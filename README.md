@@ -1,1 +1,1 @@
-# monero-rust
+# `monero-rust`
