@@ -7,5 +7,6 @@ repository = "https://github.com/ManyMath/monero-rust"
 license = "MIT"
 license-file = "LICENSE"
 keywords = ["monero", "xmr", "cryptonote"]
+description = "Monero Rust SDK"
 
 [dependencies]
