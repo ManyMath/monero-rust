@@ -10,7 +10,7 @@ path = "src/main.rs"
 [lib]
 name = "monero_rust"
 path = "src/lib.rs"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 monero-serai = { git = "https://github.com/serai-dex/serai.git", rev = "fca567f61d36360b36c153819c98bccbe09d858b", subdirectory = "coins/monero", version = "0.1.4-alpha" }
