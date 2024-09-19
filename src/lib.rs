@@ -1,4 +1,4 @@
-use monero_serai::{
+use monero_serai_mirror::{
     wallet::{
         seed::{Seed, Language},
         address::{AddressType, AddressMeta, AddressSpec, MoneroAddress, Network, SubaddressIndex},

@@ -1,6 +1,6 @@
 // This file mostly exists in order to just test functionality via `cargo run`
 
-use monero_serai::{
+use monero_serai_mirror::{
     // random_scalar,
     rpc::{HttpRpc},
     wallet::{
