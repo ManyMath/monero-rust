@@ -9,3 +9,7 @@ A Monero Rust SDK oriented towards use by Dart.
   ```
   cbindgen --config cbindgen.toml --crate libxmr --output monero-rust.h
   ```
+
+# Acknowledgements
+
+Thank you Luke "kayabaNerve" Parker for your work on crates.io/crates/monero-wallet.

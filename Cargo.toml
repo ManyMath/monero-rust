@@ -1,6 +1,6 @@
 [package]
 name = "monero-rust"
-version = "0.0.2"
+version = "0.0.3-dev.1"
 edition = "2021"
 description = "Monero Rust SDK.  Oriented towards use by Dart via FFI."
 license = "MIT"
