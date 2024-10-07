@@ -4,7 +4,6 @@ bindings for Rust crates such as `monero-serai` (soon to be `monero-wallet` and
 `monero-oxide` less soon) and `cuprate` (soon™).
 
 ## Development
-
 - Install `cbindgen`: `cargo install --force cbindgen`.
 - To generate `monero-rust.h` C bindings for Rust, use `cbindgen` in the 
   `monero-rust` directory:
@@ -13,7 +12,6 @@ bindings for Rust crates such as `monero-serai` (soon to be `monero-wallet` and
   ```
 
 # Roadmap
-
 - Scan transactions for incoming funds.
 - Match wallet2 API.
 - `monero-wallet-cli`
@@ -22,7 +20,6 @@ bindings for Rust crates such as `monero-serai` (soon to be `monero-wallet` and
 - Securely zero memory after secrets are used.
 
 # Acknowledgements
-
 - Thank you Luke "kayabaNerve" Parker and Serai for `monero-serai`.
 - Thank you Diego "rehrar" Salazar and Cypher Stack for commissioning me to 
   prove this concept via the https://github.com/cypherstack/libxmr project.
