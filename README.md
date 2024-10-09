@@ -8,7 +8,7 @@ bindings for Rust crates such as `monero-serai` (soon to be `monero-wallet` and
 - To generate `monero-rust.h` C bindings for Rust, use `cbindgen` in the 
   `monero-rust` directory:
   ```
-  cbindgen --config cbindgen.toml --crate libxmr --output monero-rust.h
+  cbindgen --config cbindgen.toml --crate monero-rust --output monero-rust.h
   ```
 
 # Roadmap
