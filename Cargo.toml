@@ -1,6 +1,6 @@
 [package]
 name = "monero-rust"
-version = "0.0.3"
+version = "0.0.4-dev.1"
 edition = "2021"
 description = "Monero in Rust.  A command-line interface and SDK."
 repository = "https://github.com/ManyMath/monero-rust"
