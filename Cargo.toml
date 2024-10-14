@@ -1,29 +1,6 @@
-[package]
-name = "monero-rust"
-version = "0.0.4-dev.1"
-edition = "2021"
-description = "Monero in Rust.  A command-line interface and SDK."
-repository = "https://github.com/ManyMath/monero-rust"
-license = "MIT"
-
-[[bin]]
-name = "monero_rust"
-path = "src/main.rs"
-
-[lib]
-name = "monero_rust"
-path = "src/lib.rs"
-crate-type = ["rlib", "cdylib", "staticlib"]
-
-[dependencies]
-monero-serai-mirror = "0.1.4-alpha"
-rand_core = "0.6.4"
-zeroize = "1.6.0"
-curve25519-dalek = { version = "^3.2", features = ["std"] }
-sha3 = "0.10.8"
-monero-generators-mirror = "0.3.0"
-hex = "0.4.3"
-tokio = { version = "1.29.1", features = ["full"] }
-
-[build-dependencies]
-cbindgen = "0.24.0"
+[workspace]
+members = [
+    "monero-rust",
+    "monero-wasm",
+]
+resolver = "2"
