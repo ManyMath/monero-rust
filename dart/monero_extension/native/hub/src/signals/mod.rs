@@ -23,3 +23,11 @@ pub struct BigBool {
 /// To nest a signal inside other signal, use `SignalPiece`.
 #[derive(Serialize, SignalPiece)]
 pub struct SmallBool(pub bool);
+
+#[derive(Deserialize, DartSignal)]
+pub struct MoneroTestRequest {}
+
+#[derive(Serialize, RustSignal)]
+pub struct MoneroTestResponse {
+    pub result: String,
+}
