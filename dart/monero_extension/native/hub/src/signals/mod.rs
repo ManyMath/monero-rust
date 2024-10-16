@@ -1,28 +1,5 @@
-use rinf::{DartSignal, RustSignal, SignalPiece};
+use rinf::{DartSignal, RustSignal};
 use serde::{Deserialize, Serialize};
-
-/// To send data from Dart to Rust, use `DartSignal`.
-#[derive(Deserialize, DartSignal)]
-pub struct SmallText {
-    pub text: String,
-}
-
-/// To send data from Rust to Dart, use `RustSignal`.
-#[derive(Serialize, RustSignal)]
-pub struct SmallNumber {
-    pub number: i32,
-}
-
-/// A signal can be nested inside another signal.
-#[derive(Serialize, RustSignal)]
-pub struct BigBool {
-    pub member: bool,
-    pub nested: SmallBool,
-}
-
-/// To nest a signal inside other signal, use `SignalPiece`.
-#[derive(Serialize, SignalPiece)]
-pub struct SmallBool(pub bool);
 
 #[derive(Deserialize, DartSignal)]
 pub struct MoneroTestRequest {}
@@ -30,4 +7,45 @@ pub struct MoneroTestRequest {}
 #[derive(Serialize, RustSignal)]
 pub struct MoneroTestResponse {
     pub result: String,
+}
+
+#[derive(Deserialize, DartSignal)]
+pub struct CreateWalletRequest {
+    pub password: String,
+    pub network: String,
+}
+
+#[derive(Serialize, RustSignal)]
+pub struct WalletCreatedResponse {
+    pub address: String,
+}
+
+#[derive(Deserialize, DartSignal)]
+pub struct StartSyncRequest {}
+
+#[derive(Serialize, RustSignal)]
+pub struct SyncProgressResponse {
+    pub current_height: u64,
+    pub daemon_height: u64,
+}
+
+#[derive(Deserialize, DartSignal)]
+pub struct GetBalanceRequest {}
+
+#[derive(Serialize, RustSignal)]
+pub struct BalanceResponse {
+    pub confirmed: u64,
+    pub unconfirmed: u64,
+}
+
+#[derive(Deserialize, DartSignal)]
+pub struct CreateTransactionRequest {
+    pub destination: String,
+    pub amount: u64,
+}
+
+#[derive(Serialize, RustSignal)]
+pub struct TransactionCreatedResponse {
+    pub tx_id: String,
+    pub fee: u64,
 }

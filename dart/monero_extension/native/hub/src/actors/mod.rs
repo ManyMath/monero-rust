@@ -1,41 +1,45 @@
-//! This module contains actors.
-//! To build a solid app, avoid communicating by sharing memory.
-//! Focus on message passing instead.
+pub mod wallet;
+pub mod sync;
+pub mod rpc;
+pub mod tx_builder;
 
-mod first;
-mod second;
-mod monero;
-
-use first::FirstActor;
 use messages::prelude::Context;
-use second::SecondActor;
-use monero::MoneroActor;
+use wallet::WalletActor;
+use sync::SyncActor;
+use rpc::RpcActor;
+use tx_builder::TxBuilderActor;
 use tokio::spawn;
-
-// Uncomment below to target the web.
 use tokio_with_wasm::alias as tokio;
 
-/// Creates and spawns the actors in the async system.
 pub async fn create_actors() {
-    // Though simple async tasks work, using the actor model
-    // is highly recommended for state management
-    // to achieve modularity and scalability in your app.
-    // Actors keep ownership of their state and run in their own loops,
-    // handling messages from other actors or external sources,
-    // such as websockets or timers.
+    let wallet_context = Context::new();
+    let wallet_addr = wallet_context.address();
 
-    // Create actor contexts.
-    let first_context = Context::new();
-    let first_addr = first_context.address();
-    let second_context = Context::new();
-    let monero_context = Context::new();
-    let monero_addr = monero_context.address();
+    let sync_context = Context::new();
+    let sync_addr = sync_context.address();
 
-    // Spawn the actors.
-    let first_actor = FirstActor::new(first_addr.clone());
-    spawn(first_context.run(first_actor));
-    let second_actor = SecondActor::new(first_addr);
-    spawn(second_context.run(second_actor));
-    let monero_actor = MoneroActor::new(monero_addr);
-    spawn(monero_context.run(monero_actor));
+    let rpc_context = Context::new();
+    let rpc_addr = rpc_context.address();
+
+    let tx_builder_context = Context::new();
+    let tx_builder_addr = tx_builder_context.address();
+
+    let mut wallet_actor = WalletActor::new(wallet_addr.clone());
+    wallet_actor.set_sync_actor(sync_addr.clone());
+    wallet_actor.set_rpc_actor(rpc_addr.clone());
+
+    let mut sync_actor = SyncActor::new(sync_addr.clone());
+    sync_actor.set_wallet_actor(wallet_addr.clone());
+    sync_actor.set_rpc_actor(rpc_addr.clone());
+
+    let rpc_actor = RpcActor::new(rpc_addr.clone());
+
+    let mut tx_builder_actor = TxBuilderActor::new(tx_builder_addr.clone());
+    tx_builder_actor.set_wallet_actor(wallet_addr.clone());
+    tx_builder_actor.set_rpc_actor(rpc_addr.clone());
+
+    spawn(wallet_context.run(wallet_actor));
+    spawn(sync_context.run(sync_actor));
+    spawn(rpc_context.run(rpc_actor));
+    spawn(tx_builder_context.run(tx_builder_actor));
 }
