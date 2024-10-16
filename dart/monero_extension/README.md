@@ -1,57 +1,27 @@
 # monero_extension
+A Flutter web app demonstrating monero-wasm functionality.
 
-A new Flutter project.
+## Setup
+Requires:
+- Flutter SDK
+- Rust toolchain
+- `cargo install rinf_cli`
 
-## Getting Started
-
-This project is a starting point for a Flutter application.
-
-A few resources to get you started if this is your first Flutter project:
-
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
-
-## Using Rust Inside Flutter
-
-This project leverages Flutter for GUI and Rust for the backend logic,
-utilizing the capabilities of the
-[Rinf](https://pub.dev/packages/rinf) framework.
-
-To run and build this app, you need to have
-[Flutter SDK](https://docs.flutter.dev/get-started/install)
-and [Rust toolchain](https://www.rust-lang.org/tools/install)
-installed on your system.
-You can check that your system is ready with the commands below.
-Note that all the Flutter subcomponents should be installed.
-
-```shell
-rustc --version
-flutter doctor
+## Build
+```sh
+rinf gen          # Generate Dart bindings
+rinf wasm         # Build WASM from Rust
+flutter build web # Build web app
 ```
 
-You also need to have the CLI tool for Rinf ready.
-
-```shell
-cargo install rinf_cli
+## Run
+```sh
+rinf server       # Get full `flutter run` command for server
 ```
-
-Signals sent between Dart and Rust are implemented using signal attributes.
-If you've modified the signal structs, run the following command
-to generate the corresponding Dart classes:
-
-```shell
-rinf gen
+Which will place a command into the clipboard like:
+```sh
+flutter run \
+  --web-header=cross-origin-opener-policy=same-origin \
+  --web-header=cross-origin-embedder-policy=require-corp
 ```
-
-Now you can run and build this app just like any other Flutter projects.
-
-```shell
-flutter run
-```
-
-For detailed instructions on writing Rust and Flutter together,
-please refer to Rinf's [documentation](https://rinf.cunarist.org).
+Paste the command from the clipboard to start the server.
