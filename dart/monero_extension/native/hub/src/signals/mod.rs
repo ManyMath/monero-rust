@@ -49,3 +49,26 @@ pub struct TransactionCreatedResponse {
     pub tx_id: String,
     pub fee: u64,
 }
+
+#[derive(Deserialize, DartSignal)]
+pub struct GenerateSeedRequest {}
+
+#[derive(Serialize, RustSignal)]
+pub struct SeedGeneratedResponse {
+    pub seed: String,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Deserialize, DartSignal)]
+pub struct DeriveAddressRequest {
+    pub seed: String,
+    pub network: String,
+}
+
+#[derive(Serialize, RustSignal)]
+pub struct AddressDerivedResponse {
+    pub address: String,
+    pub success: bool,
+    pub error: Option<String>,
+}

@@ -20,7 +20,9 @@ impl WalletActor {
         let mut _owned_tasks = JoinSet::new();
         _owned_tasks.spawn(Self::listen_to_create_wallet(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_balance_requests(self_addr.clone()));
-        _owned_tasks.spawn(Self::listen_to_test(self_addr));
+        _owned_tasks.spawn(Self::listen_to_test(self_addr.clone()));
+        _owned_tasks.spawn(Self::listen_to_generate_seed(self_addr.clone()));
+        _owned_tasks.spawn(Self::listen_to_derive_address(self_addr));
 
         WalletActor {
             state: WalletState {
@@ -64,6 +66,55 @@ impl WalletActor {
         while let Some(_signal_pack) = receiver.recv().await {
             let result = monero_wasm::test_integration();
             MoneroTestResponse { result }.send_signal_to_dart();
+        }
+    }
+
+    async fn listen_to_generate_seed(mut self_addr: Address<Self>) {
+        let receiver = GenerateSeedRequest::get_dart_signal_receiver();
+        while let Some(_signal_pack) = receiver.recv().await {
+            match monero_wasm::generate_seed() {
+                Ok(seed) => {
+                    SeedGeneratedResponse {
+                        seed,
+                        success: true,
+                        error: None,
+                    }
+                    .send_signal_to_dart();
+                }
+                Err(e) => {
+                    SeedGeneratedResponse {
+                        seed: String::new(),
+                        success: false,
+                        error: Some(e),
+                    }
+                    .send_signal_to_dart();
+                }
+            }
+        }
+    }
+
+    async fn listen_to_derive_address(mut self_addr: Address<Self>) {
+        let receiver = DeriveAddressRequest::get_dart_signal_receiver();
+        while let Some(signal_pack) = receiver.recv().await {
+            let request = signal_pack.message;
+            match monero_wasm::derive_address(&request.seed, &request.network) {
+                Ok(address) => {
+                    AddressDerivedResponse {
+                        address,
+                        success: true,
+                        error: None,
+                    }
+                    .send_signal_to_dart();
+                }
+                Err(e) => {
+                    AddressDerivedResponse {
+                        address: String::new(),
+                        success: false,
+                        error: Some(e),
+                    }
+                    .send_signal_to_dart();
+                }
+            }
         }
     }
 }
