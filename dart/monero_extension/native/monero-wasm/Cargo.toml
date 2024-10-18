@@ -8,7 +8,7 @@ serde = { version = "1.0.219", features = ["derive"] }
 wasm-bindgen = "0.2.100"
 getrandom = { version = "0.2", features = ["js"] }
 
-monero-serai = { git = "https://github.com/serai-dex/serai", rev = "fca567f6" }
+monero-serai = { path = "../../../../rust/monero-serai-mirror" }
 curve25519-dalek = { version = "^3.2", features = ["std"] }
 sha3 = "0.10"
 hex = "0.4"

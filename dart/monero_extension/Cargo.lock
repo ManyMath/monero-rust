@@ -261,9 +261,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "dalek-ff-group"
+name = "dalek-ff-group-mirror"
 version = "0.3.0"
-source = "git+https://github.com/serai-dex/serai?rev=fca567f6#fca567f61d36360b36c153819c98bccbe09d858b"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d40046d9645a1506ce9b28aa39291b3906effbfe1352bcef8e59604246ced0da"
 dependencies = [
  "crypto-bigint",
  "curve25519-dalek",
@@ -586,9 +587,9 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
-version = "0.13.2"
+version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43a3c133739dddd0d2990f9a4bdf8eb4b21ef50e4851ca85ab661199821d510e"
+checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
 dependencies = [
  "ahash",
 ]
@@ -935,27 +936,25 @@ dependencies = [
 [[package]]
 name = "monero-generators"
 version = "0.3.0"
-source = "git+https://github.com/serai-dex/serai?rev=fca567f6#fca567f61d36360b36c153819c98bccbe09d858b"
 dependencies = [
  "curve25519-dalek",
- "dalek-ff-group",
+ "dalek-ff-group-mirror",
  "group",
  "lazy_static",
  "sha3",
- "std-shims",
+ "std-shims-mirror",
  "subtle",
 ]
 
 [[package]]
 name = "monero-serai"
 version = "0.1.4-alpha"
-source = "git+https://github.com/serai-dex/serai?rev=fca567f6#fca567f61d36360b36c153819c98bccbe09d858b"
 dependencies = [
  "async-trait",
  "base58-monero",
  "crc",
  "curve25519-dalek",
- "dalek-ff-group",
+ "dalek-ff-group-mirror",
  "digest_auth",
  "futures",
  "group",
@@ -963,7 +962,7 @@ dependencies = [
  "lazy_static",
  "monero-epee-bin-serde",
  "monero-generators",
- "multiexp",
+ "multiexp-mirror",
  "rand",
  "rand_chacha",
  "rand_core 0.6.4",
@@ -994,15 +993,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "multiexp"
+name = "multiexp-mirror"
 version = "0.3.1"
-source = "git+https://github.com/serai-dex/serai?rev=fca567f6#fca567f61d36360b36c153819c98bccbe09d858b"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f1d4a97fae2f7df6467ca617e22c314f1f2f32a417f14c9a648b3e8ef094847"
 dependencies = [
  "ff",
  "group",
  "rand_core 0.6.4",
  "rustversion",
- "std-shims",
+ "std-shims-mirror",
  "zeroize",
 ]
 
@@ -1482,17 +1482,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "spin"
+version = "0.9.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
+
+[[package]]
 name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
-name = "std-shims"
-version = "0.1.0"
-source = "git+https://github.com/serai-dex/serai?rev=fca567f6#fca567f61d36360b36c153819c98bccbe09d858b"
+name = "std-shims-mirror"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75607eda3a2e9fff2e85af7f411137a83c6ab843ce6fda98545883a067d37a21"
 dependencies = [
- "hashbrown 0.13.2",
+ "hashbrown 0.14.5",
+ "spin",
 ]
 
 [[package]]
