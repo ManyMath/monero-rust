@@ -28,12 +28,15 @@ pub(crate) mod decoys;
 pub(crate) use decoys::Decoys;
 
 mod send;
+// TransactionError is used by bulletproofs, so export it unconditionally
+pub use send::TransactionError;
+#[cfg(feature = "reqwest")]
 pub use send::{
-  Fee, TransactionError, Change, SignableTransaction, SignableTransactionBuilder, Eventuality,
+  Fee, Change, SignableTransaction, SignableTransactionBuilder, Eventuality,
 };
-#[cfg(feature = "multisig")]
+#[cfg(all(feature = "multisig", feature = "reqwest"))]
 pub(crate) use send::InternalPayment;
-#[cfg(feature = "multisig")]
+#[cfg(all(feature = "multisig", feature = "reqwest"))]
 pub use send::TransactionMachine;
 
 fn key_image_sort(x: &EdwardsPoint, y: &EdwardsPoint) -> std::cmp::Ordering {

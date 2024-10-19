@@ -33,7 +33,6 @@ use crate::{
     RctBase, RctPrunable, RctSignatures,
   },
   transaction::{Input, Output, Timelock, TransactionPrefix, Transaction},
-  rpc::{RpcError, RpcConnection, Rpc},
   wallet::{
     address::{Network, AddressSpec, MoneroAddress},
     ViewPair, SpendableOutput, Decoys, PaymentId, ExtraField, Extra, key_image_sort, uniqueness,
@@ -41,6 +40,9 @@ use crate::{
     extra::{ARBITRARY_DATA_MARKER, MAX_ARBITRARY_DATA_SIZE},
   },
 };
+
+#[cfg(feature = "reqwest")]
+use crate::rpc::{RpcError, RpcConnection, Rpc};
 
 mod builder;
 pub use builder::SignableTransactionBuilder;

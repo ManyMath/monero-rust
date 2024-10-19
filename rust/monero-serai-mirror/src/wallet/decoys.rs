@@ -11,10 +11,10 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use curve25519_dalek::edwards::EdwardsPoint;
 
-use crate::{
-  wallet::SpendableOutput,
-  rpc::{RpcError, RpcConnection, Rpc},
-};
+use crate::wallet::SpendableOutput;
+
+#[cfg(feature = "reqwest")]
+use crate::rpc::{RpcError, RpcConnection, Rpc};
 
 const LOCK_WINDOW: usize = 10;
 const MATURITY: u64 = 60;

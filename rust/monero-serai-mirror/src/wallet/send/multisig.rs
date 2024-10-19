@@ -30,11 +30,13 @@ use crate::{
     RctPrunable,
   },
   transaction::{Input, Transaction},
-  rpc::{RpcConnection, Rpc},
   wallet::{
     TransactionError, InternalPayment, SignableTransaction, Decoys, key_image_sort, uniqueness,
   },
 };
+
+#[cfg(feature = "reqwest")]
+use crate::rpc::{RpcConnection, Rpc};
 
 /// FROST signing machine to produce a signed transaction.
 pub struct TransactionMachine {
