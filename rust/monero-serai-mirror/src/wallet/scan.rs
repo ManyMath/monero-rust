@@ -10,12 +10,14 @@ use crate::{
   serialize::{read_byte, read_u32, read_u64, read_bytes, read_scalar, read_point, read_raw_vec},
   transaction::{Input, Timelock, Transaction},
   block::Block,
-  rpc::{RpcError, RpcConnection, Rpc},
   wallet::{
     PaymentId, Extra, address::SubaddressIndex, Scanner, uniqueness, shared_key, amount_decryption,
     commitment_mask,
   },
 };
+
+#[cfg(feature = "reqwest")]
+use crate::rpc::{RpcError, RpcConnection, Rpc};
 
 /// An absolute output ID, defined as its transaction hash and output index.
 #[derive(Clone, PartialEq, Eq, Debug, Zeroize, ZeroizeOnDrop)]
@@ -195,6 +197,7 @@ pub struct SpendableOutput {
 impl SpendableOutput {
   /// Update the spendable output's global index. This is intended to be called if a
   /// re-organization occurred.
+  #[cfg(feature = "reqwest")]
   pub async fn refresh_global_index<RPC: RpcConnection>(
     &mut self,
     rpc: &Rpc<RPC>,
@@ -204,6 +207,7 @@ impl SpendableOutput {
     Ok(())
   }
 
+  #[cfg(feature = "reqwest")]
   pub async fn from<RPC: RpcConnection>(
     rpc: &Rpc<RPC>,
     output: ReceivedOutput,
@@ -419,6 +423,7 @@ impl Scanner {
   /// transactions is a dead giveaway for which transactions you successfully scanned. This
   /// function obtains the output indexes for the miner transaction, incrementing from there
   /// instead.
+  #[cfg(feature = "reqwest")]
   pub async fn scan<RPC: RpcConnection>(
     &mut self,
     rpc: &Rpc<RPC>,
