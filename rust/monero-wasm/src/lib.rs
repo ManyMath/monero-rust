@@ -1,5 +1,25 @@
+//! Monero WASM Wallet Library
+
 use serde::{Deserialize, Serialize};
-use wasm_bindgen::prelude::*;
+
+pub mod abstractions;
+#[cfg(target_arch = "wasm32")]
+pub mod wasm_impl;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod native_impl;
+pub use abstractions::{
+    AbError, AbResult, BlockData, BlockHeader, BlockResponse, GetOutsParams, HeightResponse,
+    OutEntry, OutsResponse, OutputIndex, RpcClient, TimeProvider, TransactionData,
+    TxSubmitResponse, WalletStorage,
+};
+#[cfg(target_arch = "wasm32")]
+pub use wasm_impl::{BrowserStorage, CallbackRpcClient, JsTimeProvider, WasmRpcClient};
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use native_impl::SystemTimeProvider;
+
+pub use abstractions::MemoryStorage;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletInfo {
@@ -17,8 +37,6 @@ impl WalletInfo {
         }
     }
 }
-
-/// Generate a random Monero-like address (demo only, not cryptographically secure)
 pub fn generate_demo_address() -> String {
     use getrandom::getrandom;
 
@@ -30,43 +48,34 @@ pub fn generate_demo_address() -> String {
     }
 }
 
-/// Validate a Monero address format (basic check)
 pub fn validate_address(address: &str) -> bool {
-    // Basic validation: starts with '4' and has reasonable length
     address.starts_with('4') && address.len() > 90 && address.len() < 110
 }
 
-/// Calculate fee based on priority (demo calculation)
 pub fn calculate_fee(amount: u64, priority: u8) -> u64 {
-    let base_fee = amount / 1000; // 0.1% base fee
+    let base_fee = amount / 1000;
     match priority {
-        0 => base_fee,           // Low priority
-        1 => base_fee * 2,       // Medium priority
-        2 => base_fee * 5,       // High priority
+        0 => base_fee,
+        1 => base_fee * 2,
+        2 => base_fee * 5,
         _ => base_fee,
     }
 }
 
-/// Format atomic units to XMR (1 XMR = 1e12 atomic units)
 pub fn format_atomic_to_xmr(atomic: u64) -> String {
     let xmr = atomic as f64 / 1_000_000_000_000.0;
     format!("{:.12} XMR", xmr)
 }
 
-/// Create a demo wallet info
 pub fn create_demo_wallet(network: &str) -> WalletInfo {
     WalletInfo::new(
         generate_demo_address(),
-        5_000_000_000_000, // 5 XMR in atomic units
+        5_000_000_000_000,
         network.to_string(),
     )
 }
-
-/// Helper function to encode bytes as hex
 fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter()
-        .map(|b| format!("{:02x}", b))
-        .collect::<String>()
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 #[cfg(test)]
