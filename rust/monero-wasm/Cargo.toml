@@ -5,5 +5,20 @@ edition = "2021"
 
 [dependencies]
 serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0"
 wasm-bindgen = "0.2.100"
 getrandom = { version = "0.2", features = ["js"] }
+thiserror = "1.0"
+async-trait = "0.1"
+futures = "0.3"
+base64 = "0.21"
+
+# WASM-specific dependencies
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["Window", "Storage", "Request", "RequestInit", "RequestMode", "RequestCredentials", "Response", "Headers"] }
+wasm-bindgen-futures = "0.4"
+gloo-timers = { version = "0.3", features = ["futures"] }
+
+[dev-dependencies]
+tokio = { version = "1.29", features = ["full"] }
