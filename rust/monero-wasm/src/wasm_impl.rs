@@ -41,13 +41,11 @@ impl BrowserStorage {
     }
 
     /// Validate key to prevent XSS attacks via localStorage keys
+    /// Uses whitelist approach for maximum security
     fn validate_key(&self, key: &str) -> AbResult<()> {
-        // Reject keys containing HTML/JavaScript injection patterns
-        if key.contains('<') || key.contains('>') || key.contains('"') ||
-           key.contains('\'') || key.contains('&') || key.contains('\0') {
-            return Err(AbError::InvalidData(
-                "Key contains invalid characters that could lead to XSS".into()
-            ));
+        // Reject empty keys
+        if key.is_empty() {
+            return Err(AbError::InvalidData("Key cannot be empty".into()));
         }
 
         // Reject excessively long keys (max 256 chars)
@@ -55,9 +53,16 @@ impl BrowserStorage {
             return Err(AbError::InvalidData("Key exceeds maximum length of 256 characters".into()));
         }
 
-        // Reject empty keys
-        if key.is_empty() {
-            return Err(AbError::InvalidData("Key cannot be empty".into()));
+        // Whitelist approach: only allow alphanumeric, hyphen, underscore, and dot
+        if !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.') {
+            return Err(AbError::InvalidData(
+                "Key must contain only alphanumeric characters, hyphens, underscores, or dots".into()
+            ));
+        }
+
+        // Prevent path traversal attacks
+        if key.contains("..") {
+            return Err(AbError::InvalidData("Key cannot contain '..' (path traversal)".into()));
         }
 
         Ok(())

@@ -1,6 +1,7 @@
 //! Monero WASM Wallet Library
 
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroize;
 
 pub mod abstractions;
 #[cfg(target_arch = "wasm32")]
@@ -42,7 +43,10 @@ pub fn generate_demo_address() -> String {
 
     let mut bytes = [0u8; 32];
     if getrandom(&mut bytes).is_ok() {
-        format!("4{}", hex_encode(&bytes[..20]))
+        let address = format!("4{}", hex_encode(&bytes[..20]));
+        // Zeroize sensitive data after use
+        bytes.zeroize();
+        address
     } else {
         "4Demo_Address_Generation_Failed".to_string()
     }
@@ -71,7 +75,7 @@ pub fn create_demo_wallet(network: &str) -> WalletInfo {
     WalletInfo::new(
         generate_demo_address(),
         5_000_000_000_000,
-        network.to_string(),
+        network.trim().to_string(),
     )
 }
 fn hex_encode(bytes: &[u8]) -> String {
@@ -82,12 +86,17 @@ fn hex_encode(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    /// Helper function to generate test addresses with specified prefix and length
+    fn generate_test_address(prefix: &str, fill_char: char, total_length: usize) -> String {
+        format!("{}{}", prefix, fill_char.to_string().repeat(total_length.saturating_sub(prefix.len())))
+    }
+
     #[test]
     fn test_validate_address() {
-        let valid = "4".to_string() + &"a".repeat(95);
+        let valid = generate_test_address("4", 'a', 96);
         assert!(validate_address(&valid));
 
-        let invalid = "3".to_string() + &"a".repeat(95);
+        let invalid = generate_test_address("3", 'a', 96);
         assert!(!validate_address(&invalid));
     }
 
