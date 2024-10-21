@@ -3,11 +3,17 @@ name = "monero-wasm"
 version = "0.0.1"
 edition = "2021"
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
 serde = { version = "1.0.219", features = ["derive"] }
 wasm-bindgen = "0.2.100"
 getrandom = { version = "0.2", features = ["js"] }
 
+monero-serai = { path = "../../../../rust/monero-serai-mirror", default-features = false, features = [] }
+# For native tests, enable reqwest
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 monero-serai = { path = "../../../../rust/monero-serai-mirror" }
 curve25519-dalek = { version = "^3.2", features = ["std"] }
 sha3 = "0.10"
@@ -15,3 +21,9 @@ hex = "0.4"
 zeroize = { version = "^1.5", features = ["zeroize_derive"] }
 rand_core = "0.6"
 rand = "0.8"
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"

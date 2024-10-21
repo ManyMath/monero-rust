@@ -121,14 +121,30 @@ pub trait RpcClient {
 }
 
 /// In-memory storage for testing
+#[cfg(not(target_arch = "wasm32"))]
 pub struct MemoryStorage {
     data: std::sync::Arc<std::sync::Mutex<HashMap<String, Vec<u8>>>>,
 }
 
+#[cfg(target_arch = "wasm32")]
+pub struct MemoryStorage {
+    data: std::rc::Rc<std::cell::RefCell<HashMap<String, Vec<u8>>>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 impl MemoryStorage {
     pub fn new() -> Self {
         Self {
             data: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl MemoryStorage {
+    pub fn new() -> Self {
+        Self {
+            data: std::rc::Rc::new(std::cell::RefCell::new(HashMap::new())),
         }
     }
 }
@@ -139,8 +155,8 @@ impl Default for MemoryStorage {
     }
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
-#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg(not(target_arch = "wasm32"))]
+#[async_trait]
 impl WalletStorage for MemoryStorage {
     async fn save(&self, key: &str, data: &[u8]) -> AbResult<()> {
         let mut storage = self.data.lock()
@@ -174,6 +190,40 @@ impl WalletStorage for MemoryStorage {
     async fn exists(&self, key: &str) -> AbResult<bool> {
         let storage = self.data.lock()
             .map_err(|e| AbError::Storage(format!("Mutex lock poisoned: {}", e)))?;
+        Ok(storage.contains_key(key))
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[async_trait(?Send)]
+impl WalletStorage for MemoryStorage {
+    async fn save(&self, key: &str, data: &[u8]) -> AbResult<()> {
+        let mut storage = self.data.borrow_mut();
+        storage.insert(key.to_string(), data.to_vec());
+        Ok(())
+    }
+
+    async fn load(&self, key: &str) -> AbResult<Vec<u8>> {
+        let storage = self.data.borrow();
+        storage
+            .get(key)
+            .cloned()
+            .ok_or_else(|| AbError::NotFound(format!("Key '{}' not found", key)))
+    }
+
+    async fn delete(&self, key: &str) -> AbResult<()> {
+        let mut storage = self.data.borrow_mut();
+        storage.remove(key);
+        Ok(())
+    }
+
+    async fn list_keys(&self) -> AbResult<Vec<String>> {
+        let storage = self.data.borrow();
+        Ok(storage.keys().cloned().collect())
+    }
+
+    async fn exists(&self, key: &str) -> AbResult<bool> {
+        let storage = self.data.borrow();
         Ok(storage.contains_key(key))
     }
 }
