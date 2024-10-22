@@ -170,6 +170,13 @@ impl RpcConnection for HttpRpc {
 #[derive(Clone, Debug)]
 pub struct Rpc<R: RpcConnection>(R);
 impl<R: RpcConnection> Rpc<R> {
+  /// Create a new Rpc instance from any RpcConnection implementation.
+  /// This is primarily useful for testing with mock RPC connections.
+  #[cfg(any(test, feature = "test-helpers"))]
+  pub fn new_with_connection(connection: R) -> Self {
+    Rpc(connection)
+  }
+
   /// Perform a RPC call to the specified route with the provided parameters.
   ///
   /// This is NOT a JSON-RPC call. They use a route of "json_rpc" and are available via

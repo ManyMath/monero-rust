@@ -66,3 +66,4 @@ frost = { package = "modular-frost-mirror", version = "0.7", features = ["tests"
 [features]
 default = ["reqwest"]
 multisig = ["transcript", "frost", "dleq"]
+test-helpers = []

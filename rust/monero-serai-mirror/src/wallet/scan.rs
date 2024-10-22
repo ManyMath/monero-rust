@@ -195,6 +195,18 @@ pub struct SpendableOutput {
 }
 
 impl SpendableOutput {
+  /// Create a SpendableOutput directly from a ReceivedOutput and global index.
+  /// This is intended for testing purposes only, as in production the global index
+  /// should be obtained from the blockchain via RPC.
+  ///
+  /// # Safety
+  /// This method is only available in test builds to allow testing without RPC access.
+  /// The global_index must be correct or spending will fail.
+  #[cfg(any(test, feature = "test-helpers"))]
+  pub fn test_new(output: ReceivedOutput, global_index: u64) -> Self {
+    SpendableOutput { output, global_index }
+  }
+
   /// Update the spendable output's global index. This is intended to be called if a
   /// re-organization occurred.
   #[cfg(feature = "reqwest")]
