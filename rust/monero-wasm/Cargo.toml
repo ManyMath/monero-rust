@@ -23,8 +23,10 @@ gloo-timers = { version = "0.3", features = ["futures"] }
 
 [dev-dependencies]
 hex = "0.4"
-monero-serai = { path = "../monero-serai-mirror" }
+monero-serai = { path = "../monero-serai-mirror", features = ["reqwest", "test-helpers"] }
 curve25519-dalek = "3.2"
+rand_core = "0.6"
+rand = "0.8"
 
 # Tokio is only needed for non-WASM tests (native async runtime)
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

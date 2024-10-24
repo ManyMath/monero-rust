@@ -1340,6 +1340,8 @@ dependencies = [
  "hex",
  "js-sys",
  "monero-serai",
+ "rand",
+ "rand_core 0.6.4",
  "serde",
  "serde_json",
  "thiserror",
