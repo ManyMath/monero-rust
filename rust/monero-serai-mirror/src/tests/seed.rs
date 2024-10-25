@@ -2,11 +2,15 @@ use zeroize::Zeroizing;
 
 use rand_core::OsRng;
 
-use curve25519_dalek::scalar::Scalar;
+use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 
 use crate::{
-  hash,
-  wallet::seed::{Seed, Language, classic::trim_by_lang},
+  hash, hash_to_scalar,
+  wallet::{
+    seed::{Seed, Language, classic::trim_by_lang},
+    address::{Network, AddressSpec, MoneroAddress},
+    ViewPair,
+  },
 };
 
 #[test]
@@ -174,4 +178,86 @@ fn test_classic_seed() {
       assert_eq!(seed, Seed::from_string(seed.to_string()).unwrap());
     }
   }
+}
+
+#[test]
+fn test_polyseed() {
+  use polyseed::{Polyseed, Language as PolyseedLanguage};
+
+  let seed_phrase = "capital chief route liar question fix clutch water outside pave hamster occur always learn license knife";
+
+  let polyseed = Polyseed::from_string(
+    PolyseedLanguage::English,
+    Zeroizing::new(seed_phrase.to_string())
+  ).unwrap();
+
+  // Derive the spend key from polyseed
+  let key = polyseed.key();
+  let spend_scalar = Scalar::from_bytes_mod_order(*key);
+  assert_ne!(spend_scalar, Scalar::zero());
+  let spend_key = &spend_scalar * &ED25519_BASEPOINT_TABLE;
+
+  // Derive view key as H(spend_scalar)
+  let view_scalar = hash_to_scalar(&spend_scalar.to_bytes());
+  assert_ne!(view_scalar, Scalar::zero());
+  let view_key = &view_scalar * &ED25519_BASEPOINT_TABLE;
+
+  // Create ViewPair and generate address
+  let view_pair = ViewPair::new(spend_key, Zeroizing::new(view_scalar));
+  let address = view_pair.address(Network::Mainnet, AddressSpec::Standard);
+
+  // Expected values from test vector
+  let expected_address = "465cUW8wTMSCV8oVVh7CuWWHs7yeB1oxhNPrsEM5FKSqadTXmobLqsNEtRnyGsbN1rbDuBtWdtxtXhTJda1Lm9vcH2ZdrD1";
+  let expected_spend_key = "c584b326f1a8472e210d80e4fc87271ffa371f94b95a0794eef80e851fb4e303";
+  let expected_view_key = "3b8ffd9a88e9cdbbd311629c38d696df07551bcea08e0df1942507db8f832007";
+  let expected_public_spend_key = "759ca40019178944aa2fe8062dfe61af1e3678be2ceed67fe83c34edde8492c9";
+  let expected_public_view_key = "0d57d0165de6015305e5c1e2c54f75cc9a385348929980f1db140ac459e9958e";
+
+  // Verify address
+  assert_eq!(
+    address.to_string(),
+    expected_address,
+    "Address mismatch"
+  );
+
+  // Verify secret spend key
+  assert_eq!(
+    hex::encode(spend_scalar.to_bytes()),
+    expected_spend_key,
+    "Secret spend key mismatch"
+  );
+
+  // Verify secret view key
+  assert_eq!(
+    hex::encode(view_scalar.to_bytes()),
+    expected_view_key,
+    "Secret view key mismatch"
+  );
+
+  // Verify public spend key
+  assert_eq!(
+    hex::encode(spend_key.compress().to_bytes()),
+    expected_public_spend_key,
+    "Public spend key mismatch"
+  );
+
+  // Verify public view key
+  assert_eq!(
+    hex::encode(view_key.compress().to_bytes()),
+    expected_public_view_key,
+    "Public view key mismatch"
+  );
+
+  // Additional validation: parse the expected address and verify keys match
+  let parsed_address = MoneroAddress::from_str(Network::Mainnet, expected_address).unwrap();
+  assert_eq!(
+    parsed_address.spend,
+    spend_key,
+    "Parsed address spend key doesn't match derived spend key"
+  );
+  assert_eq!(
+    parsed_address.view,
+    view_key,
+    "Parsed address view key doesn't match derived view key"
+  );
 }

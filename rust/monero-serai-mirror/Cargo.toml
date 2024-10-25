@@ -59,7 +59,8 @@ monero-generators = { path = "generators", version = "0.3" }
 hex-literal = "0.4"
 
 tokio = { version = "1", features = ["full"] }
-monero-rpc = "0.3"
+# monero-rpc = "0.3"
+polyseed = { git = "https://github.com/kayabaNerve/monero-wallet-util", rev = "f772e352c6a2fef6444d36f31da593b94dbc3b12" }
 
 frost = { package = "modular-frost-mirror", version = "0.7", features = ["tests"] }
 
