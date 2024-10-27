@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../src/bindings/bindings.dart';
 import '../utils/key_parser.dart';
@@ -11,14 +12,19 @@ class KeysView extends StatefulWidget {
 
 class _KeysViewState extends State<KeysView> {
   final _controller = TextEditingController();
+  String _network = 'stagenet';
+  final String _seedType = '25 word';
   String? _validationError;
   String? _derivedAddress;
   String? _responseError;
   bool _isLoading = false;
+  Timer? _debounceTimer;
 
   @override
   void initState() {
     super.initState();
+
+    _controller.addListener(_onSeedChanged);
 
     AddressDerivedResponse.rustSignalStream.listen((signal) {
       setState(() {
@@ -51,8 +57,18 @@ class _KeysViewState extends State<KeysView> {
 
   @override
   void dispose() {
+    _debounceTimer?.cancel();
+    _controller.removeListener(_onSeedChanged);
     _controller.dispose();
     super.dispose();
+  }
+
+  void _onSeedChanged() {
+    _debounceTimer?.cancel();
+
+    _debounceTimer = Timer(const Duration(milliseconds: 800), () {
+      _deriveAddress();
+    });
   }
 
   void _generateSeed() {
@@ -66,6 +82,15 @@ class _KeysViewState extends State<KeysView> {
   }
 
   void _deriveAddress() {
+    if (_controller.text.trim().isEmpty) {
+      setState(() {
+        _validationError = null;
+        _responseError = null;
+        _derivedAddress = null;
+      });
+      return;
+    }
+
     setState(() {
       _validationError = null;
       _responseError = null;
@@ -87,7 +112,7 @@ class _KeysViewState extends State<KeysView> {
 
     DeriveAddressRequest(
       seed: result.normalizedInput!,
-      network: 'stagenet',
+      network: _network,
     ).sendSignalToRust();
   }
 
@@ -102,44 +127,82 @@ class _KeysViewState extends State<KeysView> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            TextField(
-              controller: _controller,
-              maxLines: 3,
-              decoration: InputDecoration(
-                labelText: '25-word seed',
-                hintText: 'Enter your 25-word mnemonic seed',
-                border: const OutlineInputBorder(),
-                errorText: _validationError,
-              ),
-            ),
-            const SizedBox(height: 16),
             Row(
               children: [
                 Expanded(
-                  child: OutlinedButton(
+                  child: OutlinedButton.icon(
                     onPressed: _generateSeed,
-                    child: const Text('Generate'),
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Generate'),
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
-                  child: ElevatedButton(
-                    onPressed: _isLoading ? null : _deriveAddress,
-                    child: _isLoading
-                        ? const SizedBox(
-                            height: 20,
-                            width: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Text('Derive Address'),
+                  child: DropdownButtonFormField<String>(
+                    initialValue: _seedType,
+                    decoration: const InputDecoration(
+                      labelText: 'Seed Type',
+                      border: OutlineInputBorder(),
+                      contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: '25 word', child: Text('25 word')),
+                    ],
+                    onChanged: null,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: DropdownButtonFormField<String>(
+                    initialValue: _network,
+                    decoration: const InputDecoration(
+                      labelText: 'Network',
+                      border: OutlineInputBorder(),
+                      contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: 'mainnet', child: Text('Mainnet')),
+                      DropdownMenuItem(value: 'stagenet', child: Text('Stagenet')),
+                      DropdownMenuItem(value: 'testnet', child: Text('Testnet')),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) {
+                        setState(() {
+                          _network = value;
+                        });
+                        _deriveAddress();
+                      }
+                    },
                   ),
                 ),
               ],
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _controller,
+              maxLines: 3,
+              decoration: InputDecoration(
+                labelText: 'Seed',
+                hintText: 'Enter or generate a 25-word seed',
+                border: const OutlineInputBorder(),
+                errorText: _validationError,
+                suffixIcon: _isLoading
+                    ? const Padding(
+                        padding: EdgeInsets.all(12.0),
+                        child: SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    : null,
+              ),
             ),
             const SizedBox(height: 24),
             if (_responseError != null)
               Container(
                 padding: const EdgeInsets.all(12),
+                margin: const EdgeInsets.only(bottom: 16),
                 decoration: BoxDecoration(
                   color: Colors.red.shade50,
                   borderRadius: BorderRadius.circular(8),
@@ -151,33 +214,44 @@ class _KeysViewState extends State<KeysView> {
                 ),
               ),
             if (_derivedAddress != null)
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.green.shade50,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.green.shade200),
+              ExpansionTile(
+                title: Text(
+                  '${_network[0].toUpperCase()}${_network.substring(1)} Address',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Stagenet Address:',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: Colors.green.shade900,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    SelectableText(
-                      _derivedAddress!,
-                      style: const TextStyle(fontFamily: 'monospace'),
-                    ),
-                  ],
+                subtitle: SelectableText(
+                  _derivedAddress!,
+                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
                 ),
+                children: [
+                  _buildKeyRow('Secret Spend Key', 'TODO'),
+                  _buildKeyRow('Secret View Key', 'TODO'),
+                  _buildKeyRow('Public Spend Key', 'TODO'),
+                  _buildKeyRow('Public View Key', 'TODO'),
+                ],
               ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildKeyRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
+          ),
+          const SizedBox(height: 4),
+          SelectableText(
+            value,
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+          ),
+        ],
       ),
     );
   }
