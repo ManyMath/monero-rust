@@ -19,6 +19,7 @@ class _KeysViewState extends State<KeysView> {
   @override
   void initState() {
     super.initState();
+
     AddressDerivedResponse.rustSignalStream.listen((signal) {
       setState(() {
         _isLoading = false;
@@ -31,12 +32,37 @@ class _KeysViewState extends State<KeysView> {
         }
       });
     });
+
+    SeedGeneratedResponse.rustSignalStream.listen((signal) {
+      if (signal.message.success) {
+        setState(() {
+          _controller.text = signal.message.seed;
+          _validationError = null;
+          _responseError = null;
+          _derivedAddress = null;
+        });
+      } else {
+        setState(() {
+          _responseError = signal.message.error ?? 'Failed to generate seed';
+        });
+      }
+    });
   }
 
   @override
   void dispose() {
     _controller.dispose();
     super.dispose();
+  }
+
+  void _generateSeed() {
+    setState(() {
+      _validationError = null;
+      _responseError = null;
+      _derivedAddress = null;
+    });
+
+    GenerateSeedRequest().sendSignalToRust();
   }
 
   void _deriveAddress() {
@@ -87,15 +113,28 @@ class _KeysViewState extends State<KeysView> {
               ),
             ),
             const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: _isLoading ? null : _deriveAddress,
-              child: _isLoading
-                  ? const SizedBox(
-                      height: 20,
-                      width: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Text('Derive Address'),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _generateSeed,
+                    child: const Text('Generate'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: _isLoading ? null : _deriveAddress,
+                    child: _isLoading
+                        ? const SizedBox(
+                            height: 20,
+                            width: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text('Derive Address'),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 24),
             if (_responseError != null)
