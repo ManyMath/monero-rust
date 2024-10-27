@@ -1,6 +1,7 @@
 import 'package:rinf/rinf.dart';
 import 'src/bindings/bindings.dart';
 import 'package:flutter/material.dart';
+import 'screens/keys_view.dart';
 
 Future<void> main() async {
   await initializeRust(assignRustSignal);
@@ -18,7 +19,7 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.orange),
         useMaterial3: true,
       ),
-      home: const TestPage(),
+      home: const KeysView(),
     );
   }
 }
