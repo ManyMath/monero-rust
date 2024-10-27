@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../src/bindings/bindings.dart';
 import '../utils/key_parser.dart';
 
@@ -116,6 +117,18 @@ class _KeysViewState extends State<KeysView> {
     ).sendSignalToRust();
   }
 
+  Future<void> _copyToClipboard(String text, String label) async {
+    await Clipboard.setData(ClipboardData(text: text));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('$label copied to clipboard'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -178,25 +191,40 @@ class _KeysViewState extends State<KeysView> {
               ],
             ),
             const SizedBox(height: 16),
-            TextField(
-              controller: _controller,
-              maxLines: 3,
-              decoration: InputDecoration(
-                labelText: 'Seed',
-                hintText: 'Enter or generate a 25-word seed',
-                border: const OutlineInputBorder(),
-                errorText: _validationError,
-                suffixIcon: _isLoading
-                    ? const Padding(
-                        padding: EdgeInsets.all(12.0),
-                        child: SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                      )
-                    : null,
-              ),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _controller,
+                    maxLines: 3,
+                    decoration: InputDecoration(
+                      labelText: 'Seed',
+                      hintText: 'Enter or generate a 25-word seed',
+                      border: const OutlineInputBorder(),
+                      errorText: _validationError,
+                      suffixIcon: _isLoading
+                          ? const Padding(
+                              padding: EdgeInsets.all(12.0),
+                              child: SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              ),
+                            )
+                          : null,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  onPressed: _controller.text.isNotEmpty
+                      ? () => _copyToClipboard(_controller.text, 'Seed')
+                      : null,
+                  icon: const Icon(Icons.copy_outlined),
+                  tooltip: 'Copy seed',
+                ),
+              ],
             ),
             const SizedBox(height: 24),
             if (_responseError != null)
@@ -219,9 +247,22 @@ class _KeysViewState extends State<KeysView> {
                   '${_network[0].toUpperCase()}${_network.substring(1)} Address',
                   style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
-                subtitle: SelectableText(
-                  _derivedAddress!,
-                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                subtitle: Row(
+                  children: [
+                    Expanded(
+                      child: SelectableText(
+                        _derivedAddress!,
+                        style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.copy_outlined, size: 16),
+                      onPressed: () => _copyToClipboard(_derivedAddress!, 'Address'),
+                      tooltip: 'Copy address',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                    ),
+                  ],
                 ),
                 children: [
                   _buildKeyRow('Secret Spend Key', 'TODO'),
@@ -237,19 +278,34 @@ class _KeysViewState extends State<KeysView> {
   }
 
   Widget _buildKeyRow(String label, String value) {
+    final bool isTodo = value == 'TODO';
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Column(
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            label,
-            style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
+                ),
+                const SizedBox(height: 4),
+                SelectableText(
+                  value,
+                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                ),
+              ],
+            ),
           ),
-          const SizedBox(height: 4),
-          SelectableText(
-            value,
-            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+          IconButton(
+            icon: const Icon(Icons.copy_outlined, size: 16),
+            onPressed: !isTodo ? () => _copyToClipboard(value, label) : null,
+            tooltip: isTodo ? null : 'Copy $label',
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
           ),
         ],
       ),
