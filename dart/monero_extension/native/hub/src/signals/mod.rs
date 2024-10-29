@@ -72,3 +72,20 @@ pub struct AddressDerivedResponse {
     pub success: bool,
     pub error: Option<String>,
 }
+
+#[derive(Deserialize, DartSignal)]
+pub struct DeriveKeysRequest {
+    pub seed: String,
+    pub network: String,
+}
+
+#[derive(Serialize, RustSignal)]
+pub struct KeysDerivedResponse {
+    pub address: String,
+    pub secret_spend_key: String,
+    pub secret_view_key: String,
+    pub public_spend_key: String,
+    pub public_view_key: String,
+    pub success: bool,
+    pub error: Option<String>,
+}

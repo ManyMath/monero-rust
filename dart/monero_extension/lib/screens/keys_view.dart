@@ -20,6 +20,10 @@ class _KeysViewState extends State<KeysView> {
   String? _responseError;
   bool _isLoading = false;
   Timer? _debounceTimer;
+  String? _secretSpendKey;
+  String? _secretViewKey;
+  String? _publicSpendKey;
+  String? _publicViewKey;
 
   @override
   void initState() {
@@ -27,14 +31,22 @@ class _KeysViewState extends State<KeysView> {
 
     _controller.addListener(_onSeedChanged);
 
-    AddressDerivedResponse.rustSignalStream.listen((signal) {
+    KeysDerivedResponse.rustSignalStream.listen((signal) {
       setState(() {
         _isLoading = false;
         if (signal.message.success) {
           _derivedAddress = signal.message.address;
+          _secretSpendKey = signal.message.secretSpendKey;
+          _secretViewKey = signal.message.secretViewKey;
+          _publicSpendKey = signal.message.publicSpendKey;
+          _publicViewKey = signal.message.publicViewKey;
           _responseError = null;
         } else {
           _derivedAddress = null;
+          _secretSpendKey = null;
+          _secretViewKey = null;
+          _publicSpendKey = null;
+          _publicViewKey = null;
           _responseError = signal.message.error ?? 'Unknown error';
         }
       });
@@ -77,6 +89,10 @@ class _KeysViewState extends State<KeysView> {
       _validationError = null;
       _responseError = null;
       _derivedAddress = null;
+      _secretSpendKey = null;
+      _secretViewKey = null;
+      _publicSpendKey = null;
+      _publicViewKey = null;
     });
 
     GenerateSeedRequest().sendSignalToRust();
@@ -88,6 +104,10 @@ class _KeysViewState extends State<KeysView> {
         _validationError = null;
         _responseError = null;
         _derivedAddress = null;
+        _secretSpendKey = null;
+        _secretViewKey = null;
+        _publicSpendKey = null;
+        _publicViewKey = null;
       });
       return;
     }
@@ -96,6 +116,10 @@ class _KeysViewState extends State<KeysView> {
       _validationError = null;
       _responseError = null;
       _derivedAddress = null;
+      _secretSpendKey = null;
+      _secretViewKey = null;
+      _publicSpendKey = null;
+      _publicViewKey = null;
     });
 
     final result = KeyParser.parse(_controller.text);
@@ -111,7 +135,7 @@ class _KeysViewState extends State<KeysView> {
       _isLoading = true;
     });
 
-    DeriveAddressRequest(
+    DeriveKeysRequest(
       seed: result.normalizedInput!,
       network: _network,
     ).sendSignalToRust();
@@ -265,10 +289,10 @@ class _KeysViewState extends State<KeysView> {
                   ],
                 ),
                 children: [
-                  _buildKeyRow('Secret Spend Key', 'TODO'),
-                  _buildKeyRow('Secret View Key', 'TODO'),
-                  _buildKeyRow('Public Spend Key', 'TODO'),
-                  _buildKeyRow('Public View Key', 'TODO'),
+                  _buildKeyRow('Secret Spend Key', _secretSpendKey),
+                  _buildKeyRow('Secret View Key', _secretViewKey),
+                  _buildKeyRow('Public Spend Key', _publicSpendKey),
+                  _buildKeyRow('Public View Key', _publicViewKey),
                 ],
               ),
           ],

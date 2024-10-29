@@ -6,6 +6,7 @@ use monero_serai::wallet::{
 use sha3::{Digest, Keccak256};
 use zeroize::Zeroizing;
 use getrandom::getrandom;
+use serde::{Serialize, Deserialize};
 
 pub fn test_integration() -> String {
     "monero-wasm works".to_string()
@@ -48,6 +49,51 @@ pub fn derive_address(mnemonic: &str, network_str: &str) -> Result<String, Strin
     );
 
     Ok(address.to_string())
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DerivedKeys {
+    pub secret_spend_key: String,
+    pub secret_view_key: String,
+    pub public_spend_key: String,
+    pub public_view_key: String,
+    pub address: String,
+}
+
+pub fn derive_keys(mnemonic: &str, network_str: &str) -> Result<DerivedKeys, String> {
+    let network = match network_str.to_lowercase().as_str() {
+        "mainnet" => Network::Mainnet,
+        "testnet" => Network::Testnet,
+        "stagenet" => Network::Stagenet,
+        _ => return Err(format!("Invalid network: {}", network_str)),
+    };
+
+    let seed = Seed::from_string(Zeroizing::new(mnemonic.to_string()))
+        .map_err(|e| format!("Failed to parse seed: {:?}", e))?;
+
+    let spend: [u8; 32] = *seed.entropy();
+    let spend_scalar = Scalar::from_bytes_mod_order(spend);
+
+    let spend_point: EdwardsPoint = &spend_scalar * &ED25519_BASEPOINT_TABLE;
+
+    let view: [u8; 32] = Keccak256::digest(&spend).into();
+    let view_scalar = Scalar::from_bytes_mod_order(view);
+
+    let view_point: EdwardsPoint = &view_scalar * &ED25519_BASEPOINT_TABLE;
+
+    let address = MoneroAddress::new(
+        AddressMeta::new(network, AddressType::Standard),
+        spend_point,
+        view_point,
+    );
+
+    Ok(DerivedKeys {
+        secret_spend_key: hex::encode(spend_scalar.to_bytes()),
+        secret_view_key: hex::encode(view_scalar.to_bytes()),
+        public_spend_key: hex::encode(spend_point.compress().to_bytes()),
+        public_view_key: hex::encode(view_point.compress().to_bytes()),
+        address: address.to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -247,6 +293,30 @@ mod tests {
         let stagenet_address = derive_address(&seed, "stagenet")
             .expect("Failed to derive stagenet address from generated seed");
         assert!(stagenet_address.starts_with("5"));
+    }
+
+    #[test]
+    fn test_derive_keys_test_vector_1() {
+        let keys = derive_keys(TEST_VECTOR_1_SEED, "mainnet")
+            .expect("Failed to derive keys from test vector 1");
+
+        assert_eq!(keys.secret_spend_key, TEST_VECTOR_1_SPEND_KEY);
+        assert_eq!(keys.secret_view_key, TEST_VECTOR_1_VIEW_KEY);
+        assert_eq!(keys.address, TEST_VECTOR_1_ADDRESS);
+        assert_eq!(keys.secret_spend_key.len(), 64);
+        assert_eq!(keys.secret_view_key.len(), 64);
+        assert_eq!(keys.public_spend_key.len(), 64);
+        assert_eq!(keys.public_view_key.len(), 64);
+    }
+
+    #[test]
+    fn test_derive_keys_test_vector_2_stagenet() {
+        let keys = derive_keys(TEST_VECTOR_2_SEED, "stagenet")
+            .expect("Failed to derive keys from test vector 2");
+
+        assert_eq!(keys.secret_spend_key, TEST_VECTOR_2_SPEND_KEY);
+        assert_eq!(keys.secret_view_key, TEST_VECTOR_2_VIEW_KEY);
+        assert_eq!(keys.address, TEST_VECTOR_2_ADDRESS);
     }
 }
 
