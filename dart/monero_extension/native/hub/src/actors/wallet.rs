@@ -22,7 +22,8 @@ impl WalletActor {
         _owned_tasks.spawn(Self::listen_to_balance_requests(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_test(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_generate_seed(self_addr.clone()));
-        _owned_tasks.spawn(Self::listen_to_derive_address(self_addr));
+        _owned_tasks.spawn(Self::listen_to_derive_address(self_addr.clone()));
+        _owned_tasks.spawn(Self::listen_to_derive_keys(self_addr));
 
         WalletActor {
             state: WalletState {
@@ -109,6 +110,39 @@ impl WalletActor {
                 Err(e) => {
                     AddressDerivedResponse {
                         address: String::new(),
+                        success: false,
+                        error: Some(e),
+                    }
+                    .send_signal_to_dart();
+                }
+            }
+        }
+    }
+
+    async fn listen_to_derive_keys(mut self_addr: Address<Self>) {
+        let receiver = DeriveKeysRequest::get_dart_signal_receiver();
+        while let Some(signal_pack) = receiver.recv().await {
+            let request = signal_pack.message;
+            match monero_wasm::derive_keys(&request.seed, &request.network) {
+                Ok(keys) => {
+                    KeysDerivedResponse {
+                        address: keys.address,
+                        secret_spend_key: keys.secret_spend_key,
+                        secret_view_key: keys.secret_view_key,
+                        public_spend_key: keys.public_spend_key,
+                        public_view_key: keys.public_view_key,
+                        success: true,
+                        error: None,
+                    }
+                    .send_signal_to_dart();
+                }
+                Err(e) => {
+                    KeysDerivedResponse {
+                        address: String::new(),
+                        secret_spend_key: String::new(),
+                        secret_view_key: String::new(),
+                        public_spend_key: String::new(),
+                        public_view_key: String::new(),
                         success: false,
                         error: Some(e),
                     }
