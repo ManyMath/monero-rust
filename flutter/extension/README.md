@@ -1,5 +1,5 @@
 # monero_extension
-A Flutter web app demonstrating monero-wasm functionality.
+A Flutter web extension demonstrating monero-wasm functionality.
 
 ## Prerequisites
 ### Required
@@ -13,27 +13,27 @@ A Flutter web app demonstrating monero-wasm functionality.
 
 ## Setup
 1. Install dependencies:
-   ```sh
-   cd monero-rust/dart/monero_extension
-   flutter pub get
-   ```
+```sh
+cd monero-rust/dart/monero_extension
+flutter pub get
+```
 
 2. Generate Dart bindings from Rust:
-   ```sh
-   rinf gen
-   ```
+```sh
+rinf gen
+```
 
 3. Build WASM module:
-   ```sh
-   rinf wasm
-   ```
+```sh
+rinf wasm
+```
 
 ## Build
 ### Development Build
 ```sh
 rinf gen          # Generate Dart bindings from Rust signals
 rinf wasm         # Compile Rust to WASM
-flutter build web # Build Flutter web app
+flutter build web  # Build Flutter web app
 ```
 
 ### Production Build
@@ -62,47 +62,18 @@ Paste and run the command to start the development server.
 ## Testing
 ### Flutter Unit Tests
 ```sh
-cd monero-rust/dart/monero_extension
+cd monero-rust/flutter/extension
 flutter test
 ```
 
 ### Native Rust Tests
 ```sh
-cd monero-rust/dart/monero_extension/native/monero-wasm
+cd monero-rust/flutter/extension/native/monero-wasm
 cargo test --lib
 ```
 
 ### WASM Browser Tests
 ```sh
-cd monero-rust/dart/monero_extension/native/monero-wasm
-
-# Chrome (requires chromedriver)
+cd monero-rust/flutter/extension/native/monero-wasm
 wasm-pack test --headless --chrome
-
-# Firefox (requires geckodriver)
-wasm-pack test --headless --firefox
-```
-
-## Project Structure
-```text
-dart/monero_extension/
-├── lib/
-│   ├── main.dart                     # App entry point
-│   └── src/
-│       └── bindings/                 # Generated Dart bindings
-│           └── signals/              # Rust signal handlers
-├── native/
-│   ├── hub/                          # Rinf message hub
-│   │   └── src/
-│   │       ├── signals/              # Signal definitions
-│   │       └── actors/               # Signal processors
-│   └── monero-wasm/                  # Core Monero implementation
-│       ├── src/
-│       │   └── lib.rs                # Seed & address functions + tests
-│       └── Cargo.toml
-├── web/
-│   ├── index.html                    # Web entry point
-│   └── pkg/                          # WASM output (generated)
-├── pubspec.yaml                      # Flutter dependencies
-└── README.md                         # This file
 ```
