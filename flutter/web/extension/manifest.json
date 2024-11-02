@@ -18,13 +18,16 @@
   ],
 
   "action": {
-    "default_popup": "index.html",
     "default_icon": {
       "16": "icons/Icon-192.png",
       "48": "icons/Icon-192.png",
       "128": "icons/Icon-512.png"
     },
     "default_title": "MoneroExtension"
+  },
+
+  "background": {
+    "service_worker": "background.js"
   },
 
   "icons": {

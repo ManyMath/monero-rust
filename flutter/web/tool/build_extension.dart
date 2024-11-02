@@ -124,6 +124,17 @@ class ExtensionBuilder {
     }
 
     await sourceFile.copy(manifestDest);
+
+    // Copy background.js for full page mode
+    final backgroundSource = path.join(projectRoot, 'extension', 'background.js');
+    final backgroundDest = path.join(extensionDir, 'background.js');
+
+    final backgroundFile = File(backgroundSource);
+    if (await backgroundFile.exists()) {
+      await backgroundFile.copy(backgroundDest);
+    } else {
+      print('  Warning: extension/background.js not found');
+    }
   }
 
   Future<void> _patchForExtension() async {
@@ -170,12 +181,12 @@ class ExtensionBuilder {
     // Fix base href for extension (must be relative, not absolute)
     content = content.replaceAll('<base href="/">', '<base href="./">');
 
-    // Add CSS for extension popup sizing
+    // Add CSS for extension full page mode
     const style = '''
   <style>
     html, body {
-      width: 400px;
-      min-height: 600px;
+      width: 100%;
+      height: 100%;
       margin: 0;
       padding: 0;
     }
