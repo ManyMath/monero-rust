@@ -1,79 +1,47 @@
-# monero_extension
-A Flutter web extension demonstrating monero-wasm functionality.
+# web
+A Flutter web extension demonstrating monero-wasm integration.  Due to security restrictions this cannot be fully tested running on a local webserver (like with the usual `flutter run -d chrome` or `rinf serve`) and must be built as an extension and loaded into a browser.
 
 ## Prerequisites
-### Required
-- Flutter SDK (3.24.3 or higher)
-- Rust toolchain (latest stable)
-- rinf CLI: `cargo install rinf_cli`
-
-### Optional (for testing)
-- wasm-pack: For WASM browser tests
-- chromedriver: For headless browser testing
+- Flutter SDK (3.24.3)
+- Rust toolchain (1.89.0)
+- rinf CLI: `cargo install rinf`
 
 ## Setup
-1. Install dependencies:
 ```sh
-cd monero-rust/dart/monero_extension
 flutter pub get
-```
-
-2. Generate Dart bindings from Rust:
-```sh
 rinf gen
-```
-
-3. Build WASM module:
-```sh
 rinf wasm
 ```
 
 ## Build
-### Development Build
 ```sh
-rinf gen          # Generate Dart bindings from Rust signals
-rinf wasm         # Compile Rust to WASM
-flutter build web  # Build Flutter web app
+dart run tool/build_extension.dart
 ```
 
-### Production Build
-```sh
-rinf gen
-rinf wasm --release
-flutter build web --release
-```
-The output will be in `build/web/`.
+Output: `build/extension/` (unpacked) and `build/monero-extension.zip`
 
-## Run
-### Development Server
-```sh
-rinf server       # Copies the full flutter run command to clipboard
-```
+Load in Chrome:
+- Go to `chrome://extensions`
+- Enable Developer mode
+- Click "Load unpacked"
+- Select `build/extension/` directory
 
-This will copy a command like the following to your clipboard:
-```sh
-flutter run \
-  --web-header=cross-origin-opener-policy=same-origin \
-  --web-header=cross-origin-embedder-policy=require-corp
-```
-
-Paste and run the command to start the development server.
+The extension bypasses CORS restrictions for testing node connectivity.
 
 ## Testing
-### Flutter Unit Tests
+### Rust Tests
 ```sh
-cd monero-rust/flutter/extension
-flutter test
-```
-
-### Native Rust Tests
-```sh
-cd monero-rust/flutter/extension/native/monero-wasm
+cd native/monero-wasm
 cargo test --lib
 ```
 
-### WASM Browser Tests
+### Flutter Tests
 ```sh
-cd monero-rust/flutter/extension/native/monero-wasm
-wasm-pack test --headless --chrome
+flutter test
+```
+
+### E2E Tests
+```sh
+npm install
+npm test
 ```
