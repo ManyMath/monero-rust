@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../src/bindings/bindings.dart';
 import '../utils/key_parser.dart';
+import '../services/extension_service.dart';
 
 class KeysView extends StatefulWidget {
   const KeysView({super.key});
@@ -13,6 +14,7 @@ class KeysView extends StatefulWidget {
 
 class _KeysViewState extends State<KeysView> {
   final _controller = TextEditingController();
+  final _extensionService = ExtensionService();
   String _network = 'stagenet';
   final String _seedType = '25 word';
   String? _validationError;
@@ -153,11 +155,27 @@ class _KeysViewState extends State<KeysView> {
     }
   }
 
+  void _toggleViewMode() {
+    _extensionService.isSidePanel
+        ? _extensionService.openFullPage()
+        : _extensionService.openSidePanel();
+  }
+
   @override
   Widget build(BuildContext context) {
+    final isSidePanel = _extensionService.isSidePanel;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Keys View'),
+        actions: [
+          if (_extensionService.isExtension)
+            IconButton(
+              icon: Icon(isSidePanel ? Icons.open_in_full : Icons.close_fullscreen),
+              tooltip: isSidePanel ? 'Expand to Page' : 'Minimize to Side Panel',
+              onPressed: _toggleViewMode,
+            ),
+        ],
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
