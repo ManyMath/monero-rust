@@ -165,6 +165,17 @@ class ExtensionBuilder {
     } else {
       print('  Warning: disable_service_worker.js not found at: $sourcePath');
     }
+
+    // Copy extension_bridge.js
+    final bridgeSource = path.join(projectRoot, 'web', 'extension_bridge.js');
+    final bridgeDest = path.join(extensionDir, 'extension_bridge.js');
+
+    final bridgeFile = File(bridgeSource);
+    if (await bridgeFile.exists()) {
+      await bridgeFile.copy(bridgeDest);
+    } else {
+      print('  Warning: extension_bridge.js not found at: $bridgeSource');
+    }
   }
 
   Future<void> _patchIndexHtml() async {
@@ -202,10 +213,11 @@ class ExtensionBuilder {
 
     content = content.replaceAll('</head>', style);
 
-    // Add loading indicator and inject disable_service_worker, remove async
+    // Add loading indicator and inject scripts
     const bodyScripts = '''<body>
   <div id="loading">Loading Monero Wallet...</div>
 
+  <script src="extension_bridge.js"></script>
   <script src="disable_service_worker.js"></script>
   <script src="flutter_bootstrap.js"></script>
 </body>''';
