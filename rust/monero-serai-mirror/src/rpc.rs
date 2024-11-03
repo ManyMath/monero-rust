@@ -8,7 +8,9 @@ use curve25519_dalek::edwards::{EdwardsPoint, CompressedEdwardsY};
 use serde::{Serialize, Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
+#[cfg(feature = "reqwest")]
 use digest_auth::AuthContext;
+#[cfg(feature = "reqwest")]
 use reqwest::Client;
 
 use crate::{
@@ -74,6 +76,7 @@ fn rpc_point(point: &str) -> Result<EdwardsPoint, RpcError> {
   .ok_or_else(|| RpcError::InvalidPoint(point.to_string()))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[async_trait]
 pub trait RpcConnection: Clone + Debug {
   /// Perform a POST request to the specified route with the specified body.
@@ -82,6 +85,16 @@ pub trait RpcConnection: Clone + Debug {
   async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError>;
 }
 
+#[cfg(target_arch = "wasm32")]
+#[async_trait(?Send)]
+pub trait RpcConnection: Clone + Debug {
+  /// Perform a POST request to the specified route with the specified body.
+  ///
+  /// The implementor is left to handle anything such as authentication.
+  async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError>;
+}
+
+#[cfg(feature = "reqwest")]
 #[derive(Clone, Debug)]
 pub struct HttpRpc {
   client: Client,
@@ -89,6 +102,7 @@ pub struct HttpRpc {
   url: String,
 }
 
+#[cfg(feature = "reqwest")]
 impl HttpRpc {
   /// Create a new HTTP(S) RPC connection.
   ///
@@ -128,6 +142,7 @@ impl HttpRpc {
   }
 }
 
+#[cfg(feature = "reqwest")]
 #[async_trait]
 impl RpcConnection for HttpRpc {
   async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {

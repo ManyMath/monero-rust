@@ -23,7 +23,8 @@ impl WalletActor {
         _owned_tasks.spawn(Self::listen_to_test(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_generate_seed(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_derive_address(self_addr.clone()));
-        _owned_tasks.spawn(Self::listen_to_derive_keys(self_addr));
+        _owned_tasks.spawn(Self::listen_to_derive_keys(self_addr.clone()));
+        _owned_tasks.spawn(Self::listen_to_scan_block(self_addr));
 
         WalletActor {
             state: WalletState {
@@ -145,6 +146,62 @@ impl WalletActor {
                         public_view_key: String::new(),
                         success: false,
                         error: Some(e),
+                    }
+                    .send_signal_to_dart();
+                }
+            }
+        }
+    }
+
+    async fn listen_to_scan_block(mut self_addr: Address<Self>) {
+        let receiver = ScanBlockRequest::get_dart_signal_receiver();
+        while let Some(signal_pack) = receiver.recv().await {
+            let request = signal_pack.message;
+
+            match monero_wasm::scan_block_for_outputs(
+                &request.node_url,
+                request.block_height,
+                &request.seed,
+                &request.network,
+            )
+            .await
+            {
+                Ok(result) => {
+                    let outputs = result
+                        .outputs
+                        .into_iter()
+                        .map(|o| OwnedOutput {
+                            tx_hash: o.tx_hash,
+                            output_index: o.output_index,
+                            amount: o.amount,
+                            amount_xmr: o.amount_xmr,
+                            key: o.key,
+                            key_offset: o.key_offset,
+                            subaddress_index: o.subaddress_index,
+                            payment_id: o.payment_id,
+                        })
+                        .collect();
+
+                    BlockScanResponse {
+                        success: true,
+                        error: None,
+                        block_height: result.block_height,
+                        block_hash: result.block_hash,
+                        block_timestamp: result.block_timestamp,
+                        tx_count: result.tx_count as u32,
+                        outputs,
+                    }
+                    .send_signal_to_dart();
+                }
+                Err(e) => {
+                    BlockScanResponse {
+                        success: false,
+                        error: Some(e),
+                        block_height: request.block_height,
+                        block_hash: String::new(),
+                        block_timestamp: 0,
+                        tx_count: 0,
+                        outputs: Vec::new(),
                     }
                     .send_signal_to_dart();
                 }

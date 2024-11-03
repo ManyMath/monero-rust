@@ -1,4 +1,4 @@
-use rinf::{DartSignal, RustSignal};
+use rinf::{DartSignal, RustSignal, SignalPiece};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, DartSignal)]
@@ -88,4 +88,35 @@ pub struct KeysDerivedResponse {
     pub public_view_key: String,
     pub success: bool,
     pub error: Option<String>,
+}
+
+#[derive(Deserialize, DartSignal)]
+pub struct ScanBlockRequest {
+    pub node_url: String,
+    pub block_height: u64,
+    pub seed: String,
+    pub network: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, SignalPiece)]
+pub struct OwnedOutput {
+    pub tx_hash: String,
+    pub output_index: u8,
+    pub amount: u64,
+    pub amount_xmr: String,
+    pub key: String,
+    pub key_offset: String,
+    pub subaddress_index: Option<(u32, u32)>,
+    pub payment_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, RustSignal)]
+pub struct BlockScanResponse {
+    pub success: bool,
+    pub error: Option<String>,
+    pub block_height: u64,
+    pub block_hash: String,
+    pub block_timestamp: u64,
+    pub tx_count: u32,
+    pub outputs: Vec<OwnedOutput>,
 }
