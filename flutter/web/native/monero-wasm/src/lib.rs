@@ -8,6 +8,11 @@ use zeroize::Zeroizing;
 use getrandom::getrandom;
 use serde::{Serialize, Deserialize};
 
+#[cfg(target_arch = "wasm32")]
+pub mod rpc_adapter;
+#[cfg(target_arch = "wasm32")]
+use rpc_adapter::WasmRpcAdapter;
+
 pub fn test_integration() -> String {
     "monero-wasm works".to_string()
 }
@@ -93,6 +98,267 @@ pub fn derive_keys(mnemonic: &str, network_str: &str) -> Result<DerivedKeys, Str
         public_spend_key: hex::encode(spend_point.compress().to_bytes()),
         public_view_key: hex::encode(view_point.compress().to_bytes()),
         address: address.to_string(),
+    })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockScanResult {
+    pub block_height: u64,
+    pub block_hash: String,
+    pub block_timestamp: u64,
+    pub tx_count: usize,
+    pub outputs: Vec<OwnedOutputInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OwnedOutputInfo {
+    pub tx_hash: String,
+    pub output_index: u8,
+    pub amount: u64,
+    pub amount_xmr: String,
+    pub key: String,
+    pub key_offset: String,
+    pub subaddress_index: Option<(u32, u32)>,
+    pub payment_id: Option<String>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::HashSet;
+
+#[cfg(not(target_arch = "wasm32"))]
+use monero_serai::{
+    rpc::HttpRpc,
+    wallet::{
+        ViewPair, Scanner,
+    },
+};
+
+#[cfg(not(target_arch = "wasm32"))]
+fn spend_key_from_seed(seed: &monero_serai::wallet::seed::Seed) -> EdwardsPoint {
+    let entropy = seed.entropy();
+    let mut spend_bytes = [0u8; 32];
+    spend_bytes.copy_from_slice(&entropy[..]);
+
+    let spend_scalar = Scalar::from_bytes_mod_order(spend_bytes);
+    &spend_scalar * &ED25519_BASEPOINT_TABLE
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn view_key_from_seed(seed: &monero_serai::wallet::seed::Seed) -> Scalar {
+    let entropy = seed.entropy();
+    let mut spend_bytes = [0u8; 32];
+    spend_bytes.copy_from_slice(&entropy[..]);
+
+    let view: [u8; 32] = Keccak256::digest(&spend_bytes).into();
+    Scalar::from_bytes_mod_order(view)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn scan_block_for_outputs(
+    node_url: &str,
+    block_height: u64,
+    mnemonic: &str,
+    network_str: &str,
+) -> Result<BlockScanResult, String> {
+    let _network = match network_str.to_lowercase().as_str() {
+        "mainnet" => Network::Mainnet,
+        "testnet" => Network::Testnet,
+        "stagenet" => Network::Stagenet,
+        _ => return Err(format!("Invalid network: {}", network_str)),
+    };
+
+    let seed = monero_serai::wallet::seed::Seed::from_string(Zeroizing::new(mnemonic.to_string()))
+        .map_err(|e| format!("Invalid mnemonic: {:?}", e))?;
+
+    let spend_point = spend_key_from_seed(&seed);
+    let view_scalar = view_key_from_seed(&seed);
+
+    let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
+    let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+
+    let rpc = HttpRpc::new(node_url.to_string())
+        .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
+
+    let block_hash_bytes = rpc.get_block_hash(block_height as usize)
+        .await
+        .map_err(|e| format!("Failed to fetch block hash: {:?}", e))?;
+    let block_hash = hex::encode(block_hash_bytes);
+
+    let block = rpc.get_block_by_number(block_height as usize)
+        .await
+        .map_err(|e| format!("Failed to fetch block: {:?}", e))?;
+
+    let block_timestamp = block.header.timestamp;
+    let tx_hashes = block.txs.clone();
+    let mut all_transactions = vec![block.miner_tx];
+
+    if !tx_hashes.is_empty() {
+        let fetched_txs = rpc.get_transactions(&tx_hashes)
+            .await
+            .map_err(|e| format!("Failed to fetch transactions: {:?}", e))?;
+        all_transactions.extend(fetched_txs);
+    }
+
+    let tx_count = all_transactions.len();
+    let mut outputs = Vec::new();
+
+    for tx in all_transactions {
+        let tx_hash = hex::encode(tx.hash());
+        let scan_result = scanner.scan_transaction(&tx);
+        let owned_outputs = scan_result.ignore_timelock();
+
+        for output in owned_outputs {
+            let amount = output.data.commitment.amount;
+            let amount_xmr = format!("{:.12}", amount as f64 / 1_000_000_000_000.0);
+            let output_index = output.absolute.o;
+            let key = hex::encode(output.data.key.compress().to_bytes());
+            let key_offset = hex::encode(output.data.key_offset.to_bytes());
+            let subaddress_index = output.metadata.subaddress.map(|idx| (idx.account(), idx.address()));
+            let payment_id = if output.metadata.payment_id != [0u8; 8] {
+                Some(hex::encode(output.metadata.payment_id))
+            } else {
+                None
+            };
+
+            outputs.push(OwnedOutputInfo {
+                tx_hash: tx_hash.clone(),
+                output_index,
+                amount,
+                amount_xmr,
+                key,
+                key_offset,
+                subaddress_index,
+                payment_id,
+            });
+        }
+    }
+
+    Ok(BlockScanResult {
+        block_height,
+        block_hash,
+        block_timestamp,
+        tx_count,
+        outputs,
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
+use std::collections::HashSet;
+
+#[cfg(target_arch = "wasm32")]
+use monero_serai::{
+    rpc::Rpc,
+    wallet::{
+        ViewPair, Scanner,
+    },
+};
+
+#[cfg(target_arch = "wasm32")]
+fn spend_key_from_seed_wasm(seed: &monero_serai::wallet::seed::Seed) -> EdwardsPoint {
+    let entropy = seed.entropy();
+    let mut spend_bytes = [0u8; 32];
+    spend_bytes.copy_from_slice(&entropy[..]);
+
+    let spend_scalar = Scalar::from_bytes_mod_order(spend_bytes);
+    &spend_scalar * &ED25519_BASEPOINT_TABLE
+}
+
+#[cfg(target_arch = "wasm32")]
+fn view_key_from_seed_wasm(seed: &monero_serai::wallet::seed::Seed) -> Scalar {
+    let entropy = seed.entropy();
+    let mut spend_bytes = [0u8; 32];
+    spend_bytes.copy_from_slice(&entropy[..]);
+
+    let view: [u8; 32] = Keccak256::digest(&spend_bytes).into();
+    Scalar::from_bytes_mod_order(view)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub async fn scan_block_for_outputs(
+    node_url: &str,
+    block_height: u64,
+    mnemonic: &str,
+    network_str: &str,
+) -> Result<BlockScanResult, String> {
+    let _network = match network_str.to_lowercase().as_str() {
+        "mainnet" => Network::Mainnet,
+        "testnet" => Network::Testnet,
+        "stagenet" => Network::Stagenet,
+        _ => return Err(format!("Invalid network: {}", network_str)),
+    };
+
+    let seed = monero_serai::wallet::seed::Seed::from_string(Zeroizing::new(mnemonic.to_string()))
+        .map_err(|e| format!("Invalid mnemonic: {:?}", e))?;
+
+    let spend_point = spend_key_from_seed_wasm(&seed);
+    let view_scalar = view_key_from_seed_wasm(&seed);
+
+    let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
+    let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+
+    let adapter = WasmRpcAdapter::new(node_url.to_string());
+    let rpc = Rpc::new_with_connection(adapter);
+
+    let block_hash_bytes = rpc.get_block_hash(block_height as usize)
+        .await
+        .map_err(|e| format!("Failed to fetch block hash: {:?}", e))?;
+    let block_hash = hex::encode(block_hash_bytes);
+
+    let block = rpc.get_block_by_number(block_height as usize)
+        .await
+        .map_err(|e| format!("Failed to fetch block: {:?}", e))?;
+
+    let block_timestamp = block.header.timestamp;
+    let tx_hashes = block.txs.clone();
+    let mut all_transactions = vec![block.miner_tx];
+
+    if !tx_hashes.is_empty() {
+        let fetched_txs = rpc.get_transactions(&tx_hashes)
+            .await
+            .map_err(|e| format!("Failed to fetch transactions: {:?}", e))?;
+        all_transactions.extend(fetched_txs);
+    }
+
+    let tx_count = all_transactions.len();
+    let mut outputs = Vec::new();
+
+    for tx in all_transactions.iter() {
+        let tx_hash = hex::encode(tx.hash());
+        let scan_result = scanner.scan_transaction(&tx);
+        let owned_outputs = scan_result.ignore_timelock();
+
+        for output in owned_outputs {
+            let amount = output.data.commitment.amount;
+            let amount_xmr = format!("{:.12}", amount as f64 / 1_000_000_000_000.0);
+            let output_index = output.absolute.o;
+            let key = hex::encode(output.data.key.compress().to_bytes());
+            let key_offset = hex::encode(output.data.key_offset.to_bytes());
+            let subaddress_index = output.metadata.subaddress.map(|idx| (idx.account(), idx.address()));
+            let payment_id = if output.metadata.payment_id != [0u8; 8] {
+                Some(hex::encode(output.metadata.payment_id))
+            } else {
+                None
+            };
+
+            outputs.push(OwnedOutputInfo {
+                tx_hash: tx_hash.clone(),
+                output_index,
+                amount,
+                amount_xmr,
+                key,
+                key_offset,
+                subaddress_index,
+                payment_id,
+            });
+        }
+    }
+
+    Ok(BlockScanResult {
+        block_height,
+        block_hash,
+        block_timestamp,
+        tx_count,
+        outputs,
     })
 }
 

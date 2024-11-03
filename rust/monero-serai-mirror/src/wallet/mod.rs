@@ -29,10 +29,11 @@ pub(crate) use decoys::Decoys;
 
 mod send;
 // TransactionError is used by bulletproofs, so export it unconditionally
-pub use send::TransactionError;
+// Fee is used by RPC, so export it unconditionally
+pub use send::{TransactionError, Fee};
 #[cfg(feature = "reqwest")]
 pub use send::{
-  Fee, Change, SignableTransaction, SignableTransactionBuilder, Eventuality,
+  Change, SignableTransaction, SignableTransactionBuilder, Eventuality,
 };
 #[cfg(all(feature = "multisig", feature = "reqwest"))]
 pub(crate) use send::InternalPayment;

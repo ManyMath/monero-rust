@@ -204,7 +204,6 @@ async fn prepare_inputs<R: RngCore + CryptoRng, RPC: RpcConnection>(
   Ok(signable)
 }
 
-#[cfg(feature = "reqwest")]
 /// Fee struct, defined as a per-unit cost and a mask for rounding purposes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Zeroize)]
 pub struct Fee {
@@ -212,7 +211,6 @@ pub struct Fee {
   pub mask: u64,
 }
 
-#[cfg(feature = "reqwest")]
 impl Fee {
   pub fn calculate(&self, weight: usize) -> u64 {
     ((((self.per_weight * u64::try_from(weight).unwrap()) - 1) / self.mask) + 1) * self.mask

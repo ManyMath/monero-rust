@@ -30,7 +30,6 @@ pub mod transaction;
 pub mod block;
 
 /// Monero daemon RPC interface.
-#[cfg(feature = "reqwest")]
 pub mod rpc;
 /// Wallet functionality, enabling scanning and sending transactions.
 pub mod wallet;
