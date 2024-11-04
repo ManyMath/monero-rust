@@ -35,7 +35,6 @@ js-sys = "0.3"
 async-trait = "0.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-monero-serai = { path = "../../../../rust/monero-serai-mirror", features = ["reqwest"] }
 curve25519-dalek = { version = "^3.2", features = ["std"] }
 sha3 = "0.10"
 hex = "0.4"
@@ -45,6 +44,3 @@ rand = "0.8"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
-
-[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-tokio = { version = "1", features = ["full"] }

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
 pub mod abstractions;
+pub mod scanner;
 #[cfg(target_arch = "wasm32")]
 pub mod wasm_impl;
 
