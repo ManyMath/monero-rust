@@ -14,6 +14,14 @@ futures = "0.3"
 base64 = "0.21"
 zeroize = "1.7"
 
+# Scanner dependencies (needed for both WASM and native)
+curve25519-dalek = { version = "3.2", default-features = false }
+sha3 = { version = "0.10", default-features = false }
+hex = { version = "0.4", default-features = false, features = ["alloc"] }
+rand_core = { version = "0.6", default-features = false }
+rand = { version = "0.8", default-features = false, features = ["getrandom"] }
+monero-serai = { path = "../monero-serai-mirror", default-features = false }
+
 # WASM-specific dependencies
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"
@@ -21,12 +29,17 @@ web-sys = { version = "0.3", features = ["Window", "Storage", "Request", "Reques
 wasm-bindgen-futures = "0.4"
 gloo-timers = { version = "0.3", features = ["futures"] }
 
-[dev-dependencies]
+# Native-specific dependencies (full features)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+monero-serai = { path = "../monero-serai-mirror", features = ["reqwest"] }
+curve25519-dalek = { version = "3.2", features = ["std"] }
+sha3 = "0.10"
 hex = "0.4"
-monero-serai = { path = "../monero-serai-mirror", features = ["reqwest", "test-helpers"] }
-curve25519-dalek = "3.2"
 rand_core = "0.6"
 rand = "0.8"
+
+[dev-dependencies]
+monero-serai = { path = "../monero-serai-mirror", features = ["reqwest", "test-helpers"] }
 
 # Tokio is only needed for non-WASM tests (native async runtime)
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
