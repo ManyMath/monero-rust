@@ -212,7 +212,7 @@ pub struct Transaction {
 }
 
 impl Transaction {
-  pub(crate) fn fee_weight(
+  pub fn fee_weight(
     protocol: Protocol,
     inputs: usize,
     outputs: usize,
