@@ -22,6 +22,7 @@ rand_core = "0.6"
 rand_chacha = "0.3"
 rand = "0.8"
 rand_distr = "0.4"
+getrandom = { version = "0.2", features = ["js"] }
 
 zeroize = { version = "^1.5", features = ["zeroize_derive"] }
 subtle = "^2.4"
@@ -48,7 +49,7 @@ serde_json = "1"
 base58-monero = "1"
 monero-epee-bin-serde = "1"
 
-digest_auth = "0.3"
+digest_auth = { version = "0.3", optional = true }
 reqwest = { version = "0.11", features = ["json"], optional = true }
 
 [build-dependencies]
@@ -65,6 +66,7 @@ polyseed = { git = "https://github.com/kayabaNerve/monero-wallet-util", rev = "f
 frost = { package = "modular-frost-mirror", version = "0.7", features = ["tests"] }
 
 [features]
-default = ["reqwest"]
+default = ["http-rpc"]
+http-rpc = ["digest_auth", "reqwest"]
 multisig = ["transcript", "frost", "dleq"]
 test-helpers = []

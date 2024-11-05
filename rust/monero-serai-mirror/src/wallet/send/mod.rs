@@ -41,12 +41,11 @@ use crate::{
   },
 };
 
-#[cfg(feature = "reqwest")]
+// RPC types are now available without reqwest feature for WASM support
 use crate::rpc::{RpcError, RpcConnection, Rpc};
 
-#[cfg(feature = "reqwest")]
+// Builder module now available without reqwest for WASM support
 mod builder;
-#[cfg(feature = "reqwest")]
 pub use builder::SignableTransactionBuilder;
 
 #[cfg(feature = "multisig")]
@@ -140,12 +139,10 @@ pub enum TransactionError {
   NotEnoughFunds(u64, u64),
   #[error("wrong spend private key")]
   WrongPrivateKey,
-  #[cfg(feature = "reqwest")]
   #[error("rpc error ({0})")]
   RpcError(RpcError),
   #[error("clsag error ({0})")]
   ClsagError(ClsagError),
-  #[cfg(feature = "reqwest")]
   #[error("invalid transaction ({0})")]
   InvalidTransaction(RpcError),
   #[cfg(feature = "multisig")]
@@ -153,7 +150,6 @@ pub enum TransactionError {
   FrostError(FrostError),
 }
 
-#[cfg(feature = "reqwest")]
 async fn prepare_inputs<R: RngCore + CryptoRng, RPC: RpcConnection>(
   rng: &mut R,
   rpc: &Rpc<RPC>,
@@ -217,14 +213,12 @@ impl Fee {
   }
 }
 
-#[cfg(feature = "reqwest")]
 #[derive(Clone, PartialEq, Eq, Debug, Zeroize)]
 pub(crate) enum InternalPayment {
   Payment((MoneroAddress, u64)),
   Change(Change, u64),
 }
 
-#[cfg(feature = "reqwest")]
 /// The eventual output of a SignableTransaction.
 ///
 /// If the SignableTransaction has a Change with a view key, this will also have the view key.
@@ -238,7 +232,6 @@ pub struct Eventuality {
   extra: Vec<u8>,
 }
 
-#[cfg(feature = "reqwest")]
 /// A signable transaction, either in a single-signer or multisig context.
 #[derive(Clone, PartialEq, Eq, Debug, Zeroize, ZeroizeOnDrop)]
 pub struct SignableTransaction {
@@ -250,7 +243,6 @@ pub struct SignableTransaction {
   fee: u64,
 }
 
-#[cfg(feature = "reqwest")]
 /// Specification for a change output.
 #[derive(Clone, PartialEq, Eq, Zeroize)]
 pub struct Change {
@@ -258,14 +250,12 @@ pub struct Change {
   view: Option<Zeroizing<Scalar>>,
 }
 
-#[cfg(feature = "reqwest")]
 impl fmt::Debug for Change {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
     f.debug_struct("Change").field("address", &self.address).finish_non_exhaustive()
   }
 }
 
-#[cfg(feature = "reqwest")]
 impl Change {
   /// Create a change output specification from a ViewPair, as needed to maintain privacy.
   pub fn new(view: &ViewPair, guaranteed: bool) -> Change {
@@ -289,7 +279,6 @@ impl Change {
   }
 }
 
-#[cfg(feature = "reqwest")]
 impl SignableTransaction {
   /// Create a signable transaction.
   ///
@@ -720,7 +709,6 @@ impl SignableTransaction {
   }
 }
 
-#[cfg(feature = "reqwest")]
 impl Eventuality {
   /// Enables building a HashMap of Extra -> Eventuality for efficiently checking if an on-chain
   /// transaction may match this eventuality.
