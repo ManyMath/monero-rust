@@ -24,14 +24,14 @@ use address::{Network, AddressType, SubaddressIndex, AddressSpec, AddressMeta, M
 mod scan;
 pub use scan::{ReceivedOutput, SpendableOutput, Timelocked};
 
-pub(crate) mod decoys;
-pub(crate) use decoys::Decoys;
+pub mod decoys;
+pub use decoys::Decoys;
 
 mod send;
 // TransactionError is used by bulletproofs, so export it unconditionally
 // Fee is used by RPC, so export it unconditionally
 pub use send::{TransactionError, Fee};
-#[cfg(feature = "reqwest")]
+// Transaction building types now available without reqwest for WASM support
 pub use send::{
   Change, SignableTransaction, SignableTransactionBuilder, Eventuality,
 };
