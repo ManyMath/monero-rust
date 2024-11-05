@@ -16,7 +16,6 @@ use crate::{
   },
 };
 
-#[cfg(feature = "reqwest")]
 use crate::rpc::{RpcError, RpcConnection, Rpc};
 
 /// An absolute output ID, defined as its transaction hash and output index.
@@ -209,7 +208,6 @@ impl SpendableOutput {
 
   /// Update the spendable output's global index. This is intended to be called if a
   /// re-organization occurred.
-  #[cfg(feature = "reqwest")]
   pub async fn refresh_global_index<RPC: RpcConnection>(
     &mut self,
     rpc: &Rpc<RPC>,
@@ -219,7 +217,6 @@ impl SpendableOutput {
     Ok(())
   }
 
-  #[cfg(feature = "reqwest")]
   pub async fn from<RPC: RpcConnection>(
     rpc: &Rpc<RPC>,
     output: ReceivedOutput,
