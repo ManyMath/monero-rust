@@ -1,13 +1,10 @@
 use std::collections::HashSet;
 
-#[cfg(feature = "reqwest")]
 use futures::lock::{Mutex, MutexGuard};
 
-#[cfg(feature = "reqwest")]
 use lazy_static::lazy_static;
 
 use rand_core::{RngCore, CryptoRng};
-#[cfg(feature = "reqwest")]
 use rand_distr::{Distribution, Gamma};
 
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -16,7 +13,6 @@ use curve25519_dalek::edwards::EdwardsPoint;
 
 use crate::wallet::SpendableOutput;
 
-#[cfg(feature = "reqwest")]
 use crate::rpc::{RpcError, RpcConnection, Rpc};
 
 const LOCK_WINDOW: usize = 10;
@@ -26,7 +22,6 @@ const BLOCK_TIME: usize = 120;
 const BLOCKS_PER_YEAR: usize = 365 * 24 * 60 * 60 / BLOCK_TIME;
 const TIP_APPLICATION: f64 = (LOCK_WINDOW * BLOCK_TIME) as f64;
 
-#[cfg(feature = "reqwest")]
 lazy_static! {
   static ref GAMMA: Gamma<f64> = Gamma::new(19.28, 1.0 / 1.61).unwrap();
   // TODO: Expose an API to reset this in case a reorg occurs/the RPC fails/returns garbage
@@ -34,7 +29,6 @@ lazy_static! {
   static ref DISTRIBUTION: Mutex<Vec<u64>> = Mutex::new(Vec::with_capacity(3000000));
 }
 
-#[cfg(feature = "reqwest")]
 #[allow(clippy::too_many_arguments)]
 async fn select_n<'a, R: RngCore + CryptoRng, RPC: RpcConnection>(
   rng: &mut R,
@@ -141,7 +135,6 @@ impl Decoys {
     self.offsets.len()
   }
 
-  #[cfg(feature = "reqwest")]
   /// Select decoys using the same distribution as Monero.
   pub async fn select<R: RngCore + CryptoRng, RPC: RpcConnection>(
     rng: &mut R,
