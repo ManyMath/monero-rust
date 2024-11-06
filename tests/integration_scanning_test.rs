@@ -1,9 +1,10 @@
-// Integration test using real stagenet data to verify output scanning.
-// TODO: Replace live node lookups with hardcoded responses for deterministic testing.
+// Integration test using stagenet data to verify output scanning.
+// Uses pre-recorded RPC responses for deterministic testing.
 
-use monero_rust::WalletState;
+mod test_helpers;
+
+use test_helpers::{test_vector_path, MockWalletHelper};
 use monero_wallet::address::Network;
-use std::path::PathBuf;
 
 // Stagenet test vector:
 // Polyseed: naive cake plug stereo fatal hour because cart ecology acoustic one sting gravity tail fish beyond
@@ -25,7 +26,76 @@ fn txid_from_hex(hex: &str) -> [u8; 32] {
 }
 
 #[tokio::test]
-async fn test_scan_real_stagenet_output() {
+async fn test_scan_stagenet_output_deterministic() {
+    // This test uses pre-recorded RPC responses for deterministic behavior
+    let recording_path = test_vector_path("integration_scanning_rpc.json");
+
+    if !recording_path.exists() {
+        panic!(
+            "Recording file not found: {:?}\nRun: STAGENET_NODE=127.0.0.1:38081 cargo test --test integration_scanning_test test_scan_stagenet_output_live -- --ignored",
+            recording_path
+        );
+    }
+
+    let spend_public = hex::decode(PUBLIC_SPEND_KEY).unwrap();
+    let view_private = hex::decode(SECRET_VIEW_KEY).unwrap();
+
+    let mut spend_public_bytes = [0u8; 32];
+    let mut view_private_bytes = [0u8; 32];
+    spend_public_bytes.copy_from_slice(&spend_public);
+    view_private_bytes.copy_from_slice(&view_private);
+
+    let mut helper = MockWalletHelper::view_only_from_keys_and_recording(
+        spend_public_bytes,
+        view_private_bytes,
+        Network::Stagenet,
+        recording_path,
+        TEST_BLOCK_HEIGHT.saturating_sub(10),
+    )
+    .expect("Failed to create wallet helper");
+
+    let wallet_address = helper.wallet.view_pair.legacy_address(Network::Stagenet).to_string();
+    assert_eq!(wallet_address, TEST_ADDRESS, "address mismatch");
+
+    let outputs_found = helper
+        .scan_block_deterministic(TEST_BLOCK_HEIGHT)
+        .await
+        .expect("failed to scan block");
+
+    println!(
+        "scanned block {}, found {} owned output(s)",
+        TEST_BLOCK_HEIGHT, outputs_found
+    );
+
+    let expected_txid = txid_from_hex(TEST_TXID);
+    let output = helper.wallet
+        .outputs
+        .values()
+        .find(|o| o.tx_hash == expected_txid)
+        .expect("expected output not found");
+
+    println!(
+        "found output: tx={}, index={}, amount={}",
+        hex::encode(output.tx_hash),
+        output.output_index,
+        output.amount
+    );
+
+    assert_eq!(output.amount, EXPECTED_AMOUNT);
+    assert_eq!(output.subaddress_indices, (0, 0));
+    assert_eq!(output.height, TEST_BLOCK_HEIGHT);
+    assert!(!output.spent);
+    assert!(!output.frozen);
+    assert_eq!(helper.wallet.get_balance(), EXPECTED_AMOUNT);
+}
+
+#[tokio::test]
+#[ignore] // Run with --ignored to record live responses
+async fn test_scan_stagenet_output_live() {
+    // This test connects to a live node and can be used to update recordings
+    use monero_rust::WalletState;
+    use std::path::PathBuf;
+
     let spend_public = hex::decode(PUBLIC_SPEND_KEY).unwrap();
     let view_private = hex::decode(SECRET_VIEW_KEY).unwrap();
 
@@ -39,7 +109,7 @@ async fn test_scan_real_stagenet_output() {
         view_private_bytes,
         Network::Stagenet,
         "test_password",
-        PathBuf::from("/tmp/test_stagenet_wallet.bin"),
+        PathBuf::from("/tmp/test_stagenet_wallet_live.bin"),
         TEST_BLOCK_HEIGHT.saturating_sub(10),
     )
     .expect("failed to create view-only wallet");
@@ -47,10 +117,16 @@ async fn test_scan_real_stagenet_output() {
     let wallet_address = wallet.view_pair.legacy_address(Network::Stagenet).to_string();
     assert_eq!(wallet_address, TEST_ADDRESS, "address mismatch");
 
+    // Use STAGENET_NODE env var or default to local node
+    let node_address = std::env::var("STAGENET_NODE")
+        .unwrap_or_else(|_| "127.0.0.1:38081".to_string());
+
     let config = monero_rust::rpc::ConnectionConfig::new(
-        "http://node.monerodevs.org:38089".to_string(),
+        format!("http://{}", node_address),
     );
     wallet.connect(config).await.expect("failed to connect to daemon");
+
+    println!("Connected to stagenet node at {}", node_address);
 
     let outputs_found = wallet
         .scan_block_by_height(TEST_BLOCK_HEIGHT)
@@ -82,6 +158,8 @@ async fn test_scan_real_stagenet_output() {
     assert!(!output.spent);
     assert!(!output.frozen);
     assert_eq!(wallet.get_balance(), EXPECTED_AMOUNT);
+
+    wallet.disconnect().await;
 }
 
 #[test]

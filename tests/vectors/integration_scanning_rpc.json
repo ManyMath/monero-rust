@@ -1,0 +1,26 @@
+[
+  {
+    "route": "get_height",
+    "body": "",
+    "response": "{\r\n  \"hash\": \"68fb5f14d4b17bb65293835ed4b648437879a1226564bea5804f2076a6a168e0\",\r\n  \"height\": 2037532,\r\n  \"status\": \"OK\",\r\n  \"untrusted\": false\r\n}",
+    "is_binary": false
+  },
+  {
+    "route": "json_rpc",
+    "body": "{\"method\":\"get_block\",\"params\":{\"height\":2032104}}",
+    "response": "{\r\n  \"id\": 0,\r\n  \"jsonrpc\": \"2.0\",\r\n  \"result\": {\r\n    \"blob\": \"1010fc8b8dcb06c083c0776307bf582ddbdcfd83107e2dc29a2aff0617a16298d69855bbc8b9cfaed9d76a02a4847c01ffe8837c01eea99aeff4150342a90b5878d43170e1a19a866d0b825d29b40e379664e547be6b82c06863b04de52101ed0fc61a6b55e14682f8409c6b19f5ab57804237fe0cf639af47710a4d7e9e1c0001243b176f1e5e0592eb0c3c82a3f1a2db81d63bdcb545852d44f92b97e9a9cd57\",\r\n    \"block_header\": {\r\n      \"block_size\": 2279,\r\n      \"block_weight\": 2279,\r\n      \"cumulative_difficulty\": 568377393402,\r\n      \"cumulative_difficulty_top64\": 0,\r\n      \"depth\": 5427,\r\n      \"difficulty\": 1158974,\r\n      \"difficulty_top64\": 0,\r\n      \"hash\": \"ee0bf09475c1fcc04e549a35ec152ad764c3b0f47fa7a1d58d1153607c9aaed1\",\r\n      \"height\": 2032104,\r\n      \"long_term_weight\": 176470,\r\n      \"major_version\": 16,\r\n      \"miner_tx_hash\": \"5fa98a22518f2ec4539b49ffd218136d935ed64fa30b7b524d513c6f8af011e3\",\r\n      \"minor_version\": 16,\r\n      \"nonce\": 1792530862,\r\n      \"num_txes\": 1,\r\n      \"orphan_status\": false,\r\n      \"pow_hash\": \"\",\r\n      \"prev_hash\": \"c083c0776307bf582ddbdcfd83107e2dc29a2aff0617a16298d69855bbc8b9cf\",\r\n      \"reward\": 752926233838,\r\n      \"timestamp\": 1768113660,\r\n      \"wide_cumulative_difficulty\": \"0x8455eec0fa\",\r\n      \"wide_difficulty\": \"0x11af3e\"\r\n    },\r\n    \"credits\": 0,\r\n    \"json\": \"{\\n  \\\"major_version\\\": 16, \\n  \\\"minor_version\\\": 16, \\n  \\\"timestamp\\\": 1768113660, \\n  \\\"prev_id\\\": \\\"c083c0776307bf582ddbdcfd83107e2dc29a2aff0617a16298d69855bbc8b9cf\\\", \\n  \\\"nonce\\\": 1792530862, \\n  \\\"miner_tx\\\": {\\n    \\\"version\\\": 2, \\n    \\\"unlock_time\\\": 2032164, \\n    \\\"vin\\\": [ {\\n        \\\"gen\\\": {\\n          \\\"height\\\": 2032104\\n        }\\n      }\\n    ], \\n    \\\"vout\\\": [ {\\n        \\\"amount\\\": 752926233838, \\n        \\\"target\\\": {\\n          \\\"tagged_key\\\": {\\n            \\\"key\\\": \\\"42a90b5878d43170e1a19a866d0b825d29b40e379664e547be6b82c06863b04d\\\", \\n            \\\"view_tag\\\": \\\"e5\\\"\\n          }\\n        }\\n      }\\n    ], \\n    \\\"extra\\\": [ 1, 237, 15, 198, 26, 107, 85, 225, 70, 130, 248, 64, 156, 107, 25, 245, 171, 87, 128, 66, 55, 254, 12, 246, 57, 175, 71, 113, 10, 77, 126, 158, 28\\n    ], \\n    \\\"rct_signatures\\\": {\\n      \\\"type\\\": 0\\n    }\\n  }, \\n  \\\"tx_hashes\\\": [ \\\"243b176f1e5e0592eb0c3c82a3f1a2db81d63bdcb545852d44f92b97e9a9cd57\\\"\\n  ]\\n}\",\r\n    \"miner_tx_hash\": \"5fa98a22518f2ec4539b49ffd218136d935ed64fa30b7b524d513c6f8af011e3\",\r\n    \"status\": \"OK\",\r\n    \"top_hash\": \"\",\r\n    \"tx_hashes\": [\"243b176f1e5e0592eb0c3c82a3f1a2db81d63bdcb545852d44f92b97e9a9cd57\"],\r\n    \"untrusted\": false\r\n  }\r\n}",
+    "is_binary": false
+  },
+  {
+    "route": "get_transactions",
+    "body": "{\"prune\":true,\"txs_hashes\":[\"243b176f1e5e0592eb0c3c82a3f1a2db81d63bdcb545852d44f92b97e9a9cd57\"]}",
+    "response": "{\r\n  \"credits\": 0,\r\n  \"status\": \"OK\",\r\n  \"top_hash\": \"\",\r\n  \"txs\": [{\r\n    \"as_hex\": \"\",\r\n    \"as_json\": \"\",\r\n    \"block_height\": 2032104,\r\n    \"block_timestamp\": 1768113660,\r\n    \"confirmations\": 5428,\r\n    \"double_spend_seen\": false,\r\n    \"in_pool\": false,\r\n    \"output_indices\": [9682524,9682525],\r\n    \"prunable_as_hex\": \"\",\r\n    \"prunable_hash\": \"a8f308c4ceaeee913adadb979370baab504552c087d3b5fecb67ac8c4dfb082f\",\r\n    \"pruned_as_hex\": \"020002020010ac88cb0497cd019dde01870aac2ee602c302a701ac028502f601a0013b1c660e4502fba26258bc0306103f91a0b2dc975fd6d366f973a300988de9a38f4f825f020010f2b69604edd034e2b403a124ce07a803e003bb08119902026e4732090d33b40fbb695d3843b1ad8abba75df712a2aa3aaa84927bf3fd6f83bcda3687190200039c1cda652afb9f86e02825217c6249433c466c083d90ddc19a1581366903f092740003dbb573c96849ab29931b7d87f0963c73ca80ad5fd89052ff974ba6abb55a3694472c011e8e8860d1b277cff07bd33578dae4153aa9956e3a42de5ba2f8f9f9e02bfdb0020901e70460abed2e4ebf0690879a1b70b2f7f96408e929dbeddaf685a62713ca5a0bec8169fd90bda4e65e0ad76460fa3ca0ef9ba2a1cf47f5d19a9a665d6012c085ae9839f4935cfe2f469c2ac9ba2cca2a5965c256c10f739e219441a335\",\r\n    \"tx_hash\": \"243b176f1e5e0592eb0c3c82a3f1a2db81d63bdcb545852d44f92b97e9a9cd57\"\r\n  }],\r\n  \"txs_as_hex\": [\"\"],\r\n  \"untrusted\": false\r\n}",
+    "is_binary": false
+  },
+  {
+    "route": "get_o_indexes.bin",
+    "body": "AREBAQEBAgEBBAR0eGlkCoBfqYoiUY8uxFObSf/SGBNtk17WT6MLe1JNUTxvivAR4w==",
+    "response": "AREBAQEBAgEBFAdjcmVkaXRzBQAAAAAAAAAACW9faW5kZXhlc4UEW76TAAAAAAAGc3RhdHVzCghPSwh0b3BfaGFzaAoACXVudHJ1c3RlZAsA",
+    "is_binary": true
+  }
+]

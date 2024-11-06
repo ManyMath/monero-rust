@@ -1,6 +1,7 @@
 //! Daemon connection integration tests.
 //!
-//! Uses stagenet nodes. Tests pass if ANY node is reachable (resilient to node downtime).
+//! All tests in this file require network access to live stagenet nodes.
+//! They are marked as #[ignore] by default. Run with --ignored to execute them.
 
 use monero_rust::{rpc::ConnectionConfig, wallet_state::WalletState, Network};
 use monero_seed::Seed;
@@ -56,6 +57,8 @@ async fn try_connect_any_node(wallet: &mut WalletState) -> Result<String, String
 }
 
 #[tokio::test]
+#[ignore] // Requires network access to live stagenet nodes
+#[ignore] // Requires network access to live stagenet nodes
 async fn test_connect_to_stagenet() {
     let mut wallet = create_test_wallet("connect");
 
@@ -76,6 +79,7 @@ async fn test_connect_to_stagenet() {
 }
 
 #[tokio::test]
+#[ignore] // Requires network access to live stagenet nodes
 async fn test_connection_health_check() {
     let mut wallet = create_test_wallet("health_check");
 
@@ -96,6 +100,7 @@ async fn test_connection_health_check() {
 }
 
 #[tokio::test]
+#[ignore] // Requires network access to live stagenet nodes
 async fn test_reconnect_after_disconnect() {
     let mut wallet = create_test_wallet("reconnect");
 
@@ -121,6 +126,7 @@ async fn test_reconnect_after_disconnect() {
 }
 
 #[tokio::test]
+#[ignore] // Requires network access to live stagenet nodes
 async fn test_switch_nodes() {
     let mut wallet = create_test_wallet("switch");
 
@@ -148,6 +154,7 @@ async fn test_switch_nodes() {
 }
 
 #[tokio::test]
+#[ignore] // Requires network access to live stagenet nodes
 async fn test_connection_timeout() {
     let mut wallet = create_test_wallet("timeout");
 
@@ -161,6 +168,7 @@ async fn test_connection_timeout() {
 }
 
 #[tokio::test]
+#[ignore] // Requires network access to live stagenet nodes
 async fn test_is_synced() {
     let mut wallet = create_test_wallet("synced");
 
@@ -179,6 +187,7 @@ async fn test_is_synced() {
 }
 
 #[tokio::test]
+#[ignore] // Requires network access to live stagenet nodes
 async fn test_multiple_wallets() {
     let mut wallets = vec![
         create_test_wallet("multi_1"),
@@ -209,6 +218,7 @@ async fn test_multiple_wallets() {
 }
 
 #[tokio::test]
+#[ignore] // Requires network access to live stagenet nodes
 async fn test_daemon_height_updates() {
     let mut wallet = create_test_wallet("height");
 

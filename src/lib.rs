@@ -2,10 +2,14 @@ pub mod crypto;
 pub mod decoy_selection;
 pub mod fee_calculation;
 pub mod input_selection;
+pub mod mock_rpc;
 pub mod rpc;
 pub mod transaction_builder;
 pub mod types;
 pub mod wallet_state;
+
+#[cfg(test)]
+pub mod test_rpc_wrapper;
 
 use monero_wallet::{
     address::{AddressType, MoneroAddress, SubaddressIndex},
