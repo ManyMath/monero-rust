@@ -34,8 +34,10 @@ pub struct OwnedOutputInfo {
     pub amount_xmr: String,
     pub key: String,
     pub key_offset: String,
+    pub commitment_mask: String,
     pub subaddress_index: Option<(u32, u32)>,
     pub payment_id: Option<String>,
+    pub received_output_bytes: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -136,6 +138,29 @@ pub fn derive_keys(mnemonic: &str, network_str: &str) -> Result<DerivedKeys, Str
 ///
 /// This function is generic over the RPC connection type, allowing it to work
 /// with both native HTTP clients and browser-based fetch implementations.
+pub async fn scan_block_for_outputs_with_url(
+    node_url: &str,
+    block_height: u64,
+    mnemonic: &str,
+    network_str: &str,
+) -> Result<BlockScanResult, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use monero_serai::rpc::HttpRpc;
+        let rpc = HttpRpc::new(node_url.to_string())
+            .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
+        scan_block_for_outputs(&rpc, block_height, mnemonic, network_str).await
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        use crate::rpc_serai::WasmRpcConnection;
+        use monero_serai::rpc::Rpc;
+        let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
+        scan_block_for_outputs(&rpc, block_height, mnemonic, network_str).await
+    }
+}
+
 pub async fn scan_block_for_outputs<R: RpcConnection>(
     rpc: &Rpc<R>,
     block_height: u64,
@@ -190,6 +215,7 @@ pub async fn scan_block_for_outputs<R: RpcConnection>(
             let output_index = output.absolute.o;
             let key = hex::encode(output.data.key.compress().to_bytes());
             let key_offset = hex::encode(output.data.key_offset.to_bytes());
+            let commitment_mask = hex::encode(output.data.commitment.mask.to_bytes());
             let subaddress_index = output
                 .metadata
                 .subaddress
@@ -199,6 +225,7 @@ pub async fn scan_block_for_outputs<R: RpcConnection>(
             } else {
                 None
             };
+            let received_output_bytes = hex::encode(output.serialize());
 
             outputs.push(OwnedOutputInfo {
                 tx_hash: tx_hash.clone(),
@@ -207,8 +234,10 @@ pub async fn scan_block_for_outputs<R: RpcConnection>(
                 amount_xmr,
                 key,
                 key_offset,
+                commitment_mask,
                 subaddress_index,
                 payment_id,
+                received_output_bytes,
             });
         }
     }
