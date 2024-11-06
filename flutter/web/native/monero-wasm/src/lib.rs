@@ -10,8 +10,18 @@ use serde::{Serialize, Deserialize};
 
 #[cfg(target_arch = "wasm32")]
 pub mod rpc_adapter;
-#[cfg(target_arch = "wasm32")]
-use rpc_adapter::WasmRpcAdapter;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod rpc_serai;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod scanner_native;
+
+pub mod tx_builder;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use scanner_native::scan_block_for_outputs_with_url;
+
+pub use tx_builder::native;
 
 pub fn test_integration() -> String {
     "monero-wasm works".to_string()
@@ -101,6 +111,7 @@ pub fn derive_keys(mnemonic: &str, network_str: &str) -> Result<DerivedKeys, Str
     })
 }
 
+#[cfg(target_arch = "wasm32")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockScanResult {
     pub block_height: u64,
@@ -110,6 +121,7 @@ pub struct BlockScanResult {
     pub outputs: Vec<OwnedOutputInfo>,
 }
 
+#[cfg(target_arch = "wasm32")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OwnedOutputInfo {
     pub tx_hash: String,
@@ -118,8 +130,10 @@ pub struct OwnedOutputInfo {
     pub amount_xmr: String,
     pub key: String,
     pub key_offset: String,
+    pub commitment_mask: String,
     pub subaddress_index: Option<(u32, u32)>,
     pub payment_id: Option<String>,
+    pub received_output_bytes: String,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -132,6 +146,9 @@ use monero_serai::{
         ViewPair, Scanner,
     },
 };
+
+#[cfg(target_arch = "wasm32")]
+use rpc_adapter::WasmRpcAdapter;
 
 #[cfg(target_arch = "wasm32")]
 fn spend_key_from_seed_wasm(seed: &monero_serai::wallet::seed::Seed) -> EdwardsPoint {
@@ -154,7 +171,7 @@ fn view_key_from_seed_wasm(seed: &monero_serai::wallet::seed::Seed) -> Scalar {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub async fn scan_block_for_outputs(
+pub async fn scan_block_for_outputs_with_url(
     node_url: &str,
     block_height: u64,
     mnemonic: &str,
@@ -220,6 +237,9 @@ pub async fn scan_block_for_outputs(
                 None
             };
 
+            let commitment_mask = hex::encode(output.data.commitment.mask.to_bytes());
+            let received_output_bytes = hex::encode(output.serialize());
+
             outputs.push(OwnedOutputInfo {
                 tx_hash: tx_hash.clone(),
                 output_index,
@@ -227,8 +247,10 @@ pub async fn scan_block_for_outputs(
                 amount_xmr,
                 key,
                 key_offset,
+                commitment_mask,
                 subaddress_index,
                 payment_id,
+                received_output_bytes,
             });
         }
     }
@@ -241,6 +263,7 @@ pub async fn scan_block_for_outputs(
         outputs,
     })
 }
+
 
 #[cfg(test)]
 mod tests {
