@@ -1,5 +1,6 @@
 pub mod crypto;
 pub mod decoy_selection;
+pub mod dyn_rpc;
 pub mod fee_calculation;
 pub mod input_selection;
 pub mod mock_rpc;

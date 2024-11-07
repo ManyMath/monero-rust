@@ -181,7 +181,7 @@ pub struct WalletState {
 
     /// RPC client (runtime only, re-establish after loading)
     #[serde(skip)]
-    pub rpc_client: std::sync::Arc<tokio::sync::RwLock<Option<monero_simple_request_rpc::SimpleRequestRpc>>>,
+    pub rpc_client: std::sync::Arc<tokio::sync::RwLock<Option<crate::dyn_rpc::DynRpc>>>,
 
     #[serde(skip)]
     pub health_check_handle: Option<tokio::task::JoinHandle<()>>,
@@ -898,8 +898,6 @@ impl WalletState {
 
     /// Connect to a Monero daemon. Disconnects any existing connection first.
     pub async fn connect(&mut self, config: crate::rpc::ConnectionConfig) -> Result<(), WalletError> {
-        use monero_simple_request_rpc::SimpleRequestRpc;
-
         // Already connected to this daemon
         if self.is_connected && self.daemon_address.as_ref() == Some(&config.daemon_address) {
             return Ok(());
@@ -910,10 +908,11 @@ impl WalletState {
         }
 
         let url = config.build_url();
-        let rpc = SimpleRequestRpc::with_custom_timeout(url.as_str().to_string(), config.timeout)
+        let base_rpc = monero_simple_request_rpc::SimpleRequestRpc::with_custom_timeout(url.as_str().to_string(), config.timeout)
             .await
             .map_err(WalletError::RpcError)?;
 
+        let rpc = crate::dyn_rpc::DynRpc::from(base_rpc);
         let daemon_height = rpc.get_height().await.map_err(WalletError::RpcError)?;
 
         self.daemon_address = Some(config.daemon_address.clone());
@@ -948,7 +947,7 @@ impl WalletState {
         self.is_connected
     }
 
-    async fn get_rpc(&self) -> Result<monero_simple_request_rpc::SimpleRequestRpc, WalletError> {
+    async fn get_rpc(&self) -> Result<crate::dyn_rpc::DynRpc, WalletError> {
         let client = self.rpc_client.read().await;
         client.clone().ok_or(WalletError::NotConnected)
     }
@@ -1063,7 +1062,7 @@ impl WalletState {
 
     async fn query_transaction_metadata(
         &self,
-        rpc: &monero_simple_request_rpc::SimpleRequestRpc,
+        rpc: &crate::dyn_rpc::DynRpc,
         txids: &[[u8; 32]],
     ) -> Result<HashMap<[u8; 32], TransactionMetadata>, WalletError> {
         use serde_json::{json, Value};
@@ -1188,25 +1187,24 @@ impl WalletState {
     }
 
     async fn attempt_reconnect(
-        rpc_client: std::sync::Arc<tokio::sync::RwLock<Option<monero_simple_request_rpc::SimpleRequestRpc>>>,
+        rpc_client: std::sync::Arc<tokio::sync::RwLock<Option<crate::dyn_rpc::DynRpc>>>,
         config: Option<crate::rpc::ConnectionConfig>,
         policy: crate::rpc::ReconnectionPolicy,
     ) {
-        use monero_simple_request_rpc::SimpleRequestRpc;
-
         let Some(config) = config else { return };
 
         for attempt in 0..policy.max_attempts {
             tokio::time::sleep(policy.delay_for_attempt(attempt)).await;
 
             let url = config.build_url();
-            let Ok(new_rpc) = SimpleRequestRpc::with_custom_timeout(
+            let Ok(base_rpc) = monero_simple_request_rpc::SimpleRequestRpc::with_custom_timeout(
                 url.as_str().to_string(),
                 config.timeout,
             ).await else {
                 continue;
             };
 
+            let new_rpc = crate::dyn_rpc::DynRpc::from(base_rpc);
             if new_rpc.get_height().await.is_ok() {
                 let mut lock = rpc_client.write().await;
                 *lock = Some(new_rpc);

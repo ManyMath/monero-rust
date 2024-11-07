@@ -57,8 +57,7 @@ async fn try_connect_any_node(wallet: &mut WalletState) -> Result<String, String
 }
 
 #[tokio::test]
-#[ignore] // Requires network access to live stagenet nodes
-#[ignore] // Requires network access to live stagenet nodes
+#[ignore]
 async fn test_connect_to_stagenet() {
     let mut wallet = create_test_wallet("connect");
 

@@ -56,3 +56,4 @@ cbindgen = "0.24.0"
 
 [dev-dependencies]
 tempfile = "3.8"
+rand_chacha = "0.3"
