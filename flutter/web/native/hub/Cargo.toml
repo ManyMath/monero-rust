@@ -27,3 +27,5 @@ monero-wasm = { path = "../monero-wasm" }
 # Uncomment below to target the web.
 tokio_with_wasm = { version = "0.8.5", features = ["rt", "macros", "time"] }
 wasm-bindgen = "0.2.100"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["console"] }

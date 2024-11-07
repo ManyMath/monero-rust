@@ -40,14 +40,20 @@ pub struct BalanceResponse {
 
 #[derive(Deserialize, DartSignal)]
 pub struct CreateTransactionRequest {
+    pub node_url: String,
+    pub seed: String,
+    pub network: String,
     pub destination: String,
     pub amount: u64,
 }
 
 #[derive(Serialize, RustSignal)]
 pub struct TransactionCreatedResponse {
+    pub success: bool,
+    pub error: Option<String>,
     pub tx_id: String,
     pub fee: u64,
+    pub tx_blob: Option<String>,
 }
 
 #[derive(Deserialize, DartSignal)]
@@ -106,8 +112,10 @@ pub struct OwnedOutput {
     pub amount_xmr: String,
     pub key: String,
     pub key_offset: String,
+    pub commitment_mask: String,
     pub subaddress_index: Option<(u32, u32)>,
     pub payment_id: Option<String>,
+    pub received_output_bytes: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, RustSignal)]
@@ -119,4 +127,17 @@ pub struct BlockScanResponse {
     pub block_timestamp: u64,
     pub tx_count: u32,
     pub outputs: Vec<OwnedOutput>,
+}
+
+#[derive(Deserialize, DartSignal)]
+pub struct BroadcastTransactionRequest {
+    pub node_url: String,
+    pub tx_blob: String,
+}
+
+#[derive(Serialize, RustSignal)]
+pub struct TransactionBroadcastResponse {
+    pub success: bool,
+    pub error: Option<String>,
+    pub tx_id: Option<String>,
 }

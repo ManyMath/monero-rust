@@ -1,12 +1,28 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredOutput {
+    pub tx_hash: String,
+    pub output_index: u8,
+    pub amount: u64,
+    pub key: String,
+    pub key_offset: String,
+    pub commitment_mask: String,
+    pub subaddress: Option<(u32, u32)>,
+    pub payment_id: Option<String>,
+    pub received_output_bytes: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletState {
     pub address: String,
     pub current_height: u64,
     pub daemon_height: u64,
     pub confirmed_balance: u64,
     pub unconfirmed_balance: u64,
+    pub seed: Option<String>,
+    pub network: Option<String>,
+    pub outputs: Vec<StoredOutput>,
 }
 
 #[derive(Debug, Clone)]
@@ -41,8 +57,21 @@ pub struct BlockData {
 
 #[derive(Debug, Clone)]
 pub struct BuildTransaction {
+    pub node_url: String,
+    pub seed: String,
+    pub network: String,
     pub destination: String,
     pub amount: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct GetWalletData;
+
+#[derive(Debug, Clone)]
+pub struct WalletData {
+    pub seed: Option<String>,
+    pub network: Option<String>,
+    pub outputs: Vec<StoredOutput>,
 }
 
 #[derive(Debug, Clone)]
@@ -59,3 +88,10 @@ pub struct UpdateBalance {
 
 #[derive(Debug, Clone)]
 pub struct GetWalletState;
+
+#[derive(Debug, Clone)]
+pub struct StoreOutputs {
+    pub seed: String,
+    pub network: String,
+    pub outputs: Vec<StoredOutput>,
+}
