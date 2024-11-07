@@ -17,7 +17,8 @@ impl Actor for TxBuilderActor {}
 impl TxBuilderActor {
     pub fn new(self_addr: Address<Self>) -> Self {
         let mut _owned_tasks = JoinSet::new();
-        _owned_tasks.spawn(Self::listen_to_tx_requests(self_addr));
+        _owned_tasks.spawn(Self::listen_to_tx_requests(self_addr.clone()));
+        _owned_tasks.spawn(Self::listen_to_broadcast_requests(self_addr));
 
         TxBuilderActor {
             wallet_actor: None,
@@ -40,10 +41,51 @@ impl TxBuilderActor {
             let request = signal_pack.message;
             let _ = self_addr
                 .notify(BuildTransaction {
+                    node_url: request.node_url,
+                    seed: request.seed,
+                    network: request.network,
                     destination: request.destination,
                     amount: request.amount,
                 })
                 .await;
+        }
+    }
+
+    async fn listen_to_broadcast_requests(_self_addr: Address<Self>) {
+        let receiver = BroadcastTransactionRequest::get_dart_signal_receiver();
+        while let Some(signal_pack) = receiver.recv().await {
+            let request = signal_pack.message;
+
+            #[cfg(target_arch = "wasm32")]
+            web_sys::console::log_1(&"Broadcasting transaction...".into());
+
+            // Spawn in local task to avoid Send requirements
+            wasm_bindgen_futures::spawn_local(async move {
+                match monero_wasm::native::broadcast_transaction(&request.node_url, &request.tx_blob).await {
+                    Ok(()) => {
+                        #[cfg(target_arch = "wasm32")]
+                        web_sys::console::log_1(&"Transaction broadcast successful!".into());
+
+                        TransactionBroadcastResponse {
+                            success: true,
+                            error: None,
+                            tx_id: None, // We could parse this from tx_blob if needed
+                        }
+                        .send_signal_to_dart();
+                    }
+                    Err(e) => {
+                        #[cfg(target_arch = "wasm32")]
+                        web_sys::console::error_1(&format!("Broadcast failed: {}", e).into());
+
+                        TransactionBroadcastResponse {
+                            success: false,
+                            error: Some(format!("Broadcast failed: {}", e)),
+                            tx_id: None,
+                        }
+                        .send_signal_to_dart();
+                    }
+                }
+            });
         }
     }
 }
@@ -51,12 +93,115 @@ impl TxBuilderActor {
 #[async_trait]
 impl Notifiable<BuildTransaction> for TxBuilderActor {
     async fn notify(&mut self, msg: BuildTransaction, _ctx: &Context<Self>) {
-        let fee = msg.amount / 100;
+        if let Some(wallet_addr) = &mut self.wallet_actor {
+            match wallet_addr.send(GetWalletData).await {
+                Ok(wallet_data) => {
+                    if wallet_data.outputs.is_empty() {
+                        TransactionCreatedResponse {
+                            success: false,
+                            error: Some("No outputs available to spend".to_string()),
+                            tx_id: String::new(),
+                            fee: 0,
+                            tx_blob: None,
+                        }
+                        .send_signal_to_dart();
+                        return;
+                    }
 
-        TransactionCreatedResponse {
-            tx_id: format!("tx_{}", msg.amount),
-            fee,
+                    // Spawn transaction building in local task to avoid Send requirements
+                    let build_fut = self.build_transaction_impl_inner(msg, wallet_data);
+                    wasm_bindgen_futures::spawn_local(async move {
+                        match build_fut.await {
+                            Ok((tx_id, fee, tx_blob)) => {
+                                #[cfg(target_arch = "wasm32")]
+                                web_sys::console::log_1(&format!("Transaction created successfully! TX ID: {}, Fee: {}", tx_id, fee).into());
+
+                                TransactionCreatedResponse {
+                                    success: true,
+                                    error: None,
+                                    tx_id,
+                                    fee,
+                                    tx_blob: Some(tx_blob),
+                                }
+                                .send_signal_to_dart();
+                            }
+                            Err(e) => {
+                                #[cfg(target_arch = "wasm32")]
+                                web_sys::console::error_1(&format!("Transaction creation failed: {}", e).into());
+
+                                TransactionCreatedResponse {
+                                    success: false,
+                                    error: Some(e),
+                                    tx_id: String::new(),
+                                    fee: 0,
+                                    tx_blob: None,
+                                }
+                                .send_signal_to_dart();
+                            }
+                        }
+                    });
+                }
+                Err(_) => {
+                    TransactionCreatedResponse {
+                        success: false,
+                        error: Some("Failed to get wallet data".to_string()),
+                        tx_id: String::new(),
+                        fee: 0,
+                        tx_blob: None,
+                    }
+                    .send_signal_to_dart();
+                }
+            }
+        } else {
+            TransactionCreatedResponse {
+                success: false,
+                error: Some("Wallet actor not initialized".to_string()),
+                tx_id: String::new(),
+                fee: 0,
+                tx_blob: None,
+            }
+            .send_signal_to_dart();
         }
-        .send_signal_to_dart();
+    }
+}
+
+impl TxBuilderActor {
+    fn build_transaction_impl_inner(
+        &self,
+        msg: BuildTransaction,
+        wallet_data: WalletData,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(String, u64, String), String>>>> {
+        use monero_wasm::native::{create_transaction, TransactionResult};
+
+        let outputs_vec: Vec<monero_wasm::native::StoredOutputData> = wallet_data
+            .outputs
+            .iter()
+            .map(|o| monero_wasm::native::StoredOutputData {
+                tx_hash: o.tx_hash.clone(),
+                output_index: o.output_index,
+                amount: o.amount,
+                key: o.key.clone(),
+                key_offset: o.key_offset.clone(),
+                commitment_mask: o.commitment_mask.clone(),
+                subaddress: o.subaddress,
+                payment_id: o.payment_id.clone(),
+                received_output_bytes: o.received_output_bytes.clone(),
+            })
+            .collect();
+
+        Box::pin(async move {
+            let result: TransactionResult = create_transaction(
+                &msg.node_url,
+                &msg.seed,
+                &msg.network,
+                outputs_vec,
+                &msg.destination,
+                msg.amount,
+            )
+            .await
+            .map_err(|e| format!("Transaction building failed: {}", e))?;
+
+            Ok((result.tx_id, result.fee, result.tx_blob))
+        })
     }
 }

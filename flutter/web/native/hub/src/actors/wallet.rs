@@ -33,6 +33,9 @@ impl WalletActor {
                 daemon_height: 0,
                 confirmed_balance: 0,
                 unconfirmed_balance: 0,
+                seed: None,
+                network: None,
+                outputs: Vec::new(),
             },
             sync_actor: None,
             rpc_actor: None,
@@ -158,7 +161,10 @@ impl WalletActor {
         while let Some(signal_pack) = receiver.recv().await {
             let request = signal_pack.message;
 
-            match monero_wasm::scan_block_for_outputs(
+            let seed = request.seed.clone();
+            let network = request.network.clone();
+
+            match monero_wasm::scan_block_for_outputs_with_url(
                 &request.node_url,
                 request.block_height,
                 &request.seed,
@@ -169,18 +175,44 @@ impl WalletActor {
                 Ok(result) => {
                     let outputs = result
                         .outputs
-                        .into_iter()
+                        .iter()
                         .map(|o| OwnedOutput {
-                            tx_hash: o.tx_hash,
+                            tx_hash: o.tx_hash.clone(),
                             output_index: o.output_index,
                             amount: o.amount,
-                            amount_xmr: o.amount_xmr,
-                            key: o.key,
-                            key_offset: o.key_offset,
+                            amount_xmr: o.amount_xmr.clone(),
+                            key: o.key.clone(),
+                            key_offset: o.key_offset.clone(),
+                            commitment_mask: o.commitment_mask.clone(),
                             subaddress_index: o.subaddress_index,
-                            payment_id: o.payment_id,
+                            payment_id: o.payment_id.clone(),
+                            received_output_bytes: o.received_output_bytes.clone(),
                         })
                         .collect();
+
+                    let stored_outputs: Vec<StoredOutput> = result
+                        .outputs
+                        .iter()
+                        .map(|o| StoredOutput {
+                            tx_hash: o.tx_hash.clone(),
+                            output_index: o.output_index,
+                            amount: o.amount,
+                            key: o.key.clone(),
+                            key_offset: o.key_offset.clone(),
+                            commitment_mask: o.commitment_mask.clone(),
+                            subaddress: o.subaddress_index,
+                            payment_id: o.payment_id.clone(),
+                            received_output_bytes: o.received_output_bytes.clone(),
+                        })
+                        .collect();
+
+                    let _ = self_addr
+                        .notify(StoreOutputs {
+                            seed,
+                            network,
+                            outputs: stored_outputs,
+                        })
+                        .await;
 
                     BlockScanResponse {
                         success: true,
@@ -237,5 +269,26 @@ impl Notifiable<GetBalanceRequest> for WalletActor {
             unconfirmed: self.state.unconfirmed_balance,
         }
         .send_signal_to_dart();
+    }
+}
+#[async_trait]
+impl Notifiable<StoreOutputs> for WalletActor {
+    async fn notify(&mut self, msg: StoreOutputs, _ctx: &Context<Self>) {
+        self.state.seed = Some(msg.seed);
+        self.state.network = Some(msg.network);
+        self.state.outputs.extend(msg.outputs);
+    }
+}
+
+#[async_trait]
+impl Handler<GetWalletData> for WalletActor {
+    type Result = WalletData;
+
+    async fn handle(&mut self, _msg: GetWalletData, _ctx: &Context<Self>) -> Self::Result {
+        WalletData {
+            seed: self.state.seed.clone(),
+            network: self.state.network.clone(),
+            outputs: self.state.outputs.clone(),
+        }
     }
 }
