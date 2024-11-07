@@ -34,6 +34,16 @@ class _KeysViewState extends State<KeysView> {
   BlockScanResponse? _scanResult;
   String? _scanError;
 
+  final _destinationController = TextEditingController();
+  final _amountController = TextEditingController();
+  bool _isCreatingTx = false;
+  TransactionCreatedResponse? _txResult;
+  String? _txError;
+
+  bool _isBroadcasting = false;
+  TransactionBroadcastResponse? _broadcastResult;
+  String? _broadcastError;
+
   int? _expandedPanel;
 
   @override
@@ -90,6 +100,34 @@ class _KeysViewState extends State<KeysView> {
         }
       });
     });
+
+    TransactionCreatedResponse.rustSignalStream.listen((signal) {
+      setState(() {
+        _isCreatingTx = false;
+        if (signal.message.success) {
+          _txResult = signal.message;
+          _txError = null;
+          _broadcastResult = null;
+          _broadcastError = null;
+        } else {
+          _txResult = null;
+          _txError = signal.message.error ?? 'Unknown error during transaction creation';
+        }
+      });
+    });
+
+    TransactionBroadcastResponse.rustSignalStream.listen((signal) {
+      setState(() {
+        _isBroadcasting = false;
+        if (signal.message.success) {
+          _broadcastResult = signal.message;
+          _broadcastError = null;
+        } else {
+          _broadcastResult = null;
+          _broadcastError = signal.message.error ?? 'Unknown error during broadcast';
+        }
+      });
+    });
   }
 
   @override
@@ -99,6 +137,8 @@ class _KeysViewState extends State<KeysView> {
     _controller.dispose();
     _nodeUrlController.dispose();
     _blockHeightController.dispose();
+    _destinationController.dispose();
+    _amountController.dispose();
     super.dispose();
   }
 
@@ -223,6 +263,106 @@ class _KeysViewState extends State<KeysView> {
       blockHeight: Uint64(BigInt.from(blockHeight)),
       seed: result.normalizedInput!,
       network: _network,
+    ).sendSignalToRust();
+  }
+
+  void _createTransaction() {
+    final result = KeyParser.parse(_controller.text);
+
+    if (!result.isValid || result.normalizedInput == null) {
+      setState(() {
+        _txError = 'Please enter a valid seed phrase first';
+      });
+      return;
+    }
+
+    if (_scanResult == null || _scanResult!.outputs.isEmpty) {
+      setState(() {
+        _txError = 'No outputs available. Scan a block with outputs first.';
+      });
+      return;
+    }
+
+    final destination = _destinationController.text.trim();
+    if (destination.isEmpty) {
+      setState(() {
+        _txError = 'Please enter a destination address';
+      });
+      return;
+    }
+
+    final amountStr = _amountController.text.trim();
+    if (amountStr.isEmpty) {
+      setState(() {
+        _txError = 'Please enter an amount';
+      });
+      return;
+    }
+
+    final amount = int.tryParse(amountStr);
+    if (amount == null || amount <= 0) {
+      setState(() {
+        _txError = 'Please enter a valid amount in atomic units';
+      });
+      return;
+    }
+
+    final nodeUrl = _nodeUrlController.text.trim();
+    if (nodeUrl.isEmpty) {
+      setState(() {
+        _txError = 'Please enter a node URL';
+      });
+      return;
+    }
+
+    setState(() {
+      _isCreatingTx = true;
+      _txResult = null;
+      _txError = null;
+    });
+
+    final fullNodeUrl = nodeUrl.startsWith('http://') || nodeUrl.startsWith('https://')
+        ? nodeUrl
+        : 'http://$nodeUrl';
+
+    CreateTransactionRequest(
+      nodeUrl: fullNodeUrl,
+      seed: result.normalizedInput!,
+      network: _network,
+      destination: destination,
+      amount: Uint64(BigInt.from(amount)),
+    ).sendSignalToRust();
+  }
+
+  void _broadcastTransaction() {
+    if (_txResult == null || _txResult!.txBlob == null) {
+      setState(() {
+        _broadcastError = 'No transaction to broadcast';
+      });
+      return;
+    }
+
+    final nodeUrl = _nodeUrlController.text.trim();
+    if (nodeUrl.isEmpty) {
+      setState(() {
+        _broadcastError = 'Please enter a node URL';
+      });
+      return;
+    }
+
+    setState(() {
+      _isBroadcasting = true;
+      _broadcastResult = null;
+      _broadcastError = null;
+    });
+
+    final fullNodeUrl = nodeUrl.startsWith('http://') || nodeUrl.startsWith('https://')
+        ? nodeUrl
+        : 'http://$nodeUrl';
+
+    BroadcastTransactionRequest(
+      nodeUrl: fullNodeUrl,
+      txBlob: _txResult!.txBlob!,
     ).sendSignalToRust();
   }
 
@@ -561,6 +701,160 @@ class _KeysViewState extends State<KeysView> {
                         ),
                       ),
                       isExpanded: _expandedPanel == 1,
+                    ),
+                    ExpansionPanel(
+                      headerBuilder: (BuildContext context, bool isExpanded) {
+                        return const ListTile(
+                          title: Text(
+                            'Create Transaction',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        );
+                      },
+                      body: Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            TextField(
+                              controller: _destinationController,
+                              decoration: const InputDecoration(
+                                labelText: 'Destination Address',
+                                hintText: 'Enter recipient Monero address',
+                                border: OutlineInputBorder(),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            TextField(
+                              controller: _amountController,
+                              decoration: const InputDecoration(
+                                labelText: 'Amount (atomic units)',
+                                hintText: '1000000000000 = 1 XMR',
+                                border: OutlineInputBorder(),
+                                helperText: '1 XMR = 1,000,000,000,000 atomic units',
+                              ),
+                              keyboardType: TextInputType.number,
+                            ),
+                            const SizedBox(height: 16),
+                            ElevatedButton.icon(
+                              onPressed: _isCreatingTx ? null : _createTransaction,
+                              icon: _isCreatingTx
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(strokeWidth: 2),
+                                    )
+                                  : const Icon(Icons.send),
+                              label: Text(_isCreatingTx ? 'Creating Transaction...' : 'Create Transaction'),
+                            ),
+                            if (_txError != null) ...[
+                              const SizedBox(height: 16),
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.red.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: Colors.red.shade200),
+                                ),
+                                child: Text(
+                                  'Transaction Error: $_txError',
+                                  style: TextStyle(color: Colors.red.shade900),
+                                ),
+                              ),
+                            ],
+                            if (_txResult != null && _txResult!.success) ...[
+                              const SizedBox(height: 16),
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.green.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: Colors.green.shade200),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Transaction Created',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.green.shade900,
+                                        fontSize: 16,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    _buildScanResultRow('TX ID', _txResult!.txId),
+                                    _buildScanResultRow('Fee', '${_txResult!.fee} atomic units'),
+                                    if (_txResult!.txBlob != null)
+                                      _buildScanResultRow('TX Blob', _txResult!.txBlob!.substring(0, 64) + '...'),
+                                    const SizedBox(height: 12),
+                                    ElevatedButton.icon(
+                                      onPressed: _isBroadcasting ? null : _broadcastTransaction,
+                                      icon: _isBroadcasting
+                                          ? const SizedBox(
+                                              width: 16,
+                                              height: 16,
+                                              child: CircularProgressIndicator(strokeWidth: 2),
+                                            )
+                                          : const Icon(Icons.upload),
+                                      label: Text(_isBroadcasting ? 'Broadcasting...' : 'Broadcast Transaction'),
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: Colors.green.shade700,
+                                        foregroundColor: Colors.white,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                            if (_broadcastError != null) ...[
+                              const SizedBox(height: 16),
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.red.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: Colors.red.shade200),
+                                ),
+                                child: Text(
+                                  'Broadcast Error: $_broadcastError',
+                                  style: TextStyle(color: Colors.red.shade900),
+                                ),
+                              ),
+                            ],
+                            if (_broadcastResult != null && _broadcastResult!.success) ...[
+                              const SizedBox(height: 16),
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.blue.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: Colors.blue.shade200),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Transaction Broadcast Successfully!',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.blue.shade900,
+                                        fontSize: 16,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      'The transaction has been submitted to the network.',
+                                      style: TextStyle(color: Colors.blue.shade900),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      isExpanded: _expandedPanel == 2,
                     ),
                   ],
                 ),
