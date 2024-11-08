@@ -54,6 +54,7 @@ pub struct TransactionCreatedResponse {
     pub tx_id: String,
     pub fee: u64,
     pub tx_blob: Option<String>,
+    pub spent_output_hashes: Vec<String>,
 }
 
 #[derive(Deserialize, DartSignal)]
@@ -116,6 +117,8 @@ pub struct OwnedOutput {
     pub subaddress_index: Option<(u32, u32)>,
     pub payment_id: Option<String>,
     pub received_output_bytes: String,
+    pub block_height: u64,
+    pub spent: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, RustSignal)]
@@ -133,6 +136,7 @@ pub struct BlockScanResponse {
 pub struct BroadcastTransactionRequest {
     pub node_url: String,
     pub tx_blob: String,
+    pub spent_output_hashes: Vec<String>,
 }
 
 #[derive(Serialize, RustSignal)]

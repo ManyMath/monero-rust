@@ -38,6 +38,8 @@ pub struct OwnedOutputInfo {
     pub subaddress_index: Option<(u32, u32)>,
     pub payment_id: Option<String>,
     pub received_output_bytes: String,
+    pub block_height: u64,
+    pub spent: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -238,6 +240,8 @@ pub async fn scan_block_for_outputs<R: RpcConnection>(
                 subaddress_index,
                 payment_id,
                 received_output_bytes,
+                block_height,
+                spent: false,
             });
         }
     }

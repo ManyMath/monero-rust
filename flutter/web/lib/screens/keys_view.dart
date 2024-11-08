@@ -363,6 +363,7 @@ class _KeysViewState extends State<KeysView> {
     BroadcastTransactionRequest(
       nodeUrl: fullNodeUrl,
       txBlob: _txResult!.txBlob!,
+      spentOutputHashes: _txResult!.spentOutputHashes,
     ).sendSignalToRust();
   }
 

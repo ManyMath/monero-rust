@@ -11,6 +11,8 @@ pub struct StoredOutput {
     pub subaddress: Option<(u32, u32)>,
     pub payment_id: Option<String>,
     pub received_output_bytes: String,
+    pub block_height: u64,
+    pub spent: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,4 +96,29 @@ pub struct StoreOutputs {
     pub seed: String,
     pub network: String,
     pub outputs: Vec<StoredOutput>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MarkOutputsSpent {
+    pub tx_hashes: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct GetWalletHeight;
+
+#[derive(Debug, Clone)]
+pub struct WalletHeight {
+    pub current_height: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct BroadcastSuccess {
+    pub spent_outputs: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BroadcastTransaction {
+    pub node_url: String,
+    pub tx_blob: String,
+    pub spent_output_hashes: Vec<String>,
 }
