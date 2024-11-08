@@ -187,6 +187,8 @@ impl WalletActor {
                             subaddress_index: o.subaddress_index,
                             payment_id: o.payment_id.clone(),
                             received_output_bytes: o.received_output_bytes.clone(),
+                            block_height: o.block_height,
+                            spent: o.spent,
                         })
                         .collect();
 
@@ -203,6 +205,8 @@ impl WalletActor {
                             subaddress: o.subaddress_index,
                             payment_id: o.payment_id.clone(),
                             received_output_bytes: o.received_output_bytes.clone(),
+                            block_height: o.block_height,
+                            spent: o.spent,
                         })
                         .collect();
 
@@ -276,7 +280,18 @@ impl Notifiable<StoreOutputs> for WalletActor {
     async fn notify(&mut self, msg: StoreOutputs, _ctx: &Context<Self>) {
         self.state.seed = Some(msg.seed);
         self.state.network = Some(msg.network);
+
+        // Update current_height to the highest block_height among new outputs
+        for output in &msg.outputs {
+            if output.block_height > self.state.current_height {
+                self.state.current_height = output.block_height;
+            }
+        }
+
         self.state.outputs.extend(msg.outputs);
+
+        // Recalculate balances after adding outputs
+        self.recalculate_balances();
     }
 }
 
@@ -290,5 +305,60 @@ impl Handler<GetWalletData> for WalletActor {
             network: self.state.network.clone(),
             outputs: self.state.outputs.clone(),
         }
+    }
+}
+
+#[async_trait]
+impl Notifiable<MarkOutputsSpent> for WalletActor {
+    async fn notify(&mut self, msg: MarkOutputsSpent, _ctx: &Context<Self>) {
+        for output in &mut self.state.outputs {
+            if msg.tx_hashes.contains(&output.tx_hash) {
+                output.spent = true;
+            }
+        }
+
+        // Recalculate balances after marking outputs as spent
+        self.recalculate_balances();
+    }
+}
+
+#[async_trait]
+impl Handler<GetWalletHeight> for WalletActor {
+    type Result = WalletHeight;
+
+    async fn handle(&mut self, _msg: GetWalletHeight, _ctx: &Context<Self>) -> Self::Result {
+        WalletHeight {
+            current_height: self.state.current_height,
+        }
+    }
+}
+
+impl WalletActor {
+    fn recalculate_balances(&mut self) {
+        const CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE: u64 = 10;
+
+        let mut confirmed = 0u64;
+        let mut unconfirmed = 0u64;
+
+        for output in &self.state.outputs {
+            if output.spent {
+                continue;
+            }
+
+            let confirmations = if self.state.current_height > output.block_height {
+                self.state.current_height - output.block_height
+            } else {
+                0
+            };
+
+            if confirmations >= CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE {
+                confirmed += output.amount;
+            } else {
+                unconfirmed += output.amount;
+            }
+        }
+
+        self.state.confirmed_balance = confirmed;
+        self.state.unconfirmed_balance = unconfirmed;
     }
 }
