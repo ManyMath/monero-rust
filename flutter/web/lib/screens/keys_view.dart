@@ -33,6 +33,7 @@ class _KeysViewState extends State<KeysView> {
 
   BlockScanResponse? _scanResult;
   String? _scanError;
+  List<OwnedOutput> _allOutputs = [];
 
   final _destinationController = TextEditingController();
   final _amountController = TextEditingController();
@@ -94,6 +95,15 @@ class _KeysViewState extends State<KeysView> {
         if (signal.message.success) {
           _scanResult = signal.message;
           _scanError = null;
+          // Add new outputs to the list, avoiding duplicates
+          for (var output in signal.message.outputs) {
+            final exists = _allOutputs.any((o) =>
+              o.txHash == output.txHash && o.outputIndex == output.outputIndex
+            );
+            if (!exists) {
+              _allOutputs.add(output);
+            }
+          }
         } else {
           _scanResult = null;
           _scanError = signal.message.error ?? 'Unknown error during scan';
@@ -705,6 +715,109 @@ class _KeysViewState extends State<KeysView> {
                     ),
                     ExpansionPanel(
                       headerBuilder: (BuildContext context, bool isExpanded) {
+                        return ListTile(
+                          title: const Text(
+                            'Coins',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          subtitle: Text(
+                            '${_allOutputs.length} output(s)',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                        );
+                      },
+                      body: Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: _allOutputs.isEmpty
+                            ? const Center(
+                                child: Padding(
+                                  padding: EdgeInsets.all(16.0),
+                                  child: Text(
+                                    'No outputs found. Scan blocks to find outputs.',
+                                    style: TextStyle(color: Colors.grey),
+                                  ),
+                                ),
+                              )
+                            : Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: _allOutputs.map((output) {
+                                  final outputHeight = output.blockHeight.toInt();
+                                  final currentHeight = _scanResult?.blockHeight.toInt() ?? outputHeight;
+                                  final confirmations = outputHeight > 0
+                                      ? currentHeight - outputHeight
+                                      : 0;
+                                  final isSpendable = confirmations >= 10 && !output.spent;
+                                  final statusColor = output.spent
+                                      ? Colors.grey
+                                      : isSpendable
+                                          ? Colors.green
+                                          : Colors.orange;
+                                  final statusText = output.spent
+                                      ? 'SPENT'
+                                      : isSpendable
+                                          ? 'SPENDABLE'
+                                          : 'LOCKED ($confirmations/10)';
+
+                                  return Card(
+                                    margin: const EdgeInsets.only(bottom: 12),
+                                    elevation: 2,
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(12),
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Row(
+                                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                            children: [
+                                              Text(
+                                                '${output.amountXmr} XMR',
+                                                style: TextStyle(
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 16,
+                                                  color: output.spent ? Colors.grey.shade600 : Colors.black,
+                                                ),
+                                              ),
+                                              Container(
+                                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                                decoration: BoxDecoration(
+                                                  color: statusColor.withOpacity(0.1),
+                                                  borderRadius: BorderRadius.circular(4),
+                                                  border: Border.all(color: statusColor),
+                                                ),
+                                                child: Text(
+                                                  statusText,
+                                                  style: TextStyle(
+                                                    color: statusColor.shade800,
+                                                    fontSize: 10,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 8),
+                                          _buildOutputDetailRow('TX Hash', output.txHash, mono: true),
+                                          _buildOutputDetailRow('Output Index', '${output.outputIndex}'),
+                                          _buildOutputDetailRow('Block Height', '$outputHeight'),
+                                          _buildOutputDetailRow('Amount', '${output.amount.toInt()} atomic units', mono: true),
+                                          if (output.subaddressIndex != null)
+                                            _buildOutputDetailRow(
+                                              'Subaddress',
+                                              '${output.subaddressIndex!.item1}/${output.subaddressIndex!.item2}',
+                                            ),
+                                          if (output.paymentId != null)
+                                            _buildOutputDetailRow('Payment ID', output.paymentId!, mono: true),
+                                        ],
+                                      ),
+                                    ),
+                                  );
+                                }).toList(),
+                              ),
+                      ),
+                      isExpanded: _expandedPanel == 2,
+                    ),
+                    ExpansionPanel(
+                      headerBuilder: (BuildContext context, bool isExpanded) {
                         return const ListTile(
                           title: Text(
                             'Create Transaction',
@@ -855,7 +968,7 @@ class _KeysViewState extends State<KeysView> {
                           ],
                         ),
                       ),
-                      isExpanded: _expandedPanel == 2,
+                      isExpanded: _expandedPanel == 3,
                     ),
                   ],
                 ),
@@ -918,6 +1031,37 @@ class _KeysViewState extends State<KeysView> {
             child: SelectableText(
               value,
               style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildOutputDetailRow(String label, String value, {bool mono = false}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 100,
+            child: Text(
+              '$label:',
+              style: const TextStyle(
+                fontWeight: FontWeight.w500,
+                fontSize: 11,
+                color: Colors.black54,
+              ),
+            ),
+          ),
+          Expanded(
+            child: SelectableText(
+              value,
+              style: TextStyle(
+                fontSize: 11,
+                fontFamily: mono ? 'monospace' : null,
+              ),
             ),
           ),
         ],
