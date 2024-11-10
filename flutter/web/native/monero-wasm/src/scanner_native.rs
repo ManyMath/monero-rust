@@ -24,6 +24,7 @@ pub struct BlockScanResult {
     pub block_timestamp: u64,
     pub tx_count: usize,
     pub outputs: Vec<OwnedOutputInfo>,
+    pub daemon_height: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -186,6 +187,11 @@ pub async fn scan_block_for_outputs<R: RpcConnection>(
         .map_err(|e| format!("Failed to fetch block hash: {:?}", e))?;
     let block_hash = hex::encode(block_hash_bytes);
 
+    let daemon_height = rpc
+        .get_height()
+        .await
+        .map_err(|e| format!("Failed to fetch daemon height: {:?}", e))? as u64;
+
     let block = rpc
         .get_block_by_number(block_height as usize)
         .await
@@ -252,6 +258,7 @@ pub async fn scan_block_for_outputs<R: RpcConnection>(
         block_timestamp,
         tx_count,
         outputs,
+        daemon_height,
     })
 }
 

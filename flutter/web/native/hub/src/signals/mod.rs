@@ -130,6 +130,7 @@ pub struct BlockScanResponse {
     pub block_timestamp: u64,
     pub tx_count: u32,
     pub outputs: Vec<OwnedOutput>,
+    pub daemon_height: u64,
 }
 
 #[derive(Deserialize, DartSignal)]
@@ -144,4 +145,16 @@ pub struct TransactionBroadcastResponse {
     pub success: bool,
     pub error: Option<String>,
     pub tx_id: Option<String>,
+}
+
+#[derive(Deserialize, DartSignal)]
+pub struct QueryDaemonHeightRequest {
+    pub node_url: String,
+}
+
+#[derive(Serialize, RustSignal)]
+pub struct DaemonHeightResponse {
+    pub success: bool,
+    pub error: Option<String>,
+    pub daemon_height: u64,
 }
