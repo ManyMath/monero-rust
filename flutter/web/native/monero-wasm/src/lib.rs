@@ -111,6 +111,31 @@ pub fn derive_keys(mnemonic: &str, network_str: &str) -> Result<DerivedKeys, Str
     })
 }
 
+pub async fn get_daemon_height(node_url: &str) -> Result<u64, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use monero_serai::rpc::HttpRpc;
+        let rpc = HttpRpc::new(node_url.to_string())
+            .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
+        let height = rpc.get_height()
+            .await
+            .map_err(|e| format!("Failed to get height: {:?}", e))?;
+        Ok(height as u64)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        use monero_serai::rpc::Rpc;
+        use rpc_adapter::WasmRpcAdapter;
+        let adapter = WasmRpcAdapter::new(node_url.to_string());
+        let rpc = Rpc::new_with_connection(adapter);
+        let height = rpc.get_height()
+            .await
+            .map_err(|e| format!("Failed to get height: {:?}", e))?;
+        Ok(height as u64)
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockScanResult {
@@ -119,6 +144,7 @@ pub struct BlockScanResult {
     pub block_timestamp: u64,
     pub tx_count: usize,
     pub outputs: Vec<OwnedOutputInfo>,
+    pub daemon_height: u64,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -203,6 +229,10 @@ pub async fn scan_block_for_outputs_with_url(
         .map_err(|e| format!("Failed to fetch block hash: {:?}", e))?;
     let block_hash = hex::encode(block_hash_bytes);
 
+    let daemon_height = rpc.get_height()
+        .await
+        .map_err(|e| format!("Failed to fetch daemon height: {:?}", e))? as u64;
+
     let block = rpc.get_block_by_number(block_height as usize)
         .await
         .map_err(|e| format!("Failed to fetch block: {:?}", e))?;
@@ -265,6 +295,7 @@ pub async fn scan_block_for_outputs_with_url(
         block_timestamp,
         tx_count,
         outputs,
+        daemon_height,
     })
 }
 

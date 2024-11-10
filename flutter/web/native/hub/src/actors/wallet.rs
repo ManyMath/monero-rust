@@ -24,7 +24,8 @@ impl WalletActor {
         _owned_tasks.spawn(Self::listen_to_generate_seed(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_derive_address(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_derive_keys(self_addr.clone()));
-        _owned_tasks.spawn(Self::listen_to_scan_block(self_addr));
+        _owned_tasks.spawn(Self::listen_to_scan_block(self_addr.clone()));
+        _owned_tasks.spawn(Self::listen_to_query_daemon_height(self_addr));
 
         WalletActor {
             state: WalletState {
@@ -215,6 +216,7 @@ impl WalletActor {
                             seed,
                             network,
                             outputs: stored_outputs,
+                            daemon_height: result.daemon_height,
                         })
                         .await;
 
@@ -226,6 +228,7 @@ impl WalletActor {
                         block_timestamp: result.block_timestamp,
                         tx_count: result.tx_count as u32,
                         outputs,
+                        daemon_height: result.daemon_height,
                     }
                     .send_signal_to_dart();
                 }
@@ -238,6 +241,33 @@ impl WalletActor {
                         block_timestamp: 0,
                         tx_count: 0,
                         outputs: Vec::new(),
+                        daemon_height: 0,
+                    }
+                    .send_signal_to_dart();
+                }
+            }
+        }
+    }
+
+    async fn listen_to_query_daemon_height(_self_addr: Address<Self>) {
+        let receiver = QueryDaemonHeightRequest::get_dart_signal_receiver();
+        while let Some(signal_pack) = receiver.recv().await {
+            let request = signal_pack.message;
+
+            match monero_wasm::get_daemon_height(&request.node_url).await {
+                Ok(height) => {
+                    DaemonHeightResponse {
+                        success: true,
+                        error: None,
+                        daemon_height: height,
+                    }
+                    .send_signal_to_dart();
+                }
+                Err(e) => {
+                    DaemonHeightResponse {
+                        success: false,
+                        error: Some(e),
+                        daemon_height: 0,
                     }
                     .send_signal_to_dart();
                 }
@@ -280,6 +310,7 @@ impl Notifiable<StoreOutputs> for WalletActor {
     async fn notify(&mut self, msg: StoreOutputs, _ctx: &Context<Self>) {
         self.state.seed = Some(msg.seed);
         self.state.network = Some(msg.network);
+        self.state.daemon_height = msg.daemon_height;
 
         // Update current_height to the highest block_height among new outputs
         for output in &msg.outputs {
@@ -329,6 +360,7 @@ impl Handler<GetWalletHeight> for WalletActor {
     async fn handle(&mut self, _msg: GetWalletHeight, _ctx: &Context<Self>) -> Self::Result {
         WalletHeight {
             current_height: self.state.current_height,
+            daemon_height: self.state.daemon_height,
         }
     }
 }

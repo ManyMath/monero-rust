@@ -34,6 +34,7 @@ class _KeysViewState extends State<KeysView> {
   BlockScanResponse? _scanResult;
   String? _scanError;
   List<OwnedOutput> _allOutputs = [];
+  int? _daemonHeight;
 
   final _destinationController = TextEditingController();
   final _amountController = TextEditingController();
@@ -95,6 +96,7 @@ class _KeysViewState extends State<KeysView> {
         if (signal.message.success) {
           _scanResult = signal.message;
           _scanError = null;
+          _daemonHeight = signal.message.daemonHeight.toInt();
           // Add new outputs to the list, avoiding duplicates
           for (var output in signal.message.outputs) {
             final exists = _allOutputs.any((o) =>
@@ -742,7 +744,8 @@ class _KeysViewState extends State<KeysView> {
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: _allOutputs.map((output) {
                                   final outputHeight = output.blockHeight.toInt();
-                                  final currentHeight = _scanResult?.blockHeight.toInt() ?? outputHeight;
+                                  // Use daemon height if available, otherwise fall back to scanned block height
+                                  final currentHeight = _daemonHeight ?? _scanResult?.blockHeight.toInt() ?? outputHeight;
                                   final confirmations = outputHeight > 0
                                       ? currentHeight - outputHeight
                                       : 0;

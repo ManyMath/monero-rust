@@ -88,8 +88,8 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                             if o.spent {
                                 return false;
                             }
-                            let confirmations = if wallet_height.current_height > o.block_height {
-                                wallet_height.current_height - o.block_height
+                            let confirmations = if wallet_height.daemon_height > o.block_height {
+                                wallet_height.daemon_height - o.block_height
                             } else {
                                 0
                             };

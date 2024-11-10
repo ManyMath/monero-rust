@@ -96,6 +96,7 @@ pub struct StoreOutputs {
     pub seed: String,
     pub network: String,
     pub outputs: Vec<StoredOutput>,
+    pub daemon_height: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -109,6 +110,7 @@ pub struct GetWalletHeight;
 #[derive(Debug, Clone)]
 pub struct WalletHeight {
     pub current_height: u64,
+    pub daemon_height: u64,
 }
 
 #[derive(Debug, Clone)]
