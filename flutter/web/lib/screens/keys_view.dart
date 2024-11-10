@@ -515,7 +515,7 @@ class _KeysViewState extends State<KeysView> {
                     borderRadius: BorderRadius.circular(8),
                     border: Border.all(color: Colors.red.shade200),
                   ),
-                  child: Text(
+                  child: SelectableText(
                     'Error: $_responseError',
                     style: TextStyle(color: Colors.red.shade900),
                   ),
@@ -632,7 +632,7 @@ class _KeysViewState extends State<KeysView> {
                                   borderRadius: BorderRadius.circular(8),
                                   border: Border.all(color: Colors.red.shade200),
                                 ),
-                                child: Text(
+                                child: SelectableText(
                                   'Scan Error: $_scanError',
                                   style: TextStyle(color: Colors.red.shade900),
                                 ),
@@ -873,7 +873,7 @@ class _KeysViewState extends State<KeysView> {
                                   borderRadius: BorderRadius.circular(8),
                                   border: Border.all(color: Colors.red.shade200),
                                 ),
-                                child: Text(
+                                child: SelectableText(
                                   'Transaction Error: $_txError',
                                   style: TextStyle(color: Colors.red.shade900),
                                 ),
@@ -933,7 +933,7 @@ class _KeysViewState extends State<KeysView> {
                                   borderRadius: BorderRadius.circular(8),
                                   border: Border.all(color: Colors.red.shade200),
                                 ),
-                                child: Text(
+                                child: SelectableText(
                                   'Broadcast Error: $_broadcastError',
                                   style: TextStyle(color: Colors.red.shade900),
                                 ),
