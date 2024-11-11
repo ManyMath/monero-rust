@@ -311,10 +311,19 @@ class _DebugViewState extends State<DebugView> {
       return;
     }
 
-    final amount = int.tryParse(amountStr);
-    if (amount == null || amount <= 0) {
+    final amountXmr = double.tryParse(amountStr);
+    if (amountXmr == null || amountXmr <= 0) {
       setState(() {
-        _txError = 'Please enter a valid amount in atomic units';
+        _txError = 'Please enter a valid amount';
+      });
+      return;
+    }
+
+    // Convert XMR to atomic units (1 XMR = 1e12 atomic units)
+    final amountAtomic = (amountXmr * 1e12).round();
+    if (amountAtomic <= 0) {
+      setState(() {
+        _txError = 'Amount too small';
       });
       return;
     }
@@ -342,7 +351,7 @@ class _DebugViewState extends State<DebugView> {
       seed: result.normalizedInput!,
       network: _network,
       destination: destination,
-      amount: Uint64(BigInt.from(amount)),
+      amount: Uint64(BigInt.from(amountAtomic)),
     ).sendSignalToRust();
   }
 
@@ -840,7 +849,6 @@ class _DebugViewState extends State<DebugView> {
                                           _buildOutputDetailRow('TX Hash', output.txHash, mono: true),
                                           _buildOutputDetailRow('Output Index', '${output.outputIndex}'),
                                           _buildOutputDetailRow('Block Height', '$outputHeight'),
-                                          _buildOutputDetailRow('Amount', '${output.amount.toInt()} atomic units', mono: true),
                                           if (output.subaddressIndex != null)
                                             _buildOutputDetailRow(
                                               'Subaddress',
@@ -890,12 +898,10 @@ class _DebugViewState extends State<DebugView> {
                             TextField(
                               controller: _amountController,
                               decoration: const InputDecoration(
-                                labelText: 'Amount (atomic units)',
-                                hintText: '1000000000000 = 1 XMR',
+                                labelText: 'Amount (XMR)',
                                 border: OutlineInputBorder(),
-                                helperText: '1 XMR = 1,000,000,000,000 atomic units',
                               ),
-                              keyboardType: TextInputType.number,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
                             ),
                             const SizedBox(height: 16),
                             ElevatedButton.icon(
@@ -946,7 +952,7 @@ class _DebugViewState extends State<DebugView> {
                                     ),
                                     const SizedBox(height: 8),
                                     _buildScanResultRow('TX ID', _txResult!.txId),
-                                    _buildScanResultRow('Fee', '${_txResult!.fee} atomic units'),
+                                    _buildScanResultRow('Fee', '${(_txResult!.fee.toInt() / 1e12).toStringAsFixed(12)} XMR'),
                                     if (_txResult!.txBlob != null)
                                       _buildScanResultRow('TX Blob', _txResult!.txBlob!.substring(0, 64) + '...'),
                                     const SizedBox(height: 12),
