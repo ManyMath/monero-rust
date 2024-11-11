@@ -56,7 +56,7 @@ class ExtensionBuilder {
 
     final rinfResult = await _runCommand('rinf', ['--help'], silent: true);
     if (!rinfResult) {
-      throw Exception('rinf CLI is not installed. Install with: cargo install rinf');
+      throw Exception('rinf CLI is not installed. Install with: cargo install rinf_cli');
     }
 
     print('Prerequisites OK');
