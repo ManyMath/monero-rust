@@ -1,23 +1,23 @@
 # `monero-rust`
-A proof-of-concept Monero SDK oriented towards use by Dart.  Seeks to provide 
-bindings for Rust crates such as `monero-serai` (soon to be `monero-wallet` and 
-`monero-oxide` less soon) and `cuprate` (soon™).
+Monero in Rust.  Contains both `monero-wasm`, oriented for use with Flutter Web 
+for browser extensions and soon to be merged back into `monero-rust` under 
+feature flags, and `wallet2`, a compatibility layer for legacy Monero Project 
+file formats.
+
+Uses `monero-serai` (soon to be `monero-wallet` and `monero-oxide` less soon) 
+and `cuprate` (soon™).
 
 ## Development
-- Install `cbindgen`: `cargo install --force cbindgen`.
-- To generate `monero-rust.h` C bindings for Rust, use `cbindgen` in the 
-  `monero-rust` directory:
-  ```
-  cbindgen --config cbindgen.toml --crate monero-rust --output monero-rust.h
+- Install `cbindgen`:
+  ```sh
+  cargo install --force cbindgen
   ```
 
-# Roadmap
-- Scan transactions for incoming funds.
-- Match wallet2 API.
-- `monero-wallet-cli`
-- `monero-wallet-rpc`
-- `monerod`
-- Securely zero memory after secrets are used.
+- To generate `monero-rust.h` C bindings for Rust, use `cbindgen` in the 
+  `monero-rust` directory:
+  ```sh
+  cbindgen --config cbindgen.toml --crate monero-rust --output monero-rust.h
+  ```
 
 # Acknowledgements
 - Thank you Luke "kayabaNerve" Parker and Serai for `monero-serai`.

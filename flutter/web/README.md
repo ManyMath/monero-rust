@@ -1,9 +1,10 @@
-# web
-A Flutter web extension demonstrating monero-wasm integration.  Due to security restrictions this cannot be fully tested running on a local webserver (like with the usual `flutter run -d chrome` or `rinf serve`) and must be built as an extension and loaded into a browser.
+# monero-rust/flutter/web
+Flutter web extension demonstrating monero-wasm.  Runs as an extension rather 
+than a local webserver because of CORS restrictions.
 
-## Prerequisites
-- Flutter SDK (3.24.3)
-- Rust toolchain (1.89.0)
+## Requirements
+- Flutter 3.24.3
+- Rust 1.89.0
 - rinf CLI: `cargo install rinf`
 
 ## Setup
@@ -20,27 +21,27 @@ dart run tool/build_extension.dart
 
 Output: `build/extension/` (unpacked) and `build/monero-extension.zip`
 
-Load in Chrome:
-- Go to `chrome://extensions`
-- Enable Developer mode
-- Click "Load unpacked"
-- Select `build/extension/` directory
+Load in Chrome: open `chrome://extensions`, enable Developer mode, click "Load unpacked", select `build/extension/`.
 
-The extension bypasses CORS restrictions for testing node connectivity.
+For UI-only changes, rebuild just the Flutter Web aspect and pack a new .zip as in:
+
+```sh
+dart run tool/build_ui.dart
+```
 
 ## Testing
-### Rust Tests
+Rust:
 ```sh
 cd native/monero-wasm
 cargo test --lib
 ```
 
-### Flutter Tests
+Flutter:
 ```sh
 flutter test
 ```
 
-### E2E Tests
+E2E:
 ```sh
 npm install
 npm test
