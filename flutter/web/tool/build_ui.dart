@@ -1,0 +1,354 @@
+#!/usr/bin/env dart
+// ignore_for_file: avoid_print
+
+import 'dart:io';
+import 'package:archive/archive_io.dart';
+import 'package:path/path.dart' as path;
+
+/// Build script for browser extension UI only (skips Rust/WASM)
+void main() async {
+  print('\nBuilding extension UI...');
+
+  final builder = UIBuilder();
+  try {
+    await builder.build();
+  } catch (e) {
+    print('\nError: $e');
+    exit(1);
+  }
+}
+
+class UIBuilder {
+  late final String projectRoot;
+  late final String buildDir;
+  late final String extensionDir;
+  late final String webBuildDir;
+
+  UIBuilder() {
+    final scriptDir = path.dirname(Platform.script.toFilePath());
+    projectRoot = path.dirname(scriptDir);
+    buildDir = path.join(projectRoot, 'build');
+    extensionDir = path.join(buildDir, 'extension');
+    webBuildDir = path.join(buildDir, 'web');
+  }
+
+  Future<void> build() async {
+    await _checkPrerequisites();
+    await _verifyWasmExists();
+    await _buildFlutterWeb();
+    await _createExtensionDirectory();
+    await _copyFlutterBuild();
+    await _copyManifest();
+    await _patchForExtension(); // patch for CSP compliance
+    await _verifyBuild();
+    await _createPackage();
+    _printSuccess();
+  }
+
+  Future<void> _checkPrerequisites() async {
+    print('\nChecking prerequisites...');
+
+    final flutterResult = await _runCommand('flutter', ['--version'], silent: true);
+    if (!flutterResult) {
+      throw Exception('Flutter is not installed or not in PATH');
+    }
+
+    print('Prerequisites OK');
+  }
+
+  Future<void> _verifyWasmExists() async {
+    print('\nVerifying WASM...');
+
+    final wasmDir = Directory(path.join(projectRoot, 'web', 'pkg'));
+    if (!await wasmDir.exists()) {
+      throw Exception('WASM not found. Run full build first: dart tool/build_extension.dart');
+    }
+
+    final wasmFiles = await wasmDir
+        .list()
+        .where((entity) => entity.path.endsWith('.wasm'))
+        .toList();
+
+    if (wasmFiles.isEmpty) {
+      throw Exception('No WASM files in web/pkg/. Run full build first.');
+    }
+  }
+
+  Future<void> _buildFlutterWeb() async {
+    print('\nBuilding Flutter web...');
+    final success = await _runCommand(
+      'flutter',
+      ['build', 'web', '--csp', '--no-web-resources-cdn', '--release'],
+      workingDir: projectRoot,
+    );
+    if (!success) {
+      throw Exception('Failed to build Flutter web app');
+    }
+  }
+
+  Future<void> _createExtensionDirectory() async {
+    print('\nCreating extension directory...');
+
+    final extensionDirectory = Directory(extensionDir);
+    if (await extensionDirectory.exists()) {
+      await extensionDirectory.delete(recursive: true);
+    }
+
+    await extensionDirectory.create(recursive: true);
+  }
+
+  Future<void> _copyFlutterBuild() async {
+    print('Copying build output...');
+
+    final webBuild = Directory(webBuildDir);
+    if (!await webBuild.exists()) {
+      throw Exception('build/web directory not found. Did Flutter build succeed?');
+    }
+
+    await _copyDirectory(webBuild, Directory(extensionDir));
+  }
+
+  Future<void> _copyManifest() async {
+    print('Copying manifest...');
+
+    final manifestSource = path.join(projectRoot, 'extension', 'manifest.json');
+    final manifestDest = path.join(extensionDir, 'manifest.json');
+
+    final sourceFile = File(manifestSource);
+    if (!await sourceFile.exists()) {
+      throw Exception('extension/manifest.json not found');
+    }
+
+    await sourceFile.copy(manifestDest);
+
+    final backgroundSource = path.join(projectRoot, 'extension', 'background.js');
+    final backgroundDest = path.join(extensionDir, 'background.js');
+
+    final backgroundFile = File(backgroundSource);
+    if (await backgroundFile.exists()) {
+      await backgroundFile.copy(backgroundDest);
+    } else {
+      print('  Warning: extension/background.js not found');
+    }
+  }
+
+  Future<void> _patchForExtension() async {
+    print('Patching for extension...');
+
+    await _removeServiceWorker();
+    await _copyDisableServiceWorker();
+    await _patchIndexHtml();
+    await _patchMainDartJs();
+  }
+
+  Future<void> _removeServiceWorker() async {
+    final serviceWorkerPath = path.join(extensionDir, 'flutter_service_worker.js');
+    final serviceWorkerFile = File(serviceWorkerPath);
+
+    if (await serviceWorkerFile.exists()) {
+      await serviceWorkerFile.delete();
+    }
+  }
+
+  Future<void> _copyDisableServiceWorker() async {
+    final sourcePath = path.join(projectRoot, 'extension', 'disable_service_worker.js');
+    final destPath = path.join(extensionDir, 'disable_service_worker.js');
+
+    final sourceFile = File(sourcePath);
+    if (await sourceFile.exists()) {
+      await sourceFile.copy(destPath);
+    } else {
+      print('  Warning: disable_service_worker.js not found at: $sourcePath');
+    }
+
+    final bridgeSource = path.join(projectRoot, 'web', 'extension_bridge.js');
+    final bridgeDest = path.join(extensionDir, 'extension_bridge.js');
+
+    final bridgeFile = File(bridgeSource);
+    if (await bridgeFile.exists()) {
+      await bridgeFile.copy(bridgeDest);
+    } else {
+      print('  Warning: extension_bridge.js not found at: $bridgeSource');
+    }
+  }
+
+  Future<void> _patchIndexHtml() async {
+    final indexPath = path.join(extensionDir, 'index.html');
+    final indexFile = File(indexPath);
+
+    if (!await indexFile.exists()) {
+      print('  Warning: index.html not found');
+      return;
+    }
+
+    String content = await indexFile.readAsString();
+
+    content = content.replaceAll('<base href="/">', '<base href="./">');
+
+    const style = '''
+  <style>
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+    }
+    #loading {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      font-family: sans-serif;
+    }
+  </style>
+</head>''';
+
+    content = content.replaceAll('</head>', style);
+
+    const bodyScripts = '''<body>
+  <div id="loading">Loading Monero Wallet...</div>
+
+  <script src="extension_bridge.js"></script>
+  <script src="disable_service_worker.js"></script>
+  <script src="flutter_bootstrap.js"></script>
+</body>''';
+
+    final bodyPattern = RegExp(r'<body>\s*<script src="flutter_bootstrap\.js"( async)?></script>\s*</body>', dotAll: true);
+    content = content.replaceAll(bodyPattern, bodyScripts);
+
+    await indexFile.writeAsString(content);
+  }
+
+  Future<void> _patchMainDartJs() async {
+    final mainDartPath = path.join(extensionDir, 'main.dart.js');
+    final mainDartFile = File(mainDartPath);
+
+    if (!await mainDartFile.exists()) {
+      print('  Warning: main.dart.js not found');
+      return;
+    }
+
+    String content = await mainDartFile.readAsString();
+
+    final patternString = r"l\.innerHTML='import init, \* as wasmBindings from " +
+        r'''"'\+n\.k\(0\)\+'";\s*\\nglobalThis\.wasmBindings = wasmBindings;\s*''' +
+        r'\\nawait init\(\);\s*\\nrinfBindings\.completeRinfLoad\(\);\s*' +
+        r"\\ndelete rinfBindings\.completeRinfLoad;\s*\\n'";
+    final pattern = RegExp(patternString);
+
+    final replacement = r"l.textContent='';l.src=n.k(0).replace('.js','_loader.js')";
+    final newContent = content.replaceAll(pattern, replacement);
+
+    if (newContent != content) {
+      await _createWasmLoader();
+      await mainDartFile.writeAsString(newContent);
+    }
+  }
+
+  Future<void> _createWasmLoader() async {
+    const wasmLoaderContent = '''// WASM loader
+const wasmPath = new URL(import.meta.url).pathname.replace('_loader.js', '.js');
+const module = await import(wasmPath);
+const init = module.default;
+globalThis.wasmBindings = module;
+await init();
+if (window.rinfBindings && window.rinfBindings.completeRinfLoad) {
+  window.rinfBindings.completeRinfLoad();
+  delete window.rinfBindings.completeRinfLoad;
+}
+''';
+
+    final wasmLoaderPath = path.join(extensionDir, 'pkg', 'hub_loader.js');
+    final wasmLoaderFile = File(wasmLoaderPath);
+
+    await wasmLoaderFile.parent.create(recursive: true);
+    await wasmLoaderFile.writeAsString(wasmLoaderContent);
+  }
+
+  Future<void> _verifyBuild() async {
+    print('\nVerifying build...');
+
+    final requiredFiles = [
+      'manifest.json',
+      'index.html',
+      'flutter.js',
+    ];
+
+    for (final fileName in requiredFiles) {
+      final filePath = path.join(extensionDir, fileName);
+      final file = File(filePath);
+
+      if (!await file.exists()) {
+        throw Exception('Required file missing: $fileName');
+      }
+    }
+  }
+
+  Future<void> _createPackage() async {
+    print('Creating zip...');
+
+    final zipPath = path.join(buildDir, 'monero-extension.zip');
+    final encoder = ZipFileEncoder();
+
+    encoder.create(zipPath);
+    await encoder.addDirectory(Directory(extensionDir), includeDirName: false);
+    encoder.close();
+  }
+
+  void _printSuccess() {
+    print('\nUI built successfully!');
+    print('  Location: build/extension/');
+    print('  Package: build/monero-extension.zip');
+    print('\nUsing existing WASM from web/pkg/');
+    print('For Rust changes, run: dart tool/build_extension.dart');
+    print('\nLoad in Chrome:');
+    print('  chrome://extensions -> Developer mode -> Load unpacked -> build/extension/\n');
+  }
+
+  Future<bool> _runCommand(
+    String command,
+    List<String> args, {
+    String? workingDir,
+    bool silent = false,
+  }) async {
+    try {
+      final result = await Process.run(
+        command,
+        args,
+        workingDirectory: workingDir ?? projectRoot,
+        runInShell: true,
+      );
+
+      if (!silent) {
+        if (result.stdout.toString().isNotEmpty) {
+          stdout.write(result.stdout);
+        }
+        if (result.stderr.toString().isNotEmpty) {
+          stderr.write(result.stderr);
+        }
+      }
+
+      return result.exitCode == 0;
+    } catch (e) {
+      if (!silent) {
+        print('Failed to run command: $command ${args.join(' ')}');
+        print('Error: $e');
+      }
+      return false;
+    }
+  }
+
+  Future<void> _copyDirectory(Directory source, Directory destination) async {
+    await destination.create(recursive: true);
+
+    await for (final entity in source.list(recursive: false)) {
+      if (entity is Directory) {
+        final newDirectory = Directory(path.join(destination.path, path.basename(entity.path)));
+        await _copyDirectory(entity, newDirectory);
+      } else if (entity is File) {
+        final newFile = File(path.join(destination.path, path.basename(entity.path)));
+        await entity.copy(newFile.path);
+      }
+    }
+  }
+}
