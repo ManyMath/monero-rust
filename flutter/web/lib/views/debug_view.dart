@@ -5,14 +5,14 @@ import '../src/bindings/bindings.dart';
 import '../utils/key_parser.dart';
 import '../services/extension_service.dart';
 
-class KeysView extends StatefulWidget {
-  const KeysView({super.key});
+class DebugView extends StatefulWidget {
+  const DebugView({super.key});
 
   @override
-  State<KeysView> createState() => _KeysViewState();
+  State<DebugView> createState() => _DebugViewState();
 }
 
-class _KeysViewState extends State<KeysView> {
+class _DebugViewState extends State<DebugView> {
   final _controller = TextEditingController();
   final _extensionService = ExtensionService();
   final _nodeUrlController = TextEditingController(text: '127.0.0.1:38081');
@@ -403,7 +403,7 @@ class _KeysViewState extends State<KeysView> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Keys View'),
+        title: const Text('Debug View'),
         actions: [
           if (_extensionService.isExtension)
             IconButton(
@@ -419,109 +419,7 @@ class _KeysViewState extends State<KeysView> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: _generateSeed,
-                      icon: const Icon(Icons.refresh),
-                      label: const Text('Generate'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: DropdownButtonFormField<String>(
-                      initialValue: _seedType,
-                      decoration: const InputDecoration(
-                        labelText: 'Seed Type',
-                        border: OutlineInputBorder(),
-                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      ),
-                      items: const [
-                        DropdownMenuItem(value: '25 word', child: Text('25 word')),
-                      ],
-                      onChanged: null,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: DropdownButtonFormField<String>(
-                      initialValue: _network,
-                      decoration: const InputDecoration(
-                        labelText: 'Network',
-                        border: OutlineInputBorder(),
-                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      ),
-                      items: const [
-                        DropdownMenuItem(value: 'mainnet', child: Text('Mainnet')),
-                        DropdownMenuItem(value: 'stagenet', child: Text('Stagenet')),
-                        DropdownMenuItem(value: 'testnet', child: Text('Testnet')),
-                      ],
-                      onChanged: (value) {
-                        if (value != null) {
-                          setState(() {
-                            _network = value;
-                          });
-                          _deriveAddress();
-                        }
-                      },
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _controller,
-                      maxLines: 3,
-                      decoration: InputDecoration(
-                        labelText: 'Seed',
-                        hintText: 'Enter or generate a 25-word seed',
-                        border: const OutlineInputBorder(),
-                        errorText: _validationError,
-                        suffixIcon: _isLoading
-                            ? const Padding(
-                                padding: EdgeInsets.all(12.0),
-                                child: SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(strokeWidth: 2),
-                                ),
-                              )
-                            : null,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    onPressed: _controller.text.isNotEmpty
-                        ? () => _copyToClipboard(_controller.text, 'Seed')
-                        : null,
-                    icon: const Icon(Icons.copy_outlined),
-                    tooltip: 'Copy seed',
-                  ),
-                ],
-              ),
-              const SizedBox(height: 24),
-              if (_responseError != null)
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  margin: const EdgeInsets.only(bottom: 16),
-                  decoration: BoxDecoration(
-                    color: Colors.red.shade50,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.red.shade200),
-                  ),
-                  child: SelectableText(
-                    'Error: $_responseError',
-                    style: TextStyle(color: Colors.red.shade900),
-                  ),
-                ),
-              if (_derivedAddress != null)
-                ExpansionPanelList(
+              ExpansionPanelList(
                   expansionCallback: (int index, bool isExpanded) {
                     setState(() {
                       _expandedPanel = (_expandedPanel == index) ? null : index;
@@ -532,51 +430,160 @@ class _KeysViewState extends State<KeysView> {
                       headerBuilder: (BuildContext context, bool isExpanded) {
                         return const ListTile(
                           title: Text(
+                            'Seed Phrase',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        );
+                      },
+                      body: Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Row(
+                              children: [
+                                ElevatedButton.icon(
+                                  onPressed: _generateSeed,
+                                  icon: const Icon(Icons.auto_awesome),
+                                  label: const Text('Generate'),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: DropdownButtonFormField<String>(
+                                    value: _seedType,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Seed Type',
+                                      border: OutlineInputBorder(),
+                                      contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                    ),
+                                    items: const [
+                                      DropdownMenuItem(value: '25 word', child: Text('25 word')),
+                                    ],
+                                    onChanged: null,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: DropdownButtonFormField<String>(
+                                    value: _network,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Network',
+                                      border: OutlineInputBorder(),
+                                      contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                    ),
+                                    items: const [
+                                      DropdownMenuItem(value: 'mainnet', child: Text('Mainnet')),
+                                      DropdownMenuItem(value: 'testnet', child: Text('Testnet')),
+                                      DropdownMenuItem(value: 'stagenet', child: Text('Stagenet')),
+                                    ],
+                                    onChanged: (value) {
+                                      if (value != null) {
+                                        setState(() {
+                                          _network = value;
+                                        });
+                                        _deriveAddress();
+                                      }
+                                    },
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 16),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: TextField(
+                                    controller: _controller,
+                                    decoration: InputDecoration(
+                                      labelText: 'Seed Phrase',
+                                      hintText: 'Enter or generate a 25-word seed phrase',
+                                      border: const OutlineInputBorder(),
+                                      errorText: _validationError,
+                                    ),
+                                    maxLines: 3,
+                                  ),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.copy_outlined),
+                                  onPressed: () => _copyToClipboard(_controller.text, 'Seed'),
+                                  tooltip: 'Copy seed',
+                                ),
+                              ],
+                            ),
+                            if (_responseError != null) ...[
+                              const SizedBox(height: 16),
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.red.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: Colors.red.shade200),
+                                ),
+                                child: SelectableText(
+                                  'Error: $_responseError',
+                                  style: TextStyle(color: Colors.red.shade900),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      isExpanded: _expandedPanel == 0,
+                    ),
+                    ExpansionPanel(
+                      headerBuilder: (BuildContext context, bool isExpanded) {
+                        return const ListTile(
+                          title: Text(
                             'Keys',
                             style: TextStyle(fontWeight: FontWeight.bold),
                           ),
                         );
                       },
-                      body: Column(
-                        children: [
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                      body: _derivedAddress == null
+                          ? const Padding(
+                              padding: EdgeInsets.all(16.0),
+                              child: Text('Enter a seed phrase to view keys'),
+                            )
+                          : Column(
                               children: [
-                                Text(
-                                  '${_network[0].toUpperCase()}${_network.substring(1)} Address',
-                                  style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
-                                ),
-                                const SizedBox(height: 4),
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: SelectableText(
-                                        _derivedAddress!,
-                                        style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        '${_network[0].toUpperCase()}${_network.substring(1)} Address',
+                                        style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
                                       ),
-                                    ),
-                                    IconButton(
-                                      icon: const Icon(Icons.copy_outlined, size: 16),
-                                      onPressed: () => _copyToClipboard(_derivedAddress!, 'Address'),
-                                      tooltip: 'Copy address',
-                                      padding: EdgeInsets.zero,
-                                      constraints: const BoxConstraints(),
-                                    ),
-                                  ],
+                                      const SizedBox(height: 4),
+                                      Row(
+                                        children: [
+                                          Expanded(
+                                            child: SelectableText(
+                                              _derivedAddress!,
+                                              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                                            ),
+                                          ),
+                                          IconButton(
+                                            icon: const Icon(Icons.copy_outlined, size: 16),
+                                            onPressed: () => _copyToClipboard(_derivedAddress!, 'Address'),
+                                            tooltip: 'Copy address',
+                                            padding: EdgeInsets.zero,
+                                            constraints: const BoxConstraints(),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
                                 ),
+                                const Divider(height: 1),
+                                _buildKeyRow('Secret Spend Key', _secretSpendKey ?? 'TODO'),
+                                _buildKeyRow('Secret View Key', _secretViewKey ?? 'TODO'),
+                                _buildKeyRow('Public Spend Key', _publicSpendKey ?? 'TODO'),
+                                _buildKeyRow('Public View Key', _publicViewKey ?? 'TODO'),
                               ],
                             ),
-                          ),
-                          const Divider(height: 1),
-                          _buildKeyRow('Secret Spend Key', _secretSpendKey ?? 'TODO'),
-                          _buildKeyRow('Secret View Key', _secretViewKey ?? 'TODO'),
-                          _buildKeyRow('Public Spend Key', _publicSpendKey ?? 'TODO'),
-                          _buildKeyRow('Public View Key', _publicViewKey ?? 'TODO'),
-                        ],
-                      ),
-                      isExpanded: _expandedPanel == 0,
+                      isExpanded: _expandedPanel == 1,
                     ),
                     ExpansionPanel(
                       headerBuilder: (BuildContext context, bool isExpanded) {
@@ -713,7 +720,7 @@ class _KeysViewState extends State<KeysView> {
                           ],
                         ),
                       ),
-                      isExpanded: _expandedPanel == 1,
+                      isExpanded: _expandedPanel == 2,
                     ),
                     ExpansionPanel(
                       headerBuilder: (BuildContext context, bool isExpanded) {
@@ -817,7 +824,7 @@ class _KeysViewState extends State<KeysView> {
                                 }).toList(),
                               ),
                       ),
-                      isExpanded: _expandedPanel == 2,
+                      isExpanded: _expandedPanel == 3,
                     ),
                     ExpansionPanel(
                       headerBuilder: (BuildContext context, bool isExpanded) {
@@ -971,7 +978,7 @@ class _KeysViewState extends State<KeysView> {
                           ],
                         ),
                       ),
-                      isExpanded: _expandedPanel == 3,
+                      isExpanded: _expandedPanel == 4,
                     ),
                   ],
                 ),
