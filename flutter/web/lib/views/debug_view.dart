@@ -425,13 +425,23 @@ class _DebugViewState extends State<DebugView> {
                       _expandedPanel = (_expandedPanel == index) ? null : index;
                     });
                   },
+                  expandIconColor: Theme.of(context).colorScheme.primary,
+                  elevation: 1,
+                  expandedHeaderPadding: EdgeInsets.zero,
                   children: [
                     ExpansionPanel(
                       headerBuilder: (BuildContext context, bool isExpanded) {
-                        return const ListTile(
-                          title: Text(
-                            'Seed Phrase',
-                            style: TextStyle(fontWeight: FontWeight.bold),
+                        return GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              _expandedPanel = (_expandedPanel == 0) ? null : 0;
+                            });
+                          },
+                          child: const ListTile(
+                            title: Text(
+                              'Seed Phrase',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
                           ),
                         );
                       },
@@ -532,10 +542,17 @@ class _DebugViewState extends State<DebugView> {
                     ),
                     ExpansionPanel(
                       headerBuilder: (BuildContext context, bool isExpanded) {
-                        return const ListTile(
-                          title: Text(
-                            'Keys',
-                            style: TextStyle(fontWeight: FontWeight.bold),
+                        return GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              _expandedPanel = (_expandedPanel == 1) ? null : 1;
+                            });
+                          },
+                          child: const ListTile(
+                            title: Text(
+                              'Keys',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
                           ),
                         );
                       },
@@ -587,10 +604,17 @@ class _DebugViewState extends State<DebugView> {
                     ),
                     ExpansionPanel(
                       headerBuilder: (BuildContext context, bool isExpanded) {
-                        return const ListTile(
-                          title: Text(
-                            'Scanning',
-                            style: TextStyle(fontWeight: FontWeight.bold),
+                        return GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              _expandedPanel = (_expandedPanel == 2) ? null : 2;
+                            });
+                          },
+                          child: const ListTile(
+                            title: Text(
+                              'Scanning',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
                           ),
                         );
                       },
@@ -724,14 +748,21 @@ class _DebugViewState extends State<DebugView> {
                     ),
                     ExpansionPanel(
                       headerBuilder: (BuildContext context, bool isExpanded) {
-                        return ListTile(
-                          title: const Text(
-                            'Coins',
-                            style: TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          subtitle: Text(
-                            '${_allOutputs.length} output(s)',
-                            style: const TextStyle(fontSize: 12),
+                        return GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              _expandedPanel = (_expandedPanel == 3) ? null : 3;
+                            });
+                          },
+                          child: ListTile(
+                            title: const Text(
+                              'Coins',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            subtitle: Text(
+                              '${_allOutputs.length} output(s)',
+                              style: const TextStyle(fontSize: 12),
+                            ),
                           ),
                         );
                       },
@@ -828,10 +859,17 @@ class _DebugViewState extends State<DebugView> {
                     ),
                     ExpansionPanel(
                       headerBuilder: (BuildContext context, bool isExpanded) {
-                        return const ListTile(
-                          title: Text(
-                            'Create Transaction',
-                            style: TextStyle(fontWeight: FontWeight.bold),
+                        return GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              _expandedPanel = (_expandedPanel == 4) ? null : 4;
+                            });
+                          },
+                          child: const ListTile(
+                            title: Text(
+                              'Create Transaction',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
                           ),
                         );
                       },
