@@ -3,6 +3,9 @@ pub mod sync;
 pub mod rpc;
 pub mod tx_builder;
 
+#[cfg(test)]
+mod wallet_test;
+
 use messages::prelude::Context;
 use wallet::WalletActor;
 use sync::SyncActor;

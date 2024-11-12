@@ -124,3 +124,27 @@ pub struct BroadcastTransaction {
     pub tx_blob: String,
     pub spent_output_hashes: Vec<String>,
 }
+
+#[derive(Debug, Clone)]
+pub struct StartContinuousScan {
+    pub node_url: String,
+    pub start_height: u64,
+    pub seed: String,
+    pub network: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct StopScan;
+
+#[derive(Debug, Clone)]
+pub struct ContinueScan;
+
+#[derive(Debug, Clone)]
+pub struct UpdateScanState {
+    pub is_scanning: bool,
+    pub current_height: u64,
+    pub target_height: u64,
+    pub node_url: String,
+    pub seed: String,
+    pub network: String,
+}
