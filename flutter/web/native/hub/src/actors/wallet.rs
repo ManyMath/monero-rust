@@ -11,6 +11,15 @@ pub struct WalletActor {
     sync_actor: Option<Address<super::sync::SyncActor>>,
     rpc_actor: Option<Address<super::rpc::RpcActor>>,
     _owned_tasks: JoinSet<()>,
+    // Continuous scan state
+    is_scanning: bool,
+    scan_start_height: u64,
+    scan_current_height: u64,
+    scan_target_height: u64,
+    scan_node_url: String,
+    scan_seed: String,
+    scan_network: String,
+    self_addr: Option<Address<Self>>,
 }
 
 impl Actor for WalletActor {}
@@ -25,7 +34,9 @@ impl WalletActor {
         _owned_tasks.spawn(Self::listen_to_derive_address(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_derive_keys(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_scan_block(self_addr.clone()));
-        _owned_tasks.spawn(Self::listen_to_query_daemon_height(self_addr));
+        _owned_tasks.spawn(Self::listen_to_query_daemon_height(self_addr.clone()));
+        _owned_tasks.spawn(Self::listen_to_start_continuous_scan(self_addr.clone()));
+        _owned_tasks.spawn(Self::listen_to_stop_scan(self_addr.clone()));
 
         WalletActor {
             state: WalletState {
@@ -41,6 +52,14 @@ impl WalletActor {
             sync_actor: None,
             rpc_actor: None,
             _owned_tasks,
+            is_scanning: false,
+            scan_start_height: 0,
+            scan_current_height: 0,
+            scan_target_height: 0,
+            scan_node_url: String::new(),
+            scan_seed: String::new(),
+            scan_network: String::new(),
+            self_addr: Some(self_addr),
         }
     }
 
@@ -274,6 +293,29 @@ impl WalletActor {
             }
         }
     }
+
+    async fn listen_to_start_continuous_scan(mut self_addr: Address<Self>) {
+        let receiver = StartContinuousScanRequest::get_dart_signal_receiver();
+        while let Some(signal_pack) = receiver.recv().await {
+            let request = signal_pack.message;
+            let _ = self_addr
+                .notify(StartContinuousScan {
+                    node_url: request.node_url,
+                    start_height: request.start_height,
+                    seed: request.seed,
+                    network: request.network,
+                })
+                .await;
+        }
+    }
+
+    async fn listen_to_stop_scan(mut self_addr: Address<Self>) {
+        let receiver = StopScanRequest::get_dart_signal_receiver();
+        while let Some(_signal_pack) = receiver.recv().await {
+            let _ = self_addr.notify(StopScan).await;
+        }
+    }
+
 }
 
 #[async_trait]
@@ -392,5 +434,216 @@ impl WalletActor {
 
         self.state.confirmed_balance = confirmed;
         self.state.unconfirmed_balance = unconfirmed;
+    }
+}
+
+#[async_trait]
+impl Notifiable<UpdateScanState> for WalletActor {
+    async fn notify(&mut self, msg: UpdateScanState, _ctx: &Context<Self>) {
+        self.is_scanning = msg.is_scanning;
+        self.scan_current_height = msg.current_height;
+        self.scan_target_height = msg.target_height;
+        self.scan_node_url = msg.node_url;
+        self.scan_seed = msg.seed;
+        self.scan_network = msg.network;
+    }
+}
+
+#[async_trait]
+impl Notifiable<StartContinuousScan> for WalletActor {
+    async fn notify(&mut self, msg: StartContinuousScan, ctx: &Context<Self>) {
+        let node_url = msg.node_url.clone();
+        let start_height = msg.start_height;
+        let seed = msg.seed.clone();
+        let network = msg.network.clone();
+        let mut self_addr = ctx.address();
+
+        // Spawn task to get daemon height and start scanning
+        tokio::spawn(async move {
+            match monero_wasm::get_daemon_height(&node_url).await {
+                Ok(daemon_height) => {
+                    // Initialize scanning state
+                    let _ = self_addr
+                        .notify(UpdateScanState {
+                            is_scanning: true,
+                            current_height: start_height,
+                            target_height: daemon_height,
+                            node_url: node_url.clone(),
+                            seed: seed.clone(),
+                            network: network.clone(),
+                        })
+                        .await;
+
+                    // Send initial progress
+                    SyncProgressResponse {
+                        current_height: start_height,
+                        daemon_height,
+                        is_synced: start_height >= daemon_height,
+                        is_scanning: true,
+                    }
+                    .send_signal_to_dart();
+
+                    // Start scanning
+                    let _ = self_addr.notify(ContinueScan).await;
+                }
+                Err(e) => {
+                    BlockScanResponse {
+                        success: false,
+                        error: Some(format!("Failed to get daemon height: {}", e)),
+                        block_height: 0,
+                        block_hash: String::new(),
+                        block_timestamp: 0,
+                        tx_count: 0,
+                        outputs: Vec::new(),
+                        daemon_height: 0,
+                    }
+                    .send_signal_to_dart();
+                }
+            }
+        });
+    }
+}
+
+#[async_trait]
+impl Notifiable<StopScan> for WalletActor {
+    async fn notify(&mut self, _msg: StopScan, _ctx: &Context<Self>) {
+        self.is_scanning = false;
+        SyncProgressResponse {
+            current_height: self.scan_current_height,
+            daemon_height: self.scan_target_height,
+            is_synced: self.scan_current_height >= self.scan_target_height,
+            is_scanning: false,
+        }
+        .send_signal_to_dart();
+    }
+}
+
+#[async_trait]
+impl Notifiable<ContinueScan> for WalletActor {
+    async fn notify(&mut self, _msg: ContinueScan, ctx: &Context<Self>) {
+        if !self.is_scanning || self.scan_current_height >= self.scan_target_height {
+            if self.scan_current_height >= self.scan_target_height {
+                self.is_scanning = false;
+                SyncProgressResponse {
+                    current_height: self.scan_current_height,
+                    daemon_height: self.scan_target_height,
+                    is_synced: true,
+                    is_scanning: false,
+                }
+                .send_signal_to_dart();
+            }
+            return;
+        }
+
+        let node_url = self.scan_node_url.clone();
+        let block_height = self.scan_current_height;
+        let seed = self.scan_seed.clone();
+        let network = self.scan_network.clone();
+        let target_height = self.scan_target_height;
+        let mut self_addr = ctx.address();
+
+        // Increment current height
+        self.scan_current_height += 1;
+
+        // Spawn task to scan the block
+        tokio::spawn(async move {
+            match monero_wasm::scan_block_for_outputs_with_url(&node_url, block_height, &seed, &network).await {
+                Ok(result) => {
+                    let outputs = result
+                        .outputs
+                        .iter()
+                        .map(|o| OwnedOutput {
+                            tx_hash: o.tx_hash.clone(),
+                            output_index: o.output_index,
+                            amount: o.amount,
+                            amount_xmr: o.amount_xmr.clone(),
+                            key: o.key.clone(),
+                            key_offset: o.key_offset.clone(),
+                            commitment_mask: o.commitment_mask.clone(),
+                            subaddress_index: o.subaddress_index,
+                            payment_id: o.payment_id.clone(),
+                            received_output_bytes: o.received_output_bytes.clone(),
+                            block_height: o.block_height,
+                            spent: o.spent,
+                        })
+                        .collect();
+
+                    let stored_outputs: Vec<StoredOutput> = result
+                        .outputs
+                        .iter()
+                        .map(|o| StoredOutput {
+                            tx_hash: o.tx_hash.clone(),
+                            output_index: o.output_index,
+                            amount: o.amount,
+                            key: o.key.clone(),
+                            key_offset: o.key_offset.clone(),
+                            commitment_mask: o.commitment_mask.clone(),
+                            subaddress: o.subaddress_index,
+                            payment_id: o.payment_id.clone(),
+                            received_output_bytes: o.received_output_bytes.clone(),
+                            block_height: o.block_height,
+                            spent: o.spent,
+                        })
+                        .collect();
+
+                    let _ = self_addr
+                        .notify(StoreOutputs {
+                            seed,
+                            network,
+                            outputs: stored_outputs,
+                            daemon_height: result.daemon_height,
+                        })
+                        .await;
+
+                    BlockScanResponse {
+                        success: true,
+                        error: None,
+                        block_height: result.block_height,
+                        block_hash: result.block_hash,
+                        block_timestamp: result.block_timestamp,
+                        tx_count: result.tx_count as u32,
+                        outputs,
+                        daemon_height: result.daemon_height,
+                    }
+                    .send_signal_to_dart();
+
+                    // Send progress update
+                    SyncProgressResponse {
+                        current_height: block_height + 1,
+                        daemon_height: target_height,
+                        is_synced: (block_height + 1) >= target_height,
+                        is_scanning: (block_height + 1) < target_height,
+                    }
+                    .send_signal_to_dart();
+
+                    // Continue scanning if not done
+                    if block_height + 1 < target_height {
+                        let _ = self_addr.notify(ContinueScan).await;
+                    }
+                }
+                Err(e) => {
+                    BlockScanResponse {
+                        success: false,
+                        error: Some(e),
+                        block_height,
+                        block_hash: String::new(),
+                        block_timestamp: 0,
+                        tx_count: 0,
+                        outputs: Vec::new(),
+                        daemon_height: 0,
+                    }
+                    .send_signal_to_dart();
+
+                    // Stop scanning on error
+                    SyncProgressResponse {
+                        current_height: block_height,
+                        daemon_height: target_height,
+                        is_synced: false,
+                        is_scanning: false,
+                    }
+                    .send_signal_to_dart();
+                }
+            }
+        });
     }
 }
