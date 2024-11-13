@@ -41,6 +41,7 @@ pub struct OwnedOutputInfo {
     pub received_output_bytes: String,
     pub block_height: u64,
     pub spent: bool,
+    pub key_image: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -77,6 +78,27 @@ fn view_key_from_seed(seed: &Seed) -> Scalar {
 
     let view: [u8; 32] = Keccak256::digest(&spend_bytes).into();
     Scalar::from_bytes_mod_order(view)
+}
+
+fn spend_key_scalar_from_seed(seed: &Seed) -> Scalar {
+    let entropy = seed.entropy();
+    let mut spend_bytes = [0u8; 32];
+    spend_bytes.copy_from_slice(&entropy[..]);
+    Scalar::from_bytes_mod_order(spend_bytes)
+}
+
+fn calculate_key_image(spend_scalar: &Scalar, key_offset: &Scalar) -> EdwardsPoint {
+    let one_time_key_scalar = spend_scalar + key_offset;
+    let one_time_public_key = &one_time_key_scalar * &ED25519_BASEPOINT_TABLE;
+    let hash_point = hash_to_point(&one_time_public_key);
+    &one_time_key_scalar * &hash_point
+}
+
+fn hash_to_point(point: &EdwardsPoint) -> EdwardsPoint {
+    let compressed = point.compress();
+    let hash: [u8; 32] = Keccak256::digest(&compressed.to_bytes()).into();
+    let scalar = Scalar::from_bytes_mod_order(hash);
+    &scalar * &ED25519_BASEPOINT_TABLE
 }
 
 pub fn generate_seed() -> Result<String, String> {
@@ -178,6 +200,8 @@ pub async fn scan_block_for_outputs<R: RpcConnection>(
     let spend_point = spend_key_from_seed(&seed);
     let view_scalar = view_key_from_seed(&seed);
 
+    let spend_scalar = spend_key_scalar_from_seed(&seed);
+
     let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
     let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
 
@@ -235,6 +259,9 @@ pub async fn scan_block_for_outputs<R: RpcConnection>(
             };
             let received_output_bytes = hex::encode(output.serialize());
 
+            let key_image_point = calculate_key_image(&spend_scalar, &output.data.key_offset);
+            let key_image = hex::encode(key_image_point.compress().to_bytes());
+
             outputs.push(OwnedOutputInfo {
                 tx_hash: tx_hash.clone(),
                 output_index,
@@ -248,6 +275,7 @@ pub async fn scan_block_for_outputs<R: RpcConnection>(
                 received_output_bytes,
                 block_height,
                 spent: false,
+                key_image,
             });
         }
     }

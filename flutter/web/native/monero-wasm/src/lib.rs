@@ -17,6 +17,7 @@ pub mod rpc_serai;
 pub mod scanner_native;
 
 pub mod tx_builder;
+pub mod spent_checker;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use scanner_native::scan_block_for_outputs_with_url;
@@ -162,6 +163,7 @@ pub struct OwnedOutputInfo {
     pub received_output_bytes: String,
     pub block_height: u64,
     pub spent: bool,
+    pub key_image: String,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -199,6 +201,31 @@ fn view_key_from_seed_wasm(seed: &monero_serai::wallet::seed::Seed) -> Scalar {
 }
 
 #[cfg(target_arch = "wasm32")]
+fn spend_key_scalar_from_seed_wasm(seed: &monero_serai::wallet::seed::Seed) -> Scalar {
+    let entropy = seed.entropy();
+    let mut spend_bytes = [0u8; 32];
+    spend_bytes.copy_from_slice(&entropy[..]);
+    Scalar::from_bytes_mod_order(spend_bytes)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn calculate_key_image_wasm(spend_scalar: &Scalar, key_offset: &Scalar) -> EdwardsPoint {
+    let one_time_key_scalar = spend_scalar + key_offset;
+    let one_time_public_key = &one_time_key_scalar * &ED25519_BASEPOINT_TABLE;
+    let hash_point = hash_to_point_wasm(&one_time_public_key);
+    &one_time_key_scalar * &hash_point
+}
+
+#[cfg(target_arch = "wasm32")]
+fn hash_to_point_wasm(point: &EdwardsPoint) -> EdwardsPoint {
+    let compressed = point.compress();
+    let bytes = compressed.to_bytes();
+    let hash: [u8; 32] = Keccak256::digest(&bytes).into();
+    let scalar = Scalar::from_bytes_mod_order(hash);
+    &scalar * &ED25519_BASEPOINT_TABLE
+}
+
+#[cfg(target_arch = "wasm32")]
 pub async fn scan_block_for_outputs_with_url(
     node_url: &str,
     block_height: u64,
@@ -217,6 +244,7 @@ pub async fn scan_block_for_outputs_with_url(
 
     let spend_point = spend_key_from_seed_wasm(&seed);
     let view_scalar = view_key_from_seed_wasm(&seed);
+    let spend_scalar = spend_key_scalar_from_seed_wasm(&seed);
 
     let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
     let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
@@ -272,6 +300,9 @@ pub async fn scan_block_for_outputs_with_url(
             let commitment_mask = hex::encode(output.data.commitment.mask.to_bytes());
             let received_output_bytes = hex::encode(output.serialize());
 
+            let key_image_point = calculate_key_image_wasm(&spend_scalar, &output.data.key_offset);
+            let key_image = hex::encode(key_image_point.compress().to_bytes());
+
             outputs.push(OwnedOutputInfo {
                 tx_hash: tx_hash.clone(),
                 output_index,
@@ -285,6 +316,7 @@ pub async fn scan_block_for_outputs_with_url(
                 received_output_bytes,
                 block_height,
                 spent: false,
+                key_image,
             });
         }
     }
