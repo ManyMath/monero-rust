@@ -120,6 +120,14 @@ class _DebugViewState extends State<DebugView> {
       });
     });
 
+    DaemonHeightResponse.rustSignalStream.listen((signal) {
+      if (signal.message.success) {
+        setState(() {
+          _daemonHeight = signal.message.daemonHeight.toInt();
+        });
+      }
+    });
+
     TransactionCreatedResponse.rustSignalStream.listen((signal) {
       setState(() {
         _isCreatingTx = false;
@@ -173,6 +181,18 @@ class _DebugViewState extends State<DebugView> {
 
   void _onSeedChanged() {
     _debounceTimer?.cancel();
+
+    if (_isContinuousScanning) {
+      StopScanRequest().sendSignalToRust();
+    }
+    setState(() {
+      _continuousScanCurrentHeight = 0;
+      _continuousScanTargetHeight = 0;
+      _isSynced = false;
+      _allOutputs = [];
+      _daemonHeight = null;
+      _scanResult = null;
+    });
 
     _debounceTimer = Timer(const Duration(milliseconds: 800), () {
       _deriveAddress();
