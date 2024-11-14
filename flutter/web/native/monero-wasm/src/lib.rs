@@ -5,6 +5,8 @@ use monero_serai::wallet::{
 };
 use sha3::{Digest, Keccak256};
 use zeroize::Zeroizing;
+#[cfg(target_arch = "wasm32")]
+use monero_serai::ringct::generate_key_image;
 use getrandom::getrandom;
 use serde::{Serialize, Deserialize};
 
@@ -210,19 +212,8 @@ fn spend_key_scalar_from_seed_wasm(seed: &monero_serai::wallet::seed::Seed) -> S
 
 #[cfg(target_arch = "wasm32")]
 fn calculate_key_image_wasm(spend_scalar: &Scalar, key_offset: &Scalar) -> EdwardsPoint {
-    let one_time_key_scalar = spend_scalar + key_offset;
-    let one_time_public_key = &one_time_key_scalar * &ED25519_BASEPOINT_TABLE;
-    let hash_point = hash_to_point_wasm(&one_time_public_key);
-    &one_time_key_scalar * &hash_point
-}
-
-#[cfg(target_arch = "wasm32")]
-fn hash_to_point_wasm(point: &EdwardsPoint) -> EdwardsPoint {
-    let compressed = point.compress();
-    let bytes = compressed.to_bytes();
-    let hash: [u8; 32] = Keccak256::digest(&bytes).into();
-    let scalar = Scalar::from_bytes_mod_order(hash);
-    &scalar * &ED25519_BASEPOINT_TABLE
+    let one_time_key_scalar = Zeroizing::new(spend_scalar + key_offset);
+    generate_key_image(&one_time_key_scalar)
 }
 
 #[cfg(target_arch = "wasm32")]
