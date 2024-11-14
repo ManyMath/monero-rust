@@ -5,6 +5,7 @@
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, edwards::EdwardsPoint, scalar::Scalar};
 use monero_serai::{
+    ringct::generate_key_image,
     rpc::{Rpc, RpcConnection},
     wallet::{
         address::{AddressMeta, AddressType, MoneroAddress, Network},
@@ -88,17 +89,8 @@ fn spend_key_scalar_from_seed(seed: &Seed) -> Scalar {
 }
 
 fn calculate_key_image(spend_scalar: &Scalar, key_offset: &Scalar) -> EdwardsPoint {
-    let one_time_key_scalar = spend_scalar + key_offset;
-    let one_time_public_key = &one_time_key_scalar * &ED25519_BASEPOINT_TABLE;
-    let hash_point = hash_to_point(&one_time_public_key);
-    &one_time_key_scalar * &hash_point
-}
-
-fn hash_to_point(point: &EdwardsPoint) -> EdwardsPoint {
-    let compressed = point.compress();
-    let hash: [u8; 32] = Keccak256::digest(&compressed.to_bytes()).into();
-    let scalar = Scalar::from_bytes_mod_order(hash);
-    &scalar * &ED25519_BASEPOINT_TABLE
+    let one_time_key_scalar = Zeroizing::new(spend_scalar + key_offset);
+    generate_key_image(&one_time_key_scalar)
 }
 
 pub fn generate_seed() -> Result<String, String> {
@@ -293,6 +285,7 @@ pub async fn scan_block_for_outputs<R: RpcConnection>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use monero_serai::ringct::generate_key_image;
 
     const TEST_VECTOR_1_SEED: &str = "hemlock jubilee eden hacksaw boil superior inroads epoxy exhale orders cavernous second brunt saved richly lower upgrade hitched launching deepest mostly playful layout lower eden";
     const TEST_VECTOR_1_SPEND_KEY: &str =
@@ -440,5 +433,15 @@ mod tests {
         assert_eq!(keys.secret_spend_key, TEST_VECTOR_2_SPEND_KEY);
         assert_eq!(keys.secret_view_key, TEST_VECTOR_2_VIEW_KEY);
         assert_eq!(keys.address, TEST_VECTOR_2_ADDRESS);
+    }
+
+    #[test]
+    fn test_key_image_matches_serai_generate() {
+        let spend_scalar = Scalar::from_bytes_mod_order([3u8; 32]);
+        let key_offset = Scalar::from_bytes_mod_order([7u8; 32]);
+        let ours = calculate_key_image(&spend_scalar, &key_offset);
+        let one_time_key = Zeroizing::new(spend_scalar + key_offset);
+        let expected = generate_key_image(&one_time_key);
+        assert_eq!(ours.compress().to_bytes(), expected.compress().to_bytes());
     }
 }
