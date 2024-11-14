@@ -989,6 +989,26 @@ class _DebugViewState extends State<DebugView> {
                     ),
                     ExpansionPanel(
                       headerBuilder: (BuildContext context, bool isExpanded) {
+                        // Calculate balance from unspent outputs
+                        double totalBalance = 0;
+                        double unlockedBalance = 0;
+                        for (var output in _allOutputs) {
+                          if (!output.spent) {
+                            final amount = double.tryParse(output.amountXmr) ?? 0;
+                            totalBalance += amount;
+                            final outputHeight = output.blockHeight.toInt();
+                            final currentHeight = _daemonHeight ?? _scanResult?.blockHeight.toInt() ?? outputHeight;
+                            final confirmations = outputHeight > 0 ? currentHeight - outputHeight : 0;
+                            if (confirmations >= 10) {
+                              unlockedBalance += amount;
+                            }
+                          }
+                        }
+                        final hasLockedBalance = unlockedBalance < totalBalance;
+                        final balanceStr = hasLockedBalance
+                            ? '${totalBalance.toStringAsFixed(12)} XMR (Unlocked: ${unlockedBalance.toStringAsFixed(12)})'
+                            : '${totalBalance.toStringAsFixed(12)} XMR';
+
                         return GestureDetector(
                           onTap: () {
                             setState(() {
@@ -1001,7 +1021,7 @@ class _DebugViewState extends State<DebugView> {
                               style: TextStyle(fontWeight: FontWeight.bold),
                             ),
                             subtitle: Text(
-                              '${_allOutputs.length} output(s)',
+                              '$balanceStr - ${_allOutputs.length} output(s)',
                               style: const TextStyle(fontSize: 12),
                             ),
                           ),
@@ -1354,4 +1374,5 @@ class _DebugViewState extends State<DebugView> {
       ),
     );
   }
+
 }
