@@ -49,6 +49,27 @@ pub struct DerivedKeys {
     pub address: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Lookahead {
+    pub account: u32,
+    pub subaddress: u32,
+}
+
+pub const DEFAULT_LOOKAHEAD: Lookahead = Lookahead {
+    account: 0,
+    subaddress: 20,
+};
+
+pub const WALLET_CLI_SOFTWARE_LOOKAHEAD: Lookahead = Lookahead {
+    account: 50,
+    subaddress: 200,
+};
+
+pub const WALLET_CLI_HARDWARE_LOOKAHEAD: Lookahead = Lookahead {
+    account: 5,
+    subaddress: 20,
+};
+
 fn parse_network(network_str: &str) -> Result<Network, String> {
     match network_str.to_lowercase().as_str() {
         "mainnet" => Ok(Network::Mainnet),
@@ -76,14 +97,21 @@ fn view_key_from_seed(seed: &Seed) -> Scalar {
     Scalar::from_bytes_mod_order(view)
 }
 
-fn register_default_subaddresses(scanner: &mut Scanner) {
-    const DEFAULT_ACCOUNT: u32 = 0;
-    const SUBADDRESS_LOOKAHEAD: u32 = 50;
-
-    for address in 0..=SUBADDRESS_LOOKAHEAD {
-        if let Some(index) = SubaddressIndex::new(DEFAULT_ACCOUNT, address) {
-            scanner.register_subaddress(index);
+fn build_subaddress_indices(lookahead: Lookahead) -> Vec<SubaddressIndex> {
+    let mut indices = Vec::new();
+    for account in 0..=lookahead.account {
+        for address in 0..=lookahead.subaddress {
+            if let Some(index) = SubaddressIndex::new(account, address) {
+                indices.push(index);
+            }
         }
+    }
+    indices
+}
+
+fn register_subaddresses(scanner: &mut Scanner, lookahead: Lookahead) {
+    for index in build_subaddress_indices(lookahead) {
+        scanner.register_subaddress(index);
     }
 }
 
@@ -160,7 +188,14 @@ pub async fn scan_block_for_outputs_with_url(
         use monero_serai::rpc::HttpRpc;
         let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
-        scan_block_for_outputs(&rpc, block_height, mnemonic, network_str).await
+        scan_block_for_outputs_with_lookahead(
+            &rpc,
+            block_height,
+            mnemonic,
+            network_str,
+            DEFAULT_LOOKAHEAD,
+        )
+        .await
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -168,7 +203,14 @@ pub async fn scan_block_for_outputs_with_url(
         use crate::rpc_serai::WasmRpcConnection;
         use monero_serai::rpc::Rpc;
         let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
-        scan_block_for_outputs(&rpc, block_height, mnemonic, network_str).await
+        scan_block_for_outputs_with_lookahead(
+            &rpc,
+            block_height,
+            mnemonic,
+            network_str,
+            DEFAULT_LOOKAHEAD,
+        )
+        .await
     }
 }
 
@@ -177,6 +219,23 @@ pub async fn scan_block_for_outputs<R: RpcConnection>(
     block_height: u64,
     mnemonic: &str,
     network_str: &str,
+) -> Result<BlockScanResult, String> {
+    scan_block_for_outputs_with_lookahead(
+        rpc,
+        block_height,
+        mnemonic,
+        network_str,
+        DEFAULT_LOOKAHEAD,
+    )
+    .await
+}
+
+pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
+    rpc: &Rpc<R>,
+    block_height: u64,
+    mnemonic: &str,
+    network_str: &str,
+    lookahead: Lookahead,
 ) -> Result<BlockScanResult, String> {
     let _network = parse_network(network_str)?;
 
@@ -188,7 +247,7 @@ pub async fn scan_block_for_outputs<R: RpcConnection>(
 
     let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
     let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
-    register_default_subaddresses(&mut scanner);
+    register_subaddresses(&mut scanner, lookahead);
 
     let block_hash_bytes = rpc
         .get_block_hash(block_height as usize)
@@ -413,5 +472,22 @@ mod tests {
         assert_eq!(keys.secret_spend_key, TEST_VECTOR_2_SPEND_KEY);
         assert_eq!(keys.secret_view_key, TEST_VECTOR_2_VIEW_KEY);
         assert_eq!(keys.address, TEST_VECTOR_2_ADDRESS);
+    }
+
+    #[test]
+    fn test_default_lookahead_indices() {
+        let indices = build_subaddress_indices(DEFAULT_LOOKAHEAD);
+        assert_eq!(indices.len(), 20);
+        assert!(indices.contains(&SubaddressIndex::new(0, 1).unwrap()));
+        assert!(indices.contains(&SubaddressIndex::new(0, 20).unwrap()));
+        assert!(!indices.contains(&SubaddressIndex::new(1, 0).unwrap()));
+    }
+
+    #[test]
+    fn test_wallet_cli_lookahead_sizes() {
+        let software = build_subaddress_indices(WALLET_CLI_SOFTWARE_LOOKAHEAD);
+        let hardware = build_subaddress_indices(WALLET_CLI_HARDWARE_LOOKAHEAD);
+        assert_eq!(software.len(), (51 * 201) - 1);
+        assert_eq!(hardware.len(), (6 * 21) - 1);
     }
 }
