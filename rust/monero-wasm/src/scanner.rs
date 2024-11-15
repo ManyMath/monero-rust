@@ -7,7 +7,7 @@ use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, edwards::EdwardsPoint
 use monero_serai::{
     rpc::{Rpc, RpcConnection},
     wallet::{
-        address::{AddressMeta, AddressType, MoneroAddress, Network},
+        address::{AddressMeta, AddressType, MoneroAddress, Network, SubaddressIndex},
         seed::{Language, Seed},
         Scanner, ViewPair,
     },
@@ -74,6 +74,17 @@ fn view_key_from_seed(seed: &Seed) -> Scalar {
 
     let view: [u8; 32] = Keccak256::digest(&spend_bytes).into();
     Scalar::from_bytes_mod_order(view)
+}
+
+fn register_default_subaddresses(scanner: &mut Scanner) {
+    const DEFAULT_ACCOUNT: u32 = 0;
+    const SUBADDRESS_LOOKAHEAD: u32 = 50;
+
+    for address in 0..=SUBADDRESS_LOOKAHEAD {
+        if let Some(index) = SubaddressIndex::new(DEFAULT_ACCOUNT, address) {
+            scanner.register_subaddress(index);
+        }
+    }
 }
 
 pub fn generate_seed() -> Result<String, String> {
@@ -177,6 +188,7 @@ pub async fn scan_block_for_outputs<R: RpcConnection>(
 
     let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
     let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+    register_default_subaddresses(&mut scanner);
 
     let block_hash_bytes = rpc
         .get_block_hash(block_height as usize)

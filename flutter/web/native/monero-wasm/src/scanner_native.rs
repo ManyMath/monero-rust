@@ -8,7 +8,7 @@ use monero_serai::{
     ringct::generate_key_image,
     rpc::{Rpc, RpcConnection},
     wallet::{
-        address::{AddressMeta, AddressType, MoneroAddress, Network},
+        address::{AddressMeta, AddressType, MoneroAddress, Network, SubaddressIndex},
         seed::{Language, Seed},
         Scanner, ViewPair,
     },
@@ -91,6 +91,17 @@ fn spend_key_scalar_from_seed(seed: &Seed) -> Scalar {
 fn calculate_key_image(spend_scalar: &Scalar, key_offset: &Scalar) -> EdwardsPoint {
     let one_time_key_scalar = Zeroizing::new(spend_scalar + key_offset);
     generate_key_image(&one_time_key_scalar)
+}
+
+fn register_default_subaddresses(scanner: &mut Scanner) {
+    const DEFAULT_ACCOUNT: u32 = 0;
+    const SUBADDRESS_LOOKAHEAD: u32 = 50;
+
+    for address in 0..=SUBADDRESS_LOOKAHEAD {
+        if let Some(index) = SubaddressIndex::new(DEFAULT_ACCOUNT, address) {
+            scanner.register_subaddress(index);
+        }
+    }
 }
 
 pub fn generate_seed() -> Result<String, String> {
@@ -196,6 +207,7 @@ pub async fn scan_block_for_outputs<R: RpcConnection>(
 
     let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
     let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+    register_default_subaddresses(&mut scanner);
 
     let block_hash_bytes = rpc
         .get_block_hash(block_height as usize)
