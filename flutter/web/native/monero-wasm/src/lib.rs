@@ -1,6 +1,6 @@
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, edwards::EdwardsPoint, scalar::Scalar};
 use monero_serai::wallet::{
-    address::{AddressMeta, AddressType, MoneroAddress, Network},
+    address::{AddressMeta, AddressType, MoneroAddress, Network, SubaddressIndex},
     seed::{Language, Seed},
 };
 use sha3::{Digest, Keccak256};
@@ -175,7 +175,7 @@ use std::collections::HashSet;
 use monero_serai::{
     rpc::Rpc,
     wallet::{
-        ViewPair, Scanner,
+        Scanner, ViewPair,
     },
 };
 
@@ -217,6 +217,18 @@ fn calculate_key_image_wasm(spend_scalar: &Scalar, key_offset: &Scalar) -> Edwar
 }
 
 #[cfg(target_arch = "wasm32")]
+fn register_default_subaddresses(scanner: &mut Scanner) {
+    const DEFAULT_ACCOUNT: u32 = 0;
+    const SUBADDRESS_LOOKAHEAD: u32 = 50;
+
+    for address in 0..=SUBADDRESS_LOOKAHEAD {
+        if let Some(index) = SubaddressIndex::new(DEFAULT_ACCOUNT, address) {
+            scanner.register_subaddress(index);
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
 pub async fn scan_block_for_outputs_with_url(
     node_url: &str,
     block_height: u64,
@@ -239,6 +251,7 @@ pub async fn scan_block_for_outputs_with_url(
 
     let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
     let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+    register_default_subaddresses(&mut scanner);
 
     let adapter = WasmRpcAdapter::new(node_url.to_string());
     let rpc = Rpc::new_with_connection(adapter);
