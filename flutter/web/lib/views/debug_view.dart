@@ -17,7 +17,8 @@ class _DebugViewState extends State<DebugView> {
   final _extensionService = ExtensionService();
   final _nodeUrlController = TextEditingController(text: '127.0.0.1:38081');
   final _blockHeightController = TextEditingController();
-  final _startHeightController = TextEditingController();
+  final _blockHeightFocusNode = FocusNode();
+  bool _blockHeightUserEdited = false;
 
   String _network = 'stagenet';
   final String _seedType = '25 word';
@@ -39,6 +40,7 @@ class _DebugViewState extends State<DebugView> {
 
   // Continuous scan state
   bool _isContinuousScanning = false;
+  bool _isContinuousPaused = false;
   int _continuousScanCurrentHeight = 0;
   int _continuousScanTargetHeight = 0;
   bool _isSynced = false;
@@ -60,6 +62,7 @@ class _DebugViewState extends State<DebugView> {
     super.initState();
 
     _controller.addListener(_onSeedChanged);
+    _blockHeightController.addListener(_onBlockHeightChanged);
 
     KeysDerivedResponse.rustSignalStream.listen((signal) {
       setState(() {
@@ -162,6 +165,15 @@ class _DebugViewState extends State<DebugView> {
         _continuousScanTargetHeight = signal.message.daemonHeight.toInt();
         _isSynced = signal.message.isSynced;
         _isContinuousScanning = signal.message.isScanning;
+        if (_isContinuousScanning) {
+          _isContinuousPaused = false;
+        } else if (_isSynced) {
+          _isContinuousPaused = false;
+        }
+        if (!_blockHeightFocusNode.hasFocus) {
+          _blockHeightController.text = _continuousScanCurrentHeight.toString();
+          _blockHeightUserEdited = false;
+        }
       });
     });
   }
@@ -170,10 +182,11 @@ class _DebugViewState extends State<DebugView> {
   void dispose() {
     _debounceTimer?.cancel();
     _controller.removeListener(_onSeedChanged);
+    _blockHeightController.removeListener(_onBlockHeightChanged);
     _controller.dispose();
     _nodeUrlController.dispose();
     _blockHeightController.dispose();
-    _startHeightController.dispose();
+    _blockHeightFocusNode.dispose();
     _destinationController.dispose();
     _amountController.dispose();
     super.dispose();
@@ -197,6 +210,12 @@ class _DebugViewState extends State<DebugView> {
     _debounceTimer = Timer(const Duration(milliseconds: 800), () {
       _deriveAddress();
     });
+  }
+
+  void _onBlockHeightChanged() {
+    if (_blockHeightFocusNode.hasFocus) {
+      _blockHeightUserEdited = true;
+    }
   }
 
   void _generateSeed() {
@@ -331,19 +350,8 @@ class _DebugViewState extends State<DebugView> {
       return;
     }
 
-    final startHeightStr = _startHeightController.text.trim();
-    if (startHeightStr.isEmpty) {
-      setState(() {
-        _scanError = 'Please enter a start height';
-      });
-      return;
-    }
-
-    final startHeight = int.tryParse(startHeightStr);
-    if (startHeight == null || startHeight < 0) {
-      setState(() {
-        _scanError = 'Invalid start height';
-      });
+    final heightToStart = _parseBlockHeightForContinuous();
+    if (heightToStart == null) {
       return;
     }
 
@@ -357,6 +365,8 @@ class _DebugViewState extends State<DebugView> {
 
     setState(() {
       _scanError = null;
+      _isContinuousPaused = false;
+      _isContinuousScanning = true;
     });
 
     // Prepend http:// if not present
@@ -366,14 +376,63 @@ class _DebugViewState extends State<DebugView> {
 
     StartContinuousScanRequest(
       nodeUrl: fullNodeUrl,
-      startHeight: Uint64(BigInt.from(startHeight)),
+      startHeight: Uint64(BigInt.from(heightToStart)),
       seed: result.normalizedInput!,
       network: _network,
     ).sendSignalToRust();
   }
 
-  void _stopScan() {
+  void _pauseContinuousScan() {
+    setState(() {
+      _isContinuousPaused = true;
+      _isContinuousScanning = false;
+    });
     StopScanRequest().sendSignalToRust();
+  }
+
+  int? _parseBlockHeightForContinuous() {
+    final startHeightStr = _blockHeightController.text.trim();
+    if (startHeightStr.isEmpty) {
+      setState(() {
+        _scanError = 'Please enter a block height';
+      });
+      return null;
+    }
+
+    final startHeight = int.tryParse(startHeightStr);
+    if (startHeight == null || startHeight < 0) {
+      setState(() {
+        _scanError = 'Invalid block height';
+      });
+      return null;
+    }
+
+    return startHeight;
+  }
+
+  String _continuousScanButtonLabel() {
+    if (_isContinuousScanning) {
+      return 'Pause Scan';
+    }
+    if (_isContinuousPaused) {
+      final currentText = _blockHeightController.text.trim();
+      final height = int.tryParse(currentText);
+      if (_blockHeightUserEdited && height != null && height > _continuousScanCurrentHeight) {
+        return 'Start Skipscan';
+      }
+      return 'Start Rescan';
+    }
+    return 'Start Scan';
+  }
+
+  Color _continuousScanButtonColor() {
+    if (_isContinuousScanning) {
+      return Colors.orange;
+    }
+    if (_isContinuousPaused) {
+      return Colors.blueGrey;
+    }
+    return Colors.green;
   }
 
   void _createTransaction() {
@@ -745,78 +804,45 @@ class _DebugViewState extends State<DebugView> {
                                 Expanded(
                                   child: TextField(
                                     controller: _blockHeightController,
+                                    focusNode: _blockHeightFocusNode,
                                     decoration: const InputDecoration(
                                       labelText: 'Block Height',
-                                      hintText: 'Single block to scan',
+                                      hintText: 'Block height for scan',
                                       border: OutlineInputBorder(),
                                     ),
                                     keyboardType: TextInputType.number,
                                   ),
                                 ),
                                 const SizedBox(width: 8),
-                                ElevatedButton.icon(
-                                  onPressed: (_isScanning || _isContinuousScanning) ? null : _scanBlock,
-                                  icon: _isScanning
-                                      ? const SizedBox(
-                                          width: 16,
-                                          height: 16,
-                                          child: CircularProgressIndicator(strokeWidth: 2),
-                                        )
-                                      : const Icon(Icons.search),
-                                  label: Text(_isScanning ? 'Scanning...' : 'Scan One'),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 16),
-                            const Divider(),
-                            const SizedBox(height: 8),
-                            Text(
-                              'Continuous Scanning',
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 14,
-                                color: Theme.of(context).colorScheme.primary,
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            TextField(
-                              controller: _startHeightController,
-                              decoration: const InputDecoration(
-                                labelText: 'Start Height',
-                                hintText: 'Enter start block height',
-                                border: OutlineInputBorder(),
-                              ),
-                              keyboardType: TextInputType.number,
-                              enabled: !_isContinuousScanning,
-                            ),
-                            const SizedBox(height: 16),
-                            Row(
-                              children: [
                                 Expanded(
                                   child: ElevatedButton.icon(
-                                    onPressed: (_isScanning || _isContinuousScanning) ? null : _startContinuousScan,
-                                    icon: const Icon(Icons.play_arrow),
-                                    label: const Text('Start Scan'),
+                                    onPressed: (_isScanning || _isContinuousScanning) ? null : _scanBlock,
+                                    icon: _isScanning
+                                        ? const SizedBox(
+                                            width: 16,
+                                            height: 16,
+                                            child: CircularProgressIndicator(strokeWidth: 2),
+                                          )
+                                        : const Icon(Icons.search),
+                                    label: Text(_isScanning ? 'Scanning...' : 'Scan One'),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: ElevatedButton.icon(
+                                    onPressed: _isScanning
+                                        ? null
+                                        : _isContinuousScanning
+                                            ? _pauseContinuousScan
+                                            : _startContinuousScan,
+                                    icon: Icon(_isContinuousScanning ? Icons.pause : Icons.play_arrow),
+                                    label: Text(_continuousScanButtonLabel()),
                                     style: ElevatedButton.styleFrom(
-                                      backgroundColor: Colors.green,
+                                      backgroundColor: _continuousScanButtonColor(),
                                       foregroundColor: Colors.white,
                                     ),
                                   ),
                                 ),
-                                if (_isContinuousScanning) ...[
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: ElevatedButton.icon(
-                                      onPressed: _stopScan,
-                                      icon: const Icon(Icons.stop),
-                                      label: const Text('Stop Scan'),
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: Colors.red,
-                                        foregroundColor: Colors.white,
-                                      ),
-                                    ),
-                                  ),
-                                ],
                               ],
                             ),
                             if (_isContinuousScanning || _isSynced) ...[
