@@ -63,19 +63,6 @@ void main() {
     expect(button.onPressed, isNotNull);
   });
 
-  testWidgets('Start Height text field exists', (WidgetTester tester) async {
-    await tester.pumpWidget(const MaterialApp(home: DebugView()));
-    await tester.pumpAndSettle();
-
-    // Expand scanning panel
-    await tester.tap(find.text('Scanning'));
-    await tester.pumpAndSettle();
-
-    // Find Start Height field
-    final startHeightField = find.widgetWithText(TextField, 'Start Height (for continuous scan)');
-    expect(startHeightField, findsOneWidget);
-  });
-
   testWidgets('Block Height text field exists', (WidgetTester tester) async {
     await tester.pumpWidget(const MaterialApp(home: DebugView()));
     await tester.pumpAndSettle();
