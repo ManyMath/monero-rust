@@ -134,6 +134,7 @@ pub struct BlockScanResponse {
     pub tx_count: u32,
     pub outputs: Vec<OwnedOutput>,
     pub daemon_height: u64,
+    pub spent_key_images: Vec<String>,
 }
 
 #[derive(Deserialize, DartSignal)]
@@ -172,3 +173,8 @@ pub struct StartContinuousScanRequest {
 
 #[derive(Deserialize, DartSignal)]
 pub struct StopScanRequest {}
+
+#[derive(Serialize, RustSignal)]
+pub struct SpentStatusUpdatedResponse {
+    pub spent_key_images: Vec<String>,
+}

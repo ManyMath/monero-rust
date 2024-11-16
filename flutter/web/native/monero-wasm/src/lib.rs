@@ -7,19 +7,20 @@ use sha3::{Digest, Keccak256};
 use zeroize::Zeroizing;
 #[cfg(target_arch = "wasm32")]
 use monero_serai::ringct::generate_key_image;
+#[cfg(target_arch = "wasm32")]
+use monero_serai::transaction::Input;
 use getrandom::getrandom;
 use serde::{Serialize, Deserialize};
 
 #[cfg(target_arch = "wasm32")]
 pub mod rpc_adapter;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub mod rpc_serai;
+
 #[cfg(not(target_arch = "wasm32"))]
 pub mod scanner_native;
 
 pub mod tx_builder;
-pub mod spent_checker;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use scanner_native::scan_block_for_outputs_with_url;
@@ -169,6 +170,7 @@ pub struct BlockScanResult {
     pub tx_count: usize,
     pub outputs: Vec<OwnedOutputInfo>,
     pub daemon_height: u64,
+    pub spent_key_images: Vec<String>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -329,9 +331,18 @@ pub async fn scan_block_for_outputs_with_url_with_lookahead(
 
     let tx_count = all_transactions.len();
     let mut outputs = Vec::new();
+    let mut spent_key_images = Vec::new();
 
     for tx in all_transactions.iter() {
         let tx_hash = hex::encode(tx.hash());
+
+        for input in &tx.prefix.inputs {
+            if let Input::ToKey { key_image, .. } = input {
+                let ki_hex = hex::encode(key_image.compress().to_bytes());
+                spent_key_images.push(ki_hex);
+            }
+        }
+
         let scan_result = scanner.scan_transaction(&tx);
         let owned_outputs = scan_result.ignore_timelock();
 
@@ -379,6 +390,7 @@ pub async fn scan_block_for_outputs_with_url_with_lookahead(
         tx_count,
         outputs,
         daemon_height,
+        spent_key_images,
     })
 }
 

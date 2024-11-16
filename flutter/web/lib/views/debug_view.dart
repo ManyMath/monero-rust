@@ -176,6 +176,33 @@ class _DebugViewState extends State<DebugView> {
         }
       });
     });
+
+    SpentStatusUpdatedResponse.rustSignalStream.listen((signal) {
+      setState(() {
+        for (var keyImage in signal.message.spentKeyImages) {
+          for (var output in _allOutputs) {
+            if (output.keyImage == keyImage) {
+              final index = _allOutputs.indexOf(output);
+              _allOutputs[index] = OwnedOutput(
+                txHash: output.txHash,
+                outputIndex: output.outputIndex,
+                amount: output.amount,
+                amountXmr: output.amountXmr,
+                key: output.key,
+                keyOffset: output.keyOffset,
+                commitmentMask: output.commitmentMask,
+                subaddressIndex: output.subaddressIndex,
+                paymentId: output.paymentId,
+                receivedOutputBytes: output.receivedOutputBytes,
+                blockHeight: output.blockHeight,
+                spent: true,
+                keyImage: output.keyImage,
+              );
+            }
+          }
+        }
+      });
+    });
   }
 
   @override
