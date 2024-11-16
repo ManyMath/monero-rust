@@ -151,11 +151,6 @@ pub struct UpdateScanState {
 }
 
 #[derive(Debug, Clone)]
-pub struct CheckSpentOutputs {
-    pub node_url: String,
-}
-
-#[derive(Debug, Clone)]
 pub struct UpdateSpentStatus {
     pub key_images: Vec<String>,
 }

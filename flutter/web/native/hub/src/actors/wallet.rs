@@ -241,6 +241,12 @@ impl WalletActor {
                         })
                         .await;
 
+                    if !result.spent_key_images.is_empty() {
+                        let _ = self_addr.notify(UpdateSpentStatus {
+                            key_images: result.spent_key_images.clone(),
+                        }).await;
+                    }
+
                     BlockScanResponse {
                         success: true,
                         error: None,
@@ -250,6 +256,7 @@ impl WalletActor {
                         tx_count: result.tx_count as u32,
                         outputs,
                         daemon_height: result.daemon_height,
+                        spent_key_images: result.spent_key_images.clone(),
                     }
                     .send_signal_to_dart();
                 }
@@ -263,6 +270,7 @@ impl WalletActor {
                         tx_count: 0,
                         outputs: Vec::new(),
                         daemon_height: 0,
+                        spent_key_images: Vec::new(),
                     }
                     .send_signal_to_dart();
                 }
@@ -498,6 +506,7 @@ impl Notifiable<StartContinuousScan> for WalletActor {
                         tx_count: 0,
                         outputs: Vec::new(),
                         daemon_height: 0,
+                        spent_key_images: Vec::new(),
                     }
                     .send_signal_to_dart();
                 }
@@ -599,6 +608,12 @@ impl Notifiable<ContinueScan> for WalletActor {
                         })
                         .await;
 
+                    if !result.spent_key_images.is_empty() {
+                        let _ = self_addr.notify(UpdateSpentStatus {
+                            key_images: result.spent_key_images.clone(),
+                        }).await;
+                    }
+
                     BlockScanResponse {
                         success: true,
                         error: None,
@@ -608,6 +623,7 @@ impl Notifiable<ContinueScan> for WalletActor {
                         tx_count: result.tx_count as u32,
                         outputs,
                         daemon_height: result.daemon_height,
+                        spent_key_images: result.spent_key_images.clone(),
                     }
                     .send_signal_to_dart();
 
@@ -635,6 +651,7 @@ impl Notifiable<ContinueScan> for WalletActor {
                         tx_count: 0,
                         outputs: Vec::new(),
                         daemon_height: 0,
+                        spent_key_images: Vec::new(),
                     }
                     .send_signal_to_dart();
 
@@ -649,94 +666,45 @@ impl Notifiable<ContinueScan> for WalletActor {
                 }
             }
         });
-
-        if let Some(self_addr) = &self.self_addr {
-            let mut addr_clone = self_addr.clone();
-            let _ = addr_clone.notify(CheckSpentOutputs {
-                node_url: self.scan_node_url.clone(),
-            }).await;
-        }
-    }
-}
-
-#[async_trait]
-impl Notifiable<CheckSpentOutputs> for WalletActor {
-    async fn notify(&mut self, msg: CheckSpentOutputs, ctx: &Context<Self>) {
-        if self.state.outputs.is_empty() {
-            return;
-        }
-
-        let key_images: Vec<String> = self
-            .state
-            .outputs
-            .iter()
-            .filter(|o| !o.spent)
-            .map(|o| o.key_image.clone())
-            .collect();
-
-        if key_images.is_empty() {
-            return;
-        }
-
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let batches = monero_wasm::spent_checker::batch_key_images(&key_images, 100);
-
-            for batch in batches {
-                match monero_wasm::spent_checker::check_key_images_spent_native(&msg.node_url, &batch).await {
-                    Ok(spent_statuses) => {
-                        let spent_key_images: Vec<String> = spent_statuses
-                            .iter()
-                            .filter(|s| s.spent)
-                            .map(|s| s.key_image.clone())
-                            .collect();
-
-                        if !spent_key_images.is_empty() {
-                            let mut updated_count = 0;
-                            for output in &mut self.state.outputs {
-                                if !output.spent && spent_key_images.contains(&output.key_image) {
-                                    output.spent = true;
-                                    updated_count += 1;
-                                }
-                            }
-                            if updated_count > 0 {
-                                self.recalculate_balances();
-
-                                BalanceResponse {
-                                    confirmed: self.state.confirmed_balance,
-                                    unconfirmed: self.state.unconfirmed_balance,
-                                }
-                                .send_signal_to_dart();
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to check spent status: {}", e);
-                    }
-                }
-            }
-        }
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            web_sys::console::log_1(&"Spent checking not yet implemented for WASM".into());
-        }
     }
 }
 
 #[async_trait]
 impl Notifiable<UpdateSpentStatus> for WalletActor {
     async fn notify(&mut self, msg: UpdateSpentStatus, _ctx: &Context<Self>) {
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::log_1(&format!("[UpdateSpentStatus] Received {} key images to mark as spent", msg.key_images.len()).into());
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::log_1(&format!("[UpdateSpentStatus] Current outputs in wallet: {}", self.state.outputs.len()).into());
+
         let mut updated_count = 0;
         for output in &mut self.state.outputs {
             if !output.spent && msg.key_images.contains(&output.key_image) {
+                #[cfg(target_arch = "wasm32")]
+                web_sys::console::log_1(&format!("[UpdateSpentStatus] Marking output as spent: {}...", &output.key_image[..16.min(output.key_image.len())]).into());
                 output.spent = true;
                 updated_count += 1;
             }
         }
 
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::log_1(&format!("[UpdateSpentStatus] Updated {} outputs as spent", updated_count).into());
+
         if updated_count > 0 {
             self.recalculate_balances();
+            #[cfg(target_arch = "wasm32")]
+            web_sys::console::log_1(&format!("[UpdateSpentStatus] Recalculated balance: confirmed={}, unconfirmed={}", self.state.confirmed_balance, self.state.unconfirmed_balance).into());
+
+            BalanceResponse {
+                confirmed: self.state.confirmed_balance,
+                unconfirmed: self.state.unconfirmed_balance,
+            }
+            .send_signal_to_dart();
+
+            SpentStatusUpdatedResponse {
+                spent_key_images: msg.key_images.clone(),
+            }
+            .send_signal_to_dart();
         }
     }
 }

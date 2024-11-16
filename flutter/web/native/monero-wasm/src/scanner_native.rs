@@ -7,6 +7,7 @@ use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, edwards::EdwardsPoint
 use monero_serai::{
     ringct::generate_key_image,
     rpc::{Rpc, RpcConnection},
+    transaction::Input,
     wallet::{
         address::{AddressMeta, AddressType, MoneroAddress, Network, SubaddressIndex},
         seed::{Language, Seed},
@@ -26,6 +27,7 @@ pub struct BlockScanResult {
     pub tx_count: usize,
     pub outputs: Vec<OwnedOutputInfo>,
     pub daemon_height: u64,
+    pub spent_key_images: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -298,9 +300,18 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
 
     let tx_count = all_transactions.len();
     let mut outputs = Vec::new();
+    let mut spent_key_images = Vec::new();
 
     for tx in all_transactions.iter() {
         let tx_hash = hex::encode(tx.hash());
+
+        for input in &tx.prefix.inputs {
+            if let Input::ToKey { key_image, .. } = input {
+                let ki_hex = hex::encode(key_image.compress().to_bytes());
+                spent_key_images.push(ki_hex);
+            }
+        }
+
         let scan_result = scanner.scan_transaction(tx);
         let owned_outputs = scan_result.ignore_timelock();
 
@@ -350,6 +361,7 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
         tx_count,
         outputs,
         daemon_height,
+        spent_key_images,
     })
 }
 

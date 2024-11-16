@@ -46,3 +46,4 @@ rand = "0.8"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
