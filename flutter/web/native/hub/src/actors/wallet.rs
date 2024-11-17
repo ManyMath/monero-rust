@@ -395,7 +395,8 @@ impl Handler<GetWalletData> for WalletActor {
 impl Notifiable<MarkOutputsSpent> for WalletActor {
     async fn notify(&mut self, msg: MarkOutputsSpent, _ctx: &Context<Self>) {
         for output in &mut self.state.outputs {
-            if msg.tx_hashes.contains(&output.tx_hash) {
+            let output_key = format!("{}:{}", output.tx_hash, output.output_index);
+            if msg.output_keys.contains(&output_key) {
                 output.spent = true;
             }
         }
