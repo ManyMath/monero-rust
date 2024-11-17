@@ -25,11 +25,26 @@ pub mod native {
     use zeroize::Zeroizing;
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct ChangeOutputInfo {
+        pub tx_hash: String,
+        pub output_index: u8,
+        pub amount: u64,
+        pub amount_xmr: String,
+        pub key: String,
+        pub key_offset: String,
+        pub commitment_mask: String,
+        pub subaddress_index: Option<(u32, u32)>,
+        pub received_output_bytes: String,
+        pub key_image: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct TransactionResult {
         pub tx_id: String,
         pub fee: u64,
         pub tx_blob: String,
         pub tx_key: String,
+        pub change_outputs: Vec<ChangeOutputInfo>,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -379,11 +394,51 @@ pub mod native {
 
         let tx_key = "0".repeat(64);
 
+        // Scan the transaction we just created to find change outputs (sends to self)
+        let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+        let scan_result = scanner.scan_transaction(&tx);
+        let our_outputs = scan_result.ignore_timelock();
+
+        use monero_serai::ringct::generate_key_image;
+
+        let change_outputs: Vec<ChangeOutputInfo> = our_outputs
+            .into_iter()
+            .map(|output| {
+                let amount = output.data.commitment.amount;
+                let amount_xmr = format!("{:.12}", amount as f64 / 1_000_000_000_000.0);
+                let key = hex::encode(output.data.key.compress().to_bytes());
+                let key_offset_scalar = output.data.key_offset;
+                let key_offset = hex::encode(key_offset_scalar.to_bytes());
+                let commitment_mask = hex::encode(output.data.commitment.mask.to_bytes());
+                let subaddress_index = output.metadata.subaddress.map(|idx| (idx.account(), idx.address()));
+                let received_output_bytes = hex::encode(output.serialize());
+
+                // Calculate key image
+                let one_time_key_scalar = Zeroizing::new(spend_key + key_offset_scalar);
+                let key_image_point = generate_key_image(&one_time_key_scalar);
+                let key_image = hex::encode(key_image_point.compress().to_bytes());
+
+                ChangeOutputInfo {
+                    tx_hash: tx_id.clone(),
+                    output_index: output.absolute.o,
+                    amount,
+                    amount_xmr,
+                    key,
+                    key_offset,
+                    commitment_mask,
+                    subaddress_index,
+                    received_output_bytes,
+                    key_image,
+                }
+            })
+            .collect();
+
         Ok(TransactionResult {
             tx_id,
             fee: fee_amount,
             tx_blob,
             tx_key,
+            change_outputs,
         })
     }
 

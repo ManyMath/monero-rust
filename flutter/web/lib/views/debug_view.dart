@@ -144,6 +144,30 @@ class _DebugViewState extends State<DebugView> {
           _txError = null;
           _broadcastResult = null;
           _broadcastError = null;
+
+          // Add change outputs to the outputs list as locked (0 block height = unconfirmed)
+          for (var changeOutput in signal.message.changeOutputs) {
+            final exists = _allOutputs.any((o) =>
+              o.txHash == changeOutput.txHash && o.outputIndex == changeOutput.outputIndex
+            );
+            if (!exists) {
+              _allOutputs.add(OwnedOutput(
+                txHash: changeOutput.txHash,
+                outputIndex: changeOutput.outputIndex,
+                amount: changeOutput.amount,
+                amountXmr: changeOutput.amountXmr,
+                key: changeOutput.key,
+                keyOffset: changeOutput.keyOffset,
+                commitmentMask: changeOutput.commitmentMask,
+                subaddressIndex: changeOutput.subaddressIndex,
+                paymentId: null,
+                receivedOutputBytes: changeOutput.receivedOutputBytes,
+                blockHeight: Uint64(BigInt.zero), // Unconfirmed - will be updated when mined
+                spent: false,
+                keyImage: changeOutput.keyImage,
+              ));
+            }
+          }
         } else {
           _txResult = null;
           _txError = signal.message.error ?? 'Unknown error during transaction creation';

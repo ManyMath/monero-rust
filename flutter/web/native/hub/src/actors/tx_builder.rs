@@ -116,6 +116,7 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                             fee: 0,
                             tx_blob: None,
                             spent_output_hashes: Vec::new(),
+                            change_outputs: Vec::new(),
                         }
                         .send_signal_to_dart();
                         return;
@@ -136,9 +137,9 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                     let build_fut = self.build_transaction_impl_inner(msg, wallet_data_filtered);
                     wasm_bindgen_futures::spawn_local(async move {
                         match build_fut.await {
-                            Ok((tx_id, fee, tx_blob)) => {
+                            Ok((tx_id, fee, tx_blob, change_outputs)) => {
                                 #[cfg(target_arch = "wasm32")]
-                                web_sys::console::log_1(&format!("Transaction created successfully! TX ID: {}, Fee: {}", tx_id, fee).into());
+                                web_sys::console::log_1(&format!("Transaction created successfully! TX ID: {}, Fee: {}, Change outputs: {}", tx_id, fee, change_outputs.len()).into());
 
                                 TransactionCreatedResponse {
                                     success: true,
@@ -147,6 +148,7 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                                     fee,
                                     tx_blob: Some(tx_blob),
                                     spent_output_hashes: spent_hashes,
+                                    change_outputs,
                                 }
                                 .send_signal_to_dart();
                             }
@@ -161,6 +163,7 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                                     fee: 0,
                                     tx_blob: None,
                                     spent_output_hashes: Vec::new(),
+                                    change_outputs: Vec::new(),
                                 }
                                 .send_signal_to_dart();
                             }
@@ -175,6 +178,7 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                         fee: 0,
                         tx_blob: None,
                         spent_output_hashes: Vec::new(),
+                        change_outputs: Vec::new(),
                     }
                     .send_signal_to_dart();
                 }
@@ -187,6 +191,7 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                 fee: 0,
                 tx_blob: None,
                 spent_output_hashes: Vec::new(),
+                change_outputs: Vec::new(),
             }
             .send_signal_to_dart();
         }
@@ -198,7 +203,7 @@ impl TxBuilderActor {
         &self,
         msg: BuildTransaction,
         wallet_data: WalletData,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(String, u64, String), String>>>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(String, u64, String, Vec<ChangeOutput>), String>>>> {
         use monero_wasm::native::{create_transaction, TransactionResult};
 
         let outputs_vec: Vec<monero_wasm::native::StoredOutputData> = wallet_data
@@ -229,7 +234,23 @@ impl TxBuilderActor {
             .await
             .map_err(|e| format!("Transaction building failed: {}", e))?;
 
-            Ok((result.tx_id, result.fee, result.tx_blob))
+            let change_outputs: Vec<ChangeOutput> = result.change_outputs
+                .into_iter()
+                .map(|c| ChangeOutput {
+                    tx_hash: c.tx_hash,
+                    output_index: c.output_index,
+                    amount: c.amount,
+                    amount_xmr: c.amount_xmr,
+                    key: c.key,
+                    key_offset: c.key_offset,
+                    commitment_mask: c.commitment_mask,
+                    subaddress_index: c.subaddress_index,
+                    received_output_bytes: c.received_output_bytes,
+                    key_image: c.key_image,
+                })
+                .collect();
+
+            Ok((result.tx_id, result.fee, result.tx_blob, change_outputs))
         })
     }
 }
