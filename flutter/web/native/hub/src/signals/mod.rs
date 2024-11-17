@@ -50,6 +50,20 @@ pub struct CreateTransactionRequest {
     pub selected_outputs: Option<Vec<String>>, // "txHash:outputIndex" keys for coin control
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, SignalPiece)]
+pub struct ChangeOutput {
+    pub tx_hash: String,
+    pub output_index: u8,
+    pub amount: u64,
+    pub amount_xmr: String,
+    pub key: String,
+    pub key_offset: String,
+    pub commitment_mask: String,
+    pub subaddress_index: Option<(u32, u32)>,
+    pub received_output_bytes: String,
+    pub key_image: String,
+}
+
 #[derive(Serialize, RustSignal)]
 pub struct TransactionCreatedResponse {
     pub success: bool,
@@ -58,6 +72,7 @@ pub struct TransactionCreatedResponse {
     pub fee: u64,
     pub tx_blob: Option<String>,
     pub spent_output_hashes: Vec<String>,
+    pub change_outputs: Vec<ChangeOutput>,
 }
 
 #[derive(Deserialize, DartSignal)]
