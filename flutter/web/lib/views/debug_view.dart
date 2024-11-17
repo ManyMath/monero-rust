@@ -58,6 +58,7 @@ class _DebugViewState extends State<DebugView> {
   bool _showSpentOutputs = false;
   String _sortBy = 'confirms'; // 'confirms' or 'value'
   bool _sortAscending = false; // false = descending (highest first)
+  Set<String> _selectedOutputs = {}; // "txHash:outputIndex" keys for coin control
 
   int? _expandedPanel;
 
@@ -187,6 +188,9 @@ class _DebugViewState extends State<DebugView> {
           for (var output in _allOutputs) {
             if (output.keyImage == keyImage) {
               final index = _allOutputs.indexOf(output);
+              // Remove from selected outputs since it's now spent
+              final outputKey = '${output.txHash}:${output.outputIndex}';
+              _selectedOutputs.remove(outputKey);
               _allOutputs[index] = OwnedOutput(
                 txHash: output.txHash,
                 outputIndex: output.outputIndex,
@@ -234,6 +238,7 @@ class _DebugViewState extends State<DebugView> {
       _continuousScanTargetHeight = 0;
       _isSynced = false;
       _allOutputs = [];
+      _selectedOutputs = {};
       _daemonHeight = null;
       _scanResult = null;
     });
@@ -476,9 +481,9 @@ class _DebugViewState extends State<DebugView> {
       return;
     }
 
-    if (_scanResult == null || _scanResult!.outputs.isEmpty) {
+    if (_allOutputs.isEmpty) {
       setState(() {
-        _txError = 'No outputs available. Scan a block with outputs first.';
+        _txError = 'No outputs available. Scan blocks to find outputs first.';
       });
       return;
     }
@@ -516,6 +521,18 @@ class _DebugViewState extends State<DebugView> {
       return;
     }
 
+    // Validate coin selection if outputs are selected
+    if (_selectedOutputs.isNotEmpty) {
+      final selectedTotal = _getSelectedOutputsTotal();
+      if (selectedTotal < amountAtomic) {
+        final selectedXmr = (selectedTotal / 1e12).toStringAsFixed(12);
+        setState(() {
+          _txError = 'Selected outputs ($selectedXmr XMR) insufficient for $amountStr XMR + fees';
+        });
+        return;
+      }
+    }
+
     final nodeUrl = _nodeUrlController.text.trim();
     if (nodeUrl.isEmpty) {
       setState(() {
@@ -540,7 +557,24 @@ class _DebugViewState extends State<DebugView> {
       network: _network,
       destination: destination,
       amount: Uint64(BigInt.from(amountAtomic)),
+      selectedOutputs: _selectedOutputs.isNotEmpty ? _selectedOutputs.toList() : null,
     ).sendSignalToRust();
+  }
+
+  int _getSelectedOutputsTotal() {
+    int total = 0;
+    final currentHeight = _daemonHeight ?? _scanResult?.blockHeight.toInt() ?? 0;
+    for (var output in _allOutputs) {
+      if (output.spent) continue;
+      final outputHeight = output.blockHeight.toInt();
+      final confirmations = outputHeight > 0 ? currentHeight - outputHeight : 0;
+      if (confirmations < 10) continue;
+      final outputKey = '${output.txHash}:${output.outputIndex}';
+      if (_selectedOutputs.contains(outputKey)) {
+        total += output.amount.toInt();
+      }
+    }
+    return total;
   }
 
   void _broadcastTransaction() {
@@ -1049,8 +1083,10 @@ class _DebugViewState extends State<DebugView> {
                         // Calculate balance from unspent outputs
                         double totalBalance = 0;
                         double unlockedBalance = 0;
+                        double selectedBalance = 0;
                         int spendableCount = 0;
                         int lockedCount = 0;
+                        int selectedCount = 0;
                         for (var output in _allOutputs) {
                           if (!output.spent) {
                             final amount = double.tryParse(output.amountXmr) ?? 0;
@@ -1061,6 +1097,11 @@ class _DebugViewState extends State<DebugView> {
                             if (confirmations >= 10) {
                               unlockedBalance += amount;
                               spendableCount++;
+                              final outputKey = '${output.txHash}:${output.outputIndex}';
+                              if (_selectedOutputs.contains(outputKey)) {
+                                selectedBalance += amount;
+                                selectedCount++;
+                              }
                             } else {
                               lockedCount++;
                             }
@@ -1075,6 +1116,9 @@ class _DebugViewState extends State<DebugView> {
                             : lockedCount > 0
                                 ? '$lockedCount locked output${lockedCount == 1 ? '' : 's'}'
                                 : 'No outputs';
+                        final selectedStr = selectedCount > 0
+                            ? ' | Selected: ${selectedBalance.toStringAsFixed(12)} XMR ($selectedCount)'
+                            : '';
 
                         return GestureDetector(
                           onTap: () {
@@ -1088,7 +1132,7 @@ class _DebugViewState extends State<DebugView> {
                               style: TextStyle(fontWeight: FontWeight.bold),
                             ),
                             subtitle: Text(
-                              '$balanceStr - $outputCountStr',
+                              '$balanceStr - $outputCountStr$selectedStr',
                               style: const TextStyle(fontSize: 12),
                             ),
                           ),
@@ -1130,8 +1174,12 @@ class _DebugViewState extends State<DebugView> {
                                             },
                                             child: const Text('Show spent'),
                                           ),
-                                          const SizedBox(width: 16),
+                                          const SizedBox(width: 12),
                                         ],
+                                        const Text('Select: ', style: TextStyle(fontSize: 12)),
+                                        _buildSelectButton('All', _selectAllSpendable),
+                                        const SizedBox(width: 4),
+                                        _buildSelectButton('None', _clearSelection),
                                         const Spacer(),
                                         const Text('Sort: ', style: TextStyle(fontSize: 12)),
                                         _buildSortButton('Confirms', 'confirms'),
@@ -1159,6 +1207,9 @@ class _DebugViewState extends State<DebugView> {
                                           ? 'SPENDABLE'
                                           : 'LOCKED ($confirmations/10)';
 
+                                  final outputKey = '${output.txHash}:${output.outputIndex}';
+                                  final isSelected = _selectedOutputs.contains(outputKey);
+
                                   return Card(
                                     margin: const EdgeInsets.only(bottom: 12),
                                     elevation: 2,
@@ -1170,13 +1221,35 @@ class _DebugViewState extends State<DebugView> {
                                           Row(
                                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                             children: [
-                                              Text(
-                                                '${output.amountXmr} XMR',
-                                                style: TextStyle(
-                                                  fontWeight: FontWeight.bold,
-                                                  fontSize: 16,
-                                                  color: output.spent ? Colors.grey.shade600 : Colors.black,
-                                                ),
+                                              Row(
+                                                children: [
+                                                  if (isSpendable)
+                                                    SizedBox(
+                                                      width: 24,
+                                                      height: 24,
+                                                      child: Checkbox(
+                                                        value: isSelected,
+                                                        onChanged: (value) {
+                                                          setState(() {
+                                                            if (value == true) {
+                                                              _selectedOutputs.add(outputKey);
+                                                            } else {
+                                                              _selectedOutputs.remove(outputKey);
+                                                            }
+                                                          });
+                                                        },
+                                                      ),
+                                                    ),
+                                                  if (isSpendable) const SizedBox(width: 8),
+                                                  Text(
+                                                    '${output.amountXmr} XMR',
+                                                    style: TextStyle(
+                                                      fontWeight: FontWeight.bold,
+                                                      fontSize: 16,
+                                                      color: output.spent ? Colors.grey.shade600 : Colors.black,
+                                                    ),
+                                                  ),
+                                                ],
                                               ),
                                               Container(
                                                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -1524,6 +1597,45 @@ class _DebugViewState extends State<DebugView> {
     });
 
     return filtered;
+  }
+
+  Widget _buildSelectButton(String label, VoidCallback onPressed) {
+    return InkWell(
+      onTap: onPressed,
+      borderRadius: BorderRadius.circular(4),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: Colors.grey.shade200,
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(fontSize: 12),
+        ),
+      ),
+    );
+  }
+
+  void _selectAllSpendable() {
+    final currentHeight = _daemonHeight ?? _scanResult?.blockHeight.toInt() ?? 0;
+    setState(() {
+      for (var output in _allOutputs) {
+        if (output.spent) continue;
+        final outputHeight = output.blockHeight.toInt();
+        final confirmations = outputHeight > 0 ? currentHeight - outputHeight : 0;
+        if (confirmations >= 10) {
+          final outputKey = '${output.txHash}:${output.outputIndex}';
+          _selectedOutputs.add(outputKey);
+        }
+      }
+    });
+  }
+
+  void _clearSelection() {
+    setState(() {
+      _selectedOutputs.clear();
+    });
   }
 
 }

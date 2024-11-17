@@ -47,6 +47,7 @@ pub struct CreateTransactionRequest {
     pub network: String,
     pub destination: String,
     pub amount: u64,
+    pub selected_outputs: Option<Vec<String>>, // "txHash:outputIndex" keys for coin control
 }
 
 #[derive(Serialize, RustSignal)]

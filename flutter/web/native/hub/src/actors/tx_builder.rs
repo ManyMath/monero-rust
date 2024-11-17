@@ -50,6 +50,7 @@ impl TxBuilderActor {
                     network: request.network,
                     destination: request.destination,
                     amount: request.amount,
+                    selected_outputs: request.selected_outputs,
                 })
                 .await;
         }
@@ -93,15 +94,28 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                             } else {
                                 0
                             };
-                            confirmations >= CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE
+                            if confirmations < CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE {
+                                return false;
+                            }
+                            // If specific outputs are selected, only include those
+                            if let Some(ref selected) = msg.selected_outputs {
+                                let output_key = format!("{}:{}", o.tx_hash, o.output_index);
+                                return selected.contains(&output_key);
+                            }
+                            true
                         })
                         .cloned()
                         .collect();
 
                     if spendable_outputs.is_empty() {
+                        let error_msg = if msg.selected_outputs.is_some() {
+                            "No selected outputs available to spend".to_string()
+                        } else {
+                            "No confirmed outputs available to spend (outputs need 10 confirmations)".to_string()
+                        };
                         TransactionCreatedResponse {
                             success: false,
-                            error: Some("No confirmed outputs available to spend (outputs need 10 confirmations)".to_string()),
+                            error: Some(error_msg),
                             tx_id: String::new(),
                             fee: 0,
                             tx_blob: None,
