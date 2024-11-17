@@ -35,10 +35,6 @@ impl TxBuilderActor {
         self.rpc_actor = Some(addr);
     }
 
-    fn get_spent_tx_hashes(outputs: &[StoredOutput]) -> Vec<String> {
-        outputs.iter().map(|o| o.tx_hash.clone()).collect()
-    }
-
     async fn listen_to_tx_requests(mut self_addr: Address<Self>) {
         let receiver = CreateTransactionRequest::get_dart_signal_receiver();
         while let Some(signal_pack) = receiver.recv().await {
@@ -125,10 +121,10 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                         return;
                     }
 
-                    // Collect tx hashes of outputs that will be spent
+                    // Collect output keys (txHash:outputIndex) of outputs that will be spent
                     let spent_hashes: Vec<String> = spendable_outputs
                         .iter()
-                        .map(|o| o.tx_hash.clone())
+                        .map(|o| format!("{}:{}", o.tx_hash, o.output_index))
                         .collect();
 
                     // Spawn transaction building in local task to avoid Send requirements
@@ -257,7 +253,7 @@ impl Notifiable<BroadcastTransaction> for TxBuilderActor {
                     // Mark outputs as spent
                     if let Some(mut wallet) = wallet_actor {
                         let _ = wallet.notify(MarkOutputsSpent {
-                            tx_hashes: spent_hashes,
+                            output_keys: spent_hashes,
                         }).await;
                     }
 

@@ -103,7 +103,7 @@ pub struct StoreOutputs {
 
 #[derive(Debug, Clone)]
 pub struct MarkOutputsSpent {
-    pub tx_hashes: Vec<String>,
+    pub output_keys: Vec<String>, // "txHash:outputIndex" format
 }
 
 #[derive(Debug, Clone)]

@@ -157,6 +157,35 @@ class _DebugViewState extends State<DebugView> {
         if (signal.message.success) {
           _broadcastResult = signal.message;
           _broadcastError = null;
+          // Mark spent outputs immediately after broadcast
+          if (_txResult != null) {
+            for (var outputKey in _txResult!.spentOutputHashes) {
+              _selectedOutputs.remove(outputKey);
+              // Find and mark the output as spent
+              for (int i = 0; i < _allOutputs.length; i++) {
+                final output = _allOutputs[i];
+                final key = '${output.txHash}:${output.outputIndex}';
+                if (key == outputKey) {
+                  _allOutputs[i] = OwnedOutput(
+                    txHash: output.txHash,
+                    outputIndex: output.outputIndex,
+                    amount: output.amount,
+                    amountXmr: output.amountXmr,
+                    key: output.key,
+                    keyOffset: output.keyOffset,
+                    commitmentMask: output.commitmentMask,
+                    subaddressIndex: output.subaddressIndex,
+                    paymentId: output.paymentId,
+                    receivedOutputBytes: output.receivedOutputBytes,
+                    blockHeight: output.blockHeight,
+                    spent: true,
+                    keyImage: output.keyImage,
+                  );
+                  break;
+                }
+              }
+            }
+          }
         } else {
           _broadcastResult = null;
           _broadcastError = signal.message.error ?? 'Unknown error during broadcast';
