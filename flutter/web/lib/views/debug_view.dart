@@ -55,6 +55,8 @@ class _DebugViewState extends State<DebugView> {
   TransactionBroadcastResponse? _broadcastResult;
   String? _broadcastError;
 
+  bool _showSpentOutputs = false;
+
   int? _expandedPanel;
 
   @override
@@ -1045,6 +1047,8 @@ class _DebugViewState extends State<DebugView> {
                         // Calculate balance from unspent outputs
                         double totalBalance = 0;
                         double unlockedBalance = 0;
+                        int spendableCount = 0;
+                        int lockedCount = 0;
                         for (var output in _allOutputs) {
                           if (!output.spent) {
                             final amount = double.tryParse(output.amountXmr) ?? 0;
@@ -1054,6 +1058,9 @@ class _DebugViewState extends State<DebugView> {
                             final confirmations = outputHeight > 0 ? currentHeight - outputHeight : 0;
                             if (confirmations >= 10) {
                               unlockedBalance += amount;
+                              spendableCount++;
+                            } else {
+                              lockedCount++;
                             }
                           }
                         }
@@ -1061,6 +1068,11 @@ class _DebugViewState extends State<DebugView> {
                         final balanceStr = hasLockedBalance
                             ? '${totalBalance.toStringAsFixed(12)} XMR (Unlocked: ${unlockedBalance.toStringAsFixed(12)})'
                             : '${totalBalance.toStringAsFixed(12)} XMR';
+                        final outputCountStr = spendableCount > 0
+                            ? '$spendableCount spendable output${spendableCount == 1 ? '' : 's'}'
+                            : lockedCount > 0
+                                ? '$lockedCount locked output${lockedCount == 1 ? '' : 's'}'
+                                : 'No outputs';
 
                         return GestureDetector(
                           onTap: () {
@@ -1074,7 +1086,7 @@ class _DebugViewState extends State<DebugView> {
                               style: TextStyle(fontWeight: FontWeight.bold),
                             ),
                             subtitle: Text(
-                              '$balanceStr - ${_allOutputs.length} output(s)',
+                              '$balanceStr - $outputCountStr',
                               style: const TextStyle(fontSize: 12),
                             ),
                           ),
@@ -1094,7 +1106,34 @@ class _DebugViewState extends State<DebugView> {
                               )
                             : Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: _allOutputs.map((output) {
+                                children: [
+                                  if (_allOutputs.any((o) => o.spent))
+                                    Padding(
+                                      padding: const EdgeInsets.only(bottom: 12),
+                                      child: Row(
+                                        children: [
+                                          Checkbox(
+                                            value: _showSpentOutputs,
+                                            onChanged: (value) {
+                                              setState(() {
+                                                _showSpentOutputs = value ?? false;
+                                              });
+                                            },
+                                          ),
+                                          GestureDetector(
+                                            onTap: () {
+                                              setState(() {
+                                                _showSpentOutputs = !_showSpentOutputs;
+                                              });
+                                            },
+                                            child: const Text('Show spent outputs'),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ..._allOutputs
+                                      .where((output) => _showSpentOutputs || !output.spent)
+                                      .map((output) {
                                   final outputHeight = output.blockHeight.toInt();
                                   // Use daemon height if available, otherwise fall back to scanned block height
                                   final currentHeight = _daemonHeight ?? _scanResult?.blockHeight.toInt() ?? outputHeight;
@@ -1165,7 +1204,8 @@ class _DebugViewState extends State<DebugView> {
                                       ),
                                     ),
                                   );
-                                }).toList(),
+                                }),
+                                ],
                               ),
                       ),
                       isExpanded: _expandedPanel == 3,
