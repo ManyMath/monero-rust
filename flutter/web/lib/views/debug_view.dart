@@ -56,6 +56,8 @@ class _DebugViewState extends State<DebugView> {
   String? _broadcastError;
 
   bool _showSpentOutputs = false;
+  String _sortBy = 'confirms'; // 'confirms' or 'value'
+  bool _sortAscending = false; // false = descending (highest first)
 
   int? _expandedPanel;
 
@@ -1107,11 +1109,11 @@ class _DebugViewState extends State<DebugView> {
                             : Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
-                                  if (_allOutputs.any((o) => o.spent))
-                                    Padding(
-                                      padding: const EdgeInsets.only(bottom: 12),
-                                      child: Row(
-                                        children: [
+                                  Padding(
+                                    padding: const EdgeInsets.only(bottom: 12),
+                                    child: Row(
+                                      children: [
+                                        if (_allOutputs.any((o) => o.spent)) ...[
                                           Checkbox(
                                             value: _showSpentOutputs,
                                             onChanged: (value) {
@@ -1126,14 +1128,19 @@ class _DebugViewState extends State<DebugView> {
                                                 _showSpentOutputs = !_showSpentOutputs;
                                               });
                                             },
-                                            child: const Text('Show spent outputs'),
+                                            child: const Text('Show spent'),
                                           ),
+                                          const SizedBox(width: 16),
                                         ],
-                                      ),
+                                        const Spacer(),
+                                        const Text('Sort: ', style: TextStyle(fontSize: 12)),
+                                        _buildSortButton('Confirms', 'confirms'),
+                                        const SizedBox(width: 4),
+                                        _buildSortButton('Value', 'value'),
+                                      ],
                                     ),
-                                  ..._allOutputs
-                                      .where((output) => _showSpentOutputs || !output.spent)
-                                      .map((output) {
+                                  ),
+                                  ..._sortedOutputs().map((output) {
                                   final outputHeight = output.blockHeight.toInt();
                                   // Use daemon height if available, otherwise fall back to scanned block height
                                   final currentHeight = _daemonHeight ?? _scanResult?.blockHeight.toInt() ?? outputHeight;
@@ -1466,6 +1473,57 @@ class _DebugViewState extends State<DebugView> {
         ],
       ),
     );
+  }
+
+  Widget _buildSortButton(String label, String sortKey) {
+    final isActive = _sortBy == sortKey;
+    final arrow = isActive ? (_sortAscending ? ' ↑' : ' ↓') : '';
+    return InkWell(
+      onTap: () {
+        setState(() {
+          if (_sortBy == sortKey) {
+            _sortAscending = !_sortAscending;
+          } else {
+            _sortBy = sortKey;
+            _sortAscending = false;
+          }
+        });
+      },
+      borderRadius: BorderRadius.circular(4),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: isActive ? Colors.blue.shade100 : Colors.grey.shade200,
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Text(
+          '$label$arrow',
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
+          ),
+        ),
+      ),
+    );
+  }
+
+  List<OwnedOutput> _sortedOutputs() {
+    final filtered = _allOutputs.where((o) => _showSpentOutputs || !o.spent).toList();
+    final currentHeight = _daemonHeight ?? _scanResult?.blockHeight.toInt() ?? 0;
+
+    filtered.sort((a, b) {
+      int comparison;
+      if (_sortBy == 'confirms') {
+        final aConf = currentHeight - a.blockHeight.toInt();
+        final bConf = currentHeight - b.blockHeight.toInt();
+        comparison = aConf.compareTo(bConf);
+      } else {
+        comparison = a.amount.toInt().compareTo(b.amount.toInt());
+      }
+      return _sortAscending ? comparison : -comparison;
+    });
+
+    return filtered;
   }
 
 }
