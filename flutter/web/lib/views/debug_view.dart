@@ -114,13 +114,16 @@ class _DebugViewState extends State<DebugView> {
           _scanResult = signal.message;
           _scanError = null;
           _daemonHeight = signal.message.daemonHeight.toInt();
-          // Add new outputs to the list, avoiding duplicates
+          // Add new outputs or update unconfirmed ones that are now confirmed
           for (var output in signal.message.outputs) {
-            final exists = _allOutputs.any((o) =>
+            final existingIndex = _allOutputs.indexWhere((o) =>
               o.txHash == output.txHash && o.outputIndex == output.outputIndex
             );
-            if (!exists) {
+            if (existingIndex == -1) {
               _allOutputs.add(output);
+            } else if (_allOutputs[existingIndex].blockHeight.toInt() == 0) {
+              // Update unconfirmed output with confirmed block height
+              _allOutputs[existingIndex] = output;
             }
           }
         } else {

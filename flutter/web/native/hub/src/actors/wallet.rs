@@ -7,7 +7,7 @@ use tokio::task::JoinSet;
 use tokio_with_wasm::alias as tokio;
 use wasm_bindgen_futures;
 
-const MEMPOOL_POLL_INTERVAL_SECS: u64 = 10;
+const MEMPOOL_POLL_INTERVAL_SECS: u64 = 90;
 
 pub struct WalletActor {
     state: WalletState,
