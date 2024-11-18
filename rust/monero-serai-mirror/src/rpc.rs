@@ -591,4 +591,59 @@ impl<R: RpcConnection> Rpc<R> {
 
     Ok(())
   }
+
+  pub async fn get_transaction_pool(&self) -> Result<(Vec<Transaction>, Vec<[u8; 32]>), RpcError> {
+    #[derive(Deserialize, Debug)]
+    struct PoolTransaction {
+      id_hash: String,
+      tx_blob: String,
+    }
+
+    #[derive(Deserialize, Debug)]
+    struct SpentKeyImage {
+      id_hash: String,
+    }
+
+    #[allow(dead_code)]
+    #[derive(Deserialize, Debug)]
+    struct TransactionPoolResponse {
+      #[serde(default)]
+      transactions: Vec<PoolTransaction>,
+      #[serde(default)]
+      spent_key_images: Vec<SpentKeyImage>,
+      status: String,
+    }
+
+    let res: TransactionPoolResponse =
+      self.rpc_call::<Option<()>, _>("get_transaction_pool", None).await?;
+
+    if res.status != "OK" {
+      return Err(RpcError::InvalidNode);
+    }
+
+    let transactions = res
+      .transactions
+      .iter()
+      .map(|pool_tx| {
+        let tx_bytes = rpc_hex(&pool_tx.tx_blob)?;
+        let tx = Transaction::read::<&[u8]>(&mut tx_bytes.as_ref())
+          .map_err(|_| RpcError::InvalidNode)?;
+
+        let expected_hash = hash_hex(&pool_tx.id_hash)?;
+        if tx.hash() != expected_hash {
+          return Err(RpcError::InvalidNode);
+        }
+
+        Ok(tx)
+      })
+      .collect::<Result<Vec<_>, RpcError>>()?;
+
+    let spent_key_images = res
+      .spent_key_images
+      .iter()
+      .map(|ki| hash_hex(&ki.id_hash))
+      .collect::<Result<Vec<_>, RpcError>>()?;
+
+    Ok((transactions, spent_key_images))
+  }
 }

@@ -194,3 +194,19 @@ pub struct StopScanRequest {}
 pub struct SpentStatusUpdatedResponse {
     pub spent_key_images: Vec<String>,
 }
+
+#[derive(Deserialize, DartSignal)]
+pub struct MempoolScanRequest {
+    pub node_url: String,
+    pub seed: String,
+    pub network: String,
+}
+
+#[derive(Serialize, RustSignal)]
+pub struct MempoolScanResponse {
+    pub success: bool,
+    pub error: Option<String>,
+    pub tx_count: u32,
+    pub outputs: Vec<OwnedOutput>,
+    pub spent_key_images: Vec<String>,
+}
