@@ -5,6 +5,9 @@ use messages::prelude::{Actor, Address, Context, Handler, Notifiable};
 use rinf::{DartSignal, RustSignal};
 use tokio::task::JoinSet;
 use tokio_with_wasm::alias as tokio;
+use wasm_bindgen_futures;
+
+const MEMPOOL_POLL_INTERVAL_SECS: u64 = 10;
 
 pub struct WalletActor {
     state: WalletState,
@@ -20,6 +23,7 @@ pub struct WalletActor {
     scan_seed: String,
     scan_network: String,
     self_addr: Option<Address<Self>>,
+    mempool_polling_active: bool,
 }
 
 impl Actor for WalletActor {}
@@ -37,6 +41,7 @@ impl WalletActor {
         _owned_tasks.spawn(Self::listen_to_query_daemon_height(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_start_continuous_scan(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_stop_scan(self_addr.clone()));
+        _owned_tasks.spawn(Self::listen_to_mempool_scan());
 
         WalletActor {
             state: WalletState {
@@ -60,6 +65,7 @@ impl WalletActor {
             scan_seed: String::new(),
             scan_network: String::new(),
             self_addr: Some(self_addr),
+            mempool_polling_active: false,
         }
     }
 
@@ -326,6 +332,64 @@ impl WalletActor {
         }
     }
 
+    async fn listen_to_mempool_scan() {
+        let receiver = MempoolScanRequest::get_dart_signal_receiver();
+        while let Some(signal_pack) = receiver.recv().await {
+            let request = signal_pack.message;
+
+            wasm_bindgen_futures::spawn_local(async move {
+                match monero_wasm::scan_mempool_for_outputs(
+                    &request.node_url,
+                    &request.seed,
+                    &request.network,
+                )
+                .await
+                {
+                    Ok(result) => {
+                        let outputs = result
+                            .outputs
+                            .iter()
+                            .map(|o| OwnedOutput {
+                                tx_hash: o.tx_hash.clone(),
+                                output_index: o.output_index,
+                                amount: o.amount,
+                                amount_xmr: o.amount_xmr.clone(),
+                                key: o.key.clone(),
+                                key_offset: o.key_offset.clone(),
+                                commitment_mask: o.commitment_mask.clone(),
+                                subaddress_index: o.subaddress_index,
+                                payment_id: o.payment_id.clone(),
+                                received_output_bytes: o.received_output_bytes.clone(),
+                                block_height: 0, // Unconfirmed - in mempool
+                                spent: o.spent,
+                                key_image: o.key_image.clone(),
+                            })
+                            .collect();
+
+                        MempoolScanResponse {
+                            success: true,
+                            error: None,
+                            tx_count: result.tx_count as u32,
+                            outputs,
+                            spent_key_images: result.spent_key_images,
+                        }
+                        .send_signal_to_dart();
+                    }
+                    Err(e) => {
+                        MempoolScanResponse {
+                            success: false,
+                            error: Some(e),
+                            tx_count: 0,
+                            outputs: Vec::new(),
+                            spent_key_images: Vec::new(),
+                        }
+                        .send_signal_to_dart();
+                    }
+                }
+            });
+        }
+    }
+
 }
 
 #[async_trait]
@@ -463,6 +527,9 @@ impl Notifiable<UpdateScanState> for WalletActor {
 #[async_trait]
 impl Notifiable<StartContinuousScan> for WalletActor {
     async fn notify(&mut self, msg: StartContinuousScan, ctx: &Context<Self>) {
+        // Stop any existing mempool polling when starting a new scan
+        self.mempool_polling_active = false;
+
         let node_url = msg.node_url.clone();
         let start_height = msg.start_height;
         let seed = msg.seed.clone();
@@ -520,6 +587,7 @@ impl Notifiable<StartContinuousScan> for WalletActor {
 impl Notifiable<StopScan> for WalletActor {
     async fn notify(&mut self, _msg: StopScan, _ctx: &Context<Self>) {
         self.is_scanning = false;
+        self.mempool_polling_active = false; // Stop mempool polling when scan is stopped
         SyncProgressResponse {
             current_height: self.scan_current_height,
             daemon_height: self.scan_target_height,
@@ -543,6 +611,10 @@ impl Notifiable<ContinueScan> for WalletActor {
                     is_scanning: false,
                 }
                 .send_signal_to_dart();
+
+                // Start automatic mempool polling now that we're synced
+                let mut self_addr = ctx.address();
+                let _ = self_addr.notify(StartMempoolPolling).await;
             }
             return;
         }
@@ -707,5 +779,101 @@ impl Notifiable<UpdateSpentStatus> for WalletActor {
             }
             .send_signal_to_dart();
         }
+    }
+}
+
+#[async_trait]
+impl Notifiable<StartMempoolPolling> for WalletActor {
+    async fn notify(&mut self, _msg: StartMempoolPolling, ctx: &Context<Self>) {
+        if self.mempool_polling_active {
+            return; // Already polling
+        }
+
+        // Only start if we have scan parameters
+        if self.scan_node_url.is_empty() || self.scan_seed.is_empty() {
+            return;
+        }
+
+        self.mempool_polling_active = true;
+
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::log_1(&"[MempoolPolling] Starting automatic mempool polling".into());
+
+        // Start the polling loop
+        let mut self_addr = ctx.address();
+        let _ = self_addr.notify(ContinueMempoolPolling).await;
+    }
+}
+
+#[async_trait]
+impl Notifiable<StopMempoolPolling> for WalletActor {
+    async fn notify(&mut self, _msg: StopMempoolPolling, _ctx: &Context<Self>) {
+        self.mempool_polling_active = false;
+
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::log_1(&"[MempoolPolling] Stopped automatic mempool polling".into());
+    }
+}
+
+#[async_trait]
+impl Notifiable<ContinueMempoolPolling> for WalletActor {
+    async fn notify(&mut self, _msg: ContinueMempoolPolling, ctx: &Context<Self>) {
+        if !self.mempool_polling_active {
+            return;
+        }
+
+        let node_url = self.scan_node_url.clone();
+        let seed = self.scan_seed.clone();
+        let network = self.scan_network.clone();
+        let mut self_addr = ctx.address();
+
+        // Spawn task to scan mempool and schedule next poll
+        tokio::spawn(async move {
+            match monero_wasm::scan_mempool_for_outputs(&node_url, &seed, &network).await {
+                Ok(result) => {
+                    let outputs: Vec<OwnedOutput> = result
+                        .outputs
+                        .iter()
+                        .map(|o| OwnedOutput {
+                            tx_hash: o.tx_hash.clone(),
+                            output_index: o.output_index,
+                            amount: o.amount,
+                            amount_xmr: o.amount_xmr.clone(),
+                            key: o.key.clone(),
+                            key_offset: o.key_offset.clone(),
+                            commitment_mask: o.commitment_mask.clone(),
+                            subaddress_index: o.subaddress_index,
+                            payment_id: o.payment_id.clone(),
+                            received_output_bytes: o.received_output_bytes.clone(),
+                            block_height: 0, // Unconfirmed
+                            spent: o.spent,
+                            key_image: o.key_image.clone(),
+                        })
+                        .collect();
+
+                    // Only send response if there are outputs or spent key images
+                    if !outputs.is_empty() || !result.spent_key_images.is_empty() {
+                        MempoolScanResponse {
+                            success: true,
+                            error: None,
+                            tx_count: result.tx_count as u32,
+                            outputs,
+                            spent_key_images: result.spent_key_images,
+                        }
+                        .send_signal_to_dart();
+                    }
+                }
+                Err(e) => {
+                    #[cfg(target_arch = "wasm32")]
+                    web_sys::console::error_1(&format!("[MempoolPolling] Error: {}", e).into());
+                }
+            }
+
+            // Wait before next poll
+            tokio::time::sleep(std::time::Duration::from_secs(MEMPOOL_POLL_INTERVAL_SECS)).await;
+
+            // Schedule next poll
+            let _ = self_addr.notify(ContinueMempoolPolling).await;
+        });
     }
 }

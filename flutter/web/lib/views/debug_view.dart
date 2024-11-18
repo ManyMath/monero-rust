@@ -60,6 +60,8 @@ class _DebugViewState extends State<DebugView> {
   bool _sortAscending = false; // false = descending (highest first)
   Set<String> _selectedOutputs = {}; // "txHash:outputIndex" keys for coin control
 
+  bool _isScanningMempool = false;
+
   int? _expandedPanel;
 
   @override
@@ -259,6 +261,63 @@ class _DebugViewState extends State<DebugView> {
                 spent: true,
                 keyImage: output.keyImage,
               );
+            }
+          }
+        }
+      });
+    });
+
+    MempoolScanResponse.rustSignalStream.listen((signal) {
+      setState(() {
+        _isScanningMempool = false;
+        if (signal.message.success) {
+          // Add new unconfirmed outputs (with block_height 0), avoiding duplicates
+          for (var output in signal.message.outputs) {
+            final exists = _allOutputs.any((o) =>
+              o.txHash == output.txHash && o.outputIndex == output.outputIndex
+            );
+            if (!exists) {
+              // Outputs from mempool have block_height 0 (unconfirmed)
+              _allOutputs.add(OwnedOutput(
+                txHash: output.txHash,
+                outputIndex: output.outputIndex,
+                amount: output.amount,
+                amountXmr: output.amountXmr,
+                key: output.key,
+                keyOffset: output.keyOffset,
+                commitmentMask: output.commitmentMask,
+                subaddressIndex: output.subaddressIndex,
+                paymentId: output.paymentId,
+                receivedOutputBytes: output.receivedOutputBytes,
+                blockHeight: Uint64(BigInt.zero),
+                spent: output.spent,
+                keyImage: output.keyImage,
+              ));
+            }
+          }
+          // Update spent status based on spent_key_images
+          for (var keyImage in signal.message.spentKeyImages) {
+            for (int i = 0; i < _allOutputs.length; i++) {
+              final output = _allOutputs[i];
+              if (output.keyImage == keyImage && !output.spent) {
+                final outputKey = '${output.txHash}:${output.outputIndex}';
+                _selectedOutputs.remove(outputKey);
+                _allOutputs[i] = OwnedOutput(
+                  txHash: output.txHash,
+                  outputIndex: output.outputIndex,
+                  amount: output.amount,
+                  amountXmr: output.amountXmr,
+                  key: output.key,
+                  keyOffset: output.keyOffset,
+                  commitmentMask: output.commitmentMask,
+                  subaddressIndex: output.subaddressIndex,
+                  paymentId: output.paymentId,
+                  receivedOutputBytes: output.receivedOutputBytes,
+                  blockHeight: output.blockHeight,
+                  spent: true,
+                  keyImage: output.keyImage,
+                );
+              }
             }
           }
         }
@@ -477,6 +536,47 @@ class _DebugViewState extends State<DebugView> {
       _isContinuousScanning = false;
     });
     StopScanRequest().sendSignalToRust();
+  }
+
+  void _scanMempool() {
+    if (_controller.text.trim().isEmpty) {
+      setState(() {
+        _scanError = 'Please enter a seed phrase first';
+      });
+      return;
+    }
+
+    final result = KeyParser.parse(_controller.text);
+    if (!result.isValid) {
+      setState(() {
+        _scanError = 'Invalid seed phrase: ${result.error}';
+      });
+      return;
+    }
+
+    final nodeUrl = _nodeUrlController.text.trim();
+    if (nodeUrl.isEmpty) {
+      setState(() {
+        _scanError = 'Please enter a node URL';
+      });
+      return;
+    }
+
+    setState(() {
+      _isScanningMempool = true;
+      _scanError = null;
+    });
+
+    // Prepend http:// if not present
+    final fullNodeUrl = nodeUrl.startsWith('http://') || nodeUrl.startsWith('https://')
+        ? nodeUrl
+        : 'http://$nodeUrl';
+
+    MempoolScanRequest(
+      nodeUrl: fullNodeUrl,
+      seed: result.normalizedInput!,
+      network: _network,
+    ).sendSignalToRust();
   }
 
   int? _parseBlockHeightForContinuous() {
@@ -957,6 +1057,26 @@ class _DebugViewState extends State<DebugView> {
                                     label: Text(_continuousScanButtonLabel()),
                                     style: ElevatedButton.styleFrom(
                                       backgroundColor: _continuousScanButtonColor(),
+                                      foregroundColor: Colors.white,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: ElevatedButton.icon(
+                                    onPressed: (_isScanningMempool || _controller.text.trim().isEmpty)
+                                        ? null
+                                        : _scanMempool,
+                                    icon: _isScanningMempool
+                                        ? const SizedBox(
+                                            width: 16,
+                                            height: 16,
+                                            child: CircularProgressIndicator(strokeWidth: 2),
+                                          )
+                                        : const Icon(Icons.memory),
+                                    label: Text(_isScanningMempool ? 'Scanning...' : 'Scan Mempool'),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.purple,
                                       foregroundColor: Colors.white,
                                     ),
                                   ),

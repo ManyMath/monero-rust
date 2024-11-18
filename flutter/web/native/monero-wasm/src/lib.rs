@@ -175,6 +175,14 @@ pub struct BlockScanResult {
 
 #[cfg(target_arch = "wasm32")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MempoolScanResult {
+    pub tx_count: usize,
+    pub outputs: Vec<OwnedOutputInfo>,
+    pub spent_key_images: Vec<String>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OwnedOutputInfo {
     pub tx_hash: String,
     pub output_index: u8,
@@ -390,6 +398,107 @@ pub async fn scan_block_for_outputs_with_url_with_lookahead(
         tx_count,
         outputs,
         daemon_height,
+        spent_key_images,
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
+pub async fn scan_mempool_for_outputs(
+    node_url: &str,
+    mnemonic: &str,
+    _network_str: &str,
+) -> Result<MempoolScanResult, String> {
+    scan_mempool_for_outputs_with_lookahead(node_url, mnemonic, _network_str, DEFAULT_LOOKAHEAD).await
+}
+
+#[cfg(target_arch = "wasm32")]
+pub async fn scan_mempool_for_outputs_with_lookahead(
+    node_url: &str,
+    mnemonic: &str,
+    _network_str: &str,
+    lookahead: Lookahead,
+) -> Result<MempoolScanResult, String> {
+    let seed = monero_serai::wallet::seed::Seed::from_string(Zeroizing::new(mnemonic.to_string()))
+        .map_err(|e| format!("Invalid mnemonic: {:?}", e))?;
+
+    let spend_point = spend_key_from_seed_wasm(&seed);
+    let view_scalar = view_key_from_seed_wasm(&seed);
+    let spend_scalar = spend_key_scalar_from_seed_wasm(&seed);
+
+    let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
+    let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+    register_subaddresses(&mut scanner, lookahead);
+
+    let adapter = WasmRpcAdapter::new(node_url.to_string());
+    let rpc = Rpc::new_with_connection(adapter);
+
+    let (mempool_txs, mempool_spent_key_images) = rpc.get_transaction_pool()
+        .await
+        .map_err(|e| format!("Failed to fetch mempool: {:?}", e))?;
+
+    let tx_count = mempool_txs.len();
+    let mut outputs = Vec::new();
+    let mut spent_key_images: Vec<String> = mempool_spent_key_images
+        .iter()
+        .map(hex::encode)
+        .collect();
+
+    for tx in mempool_txs.iter() {
+        let tx_hash = hex::encode(tx.hash());
+
+        // Also extract spent key images from transaction inputs
+        for input in &tx.prefix.inputs {
+            if let Input::ToKey { key_image, .. } = input {
+                let ki_hex = hex::encode(key_image.compress().to_bytes());
+                if !spent_key_images.contains(&ki_hex) {
+                    spent_key_images.push(ki_hex);
+                }
+            }
+        }
+
+        let scan_result = scanner.scan_transaction(&tx);
+        let owned_outputs = scan_result.ignore_timelock();
+
+        for output in owned_outputs {
+            let amount = output.data.commitment.amount;
+            let amount_xmr = format!("{:.12}", amount as f64 / 1_000_000_000_000.0);
+            let output_index = output.absolute.o;
+            let key = hex::encode(output.data.key.compress().to_bytes());
+            let key_offset = hex::encode(output.data.key_offset.to_bytes());
+            let subaddress_index = output.metadata.subaddress.map(|idx| (idx.account(), idx.address()));
+            let payment_id = if output.metadata.payment_id != [0u8; 8] {
+                Some(hex::encode(output.metadata.payment_id))
+            } else {
+                None
+            };
+
+            let commitment_mask = hex::encode(output.data.commitment.mask.to_bytes());
+            let received_output_bytes = hex::encode(output.serialize());
+
+            let key_image_point = calculate_key_image_wasm(&spend_scalar, &output.data.key_offset);
+            let key_image = hex::encode(key_image_point.compress().to_bytes());
+
+            outputs.push(OwnedOutputInfo {
+                tx_hash: tx_hash.clone(),
+                output_index,
+                amount,
+                amount_xmr,
+                key,
+                key_offset,
+                commitment_mask,
+                subaddress_index,
+                payment_id,
+                received_output_bytes,
+                block_height: 0, // Unconfirmed - in mempool
+                spent: false,
+                key_image,
+            });
+        }
+    }
+
+    Ok(MempoolScanResult {
+        tx_count,
+        outputs,
         spent_key_images,
     })
 }
