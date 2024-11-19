@@ -164,3 +164,9 @@ pub struct StopMempoolPolling;
 
 #[derive(Debug, Clone)]
 pub struct ContinueMempoolPolling;
+
+#[derive(Debug, Clone)]
+pub struct StartBlockRefresh;
+
+#[derive(Debug, Clone)]
+pub struct ContinueBlockRefresh;
