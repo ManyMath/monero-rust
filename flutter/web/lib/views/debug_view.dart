@@ -45,8 +45,8 @@ class _DebugViewState extends State<DebugView> {
   int _continuousScanTargetHeight = 0;
   bool _isSynced = false;
 
-  final _destinationController = TextEditingController();
-  final _amountController = TextEditingController();
+  List<TextEditingController> _destinationControllers = [TextEditingController()];
+  List<TextEditingController> _amountControllers = [TextEditingController()];
   bool _isCreatingTx = false;
   TransactionCreatedResponse? _txResult;
   String? _txError;
@@ -337,8 +337,12 @@ class _DebugViewState extends State<DebugView> {
     _nodeUrlController.dispose();
     _blockHeightController.dispose();
     _blockHeightFocusNode.dispose();
-    _destinationController.dispose();
-    _amountController.dispose();
+    for (var c in _destinationControllers) {
+      c.dispose();
+    }
+    for (var c in _amountControllers) {
+      c.dispose();
+    }
     super.dispose();
   }
 
@@ -644,46 +648,59 @@ class _DebugViewState extends State<DebugView> {
       return;
     }
 
-    final destination = _destinationController.text.trim();
-    if (destination.isEmpty) {
-      setState(() {
-        _txError = 'Please enter a destination address';
-      });
-      return;
-    }
+    // Validate all recipients
+    List<Recipient> recipients = [];
+    int totalAtomic = 0;
 
-    final amountStr = _amountController.text.trim();
-    if (amountStr.isEmpty) {
-      setState(() {
-        _txError = 'Please enter an amount';
-      });
-      return;
-    }
+    for (int i = 0; i < _destinationControllers.length; i++) {
+      final destination = _destinationControllers[i].text.trim();
+      if (destination.isEmpty) {
+        setState(() {
+          _txError = 'Please enter a destination address for recipient ${i + 1}';
+        });
+        return;
+      }
 
-    final amountXmr = double.tryParse(amountStr);
-    if (amountXmr == null || amountXmr <= 0) {
-      setState(() {
-        _txError = 'Please enter a valid amount';
-      });
-      return;
-    }
+      final amountStr = _amountControllers[i].text.trim();
+      if (amountStr.isEmpty) {
+        setState(() {
+          _txError = 'Please enter an amount for recipient ${i + 1}';
+        });
+        return;
+      }
 
-    // Convert XMR to atomic units (1 XMR = 1e12 atomic units)
-    final amountAtomic = (amountXmr * 1e12).round();
-    if (amountAtomic <= 0) {
-      setState(() {
-        _txError = 'Amount too small';
-      });
-      return;
+      final amountXmr = double.tryParse(amountStr);
+      if (amountXmr == null || amountXmr <= 0) {
+        setState(() {
+          _txError = 'Please enter a valid amount for recipient ${i + 1}';
+        });
+        return;
+      }
+
+      // Convert XMR to atomic units (1 XMR = 1e12 atomic units)
+      final amountAtomic = (amountXmr * 1e12).round();
+      if (amountAtomic <= 0) {
+        setState(() {
+          _txError = 'Amount too small for recipient ${i + 1}';
+        });
+        return;
+      }
+
+      totalAtomic += amountAtomic;
+      recipients.add(Recipient(
+        address: destination,
+        amount: Uint64(BigInt.from(amountAtomic)),
+      ));
     }
 
     // Validate coin selection if outputs are selected
     if (_selectedOutputs.isNotEmpty) {
       final selectedTotal = _getSelectedOutputsTotal();
-      if (selectedTotal < amountAtomic) {
+      if (selectedTotal < totalAtomic) {
         final selectedXmr = (selectedTotal / 1e12).toStringAsFixed(12);
+        final totalXmr = (totalAtomic / 1e12).toStringAsFixed(12);
         setState(() {
-          _txError = 'Selected outputs ($selectedXmr XMR) insufficient for $amountStr XMR + fees';
+          _txError = 'Selected outputs ($selectedXmr XMR) insufficient for $totalXmr XMR + fees';
         });
         return;
       }
@@ -711,10 +728,38 @@ class _DebugViewState extends State<DebugView> {
       nodeUrl: fullNodeUrl,
       seed: result.normalizedInput!,
       network: _network,
-      destination: destination,
-      amount: Uint64(BigInt.from(amountAtomic)),
+      recipients: recipients,
       selectedOutputs: _selectedOutputs.isNotEmpty ? _selectedOutputs.toList() : null,
     ).sendSignalToRust();
+  }
+
+  void _addRecipient() {
+    if (_destinationControllers.length >= 15) return;
+    setState(() {
+      _destinationControllers.add(TextEditingController());
+      _amountControllers.add(TextEditingController());
+    });
+  }
+
+  void _removeRecipient(int index) {
+    if (_destinationControllers.length <= 1) return;
+    setState(() {
+      _destinationControllers[index].dispose();
+      _amountControllers[index].dispose();
+      _destinationControllers.removeAt(index);
+      _amountControllers.removeAt(index);
+    });
+  }
+
+  double _getRecipientsTotal() {
+    double total = 0;
+    for (var controller in _amountControllers) {
+      final amount = double.tryParse(controller.text.trim());
+      if (amount != null && amount > 0) {
+        total += amount;
+      }
+    }
+    return total;
   }
 
   int _getSelectedOutputsTotal() {
@@ -1487,23 +1532,81 @@ class _DebugViewState extends State<DebugView> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            TextField(
-                              controller: _destinationController,
-                              decoration: const InputDecoration(
-                                labelText: 'Destination Address',
-                                hintText: 'Enter recipient Monero address',
-                                border: OutlineInputBorder(),
-                              ),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  'Recipients: ${_destinationControllers.length}/15',
+                                  style: const TextStyle(fontWeight: FontWeight.bold),
+                                ),
+                                Text(
+                                  'Total: ${_getRecipientsTotal().toStringAsFixed(12)} XMR',
+                                  style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue),
+                                ),
+                              ],
                             ),
-                            const SizedBox(height: 16),
-                            TextField(
-                              controller: _amountController,
-                              decoration: const InputDecoration(
-                                labelText: 'Amount (XMR)',
-                                border: OutlineInputBorder(),
+                            const SizedBox(height: 12),
+                            ...List.generate(_destinationControllers.length, (index) {
+                              return Container(
+                                margin: const EdgeInsets.only(bottom: 12),
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  border: Border.all(color: Colors.grey.shade300),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Text(
+                                          'Recipient ${index + 1}',
+                                          style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 12),
+                                        ),
+                                        const Spacer(),
+                                        if (_destinationControllers.length > 1)
+                                          IconButton(
+                                            icon: const Icon(Icons.close, size: 18),
+                                            onPressed: () => _removeRecipient(index),
+                                            tooltip: 'Remove recipient',
+                                            padding: EdgeInsets.zero,
+                                            constraints: const BoxConstraints(),
+                                          ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 8),
+                                    TextField(
+                                      controller: _destinationControllers[index],
+                                      decoration: const InputDecoration(
+                                        labelText: 'Address',
+                                        hintText: 'Enter recipient Monero address',
+                                        border: OutlineInputBorder(),
+                                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                      ),
+                                      style: const TextStyle(fontSize: 12),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    TextField(
+                                      controller: _amountControllers[index],
+                                      decoration: const InputDecoration(
+                                        labelText: 'Amount (XMR)',
+                                        border: OutlineInputBorder(),
+                                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                      ),
+                                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                      style: const TextStyle(fontSize: 12),
+                                      onChanged: (_) => setState(() {}),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            }),
+                            if (_destinationControllers.length < 15)
+                              OutlinedButton.icon(
+                                onPressed: _addRecipient,
+                                icon: const Icon(Icons.add),
+                                label: const Text('Add Recipient'),
                               ),
-                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                            ),
                             const SizedBox(height: 16),
                             ElevatedButton.icon(
                               onPressed: _isCreatingTx ? null : _createTransaction,

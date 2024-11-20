@@ -108,8 +108,7 @@ pub mod native {
     pub struct PreparedTransaction {
         pub node_url: String,
         pub network: String,
-        pub destination: String,
-        pub amount: u64,
+        pub recipients: Vec<(String, u64)>, // (address, amount) pairs
         pub fee: u64,
         pub total_input: u64,
         pub change: u64,
@@ -222,6 +221,9 @@ pub mod native {
         })
     }
 
+    /// Estimate transaction fee without building the transaction.
+    /// `num_outputs` should include the change output (typically num_destinations + 1).
+    /// Maximum 16 outputs due to bulletproofs limit (15 destinations + 1 change, or 16 if no change).
     pub async fn estimate_fee(
         node_url: &str,
         num_inputs: usize,
@@ -232,6 +234,9 @@ pub mod native {
         }
         if num_outputs < 2 {
             return Err("Must have at least 2 outputs (destination + change)".to_string());
+        }
+        if num_outputs > 16 {
+            return Err("Maximum 16 outputs allowed (bulletproofs limit)".to_string());
         }
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -265,33 +270,45 @@ pub mod native {
         node_url: &str,
         network_str: &str,
         stored_outputs: Vec<StoredOutputData>,
-        destination: &str,
-        amount: u64,
+        recipients: &[(String, u64)],
     ) -> Result<PreparedTransaction, String> {
         if stored_outputs.is_empty() {
             return Err("No outputs provided".to_string());
         }
+        if recipients.is_empty() {
+            return Err("No recipients provided".to_string());
+        }
+        if recipients.len() > 15 {
+            return Err("Maximum 15 recipients allowed (16 outputs - 1 change)".to_string());
+        }
+
         let network = parse_network(network_str)?;
 
-        MoneroAddress::from_str(network, destination)
-            .map_err(|e| format!("Invalid destination: {:?}", e))?;
+        // Validate all destination addresses
+        for (addr, _) in recipients {
+            MoneroAddress::from_str(network, addr)
+                .map_err(|e| format!("Invalid destination '{}': {:?}", addr, e))?;
+        }
 
         let total_input: u64 = stored_outputs.iter().map(|o| o.amount).sum();
-        let fee_est = estimate_fee(node_url, stored_outputs.len(), 2).await?;
+        let total_amount: u64 = recipients.iter().map(|(_, amt)| *amt).sum();
 
-        let total_out = amount + fee_est.fee;
+        // num_outputs = recipients + 1 change
+        let num_outputs = recipients.len() + 1;
+        let fee_est = estimate_fee(node_url, stored_outputs.len(), num_outputs).await?;
+
+        let total_out = total_amount + fee_est.fee;
         if total_input < total_out {
             return Err(format!(
                 "Insufficient funds: have {} piconero, need {} (amount {} + fee {})",
-                total_input, total_out, amount, fee_est.fee
+                total_input, total_out, total_amount, fee_est.fee
             ));
         }
 
         Ok(PreparedTransaction {
             node_url: node_url.to_string(),
             network: network_str.to_string(),
-            destination: destination.to_string(),
-            amount,
+            recipients: recipients.to_vec(),
             fee: fee_est.fee,
             total_input,
             change: total_input - total_out,
@@ -308,8 +325,7 @@ pub mod native {
             seed_phrase,
             &prepared.network,
             prepared.stored_outputs,
-            &prepared.destination,
-            prepared.amount,
+            &prepared.recipients,
         ).await
     }
 
@@ -318,12 +334,18 @@ pub mod native {
         seed_phrase: &str,
         network_str: &str,
         stored_outputs: Vec<StoredOutputData>,
-        destination: &str,
-        amount: u64,
+        recipients: &[(String, u64)],
     ) -> Result<TransactionResult, String> {
         if stored_outputs.is_empty() {
             return Err("No outputs provided".to_string());
         }
+        if recipients.is_empty() {
+            return Err("No recipients provided".to_string());
+        }
+        if recipients.len() > 15 {
+            return Err("Maximum 15 recipients allowed (16 outputs - 1 change)".to_string());
+        }
+
         let network = parse_network(network_str)?;
 
         let seed = Seed::from_string(Zeroizing::new(seed_phrase.to_string()))
@@ -349,8 +371,13 @@ pub mod native {
             .await
             .map_err(|e| format!("Failed to get fee: {:?}", e))?;
 
-        let dest_addr = MoneroAddress::from_str(network, destination)
-            .map_err(|e| format!("Invalid destination address: {:?}", e))?;
+        // Parse and validate all destination addresses
+        let mut dest_addrs = Vec::with_capacity(recipients.len());
+        for (addr_str, _) in recipients {
+            let dest_addr = MoneroAddress::from_str(network, addr_str)
+                .map_err(|e| format!("Invalid destination address '{}': {:?}", addr_str, e))?;
+            dest_addrs.push(dest_addr);
+        }
 
         let change = Change::new(&view_pair, false);
         let mut spendable_outputs = Vec::new();
@@ -375,7 +402,10 @@ pub mod native {
             builder.add_input(output);
         }
 
-        builder.add_payment(dest_addr, amount);
+        // Add all payments
+        for (dest_addr, (_, amount)) in dest_addrs.into_iter().zip(recipients.iter()) {
+            builder.add_payment(dest_addr, *amount);
+        }
 
         let signable = builder
             .build()

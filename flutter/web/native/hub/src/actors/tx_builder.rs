@@ -39,13 +39,18 @@ impl TxBuilderActor {
         let receiver = CreateTransactionRequest::get_dart_signal_receiver();
         while let Some(signal_pack) = receiver.recv().await {
             let request = signal_pack.message;
+            // Convert Vec<Recipient> to Vec<(String, u64)>
+            let recipients: Vec<(String, u64)> = request
+                .recipients
+                .into_iter()
+                .map(|r| (r.address, r.amount))
+                .collect();
             let _ = self_addr
                 .notify(BuildTransaction {
                     node_url: request.node_url,
                     seed: request.seed,
                     network: request.network,
-                    destination: request.destination,
-                    amount: request.amount,
+                    recipients,
                     selected_outputs: request.selected_outputs,
                 })
                 .await;
@@ -228,8 +233,7 @@ impl TxBuilderActor {
                 &msg.seed,
                 &msg.network,
                 outputs_vec,
-                &msg.destination,
-                msg.amount,
+                &msg.recipients,
             )
             .await
             .map_err(|e| format!("Transaction building failed: {}", e))?;

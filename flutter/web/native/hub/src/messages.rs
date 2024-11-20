@@ -63,8 +63,7 @@ pub struct BuildTransaction {
     pub node_url: String,
     pub seed: String,
     pub network: String,
-    pub destination: String,
-    pub amount: u64,
+    pub recipients: Vec<(String, u64)>, // (address, amount) pairs
     pub selected_outputs: Option<Vec<String>>, // "txHash:outputIndex" keys for coin control
 }
 
