@@ -1,6 +1,12 @@
 use rinf::{DartSignal, RustSignal, SignalPiece};
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize, SignalPiece)]
+pub struct Recipient {
+    pub address: String,
+    pub amount: u64,
+}
+
 #[derive(Deserialize, DartSignal)]
 pub struct MoneroTestRequest {}
 
@@ -45,8 +51,7 @@ pub struct CreateTransactionRequest {
     pub node_url: String,
     pub seed: String,
     pub network: String,
-    pub destination: String,
-    pub amount: u64,
+    pub recipients: Vec<Recipient>,
     pub selected_outputs: Option<Vec<String>>, // "txHash:outputIndex" keys for coin control
 }
 
