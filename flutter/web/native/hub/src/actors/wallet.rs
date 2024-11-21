@@ -6,6 +6,7 @@ use rinf::{DartSignal, RustSignal};
 use tokio::task::JoinSet;
 use tokio_with_wasm::alias as tokio;
 use wasm_bindgen_futures;
+use gloo_timers::future::TimeoutFuture;
 
 const REFRESH_PERIOD: u64 = 90; // [seconds]
 const MEMPOOL_POLL_PERIOD_OFFSET: u64 = 45; // [s]
@@ -545,7 +546,7 @@ impl Notifiable<StartContinuousScan> for WalletActor {
         let mut self_addr = ctx.address();
 
         // Spawn task to get daemon height and start scanning
-        tokio::spawn(async move {
+        wasm_bindgen_futures::spawn_local(async move {
             match monero_wasm::get_daemon_height(&node_url).await {
                 Ok(daemon_height) => {
                     // Initialize scanning state
@@ -573,6 +574,9 @@ impl Notifiable<StartContinuousScan> for WalletActor {
                     let _ = self_addr.notify(ContinueScan).await;
                 }
                 Err(e) => {
+                    #[cfg(target_arch = "wasm32")]
+                    web_sys::console::error_1(&format!("[StartContinuousScan] Failed to get daemon height: {}", e).into());
+
                     BlockScanResponse {
                         success: false,
                         error: Some(format!("Failed to get daemon height: {}", e)),
@@ -585,6 +589,10 @@ impl Notifiable<StartContinuousScan> for WalletActor {
                         spent_key_images: Vec::new(),
                     }
                     .send_signal_to_dart();
+
+                    // Restart polling since scan failed to start
+                    let _ = self_addr.notify(StartBlockRefresh).await;
+                    let _ = self_addr.notify(StartMempoolPolling).await;
                 }
             }
         });
@@ -640,7 +648,7 @@ impl Notifiable<ContinueScan> for WalletActor {
         self.scan_current_height += 1;
 
         // Spawn task to scan the block
-        tokio::spawn(async move {
+        wasm_bindgen_futures::spawn_local(async move {
             match monero_wasm::scan_block_for_outputs_with_url(&node_url, block_height, &seed, &network).await {
                 Ok(result) => {
                     let outputs = result
@@ -719,12 +727,22 @@ impl Notifiable<ContinueScan> for WalletActor {
                     }
                     .send_signal_to_dart();
 
-                    // Continue scanning if not done
+                    // Continue scanning if not done, otherwise start polling
                     if block_height + 1 < target_height {
                         let _ = self_addr.notify(ContinueScan).await;
+                    } else {
+                        #[cfg(target_arch = "wasm32")]
+                        web_sys::console::log_1(&"[ContinueScan] Scan complete! Starting block refresh and mempool polling...".into());
+
+                        let _ = self_addr.notify(StopScan).await;
+                        let _ = self_addr.notify(StartBlockRefresh).await;
+                        let _ = self_addr.notify(StartMempoolPolling).await;
                     }
                 }
                 Err(e) => {
+                    #[cfg(target_arch = "wasm32")]
+                    web_sys::console::error_1(&format!("[ContinueScan] Scan error at height {}: {}", block_height, e).into());
+
                     BlockScanResponse {
                         success: false,
                         error: Some(e),
@@ -746,6 +764,11 @@ impl Notifiable<ContinueScan> for WalletActor {
                         is_scanning: false,
                     }
                     .send_signal_to_dart();
+
+                    // Notify actor to stop scanning and restart polling
+                    let _ = self_addr.notify(StopScan).await;
+                    let _ = self_addr.notify(StartBlockRefresh).await;
+                    let _ = self_addr.notify(StartMempoolPolling).await;
                 }
             }
         });
@@ -830,6 +853,8 @@ impl Notifiable<StopMempoolPolling> for WalletActor {
 impl Notifiable<ContinueMempoolPolling> for WalletActor {
     async fn notify(&mut self, _msg: ContinueMempoolPolling, ctx: &Context<Self>) {
         if !self.mempool_polling_active {
+            #[cfg(target_arch = "wasm32")]
+            web_sys::console::log_1(&"[MempoolPolling] ContinueMempoolPolling called but not active".into());
             return;
         }
 
@@ -846,13 +871,23 @@ impl Notifiable<ContinueMempoolPolling> for WalletActor {
         };
         self.mempool_first_poll = false;
 
-        // Spawn task to wait, scan mempool, and schedule next poll
-        tokio::spawn(async move {
-            // Wait before polling
-            tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::log_1(&format!("[MempoolPolling] Scheduling next scan in {}s", delay_secs).into());
+
+        wasm_bindgen_futures::spawn_local(async move {
+            TimeoutFuture::new((delay_secs * 1000) as u32).await;
+
+            #[cfg(target_arch = "wasm32")]
+            web_sys::console::log_1(&"[MempoolPolling] Timer fired, scanning mempool...".into());
 
             match monero_wasm::scan_mempool_for_outputs(&node_url, &seed, &network).await {
                 Ok(result) => {
+                    #[cfg(target_arch = "wasm32")]
+                    web_sys::console::log_1(&format!(
+                        "[MempoolPolling] Scan complete: {} txs, {} outputs, {} spent",
+                        result.tx_count, result.outputs.len(), result.spent_key_images.len()
+                    ).into());
+
                     let outputs: Vec<OwnedOutput> = result
                         .outputs
                         .iter()
@@ -901,17 +936,24 @@ impl Notifiable<ContinueMempoolPolling> for WalletActor {
 impl Notifiable<StartBlockRefresh> for WalletActor {
     async fn notify(&mut self, _msg: StartBlockRefresh, ctx: &Context<Self>) {
         if self.block_refresh_active {
-            return; // Already refreshing
+            #[cfg(target_arch = "wasm32")]
+            web_sys::console::log_1(&"[BlockRefresh] Already active, skipping".into());
+            return;
         }
 
         if self.scan_node_url.is_empty() || self.scan_seed.is_empty() {
+            #[cfg(target_arch = "wasm32")]
+            web_sys::console::warn_1(&"[BlockRefresh] Cannot start: missing node_url or seed".into());
             return;
         }
 
         self.block_refresh_active = true;
 
         #[cfg(target_arch = "wasm32")]
-        web_sys::console::log_1(&format!("[BlockRefresh] Starting automatic block refresh (every {}s)", REFRESH_PERIOD).into());
+        web_sys::console::log_1(&format!(
+            "[BlockRefresh] Starting automatic block refresh (every {}s) from height {}",
+            REFRESH_PERIOD, self.scan_current_height
+        ).into());
 
         // Start the refresh loop
         let mut self_addr = ctx.address();
@@ -923,8 +965,16 @@ impl Notifiable<StartBlockRefresh> for WalletActor {
 impl Notifiable<ContinueBlockRefresh> for WalletActor {
     async fn notify(&mut self, _msg: ContinueBlockRefresh, ctx: &Context<Self>) {
         if !self.block_refresh_active {
+            #[cfg(target_arch = "wasm32")]
+            web_sys::console::log_1(&"[BlockRefresh] ContinueBlockRefresh called but not active".into());
             return;
         }
+
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::log_1(&format!(
+            "[BlockRefresh] Scheduling next check in {}s (current height: {})",
+            REFRESH_PERIOD, self.scan_current_height
+        ).into());
 
         let node_url = self.scan_node_url.clone();
         let seed = self.scan_seed.clone();
@@ -932,8 +982,11 @@ impl Notifiable<ContinueBlockRefresh> for WalletActor {
         let current_height = self.scan_current_height;
         let mut self_addr = ctx.address();
 
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_secs(REFRESH_PERIOD)).await;
+        wasm_bindgen_futures::spawn_local(async move {
+            TimeoutFuture::new((REFRESH_PERIOD * 1000) as u32).await;
+
+            #[cfg(target_arch = "wasm32")]
+            web_sys::console::log_1(&"[BlockRefresh] Timer fired, checking daemon height...".into());
 
             match monero_wasm::get_daemon_height(&node_url).await {
                 Ok(daemon_height) => {
