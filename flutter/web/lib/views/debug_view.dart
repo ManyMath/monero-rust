@@ -15,7 +15,7 @@ class DebugView extends StatefulWidget {
 class _DebugViewState extends State<DebugView> {
   final _controller = TextEditingController();
   final _extensionService = ExtensionService();
-  final _nodeUrlController = TextEditingController(text: '127.0.0.1:38081');
+  final _nodeUrlController = TextEditingController(text: 'http://127.0.0.1:38081');
   final _blockHeightController = TextEditingController();
   final _blockHeightFocusNode = FocusNode();
   bool _blockHeightUserEdited = false;
@@ -61,6 +61,17 @@ class _DebugViewState extends State<DebugView> {
   Set<String> _selectedOutputs = {}; // "txHash:outputIndex" keys for coin control
 
   bool _isScanningMempool = false;
+
+  // Polling timers (managed in Dart)
+  Timer? _blockRefreshTimer;
+  Timer? _mempoolPollTimer;
+  Timer? _mempoolDelayTimer; // Initial 45s delay before first periodic
+  Timer? _countdownTimer;
+  int _blockRefreshCountdown = 0;
+  int _mempoolCountdown = 0;
+  static const _blockRefreshInterval = Duration(seconds: 90);
+  static const _mempoolPollInterval = Duration(seconds: 90);
+  static const _mempoolPollOffset = Duration(seconds: 45);
 
   int? _expandedPanel;
 
@@ -223,6 +234,8 @@ class _DebugViewState extends State<DebugView> {
     });
 
     SyncProgressResponse.rustSignalStream.listen((signal) {
+      final wasSynced = _isSynced;
+      final wasScanning = _isContinuousScanning;
       setState(() {
         _continuousScanCurrentHeight = signal.message.currentHeight.toInt();
         _continuousScanTargetHeight = signal.message.daemonHeight.toInt();
@@ -238,6 +251,15 @@ class _DebugViewState extends State<DebugView> {
           _blockHeightUserEdited = false;
         }
       });
+
+      // Stop polling timers when scanning starts
+      if (_isContinuousScanning && !wasScanning) {
+        _stopPollingTimers();
+      }
+      // Start polling timers when sync completes (or scan finishes while synced)
+      if (_isSynced && !_isContinuousScanning && (wasScanning || !wasSynced)) {
+        _startPollingTimers();
+      }
     });
 
     SpentStatusUpdatedResponse.rustSignalStream.listen((signal) {
@@ -328,8 +350,70 @@ class _DebugViewState extends State<DebugView> {
     });
   }
 
+  void _startPollingTimers() {
+    debugPrint('[Dart] Starting polling timers (block: ${_blockRefreshInterval.inSeconds}s, mempool: ${_mempoolPollInterval.inSeconds}s with ${_mempoolPollOffset.inSeconds}s offset)');
+    _stopPollingTimers(); // Cancel any existing timers first
+
+    _blockRefreshTimer = Timer.periodic(_blockRefreshInterval, (_) {
+      _onBlockRefreshTimer();
+    });
+
+    // Start mempool polling with offset to stagger requests
+    _mempoolDelayTimer = Timer(_mempoolPollOffset, () {
+      _mempoolDelayTimer = null;
+      _onMempoolPollTimer(); // First poll after offset
+      _mempoolPollTimer = Timer.periodic(_mempoolPollInterval, (_) {
+        _onMempoolPollTimer();
+      });
+    });
+  }
+
+  void _stopPollingTimers() {
+    if (_blockRefreshTimer != null || _mempoolPollTimer != null || _mempoolDelayTimer != null) {
+      debugPrint('[Dart] Stopping polling timers');
+    }
+    _blockRefreshTimer?.cancel();
+    _blockRefreshTimer = null;
+    _mempoolDelayTimer?.cancel();
+    _mempoolDelayTimer = null;
+    _mempoolPollTimer?.cancel();
+    _mempoolPollTimer = null;
+  }
+
+  void _onBlockRefreshTimer() {
+    debugPrint('[Dart] Block refresh timer fired');
+    final seed = _controller.text.trim();
+    if (seed.isEmpty) return;
+
+    // Query daemon height - if higher than current, a scan will be triggered
+    QueryDaemonHeightRequest(
+      nodeUrl: _nodeUrlController.text,
+    ).sendSignalToRust();
+
+    // Start a continuous scan from current height to check for new blocks
+    StartContinuousScanRequest(
+      nodeUrl: _nodeUrlController.text,
+      startHeight: Uint64(BigInt.from(_continuousScanCurrentHeight)),
+      seed: seed,
+      network: _network,
+    ).sendSignalToRust();
+  }
+
+  void _onMempoolPollTimer() {
+    debugPrint('[Dart] Mempool poll timer fired');
+    final seed = _controller.text.trim();
+    if (seed.isEmpty) return;
+
+    MempoolScanRequest(
+      nodeUrl: _nodeUrlController.text,
+      seed: seed,
+      network: _network,
+    ).sendSignalToRust();
+  }
+
   @override
   void dispose() {
+    _stopPollingTimers();
     _debounceTimer?.cancel();
     _controller.removeListener(_onSeedChanged);
     _blockHeightController.removeListener(_onBlockHeightChanged);

@@ -6,11 +6,6 @@ use rinf::{DartSignal, RustSignal};
 use tokio::task::JoinSet;
 use tokio_with_wasm::alias as tokio;
 use wasm_bindgen_futures;
-use gloo_timers::future::TimeoutFuture;
-
-const REFRESH_PERIOD: u64 = 90; // [seconds]
-const MEMPOOL_POLL_PERIOD_OFFSET: u64 = 45; // [s]
-const MEMPOOL_POLL_PERIOD: u64 = 90; // [s]
 
 pub struct WalletActor {
     state: WalletState,
@@ -26,10 +21,6 @@ pub struct WalletActor {
     scan_seed: String,
     scan_network: String,
     self_addr: Option<Address<Self>>,
-    // Polling state (active after sync completes)
-    mempool_polling_active: bool,
-    mempool_first_poll: bool,
-    block_refresh_active: bool,
 }
 
 impl Actor for WalletActor {}
@@ -71,9 +62,6 @@ impl WalletActor {
             scan_seed: String::new(),
             scan_network: String::new(),
             self_addr: Some(self_addr),
-            mempool_polling_active: false,
-            mempool_first_poll: true,
-            block_refresh_active: false,
         }
     }
 
@@ -535,17 +523,12 @@ impl Notifiable<UpdateScanState> for WalletActor {
 #[async_trait]
 impl Notifiable<StartContinuousScan> for WalletActor {
     async fn notify(&mut self, msg: StartContinuousScan, ctx: &Context<Self>) {
-        // Stop any existing polling when starting a new scan
-        self.mempool_polling_active = false;
-        self.block_refresh_active = false;
-
         let node_url = msg.node_url.clone();
         let start_height = msg.start_height;
         let seed = msg.seed.clone();
         let network = msg.network.clone();
         let mut self_addr = ctx.address();
 
-        // Spawn task to get daemon height and start scanning
         wasm_bindgen_futures::spawn_local(async move {
             match monero_wasm::get_daemon_height(&node_url).await {
                 Ok(daemon_height) => {
@@ -589,10 +572,6 @@ impl Notifiable<StartContinuousScan> for WalletActor {
                         spent_key_images: Vec::new(),
                     }
                     .send_signal_to_dart();
-
-                    // Restart polling since scan failed to start
-                    let _ = self_addr.notify(StartBlockRefresh).await;
-                    let _ = self_addr.notify(StartMempoolPolling).await;
                 }
             }
         });
@@ -603,8 +582,6 @@ impl Notifiable<StartContinuousScan> for WalletActor {
 impl Notifiable<StopScan> for WalletActor {
     async fn notify(&mut self, _msg: StopScan, _ctx: &Context<Self>) {
         self.is_scanning = false;
-        self.mempool_polling_active = false;
-        self.block_refresh_active = false;
         SyncProgressResponse {
             current_height: self.scan_current_height,
             daemon_height: self.scan_target_height,
@@ -628,11 +605,6 @@ impl Notifiable<ContinueScan> for WalletActor {
                     is_scanning: false,
                 }
                 .send_signal_to_dart();
-
-                // Start automatic polling now that we're synced
-                let mut self_addr = ctx.address();
-                let _ = self_addr.notify(StartBlockRefresh).await;
-                let _ = self_addr.notify(StartMempoolPolling).await;
             }
             return;
         }
@@ -647,7 +619,6 @@ impl Notifiable<ContinueScan> for WalletActor {
         // Increment current height
         self.scan_current_height += 1;
 
-        // Spawn task to scan the block
         wasm_bindgen_futures::spawn_local(async move {
             match monero_wasm::scan_block_for_outputs_with_url(&node_url, block_height, &seed, &network).await {
                 Ok(result) => {
@@ -731,12 +702,11 @@ impl Notifiable<ContinueScan> for WalletActor {
                     if block_height + 1 < target_height {
                         let _ = self_addr.notify(ContinueScan).await;
                     } else {
+                        // Scanning complete.  Dart handles starting polling timers
                         #[cfg(target_arch = "wasm32")]
-                        web_sys::console::log_1(&"[ContinueScan] Scan complete! Starting block refresh and mempool polling...".into());
+                        web_sys::console::log_1(&"[ContinueScan] Scan complete!".into());
 
                         let _ = self_addr.notify(StopScan).await;
-                        let _ = self_addr.notify(StartBlockRefresh).await;
-                        let _ = self_addr.notify(StartMempoolPolling).await;
                     }
                 }
                 Err(e) => {
@@ -765,10 +735,8 @@ impl Notifiable<ContinueScan> for WalletActor {
                     }
                     .send_signal_to_dart();
 
-                    // Notify actor to stop scanning and restart polling
+                    // Notify actor to stop scanning
                     let _ = self_addr.notify(StopScan).await;
-                    let _ = self_addr.notify(StartBlockRefresh).await;
-                    let _ = self_addr.notify(StartMempoolPolling).await;
                 }
             }
         });
@@ -812,218 +780,5 @@ impl Notifiable<UpdateSpentStatus> for WalletActor {
             }
             .send_signal_to_dart();
         }
-    }
-}
-
-#[async_trait]
-impl Notifiable<StartMempoolPolling> for WalletActor {
-    async fn notify(&mut self, _msg: StartMempoolPolling, ctx: &Context<Self>) {
-        if self.mempool_polling_active {
-            return; // Already polling
-        }
-
-        // Only start if we have scan parameters
-        if self.scan_node_url.is_empty() || self.scan_seed.is_empty() {
-            return;
-        }
-
-        self.mempool_polling_active = true;
-        self.mempool_first_poll = true; // Reset for staggered timing
-
-        #[cfg(target_arch = "wasm32")]
-        web_sys::console::log_1(&"[MempoolPolling] Starting automatic mempool polling (45s initial, then 90s)".into());
-
-        // Start the polling loop
-        let mut self_addr = ctx.address();
-        let _ = self_addr.notify(ContinueMempoolPolling).await;
-    }
-}
-
-#[async_trait]
-impl Notifiable<StopMempoolPolling> for WalletActor {
-    async fn notify(&mut self, _msg: StopMempoolPolling, _ctx: &Context<Self>) {
-        self.mempool_polling_active = false;
-
-        #[cfg(target_arch = "wasm32")]
-        web_sys::console::log_1(&"[MempoolPolling] Stopped automatic mempool polling".into());
-    }
-}
-
-#[async_trait]
-impl Notifiable<ContinueMempoolPolling> for WalletActor {
-    async fn notify(&mut self, _msg: ContinueMempoolPolling, ctx: &Context<Self>) {
-        if !self.mempool_polling_active {
-            #[cfg(target_arch = "wasm32")]
-            web_sys::console::log_1(&"[MempoolPolling] ContinueMempoolPolling called but not active".into());
-            return;
-        }
-
-        let node_url = self.scan_node_url.clone();
-        let seed = self.scan_seed.clone();
-        let network = self.scan_network.clone();
-        let mut self_addr = ctx.address();
-
-        // First poll uses shorter delay to stagger with block refresh
-        let delay_secs = if self.mempool_first_poll {
-            MEMPOOL_POLL_PERIOD_OFFSET
-        } else {
-            MEMPOOL_POLL_PERIOD
-        };
-        self.mempool_first_poll = false;
-
-        #[cfg(target_arch = "wasm32")]
-        web_sys::console::log_1(&format!("[MempoolPolling] Scheduling next scan in {}s", delay_secs).into());
-
-        wasm_bindgen_futures::spawn_local(async move {
-            TimeoutFuture::new((delay_secs * 1000) as u32).await;
-
-            #[cfg(target_arch = "wasm32")]
-            web_sys::console::log_1(&"[MempoolPolling] Timer fired, scanning mempool...".into());
-
-            match monero_wasm::scan_mempool_for_outputs(&node_url, &seed, &network).await {
-                Ok(result) => {
-                    #[cfg(target_arch = "wasm32")]
-                    web_sys::console::log_1(&format!(
-                        "[MempoolPolling] Scan complete: {} txs, {} outputs, {} spent",
-                        result.tx_count, result.outputs.len(), result.spent_key_images.len()
-                    ).into());
-
-                    let outputs: Vec<OwnedOutput> = result
-                        .outputs
-                        .iter()
-                        .map(|o| OwnedOutput {
-                            tx_hash: o.tx_hash.clone(),
-                            output_index: o.output_index,
-                            amount: o.amount,
-                            amount_xmr: o.amount_xmr.clone(),
-                            key: o.key.clone(),
-                            key_offset: o.key_offset.clone(),
-                            commitment_mask: o.commitment_mask.clone(),
-                            subaddress_index: o.subaddress_index,
-                            payment_id: o.payment_id.clone(),
-                            received_output_bytes: o.received_output_bytes.clone(),
-                            block_height: 0, // Unconfirmed
-                            spent: o.spent,
-                            key_image: o.key_image.clone(),
-                        })
-                        .collect();
-
-                    // Only send response if there are outputs or spent key images
-                    if !outputs.is_empty() || !result.spent_key_images.is_empty() {
-                        MempoolScanResponse {
-                            success: true,
-                            error: None,
-                            tx_count: result.tx_count as u32,
-                            outputs,
-                            spent_key_images: result.spent_key_images,
-                        }
-                        .send_signal_to_dart();
-                    }
-                }
-                Err(e) => {
-                    #[cfg(target_arch = "wasm32")]
-                    web_sys::console::error_1(&format!("[MempoolPolling] Error: {}", e).into());
-                }
-            }
-
-            // Schedule next poll
-            let _ = self_addr.notify(ContinueMempoolPolling).await;
-        });
-    }
-}
-
-#[async_trait]
-impl Notifiable<StartBlockRefresh> for WalletActor {
-    async fn notify(&mut self, _msg: StartBlockRefresh, ctx: &Context<Self>) {
-        if self.block_refresh_active {
-            #[cfg(target_arch = "wasm32")]
-            web_sys::console::log_1(&"[BlockRefresh] Already active, skipping".into());
-            return;
-        }
-
-        if self.scan_node_url.is_empty() || self.scan_seed.is_empty() {
-            #[cfg(target_arch = "wasm32")]
-            web_sys::console::warn_1(&"[BlockRefresh] Cannot start: missing node_url or seed".into());
-            return;
-        }
-
-        self.block_refresh_active = true;
-
-        #[cfg(target_arch = "wasm32")]
-        web_sys::console::log_1(&format!(
-            "[BlockRefresh] Starting automatic block refresh (every {}s) from height {}",
-            REFRESH_PERIOD, self.scan_current_height
-        ).into());
-
-        // Start the refresh loop
-        let mut self_addr = ctx.address();
-        let _ = self_addr.notify(ContinueBlockRefresh).await;
-    }
-}
-
-#[async_trait]
-impl Notifiable<ContinueBlockRefresh> for WalletActor {
-    async fn notify(&mut self, _msg: ContinueBlockRefresh, ctx: &Context<Self>) {
-        if !self.block_refresh_active {
-            #[cfg(target_arch = "wasm32")]
-            web_sys::console::log_1(&"[BlockRefresh] ContinueBlockRefresh called but not active".into());
-            return;
-        }
-
-        #[cfg(target_arch = "wasm32")]
-        web_sys::console::log_1(&format!(
-            "[BlockRefresh] Scheduling next check in {}s (current height: {})",
-            REFRESH_PERIOD, self.scan_current_height
-        ).into());
-
-        let node_url = self.scan_node_url.clone();
-        let seed = self.scan_seed.clone();
-        let network = self.scan_network.clone();
-        let current_height = self.scan_current_height;
-        let mut self_addr = ctx.address();
-
-        wasm_bindgen_futures::spawn_local(async move {
-            TimeoutFuture::new((REFRESH_PERIOD * 1000) as u32).await;
-
-            #[cfg(target_arch = "wasm32")]
-            web_sys::console::log_1(&"[BlockRefresh] Timer fired, checking daemon height...".into());
-
-            match monero_wasm::get_daemon_height(&node_url).await {
-                Ok(daemon_height) => {
-                    if daemon_height > current_height {
-                        #[cfg(target_arch = "wasm32")]
-                        web_sys::console::log_1(&format!(
-                            "[BlockRefresh] New blocks detected: {} -> {}, starting scan",
-                            current_height, daemon_height
-                        ).into());
-
-                        let _ = self_addr.notify(StartContinuousScan {
-                            node_url: node_url.clone(),
-                            start_height: current_height,
-                            seed: seed.clone(),
-                            network: network.clone(),
-                        }).await;
-
-                        // Don't schedule next refresh - ContinueScan will restart block refresh when done
-                    } else {
-                        #[cfg(target_arch = "wasm32")]
-                        web_sys::console::log_1(&format!(
-                            "[BlockRefresh] No new blocks (height: {})",
-                            daemon_height
-                        ).into());
-
-                        // Schedule next refresh check
-                        let _ = self_addr.notify(ContinueBlockRefresh).await;
-                    }
-                }
-                Err(e) => {
-                    #[cfg(target_arch = "wasm32")]
-                    web_sys::console::error_1(&format!("[BlockRefresh] Error getting daemon height: {}", e).into());
-
-                    // Schedule next refresh despite error
-                    let _ = self_addr.notify(ContinueBlockRefresh).await;
-                }
-            }
-        });
     }
 }
