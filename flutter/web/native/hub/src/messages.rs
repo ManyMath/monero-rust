@@ -155,17 +155,3 @@ pub struct UpdateSpentStatus {
     pub key_images: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
-pub struct StartMempoolPolling;
-
-#[derive(Debug, Clone)]
-pub struct StopMempoolPolling;
-
-#[derive(Debug, Clone)]
-pub struct ContinueMempoolPolling;
-
-#[derive(Debug, Clone)]
-pub struct StartBlockRefresh;
-
-#[derive(Debug, Clone)]
-pub struct ContinueBlockRefresh;
