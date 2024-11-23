@@ -354,16 +354,29 @@ class _DebugViewState extends State<DebugView> {
     debugPrint('[Dart] Starting polling timers (block: ${_blockRefreshInterval.inSeconds}s, mempool: ${_mempoolPollInterval.inSeconds}s with ${_mempoolPollOffset.inSeconds}s offset)');
     _stopPollingTimers(); // Cancel any existing timers first
 
+    _blockRefreshCountdown = _blockRefreshInterval.inSeconds;
+    _mempoolCountdown = _mempoolPollOffset.inSeconds;
+
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      setState(() {
+        if (_blockRefreshCountdown > 0) _blockRefreshCountdown--;
+        if (_mempoolCountdown > 0) _mempoolCountdown--;
+      });
+    });
+
     _blockRefreshTimer = Timer.periodic(_blockRefreshInterval, (_) {
       _onBlockRefreshTimer();
+      setState(() => _blockRefreshCountdown = _blockRefreshInterval.inSeconds);
     });
 
     // Start mempool polling with offset to stagger requests
     _mempoolDelayTimer = Timer(_mempoolPollOffset, () {
       _mempoolDelayTimer = null;
-      _onMempoolPollTimer(); // First poll after offset
+      _onMempoolPollTimer(); // First poll at 45s
+      setState(() => _mempoolCountdown = _mempoolPollInterval.inSeconds);
       _mempoolPollTimer = Timer.periodic(_mempoolPollInterval, (_) {
         _onMempoolPollTimer();
+        setState(() => _mempoolCountdown = _mempoolPollInterval.inSeconds);
       });
     });
   }
@@ -372,12 +385,16 @@ class _DebugViewState extends State<DebugView> {
     if (_blockRefreshTimer != null || _mempoolPollTimer != null || _mempoolDelayTimer != null) {
       debugPrint('[Dart] Stopping polling timers');
     }
+    _countdownTimer?.cancel();
+    _countdownTimer = null;
     _blockRefreshTimer?.cancel();
     _blockRefreshTimer = null;
     _mempoolDelayTimer?.cancel();
     _mempoolDelayTimer = null;
     _mempoolPollTimer?.cancel();
     _mempoolPollTimer = null;
+    _blockRefreshCountdown = 0;
+    _mempoolCountdown = 0;
   }
 
   void _onBlockRefreshTimer() {
