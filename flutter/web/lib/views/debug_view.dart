@@ -1303,6 +1303,17 @@ class _DebugViewState extends State<DebugView> {
                                         color: _isSynced ? Colors.green.shade900 : Colors.blue.shade900,
                                       ),
                                     ),
+                                    // Polling countdown when synced
+                                    if (_isSynced && (_blockRefreshCountdown > 0 || _mempoolCountdown > 0)) ...[
+                                      const SizedBox(height: 12),
+                                      Text(
+                                        'Next poll: ${_mempoolCountdown > 0 && (_blockRefreshCountdown == 0 || _mempoolCountdown < _blockRefreshCountdown) ? _mempoolCountdown : _blockRefreshCountdown}s',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: Colors.green.shade700,
+                                        ),
+                                      ),
+                                    ],
                                   ],
                                 ),
                               ),
