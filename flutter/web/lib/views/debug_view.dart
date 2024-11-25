@@ -25,7 +25,6 @@ class _DebugViewState extends State<DebugView> {
   String? _validationError;
   String? _derivedAddress;
   String? _responseError;
-  bool _isLoading = false;
   bool _isScanning = false;
   Timer? _debounceTimer;
   String? _secretSpendKey;
@@ -38,6 +37,10 @@ class _DebugViewState extends State<DebugView> {
   List<OwnedOutput> _allOutputs = [];
   int? _daemonHeight;
 
+  /// Returns the current blockchain height for confirmation calculations.
+  /// Falls back to 0 if unknown, which safely shows 0 confirmations.
+  int get _currentHeight => _daemonHeight ?? _scanResult?.blockHeight.toInt() ?? 0;
+
   // Continuous scan state
   bool _isContinuousScanning = false;
   bool _isContinuousPaused = false;
@@ -45,8 +48,8 @@ class _DebugViewState extends State<DebugView> {
   int _continuousScanTargetHeight = 0;
   bool _isSynced = false;
 
-  List<TextEditingController> _destinationControllers = [TextEditingController()];
-  List<TextEditingController> _amountControllers = [TextEditingController()];
+  final List<TextEditingController> _destinationControllers = [TextEditingController()];
+  final List<TextEditingController> _amountControllers = [TextEditingController()];
   bool _isCreatingTx = false;
   TransactionCreatedResponse? _txResult;
   String? _txError;
@@ -75,6 +78,17 @@ class _DebugViewState extends State<DebugView> {
 
   int? _expandedPanel;
 
+  // Stream subscriptions
+  StreamSubscription? _keysDerivedSubscription;
+  StreamSubscription? _seedGeneratedSubscription;
+  StreamSubscription? _blockScanSubscription;
+  StreamSubscription? _daemonHeightSubscription;
+  StreamSubscription? _transactionCreatedSubscription;
+  StreamSubscription? _transactionBroadcastSubscription;
+  StreamSubscription? _syncProgressSubscription;
+  StreamSubscription? _spentStatusUpdatedSubscription;
+  StreamSubscription? _mempoolScanSubscription;
+
   @override
   void initState() {
     super.initState();
@@ -82,9 +96,8 @@ class _DebugViewState extends State<DebugView> {
     _controller.addListener(_onSeedChanged);
     _blockHeightController.addListener(_onBlockHeightChanged);
 
-    KeysDerivedResponse.rustSignalStream.listen((signal) {
+    _keysDerivedSubscription = KeysDerivedResponse.rustSignalStream.listen((signal) {
       setState(() {
-        _isLoading = false;
         if (signal.message.success) {
           _derivedAddress = signal.message.address;
           _secretSpendKey = signal.message.secretSpendKey;
@@ -103,7 +116,7 @@ class _DebugViewState extends State<DebugView> {
       });
     });
 
-    SeedGeneratedResponse.rustSignalStream.listen((signal) {
+    _seedGeneratedSubscription = SeedGeneratedResponse.rustSignalStream.listen((signal) {
       if (signal.message.success) {
         setState(() {
           _controller.text = signal.message.seed;
@@ -118,7 +131,7 @@ class _DebugViewState extends State<DebugView> {
       }
     });
 
-    BlockScanResponse.rustSignalStream.listen((signal) {
+    _blockScanSubscription = BlockScanResponse.rustSignalStream.listen((signal) {
       setState(() {
         _isScanning = false;
         if (signal.message.success) {
@@ -144,15 +157,19 @@ class _DebugViewState extends State<DebugView> {
       });
     });
 
-    DaemonHeightResponse.rustSignalStream.listen((signal) {
+    _daemonHeightSubscription = DaemonHeightResponse.rustSignalStream.listen((signal) {
       if (signal.message.success) {
         setState(() {
           _daemonHeight = signal.message.daemonHeight.toInt();
         });
+      } else {
+        setState(() {
+          _scanError = signal.message.error ?? 'Failed to get daemon height';
+        });
       }
     });
 
-    TransactionCreatedResponse.rustSignalStream.listen((signal) {
+    _transactionCreatedSubscription = TransactionCreatedResponse.rustSignalStream.listen((signal) {
       setState(() {
         _isCreatingTx = false;
         if (signal.message.success) {
@@ -191,7 +208,7 @@ class _DebugViewState extends State<DebugView> {
       });
     });
 
-    TransactionBroadcastResponse.rustSignalStream.listen((signal) {
+    _transactionBroadcastSubscription = TransactionBroadcastResponse.rustSignalStream.listen((signal) {
       setState(() {
         _isBroadcasting = false;
         if (signal.message.success) {
@@ -233,7 +250,7 @@ class _DebugViewState extends State<DebugView> {
       });
     });
 
-    SyncProgressResponse.rustSignalStream.listen((signal) {
+    _syncProgressSubscription = SyncProgressResponse.rustSignalStream.listen((signal) {
       final wasSynced = _isSynced;
       final wasScanning = _isContinuousScanning;
       setState(() {
@@ -241,9 +258,7 @@ class _DebugViewState extends State<DebugView> {
         _continuousScanTargetHeight = signal.message.daemonHeight.toInt();
         _isSynced = signal.message.isSynced;
         _isContinuousScanning = signal.message.isScanning;
-        if (_isContinuousScanning) {
-          _isContinuousPaused = false;
-        } else if (_isSynced) {
+        if (_isContinuousScanning && !wasScanning) {
           _isContinuousPaused = false;
         }
         if (!_blockHeightFocusNode.hasFocus) {
@@ -262,7 +277,7 @@ class _DebugViewState extends State<DebugView> {
       }
     });
 
-    SpentStatusUpdatedResponse.rustSignalStream.listen((signal) {
+    _spentStatusUpdatedSubscription = SpentStatusUpdatedResponse.rustSignalStream.listen((signal) {
       setState(() {
         for (var keyImage in signal.message.spentKeyImages) {
           for (var output in _allOutputs) {
@@ -292,7 +307,7 @@ class _DebugViewState extends State<DebugView> {
       });
     });
 
-    MempoolScanResponse.rustSignalStream.listen((signal) {
+    _mempoolScanSubscription = MempoolScanResponse.rustSignalStream.listen((signal) {
       setState(() {
         _isScanningMempool = false;
         if (signal.message.success) {
@@ -397,19 +412,30 @@ class _DebugViewState extends State<DebugView> {
     _mempoolCountdown = 0;
   }
 
+  /// Normalizes a node URL by trimming whitespace and adding http:// if no scheme is present.
+  String _normalizeNodeUrl(String url) {
+    final trimmed = url.trim();
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      return trimmed;
+    }
+    return 'http://$trimmed';
+  }
+
   void _onBlockRefreshTimer() {
     debugPrint('[Dart] Block refresh timer fired');
     final seed = _controller.text.trim();
     if (seed.isEmpty) return;
 
+    final nodeUrl = _normalizeNodeUrl(_nodeUrlController.text);
+
     // Query daemon height - if higher than current, a scan will be triggered
     QueryDaemonHeightRequest(
-      nodeUrl: _nodeUrlController.text,
+      nodeUrl: nodeUrl,
     ).sendSignalToRust();
 
     // Start a continuous scan from current height to check for new blocks
     StartContinuousScanRequest(
-      nodeUrl: _nodeUrlController.text,
+      nodeUrl: nodeUrl,
       startHeight: Uint64(BigInt.from(_continuousScanCurrentHeight)),
       seed: seed,
       network: _network,
@@ -421,8 +447,10 @@ class _DebugViewState extends State<DebugView> {
     final seed = _controller.text.trim();
     if (seed.isEmpty) return;
 
+    final nodeUrl = _normalizeNodeUrl(_nodeUrlController.text);
+
     MempoolScanRequest(
-      nodeUrl: _nodeUrlController.text,
+      nodeUrl: nodeUrl,
       seed: seed,
       network: _network,
     ).sendSignalToRust();
@@ -430,6 +458,17 @@ class _DebugViewState extends State<DebugView> {
 
   @override
   void dispose() {
+    // Cancel stream subscriptions
+    _keysDerivedSubscription?.cancel();
+    _seedGeneratedSubscription?.cancel();
+    _blockScanSubscription?.cancel();
+    _daemonHeightSubscription?.cancel();
+    _transactionCreatedSubscription?.cancel();
+    _transactionBroadcastSubscription?.cancel();
+    _syncProgressSubscription?.cancel();
+    _spentStatusUpdatedSubscription?.cancel();
+    _mempoolScanSubscription?.cancel();
+
     _stopPollingTimers();
     _debounceTimer?.cancel();
     _controller.removeListener(_onSeedChanged);
@@ -520,10 +559,6 @@ class _DebugViewState extends State<DebugView> {
       });
       return;
     }
-
-    setState(() {
-      _isLoading = true;
-    });
 
     DeriveKeysRequest(
       seed: result.normalizedInput!,
@@ -865,11 +900,10 @@ class _DebugViewState extends State<DebugView> {
 
   int _getSelectedOutputsTotal() {
     int total = 0;
-    final currentHeight = _daemonHeight ?? _scanResult?.blockHeight.toInt() ?? 0;
     for (var output in _allOutputs) {
       if (output.spent) continue;
       final outputHeight = output.blockHeight.toInt();
-      final confirmations = outputHeight > 0 ? currentHeight - outputHeight : 0;
+      final confirmations = outputHeight > 0 ? _currentHeight - outputHeight : 0;
       if (confirmations < 10) continue;
       final outputKey = '${output.txHash}:${output.outputIndex}';
       if (_selectedOutputs.contains(outputKey)) {
@@ -1089,12 +1123,16 @@ class _DebugViewState extends State<DebugView> {
                           ),
                         );
                       },
-                      body: _derivedAddress == null
-                          ? const Padding(
+                      body: Builder(
+                        builder: (context) {
+                          final address = _derivedAddress;
+                          if (address == null) {
+                            return const Padding(
                               padding: EdgeInsets.all(16.0),
                               child: Text('Enter a seed phrase to view keys'),
-                            )
-                          : Column(
+                            );
+                          }
+                          return Column(
                               children: [
                                 Padding(
                                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -1110,13 +1148,13 @@ class _DebugViewState extends State<DebugView> {
                                         children: [
                                           Expanded(
                                             child: SelectableText(
-                                              _derivedAddress!,
+                                              address,
                                               style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
                                             ),
                                           ),
                                           IconButton(
                                             icon: const Icon(Icons.copy_outlined, size: 16),
-                                            onPressed: () => _copyToClipboard(_derivedAddress!, 'Address'),
+                                            onPressed: () => _copyToClipboard(address, 'Address'),
                                             tooltip: 'Copy address',
                                             padding: EdgeInsets.zero,
                                             constraints: const BoxConstraints(),
@@ -1132,7 +1170,9 @@ class _DebugViewState extends State<DebugView> {
                                 _buildKeyRow('Public Spend Key', _publicSpendKey ?? 'TODO'),
                                 _buildKeyRow('Public View Key', _publicViewKey ?? 'TODO'),
                               ],
-                            ),
+                            );
+                        },
+                      ),
                       isExpanded: _expandedPanel == 1,
                     ),
                     ExpansionPanel(
@@ -1425,8 +1465,7 @@ class _DebugViewState extends State<DebugView> {
                             final amount = double.tryParse(output.amountXmr) ?? 0;
                             totalBalance += amount;
                             final outputHeight = output.blockHeight.toInt();
-                            final currentHeight = _daemonHeight ?? _scanResult?.blockHeight.toInt() ?? outputHeight;
-                            final confirmations = outputHeight > 0 ? currentHeight - outputHeight : 0;
+                            final confirmations = outputHeight > 0 ? _currentHeight - outputHeight : 0;
                             if (confirmations >= 10) {
                               unlockedBalance += amount;
                               spendableCount++;
@@ -1523,10 +1562,8 @@ class _DebugViewState extends State<DebugView> {
                                   ),
                                   ..._sortedOutputs().map((output) {
                                   final outputHeight = output.blockHeight.toInt();
-                                  // Use daemon height if available, otherwise fall back to scanned block height
-                                  final currentHeight = _daemonHeight ?? _scanResult?.blockHeight.toInt() ?? outputHeight;
                                   final confirmations = outputHeight > 0
-                                      ? currentHeight - outputHeight
+                                      ? _currentHeight - outputHeight
                                       : 0;
                                   final isSpendable = confirmations >= 10 && !output.spent;
                                   final statusColor = output.spent
@@ -1770,7 +1807,7 @@ class _DebugViewState extends State<DebugView> {
                                     _buildScanResultRow('TX ID', _txResult!.txId),
                                     _buildScanResultRow('Fee', '${(_txResult!.fee.toInt() / 1e12).toStringAsFixed(12)} XMR'),
                                     if (_txResult!.txBlob != null)
-                                      _buildScanResultRow('TX Blob', _txResult!.txBlob!.substring(0, 64) + '...'),
+                                      _buildScanResultRow('TX Blob', '${_txResult!.txBlob!.substring(0, 64)}...'),
                                     const SizedBox(height: 12),
                                     ElevatedButton.icon(
                                       onPressed: _isBroadcasting ? null : _broadcastTransaction,
@@ -1973,13 +2010,12 @@ class _DebugViewState extends State<DebugView> {
 
   List<OwnedOutput> _sortedOutputs() {
     final filtered = _allOutputs.where((o) => _showSpentOutputs || !o.spent).toList();
-    final currentHeight = _daemonHeight ?? _scanResult?.blockHeight.toInt() ?? 0;
 
     filtered.sort((a, b) {
       int comparison;
       if (_sortBy == 'confirms') {
-        final aConf = currentHeight - a.blockHeight.toInt();
-        final bConf = currentHeight - b.blockHeight.toInt();
+        final aConf = _currentHeight - a.blockHeight.toInt();
+        final bConf = _currentHeight - b.blockHeight.toInt();
         comparison = aConf.compareTo(bConf);
       } else {
         comparison = a.amount.toInt().compareTo(b.amount.toInt());
@@ -2009,12 +2045,11 @@ class _DebugViewState extends State<DebugView> {
   }
 
   void _selectAllSpendable() {
-    final currentHeight = _daemonHeight ?? _scanResult?.blockHeight.toInt() ?? 0;
     setState(() {
       for (var output in _allOutputs) {
         if (output.spent) continue;
         final outputHeight = output.blockHeight.toInt();
-        final confirmations = outputHeight > 0 ? currentHeight - outputHeight : 0;
+        final confirmations = outputHeight > 0 ? _currentHeight - outputHeight : 0;
         if (confirmations >= 10) {
           final outputKey = '${output.txHash}:${output.outputIndex}';
           _selectedOutputs.add(outputKey);
