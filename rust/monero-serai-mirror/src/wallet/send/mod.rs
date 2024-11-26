@@ -227,6 +227,8 @@ pub(crate) enum InternalPayment {
 pub struct Eventuality {
   protocol: Protocol,
   r_seed: Zeroizing<[u8; 32]>,
+  tx_key: Zeroizing<Scalar>,
+  tx_key_additional: Vec<Zeroizing<Scalar>>,
   inputs: Vec<EdwardsPoint>,
   payments: Vec<InternalPayment>,
   extra: Vec<u8>,
@@ -397,7 +399,7 @@ impl SignableTransaction {
     inputs: &[EdwardsPoint],
     payments: &mut Vec<InternalPayment>,
     uniqueness: [u8; 32],
-  ) -> (EdwardsPoint, Vec<Zeroizing<Scalar>>, Vec<SendOutput>, Option<[u8; 8]>) {
+  ) -> (EdwardsPoint, Vec<SendOutput>, Option<[u8; 8]>, Zeroizing<Scalar>, Vec<Zeroizing<Scalar>>) {
     let mut rng = {
       // Hash the inputs into the seed so we don't re-use Rs
       // Doesn't re-use uniqueness as that's based on key images, which requires interactivity
@@ -523,7 +525,7 @@ impl SignableTransaction {
       id = id.or(Some(rand));
     }
 
-    (tx_public_key, additional_keys, outputs, id)
+    (tx_public_key, outputs, id, tx_key, additional_keys)
   }
 
   #[allow(non_snake_case)]
@@ -564,7 +566,7 @@ impl SignableTransaction {
   /// if the transaction has already been signed and published.
   pub fn eventuality(&self) -> Option<Eventuality> {
     let inputs = self.inputs.iter().map(|input| input.key()).collect::<Vec<_>>();
-    let (tx_key, additional, outputs, id) = Self::prepare_payments(
+    let (tx_public_key, outputs, id, tx_key, tx_key_additional) = Self::prepare_payments(
       self.r_seed.as_ref()?,
       &inputs,
       &mut self.payments.clone(),
@@ -577,12 +579,14 @@ impl SignableTransaction {
     let Rs = outputs.iter().map(|output| output.R).collect();
     drop(outputs);
 
-    let additional = !additional.is_empty();
-    let extra = Self::extra(tx_key, additional, Rs, id, &mut self.data.clone());
+    let additional = !tx_key_additional.is_empty();
+    let extra = Self::extra(tx_public_key, additional, Rs, id, &mut self.data.clone());
 
     Some(Eventuality {
       protocol: self.protocol,
       r_seed: self.r_seed.clone()?,
+      tx_key,
+      tx_key_additional,
       inputs,
       payments: self.payments.clone(),
       extra,
@@ -601,14 +605,14 @@ impl SignableTransaction {
       res
     });
 
-    let (tx_key, additional, outputs, id) = Self::prepare_payments(
+    let (tx_public_key, outputs, id, _tx_key, tx_key_additional) = Self::prepare_payments(
       &r_seed,
       &self.inputs.iter().map(|input| input.key()).collect::<Vec<_>>(),
       &mut self.payments,
       uniqueness,
     );
     // This function only cares if additional keys were necessary, not what they were
-    let additional = !additional.is_empty();
+    let additional = !tx_key_additional.is_empty();
 
     let commitments = outputs.iter().map(|output| output.commitment.clone()).collect::<Vec<_>>();
     let sum = commitments.iter().map(|commitment| commitment.mask).sum();
@@ -618,7 +622,7 @@ impl SignableTransaction {
 
     // Create the TX extra
     let extra = Self::extra(
-      tx_key,
+      tx_public_key,
       additional,
       outputs.iter().map(|output| output.R).collect(),
       id,
@@ -719,6 +723,16 @@ impl Eventuality {
     &self.extra
   }
 
+  /// Returns the private transaction key (r scalar).
+  pub fn tx_key(&self) -> &Scalar {
+    &self.tx_key
+  }
+
+  /// Returns additional private keys for subaddress outputs.
+  pub fn tx_key_additional(&self) -> &[Zeroizing<Scalar>] {
+    &self.tx_key_additional
+  }
+
   pub fn matches(&self, tx: &Transaction) -> bool {
     if self.payments.len() != tx.prefix.outputs.len() {
       return false;
@@ -738,7 +752,7 @@ impl Eventuality {
     }
 
     // Generate the outputs. This is TX-specific due to uniqueness.
-    let (_, _, outputs, _) = SignableTransaction::prepare_payments(
+    let (_, outputs, _, _, _) = SignableTransaction::prepare_payments(
       &self.r_seed,
       &self.inputs,
       &mut self.payments.clone(),
@@ -765,6 +779,11 @@ impl Eventuality {
   pub fn write<W: io::Write>(&self, w: &mut W) -> io::Result<()> {
     self.protocol.write(w)?;
     write_raw_vec(write_byte, self.r_seed.as_ref(), w)?;
+    write_scalar(&self.tx_key, w)?;
+    fn write_zeroizing_scalar<W: io::Write>(scalar: &Zeroizing<Scalar>, w: &mut W) -> io::Result<()> {
+      write_scalar(scalar, w)
+    }
+    write_vec(write_zeroizing_scalar, &self.tx_key_additional, w)?;
     write_vec(write_point, &self.inputs, w)?;
 
     fn write_payment<W: io::Write>(payment: &InternalPayment, w: &mut W) -> io::Result<()> {
@@ -824,9 +843,15 @@ impl Eventuality {
       })
     }
 
+    fn read_zeroizing_scalar<R: io::Read>(r: &mut R) -> io::Result<Zeroizing<Scalar>> {
+      Ok(Zeroizing::new(read_scalar(r)?))
+    }
+
     Ok(Eventuality {
       protocol: Protocol::read(r)?,
       r_seed: Zeroizing::new(read_bytes::<_, 32>(r)?),
+      tx_key: Zeroizing::new(read_scalar(r)?),
+      tx_key_additional: read_vec(read_zeroizing_scalar, r)?,
       inputs: read_vec(read_point, r)?,
       payments: read_vec(read_payment, r)?,
       extra: read_vec(read_byte, r)?,
