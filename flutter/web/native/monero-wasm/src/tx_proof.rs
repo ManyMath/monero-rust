@@ -228,6 +228,13 @@ pub fn verify_out_proof_v2(
     Ok(true)
 }
 
+// TODO: Add deterministic OutProofV2 test using a monero-wallet-cli test 
+// vector.  Generate a proof with `get_tx_proof` in monero-wallet-cli, then 
+// verify our implementation produces the same signature given the same inputs 
+// and nonce (k):
+// - Make the random k deterministic via a seeded RNG for testing
+// - Verify our proof against monero-wallet-cli's `check_tx_proof`
+
 #[cfg(test)]
 mod tests {
     use super::*;
