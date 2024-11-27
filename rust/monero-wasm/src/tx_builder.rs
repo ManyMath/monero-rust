@@ -13,6 +13,7 @@ pub mod native {
             ViewPair, Fee,
         },
     };
+    use rand_core::RngCore;
 
     #[cfg(not(target_arch = "wasm32"))]
     use monero_serai::rpc::HttpRpc;
@@ -30,7 +31,11 @@ pub mod native {
         pub tx_id: String,
         pub fee: u64,
         pub tx_blob: String,
+        /// The private transaction key (r scalar), hex-encoded.
+        /// This key is required to prove payments to recipients.
         pub tx_key: String,
+        /// Additional private keys for subaddress outputs, hex-encoded.
+        pub tx_key_additional: Vec<String>,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -378,6 +383,12 @@ pub mod native {
 
         let mut builder = SignableTransactionBuilder::new(protocol, fee, Some(change));
 
+        // Generate and set r_seed so we can access the eventuality (and tx_key)
+        let mut rng = rand::rngs::OsRng;
+        let mut r_seed = Zeroizing::new([0u8; 32]);
+        rng.fill_bytes(r_seed.as_mut());
+        builder.set_r_seed(r_seed);
+
         for output in spendable_outputs {
             builder.add_input(output);
         }
@@ -390,7 +401,15 @@ pub mod native {
 
         let fee_amount = signable.fee();
 
-        let mut rng = rand::rngs::OsRng;
+        // Get the eventuality to extract the private tx_key before signing
+        let eventuality = signable.eventuality()
+            .ok_or_else(|| "Failed to get eventuality (r_seed not set)".to_string())?;
+        let tx_key = hex::encode(eventuality.tx_key().to_bytes());
+        let tx_key_additional: Vec<String> = eventuality.tx_key_additional()
+            .iter()
+            .map(|k| hex::encode(k.to_bytes()))
+            .collect();
+
         let tx = signable
             .sign(&mut rng, &rpc, &Zeroizing::new(spend_key))
             .await
@@ -399,13 +418,12 @@ pub mod native {
         let tx_id = hex::encode(tx.hash());
         let tx_blob = hex::encode(tx.serialize());
 
-        let tx_key = "0".repeat(64);
-
         Ok(TransactionResult {
             tx_id,
             fee: fee_amount,
             tx_blob,
             tx_key,
+            tx_key_additional,
         })
     }
 

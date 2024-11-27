@@ -21,6 +21,7 @@ pub mod rpc_serai;
 pub mod scanner_native;
 
 pub mod tx_builder;
+pub mod tx_proof;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use scanner_native::scan_block_for_outputs_with_url;

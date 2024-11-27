@@ -724,6 +724,7 @@ impl Eventuality {
   }
 
   /// Returns the private transaction key (r scalar).
+  /// This key is required to prove payments to recipients.
   pub fn tx_key(&self) -> &Scalar {
     &self.tx_key
   }

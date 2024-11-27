@@ -76,6 +76,11 @@ pub struct TransactionCreatedResponse {
     pub tx_id: String,
     pub fee: u64,
     pub tx_blob: Option<String>,
+    /// The private transaction key (r scalar), hex-encoded.
+    /// Required to prove payments to recipients.
+    pub tx_key: Option<String>,
+    /// Additional private keys for subaddress outputs, hex-encoded.
+    pub tx_key_additional: Vec<String>,
     pub spent_output_hashes: Vec<String>,
     pub change_outputs: Vec<ChangeOutput>,
 }
@@ -214,4 +219,23 @@ pub struct MempoolScanResponse {
     pub tx_count: u32,
     pub outputs: Vec<OwnedOutput>,
     pub spent_key_images: Vec<String>,
+}
+
+#[derive(Deserialize, DartSignal)]
+pub struct GenerateOutProofRequest {
+    pub tx_id: String,
+    pub tx_key: String,
+    pub recipient_address: String,
+    pub message: String,
+    pub network: String,
+}
+
+#[derive(Serialize, RustSignal)]
+pub struct OutProofGeneratedResponse {
+    pub success: bool,
+    pub error: Option<String>,
+    /// The OutProofV2 signature string (e.g., "OutProofV2...")
+    pub signature: Option<String>,
+    /// Feather-style formatted proof with headers
+    pub formatted: Option<String>,
 }

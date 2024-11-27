@@ -18,7 +18,8 @@ impl TxBuilderActor {
     pub fn new(self_addr: Address<Self>) -> Self {
         let mut _owned_tasks = JoinSet::new();
         _owned_tasks.spawn(Self::listen_to_tx_requests(self_addr.clone()));
-        _owned_tasks.spawn(Self::listen_to_broadcast_requests(self_addr));
+        _owned_tasks.spawn(Self::listen_to_broadcast_requests(self_addr.clone()));
+        _owned_tasks.spawn(Self::listen_to_proof_requests(self_addr));
 
         TxBuilderActor {
             wallet_actor: None,
@@ -66,6 +67,41 @@ impl TxBuilderActor {
                 tx_blob: request.tx_blob,
                 spent_output_hashes: request.spent_output_hashes,
             }).await;
+        }
+    }
+
+    async fn listen_to_proof_requests(_self_addr: Address<Self>) {
+        let receiver = GenerateOutProofRequest::get_dart_signal_receiver();
+        while let Some(signal_pack) = receiver.recv().await {
+            let request = signal_pack.message;
+
+            // Generate the proof (network is passed as string)
+            match monero_wasm::tx_proof::generate_out_proof_v2(
+                &request.tx_id,
+                &request.tx_key,
+                &request.recipient_address,
+                &request.message,
+                &request.network,
+            ) {
+                Ok(result) => {
+                    OutProofGeneratedResponse {
+                        success: true,
+                        error: None,
+                        signature: Some(result.signature),
+                        formatted: Some(result.formatted),
+                    }
+                    .send_signal_to_dart();
+                }
+                Err(e) => {
+                    OutProofGeneratedResponse {
+                        success: false,
+                        error: Some(e),
+                        signature: None,
+                        formatted: None,
+                    }
+                    .send_signal_to_dart();
+                }
+            }
         }
     }
 }
@@ -120,6 +156,8 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                             tx_id: String::new(),
                             fee: 0,
                             tx_blob: None,
+                            tx_key: None,
+                            tx_key_additional: Vec::new(),
                             spent_output_hashes: Vec::new(),
                             change_outputs: Vec::new(),
                         }
@@ -142,7 +180,7 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                     let build_fut = self.build_transaction_impl_inner(msg, wallet_data_filtered);
                     wasm_bindgen_futures::spawn_local(async move {
                         match build_fut.await {
-                            Ok((tx_id, fee, tx_blob, change_outputs)) => {
+                            Ok((tx_id, fee, tx_blob, tx_key, tx_key_additional, change_outputs)) => {
                                 #[cfg(target_arch = "wasm32")]
                                 web_sys::console::log_1(&format!("Transaction created successfully! TX ID: {}, Fee: {}, Change outputs: {}", tx_id, fee, change_outputs.len()).into());
 
@@ -152,6 +190,8 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                                     tx_id,
                                     fee,
                                     tx_blob: Some(tx_blob),
+                                    tx_key: Some(tx_key),
+                                    tx_key_additional,
                                     spent_output_hashes: spent_hashes,
                                     change_outputs,
                                 }
@@ -167,6 +207,8 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                                     tx_id: String::new(),
                                     fee: 0,
                                     tx_blob: None,
+                                    tx_key: None,
+                                    tx_key_additional: Vec::new(),
                                     spent_output_hashes: Vec::new(),
                                     change_outputs: Vec::new(),
                                 }
@@ -182,6 +224,8 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                         tx_id: String::new(),
                         fee: 0,
                         tx_blob: None,
+                        tx_key: None,
+                        tx_key_additional: Vec::new(),
                         spent_output_hashes: Vec::new(),
                         change_outputs: Vec::new(),
                     }
@@ -195,6 +239,8 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                 tx_id: String::new(),
                 fee: 0,
                 tx_blob: None,
+                tx_key: None,
+                tx_key_additional: Vec::new(),
                 spent_output_hashes: Vec::new(),
                 change_outputs: Vec::new(),
             }
@@ -208,7 +254,7 @@ impl TxBuilderActor {
         &self,
         msg: BuildTransaction,
         wallet_data: WalletData,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(String, u64, String, Vec<ChangeOutput>), String>>>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(String, u64, String, String, Vec<String>, Vec<ChangeOutput>), String>>>> {
         use monero_wasm::native::{create_transaction, TransactionResult};
 
         let outputs_vec: Vec<monero_wasm::native::StoredOutputData> = wallet_data
@@ -254,7 +300,7 @@ impl TxBuilderActor {
                 })
                 .collect();
 
-            Ok((result.tx_id, result.fee, result.tx_blob, change_outputs))
+            Ok((result.tx_id, result.fee, result.tx_blob, result.tx_key, result.tx_key_additional, change_outputs))
         })
     }
 }
