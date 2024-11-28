@@ -4,6 +4,7 @@
 mod actors;
 mod signals;
 mod messages;
+mod encryption;
 
 use actors::create_actors;
 use rinf::{dart_shutdown, write_interface};
