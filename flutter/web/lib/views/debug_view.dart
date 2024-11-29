@@ -20,6 +20,10 @@ class _DebugViewState extends State<DebugView> {
   final _blockHeightFocusNode = FocusNode();
   bool _blockHeightUserEdited = false;
 
+  // Current wallet ID (multi-wallet support)
+  String _walletId = 'default_wallet';
+  List<String> _availableWalletIds = [];
+
   String _network = 'stagenet';
   final String _seedType = '25 word';
   String? _validationError;
@@ -64,6 +68,17 @@ class _DebugViewState extends State<DebugView> {
   Set<String> _selectedOutputs = {}; // "txHash:outputIndex" keys for coin control
 
   bool _isScanningMempool = false;
+
+  // File management state
+  final _storageService = WalletStorageService();
+  bool _isSaving = false;
+  bool _isLoadingWallet = false;
+  String? _saveError;
+  String? _loadError;
+  String? _lastSaveTime;
+
+  // Helper to get storage key for current wallet
+  String get _storageKey => 'monero_wallet_$_walletId';
 
   // Polling timers (managed in Dart)
   Timer? _blockRefreshTimer;
@@ -363,6 +378,9 @@ class _DebugViewState extends State<DebugView> {
         }
       });
     });
+
+    // Load available wallets from localStorage
+    _refreshAvailableWallets();
   }
 
   void _startPollingTimers() {
@@ -1289,10 +1307,253 @@ class _DebugViewState extends State<DebugView> {
                     ),
                     ExpansionPanel(
                       headerBuilder: (BuildContext context, bool isExpanded) {
+                        final hasData = html.window.localStorage.containsKey(_storageKey);
                         return GestureDetector(
                           onTap: () {
                             setState(() {
                               _expandedPanel = (_expandedPanel == 1) ? null : 1;
+                            });
+                          },
+                          child: ListTile(
+                            title: const Text(
+                              'File Management',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            subtitle: Text(
+                              hasData ? 'Wallet data stored' : 'No stored data',
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          ),
+                        );
+                      },
+                      body: Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            // Wallet Switcher
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.grey.shade100,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: Colors.grey.shade300),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Icon(Icons.account_balance_wallet, color: Colors.grey.shade700, size: 20),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        'Active Wallet',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.grey.shade900,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: DropdownButtonFormField<String>(
+                                          value: _walletId,
+                                          decoration: const InputDecoration(
+                                            labelText: 'Select Wallet',
+                                            border: OutlineInputBorder(),
+                                            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                          ),
+                                          items: _availableWalletIds.map((id) {
+                                            final hasData = html.window.localStorage.containsKey('monero_wallet_$id');
+                                            return DropdownMenuItem(
+                                              value: id,
+                                              child: Row(
+                                                children: [
+                                                  Text(id),
+                                                  if (hasData) ...[
+                                                    const SizedBox(width: 8),
+                                                    Icon(Icons.check_circle, size: 16, color: Colors.green.shade600),
+                                                  ],
+                                                ],
+                                              ),
+                                            );
+                                          }).toList(),
+                                          onChanged: (newId) {
+                                            if (newId != null) {
+                                              _switchWallet(newId);
+                                            }
+                                          },
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      IconButton(
+                                        onPressed: _createNewWallet,
+                                        icon: const Icon(Icons.add_circle),
+                                        tooltip: 'Create New Wallet',
+                                        color: Colors.blue,
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            if (html.window.localStorage.containsKey(_storageKey)) ...[
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.blue.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: Colors.blue.shade200),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Icon(Icons.storage, color: Colors.blue.shade700, size: 20),
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          'Encrypted wallet data found',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.blue.shade900,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    if (_lastSaveTime != null) ...[
+                                      const SizedBox(height: 8),
+                                      Text(
+                                        'Last saved: $_lastSaveTime',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.blue.shade700,
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              ElevatedButton.icon(
+                                onPressed: _isLoadingWallet ? null : _loadWalletData,
+                                icon: _isLoadingWallet
+                                    ? const SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(strokeWidth: 2),
+                                      )
+                                    : const Icon(Icons.folder_open),
+                                label: Text(_isLoadingWallet ? 'Loading...' : 'Load Wallet Data'),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.green,
+                                  foregroundColor: Colors.white,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              OutlinedButton.icon(
+                                onPressed: _clearStoredData,
+                                icon: const Icon(Icons.delete_outline),
+                                label: const Text('Clear Stored Data'),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: Colors.red,
+                                ),
+                              ),
+                            ] else ...[
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.grey.shade100,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: Colors.grey.shade300),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Icon(Icons.info_outline, color: Colors.grey.shade700, size: 20),
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          'No wallet data stored',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.grey.shade900,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      'Save your wallet data to restore it when you reopen the extension. Your data will be encrypted with a password.',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey.shade700,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 12),
+                            const Divider(),
+                            const SizedBox(height: 12),
+                            ElevatedButton.icon(
+                              onPressed: _isSaving ? null : _saveWalletData,
+                              icon: _isSaving
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(strokeWidth: 2),
+                                    )
+                                  : const Icon(Icons.save),
+                              label: Text(_isSaving ? 'Saving...' : 'Save Wallet Data'),
+                            ),
+                            if (_saveError != null) ...[
+                              const SizedBox(height: 12),
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: Colors.red.shade50,
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(color: Colors.red.shade200),
+                                ),
+                                child: Text(
+                                  _saveError!,
+                                  style: TextStyle(color: Colors.red.shade900, fontSize: 12),
+                                ),
+                              ),
+                            ],
+                            if (_loadError != null) ...[
+                              const SizedBox(height: 12),
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: Colors.red.shade50,
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(color: Colors.red.shade200),
+                                ),
+                                child: Text(
+                                  _loadError!,
+                                  style: TextStyle(color: Colors.red.shade900, fontSize: 12),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      isExpanded: _expandedPanel == 1,
+                    ),
+                    ExpansionPanel(
+                      headerBuilder: (BuildContext context, bool isExpanded) {
+                        return GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              _expandedPanel = (_expandedPanel == 2) ? null : 2;
                             });
                           },
                           child: const ListTile(
@@ -2255,4 +2516,555 @@ class _DebugViewState extends State<DebugView> {
     });
   }
 
+  Future<void> _saveWalletData() async {
+    setState(() {
+      _isSaving = true;
+      _saveError = null;
+    });
+
+    // Show password dialog
+    final password = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const PasswordDialog(
+        isUnlock: false,
+        title: 'Encrypt Wallet Data',
+        submitLabel: 'Save',
+      ),
+    );
+
+    if (password == null) {
+      setState(() {
+        _isSaving = false;
+      });
+      return;
+    }
+
+    // Warn if password is empty
+    if (password.isEmpty) {
+      final proceed = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          icon: const Icon(Icons.warning, color: Colors.orange, size: 48),
+          title: const Text('⚠️ Security Warning'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'You are about to save your wallet data WITHOUT a password.',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.red.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.red.shade300, width: 2),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.dangerous, color: Colors.red.shade700, size: 20),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'YOUR FUNDS ARE AT RISK',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.red.shade900,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Anyone with access to your browser can steal your wallet seed and all your Monero.',
+                      style: TextStyle(color: Colors.red.shade900, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'It is STRONGLY RECOMMENDED to use a password.',
+                style: TextStyle(fontSize: 13),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              style: TextButton.styleFrom(
+                backgroundColor: Colors.green.shade100,
+                foregroundColor: Colors.green.shade900,
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              ),
+              child: const Text(
+                'Cancel (Recommended)',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Save Anyway (Unsafe)'),
+            ),
+          ],
+        ),
+      );
+
+      if (proceed != true) {
+        setState(() {
+          _isSaving = false;
+        });
+        return;
+      }
+    }
+
+    // Prepare wallet data to save
+    final walletData = {
+      'version': 1,
+      'walletId': _walletId,
+      'seed': _controller.text.trim(),
+      'network': _network,
+      'address': _derivedAddress,
+      'outputs': _allOutputs.map((o) => {
+        'txHash': o.txHash,
+        'outputIndex': o.outputIndex,
+        'amount': o.amount.toString(),
+        'amountXmr': o.amountXmr,
+        'key': o.key,
+        'keyOffset': o.keyOffset,
+        'commitmentMask': o.commitmentMask,
+        'subaddressIndex': o.subaddressIndex != null
+            ? [o.subaddressIndex!.item1, o.subaddressIndex!.item2]
+            : null,
+        'paymentId': o.paymentId,
+        'receivedOutputBytes': o.receivedOutputBytes,
+        'blockHeight': o.blockHeight.toString(),
+        'spent': o.spent,
+        'keyImage': o.keyImage,
+      }).toList(),
+      'scanState': {
+        'isContinuousScanning': _isContinuousScanning,
+        'isContinuousPaused': _isContinuousPaused,
+        'continuousScanCurrentHeight': _continuousScanCurrentHeight,
+        'continuousScanTargetHeight': _continuousScanTargetHeight,
+        'isSynced': _isSynced,
+        'daemonHeight': _daemonHeight,
+      },
+      'selectedOutputs': _selectedOutputs.toList(),
+      'nodeUrl': _nodeUrlController.text,
+    };
+
+    final jsonString = jsonEncode(walletData);
+
+    // Wait for encrypted response
+    final completer = Completer<bool>();
+    final subscription = WalletDataSavedResponse.rustSignalStream.listen((signal) {
+      debugPrint('[SAVE] Received save response - success: ${signal.message.success}');
+      if (!completer.isCompleted) {
+        if (signal.message.success && signal.message.encryptedData != null) {
+          // Store the encrypted data to localStorage with wallet-specific key
+          debugPrint('[SAVE] Storing encrypted data to localStorage key: $_storageKey (${signal.message.encryptedData!.length} chars)');
+          html.window.localStorage[_storageKey] = signal.message.encryptedData!;
+          // Also store the active wallet ID
+          html.window.localStorage['monero_active_wallet'] = _walletId;
+          debugPrint('[SAVE] Data successfully written to localStorage for wallet: $_walletId');
+          completer.complete(true);
+        } else {
+          debugPrint('[SAVE] Failed - no encrypted data in response');
+          completer.complete(false);
+        }
+      }
+    });
+
+    // Send save request
+    debugPrint('[SAVE] Sending SaveWalletDataRequest to Rust...');
+    SaveWalletDataRequest(
+      password: password,
+      walletDataJson: jsonString,
+    ).sendSignalToRust();
+
+    final success = await completer.future.timeout(
+      const Duration(seconds: 10),
+      onTimeout: () {
+        debugPrint('[SAVE] Timeout waiting for save response');
+        return false;
+      },
+    );
+
+    await subscription.cancel();
+
+    setState(() {
+      _isSaving = false;
+      if (success) {
+        _saveError = null;
+        _lastSaveTime = DateTime.now().toString().substring(0, 19);
+        debugPrint('[SAVE] Save completed successfully');
+      } else {
+        _saveError = 'Failed to save wallet data';
+        debugPrint('[SAVE] Save failed with error: $_saveError');
+      }
+    });
+
+    if (success && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Wallet data saved successfully'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    } else if (!success && mounted) {
+      debugPrint('[SAVE] Showing error snackbar');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Save failed: $_saveError'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  /// Scan localStorage for all available wallet IDs
+  void _refreshAvailableWallets() {
+    debugPrint('[WALLET] Scanning localStorage for available wallets...');
+    final walletIds = <String>[];
+
+    // Scan all localStorage keys
+    for (var i = 0; i < html.window.localStorage.length; i++) {
+      final key = html.window.localStorage.keys.elementAt(i);
+      if (key.startsWith('monero_wallet_')) {
+        final walletId = key.substring('monero_wallet_'.length);
+        walletIds.add(walletId);
+      }
+    }
+
+    // Ensure current wallet is in the list even if no data saved yet
+    if (!walletIds.contains(_walletId)) {
+      walletIds.insert(0, _walletId);
+    }
+
+    walletIds.sort();
+
+    setState(() {
+      _availableWalletIds = walletIds;
+    });
+
+    debugPrint('[WALLET] Found ${walletIds.length} wallets: ${walletIds.join(', ')}');
+  }
+
+  /// Switch to a different wallet
+  Future<void> _switchWallet(String newWalletId) async {
+    if (newWalletId == _walletId) {
+      debugPrint('[WALLET] Already on wallet: $newWalletId');
+      return;
+    }
+
+    debugPrint('[WALLET] Switching from $_walletId to $newWalletId');
+
+    // Clear current state
+    setState(() {
+      _walletId = newWalletId;
+      _controller.text = '';
+      _derivedAddress = null;
+      _secretSpendKey = null;
+      _secretViewKey = null;
+      _publicSpendKey = null;
+      _publicViewKey = null;
+      _allOutputs = [];
+      _selectedOutputs = {};
+      _isContinuousScanning = false;
+      _isContinuousPaused = false;
+      _continuousScanCurrentHeight = 0;
+      _continuousScanTargetHeight = 0;
+      _isSynced = false;
+      _daemonHeight = null;
+      _scanResult = null;
+      _scanError = null;
+      _txResult = null;
+      _txError = null;
+      _broadcastResult = null;
+      _broadcastError = null;
+      _lastSaveTime = null;
+      _loadError = null;
+      _saveError = null;
+    });
+
+    // Refresh available wallets
+    _refreshAvailableWallets();
+
+    // Auto-load if wallet has saved data
+    if (html.window.localStorage.containsKey(_storageKey)) {
+      debugPrint('[WALLET] Wallet $newWalletId has saved data, auto-loading...');
+      await _loadWalletData();
+    }
+  }
+
+  /// Create a new wallet with custom ID
+  Future<void> _createNewWallet() async {
+    final controller = TextEditingController();
+
+    final walletId = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Create New Wallet'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text('Enter a unique ID for your new wallet:'),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: 'Wallet ID',
+                hintText: 'e.g., my_savings, trading_account',
+                border: OutlineInputBorder(),
+              ),
+              onSubmitted: (value) {
+                if (value.trim().isNotEmpty) {
+                  Navigator.of(context).pop(value.trim());
+                }
+              },
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(null),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final value = controller.text.trim();
+              if (value.isNotEmpty) {
+                Navigator.of(context).pop(value);
+              }
+            },
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+
+    if (walletId != null && walletId.isNotEmpty) {
+      // Check if wallet ID already exists
+      if (_availableWalletIds.contains(walletId)) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Wallet "$walletId" already exists'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+
+      // Switch to new wallet
+      await _switchWallet(walletId);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Created new wallet: $walletId'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _loadWalletData() async {
+    setState(() {
+      _isLoadingWallet = true;
+      _loadError = null;
+    });
+
+    // Show password dialog
+    final password = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const PasswordDialog(
+        isUnlock: true,
+        title: 'Unlock Wallet Data',
+        submitLabel: 'Unlock',
+      ),
+    );
+
+    if (password == null) {
+      setState(() {
+        _isLoadingWallet = false;
+      });
+      return;
+    }
+
+    // Get encrypted data from storage for this wallet
+    debugPrint('[LOAD] Looking for wallet data at key: $_storageKey');
+    final encryptedData = html.window.localStorage[_storageKey];
+    if (encryptedData == null) {
+      setState(() {
+        _isLoadingWallet = false;
+        _loadError = 'No stored wallet data found for wallet: $_walletId';
+      });
+      debugPrint('[LOAD] No data found at key: $_storageKey');
+      return;
+    }
+    debugPrint('[LOAD] Found encrypted data (${encryptedData.length} chars)');
+
+    // Wait for decrypted response
+    final completer = Completer<String?>();
+    final subscription = WalletDataLoadedResponse.rustSignalStream.listen((signal) {
+      if (!completer.isCompleted) {
+        if (signal.message.success && signal.message.walletDataJson != null) {
+          completer.complete(signal.message.walletDataJson);
+        } else {
+          completer.complete(null);
+        }
+      }
+    });
+
+    // Send load request
+    LoadWalletDataRequest(
+      password: password,
+      encryptedData: encryptedData,
+    ).sendSignalToRust();
+
+    final jsonString = await completer.future.timeout(
+      const Duration(seconds: 10),
+      onTimeout: () => null,
+    );
+
+    await subscription.cancel();
+
+    if (jsonString == null) {
+      setState(() {
+        _isLoadingWallet = false;
+        _loadError = 'Failed to decrypt wallet data (wrong password?)';
+      });
+      return;
+    }
+
+    try {
+      final walletData = jsonDecode(jsonString) as Map<String, dynamic>;
+
+      // Restore wallet state
+      setState(() {
+        // Restore seed and network
+        _controller.text = walletData['seed'] as String? ?? '';
+        _network = walletData['network'] as String? ?? 'stagenet';
+        _derivedAddress = walletData['address'] as String?;
+        _nodeUrlController.text = walletData['nodeUrl'] as String? ?? 'http://127.0.0.1:38081';
+
+        // Restore outputs
+        _allOutputs = (walletData['outputs'] as List).map((o) {
+          final outputData = o as Map<String, dynamic>;
+          return OwnedOutput(
+            txHash: outputData['txHash'] as String,
+            outputIndex: outputData['outputIndex'] as int,
+            amount: Uint64(BigInt.parse(outputData['amount'] as String)),
+            amountXmr: outputData['amountXmr'] as String,
+            key: outputData['key'] as String,
+            keyOffset: outputData['keyOffset'] as String,
+            commitmentMask: outputData['commitmentMask'] as String,
+            subaddressIndex: outputData['subaddressIndex'] != null
+                ? Tuple2<int, int>(
+                    outputData['subaddressIndex'][0] as int,
+                    outputData['subaddressIndex'][1] as int,
+                  )
+                : null,
+            paymentId: outputData['paymentId'] as String?,
+            receivedOutputBytes: outputData['receivedOutputBytes'] as String,
+            blockHeight: Uint64(BigInt.parse(outputData['blockHeight'] as String)),
+            spent: outputData['spent'] as bool,
+            keyImage: outputData['keyImage'] as String,
+          );
+        }).toList();
+
+        // Restore scan state
+        final scanState = walletData['scanState'] as Map<String, dynamic>;
+        _isContinuousScanning = scanState['isContinuousScanning'] as bool;
+        _isContinuousPaused = scanState['isContinuousPaused'] as bool;
+        _continuousScanCurrentHeight = scanState['continuousScanCurrentHeight'] as int;
+        _continuousScanTargetHeight = scanState['continuousScanTargetHeight'] as int;
+        _isSynced = scanState['isSynced'] as bool;
+        _daemonHeight = scanState['daemonHeight'] as int?;
+
+        // Restore selected outputs
+        _selectedOutputs = Set<String>.from(walletData['selectedOutputs'] as List);
+
+        _isLoadingWallet = false;
+        _loadError = null;
+      });
+
+      // Derive address to populate keys
+      _deriveAddress();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Wallet data loaded successfully'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      setState(() {
+        _isLoadingWallet = false;
+        _loadError = 'Failed to parse wallet data: $e';
+      });
+    }
+  }
+
+  void _clearStoredData() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Clear Stored Data'),
+        content: Text(
+          'Are you sure you want to clear stored data for wallet "$_walletId"? This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              debugPrint('[STORAGE] Clearing data for wallet: $_walletId');
+              html.window.localStorage.remove(_storageKey);
+              setState(() {
+                _lastSaveTime = null;
+              });
+              Navigator.of(context).pop();
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Stored data cleared for wallet: $_walletId'),
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Clear'),
+          ),
+        ],
+      ),
+    );
+  }
 }
