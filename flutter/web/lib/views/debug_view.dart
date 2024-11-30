@@ -1,9 +1,14 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:tuple/tuple.dart';
 import '../src/bindings/bindings.dart';
 import '../utils/key_parser.dart';
 import '../services/extension_service.dart';
+import '../widgets/password_dialog.dart';
+import '../services/wallet_storage_service.dart';
 
 class DebugView extends StatefulWidget {
   const DebugView({super.key});
@@ -2526,7 +2531,7 @@ class _DebugViewState extends State<DebugView> {
     final password = await showDialog<String>(
       context: context,
       barrierDismissible: false,
-      builder: (context) => const PasswordDialog(
+      builder: (context) => PasswordDialog(
         isUnlock: false,
         title: 'Encrypt Wallet Data',
         submitLabel: 'Save',
@@ -2898,7 +2903,7 @@ class _DebugViewState extends State<DebugView> {
     final password = await showDialog<String>(
       context: context,
       barrierDismissible: false,
-      builder: (context) => const PasswordDialog(
+      builder: (context) => PasswordDialog(
         isUnlock: true,
         title: 'Unlock Wallet Data',
         submitLabel: 'Unlock',
