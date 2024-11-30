@@ -9,7 +9,6 @@ use wasm_bindgen_futures;
 
 pub struct WalletActor {
     state: WalletState,
-    sync_actor: Option<Address<super::sync::SyncActor>>,
     rpc_actor: Option<Address<super::rpc::RpcActor>>,
     _owned_tasks: JoinSet<()>,
     // Continuous scan state
@@ -51,7 +50,6 @@ impl WalletActor {
                 network: None,
                 outputs: Vec::new(),
             },
-            sync_actor: None,
             rpc_actor: None,
             _owned_tasks,
             is_scanning: false,
@@ -63,10 +61,6 @@ impl WalletActor {
             scan_network: String::new(),
             self_addr: Some(self_addr),
         }
-    }
-
-    pub fn set_sync_actor(&mut self, addr: Address<super::sync::SyncActor>) {
-        self.sync_actor = Some(addr);
     }
 
     pub fn set_rpc_actor(&mut self, addr: Address<super::rpc::RpcActor>) {
@@ -324,7 +318,7 @@ impl WalletActor {
     async fn listen_to_stop_scan(mut self_addr: Address<Self>) {
         let receiver = StopScanRequest::get_dart_signal_receiver();
         while let Some(_signal_pack) = receiver.recv().await {
-            let _ = self_addr.notify(StopScan).await;
+            let _ = self_addr.notify(messages::StopScan).await;
         }
     }
 
