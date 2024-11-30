@@ -318,7 +318,7 @@ impl WalletActor {
     async fn listen_to_stop_scan(mut self_addr: Address<Self>) {
         let receiver = StopScanRequest::get_dart_signal_receiver();
         while let Some(_signal_pack) = receiver.recv().await {
-            let _ = self_addr.notify(messages::StopScan).await;
+            let _ = self_addr.notify(StopScan).await;
         }
     }
 

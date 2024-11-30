@@ -239,3 +239,29 @@ pub struct OutProofGeneratedResponse {
     /// Feather-style formatted proof with headers
     pub formatted: Option<String>,
 }
+
+#[derive(Deserialize, DartSignal)]
+pub struct SaveWalletDataRequest {
+    pub password: String,
+    pub wallet_data_json: String,
+}
+
+#[derive(Serialize, RustSignal)]
+pub struct WalletDataSavedResponse {
+    pub success: bool,
+    pub error: Option<String>,
+    pub encrypted_data: Option<String>,
+}
+
+#[derive(Deserialize, DartSignal)]
+pub struct LoadWalletDataRequest {
+    pub password: String,
+    pub encrypted_data: String,
+}
+
+#[derive(Serialize, RustSignal)]
+pub struct WalletDataLoadedResponse {
+    pub success: bool,
+    pub error: Option<String>,
+    pub wallet_data_json: Option<String>,
+}
