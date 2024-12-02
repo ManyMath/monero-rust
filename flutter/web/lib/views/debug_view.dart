@@ -26,7 +26,7 @@ class _DebugViewState extends State<DebugView> {
   bool _blockHeightUserEdited = false;
 
   // Current wallet ID (multi-wallet support)
-  String _walletId = 'default_wallet';
+  String _walletId = '';
   List<String> _availableWalletIds = [];
 
   String _network = 'stagenet';
@@ -1336,139 +1336,8 @@ class _DebugViewState extends State<DebugView> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            // Wallet Switcher
-                            Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: Colors.grey.shade100,
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: Colors.grey.shade300),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: [
-                                      Icon(Icons.account_balance_wallet, color: Colors.grey.shade700, size: 20),
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        'Active Wallet',
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.grey.shade900,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 12),
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: DropdownButtonFormField<String>(
-                                          value: _walletId,
-                                          decoration: const InputDecoration(
-                                            labelText: 'Select Wallet',
-                                            border: OutlineInputBorder(),
-                                            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                          ),
-                                          items: _availableWalletIds.map((id) {
-                                            final hasData = html.window.localStorage.containsKey('monero_wallet_$id');
-                                            return DropdownMenuItem(
-                                              value: id,
-                                              child: Row(
-                                                children: [
-                                                  Text(id),
-                                                  if (hasData) ...[
-                                                    const SizedBox(width: 8),
-                                                    Icon(Icons.check_circle, size: 16, color: Colors.green.shade600),
-                                                  ],
-                                                ],
-                                              ),
-                                            );
-                                          }).toList(),
-                                          onChanged: (newId) {
-                                            if (newId != null) {
-                                              _switchWallet(newId);
-                                            }
-                                          },
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      IconButton(
-                                        onPressed: _createNewWallet,
-                                        icon: const Icon(Icons.add_circle),
-                                        tooltip: 'Create New Wallet',
-                                        color: Colors.blue,
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            if (html.window.localStorage.containsKey(_storageKey)) ...[
-                              Container(
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: Colors.blue.shade50,
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: Colors.blue.shade200),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        Icon(Icons.storage, color: Colors.blue.shade700, size: 20),
-                                        const SizedBox(width: 8),
-                                        Text(
-                                          'Encrypted wallet data found',
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            color: Colors.blue.shade900,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    if (_lastSaveTime != null) ...[
-                                      const SizedBox(height: 8),
-                                      Text(
-                                        'Last saved: $_lastSaveTime',
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          color: Colors.blue.shade700,
-                                        ),
-                                      ),
-                                    ],
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              ElevatedButton.icon(
-                                onPressed: _isLoadingWallet ? null : _loadWalletData,
-                                icon: _isLoadingWallet
-                                    ? const SizedBox(
-                                        width: 16,
-                                        height: 16,
-                                        child: CircularProgressIndicator(strokeWidth: 2),
-                                      )
-                                    : const Icon(Icons.folder_open),
-                                label: Text(_isLoadingWallet ? 'Loading...' : 'Load Wallet Data'),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.green,
-                                  foregroundColor: Colors.white,
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              OutlinedButton.icon(
-                                onPressed: _clearStoredData,
-                                icon: const Icon(Icons.delete_outline),
-                                label: const Text('Clear Stored Data'),
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: Colors.red,
-                                ),
-                              ),
-                            ] else ...[
+                            // Wallet Switcher - only show if there are wallets
+                            if (_availableWalletIds.isNotEmpty) ...[
                               Container(
                                 padding: const EdgeInsets.all(12),
                                 decoration: BoxDecoration(
@@ -1481,10 +1350,10 @@ class _DebugViewState extends State<DebugView> {
                                   children: [
                                     Row(
                                       children: [
-                                        Icon(Icons.info_outline, color: Colors.grey.shade700, size: 20),
+                                        Icon(Icons.account_balance_wallet, color: Colors.grey.shade700, size: 20),
                                         const SizedBox(width: 8),
                                         Text(
-                                          'No wallet data stored',
+                                          'Stored Wallets',
                                           style: TextStyle(
                                             fontWeight: FontWeight.bold,
                                             color: Colors.grey.shade900,
@@ -1492,21 +1361,74 @@ class _DebugViewState extends State<DebugView> {
                                         ),
                                       ],
                                     ),
-                                    const SizedBox(height: 8),
-                                    Text(
-                                      'Save your wallet data to restore it when you reopen the extension. Your data will be encrypted with a password.',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: Colors.grey.shade700,
+                                    const SizedBox(height: 12),
+                                    DropdownButtonFormField<String>(
+                                      value: _availableWalletIds.contains(_walletId) ? _walletId : null,
+                                      decoration: const InputDecoration(
+                                        labelText: 'Select Wallet',
+                                        border: OutlineInputBorder(),
+                                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                                       ),
+                                      items: _availableWalletIds.map((id) {
+                                        return DropdownMenuItem(
+                                          value: id,
+                                          child: Text(id),
+                                        );
+                                      }).toList(),
+                                      onChanged: (newId) {
+                                        if (newId != null) {
+                                          _switchWallet(newId);
+                                        }
+                                      },
+                                    ),
+                                    if (_lastSaveTime != null) ...[
+                                      const SizedBox(height: 8),
+                                      Text(
+                                        'Last saved: $_lastSaveTime',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.grey.shade700,
+                                        ),
+                                      ),
+                                    ],
+                                    const SizedBox(height: 12),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: ElevatedButton.icon(
+                                            onPressed: _isLoadingWallet ? null : _loadWalletData,
+                                            icon: _isLoadingWallet
+                                                ? const SizedBox(
+                                                    width: 16,
+                                                    height: 16,
+                                                    child: CircularProgressIndicator(strokeWidth: 2),
+                                                  )
+                                                : const Icon(Icons.folder_open),
+                                            label: Text(_isLoadingWallet ? 'Loading...' : 'Load'),
+                                            style: ElevatedButton.styleFrom(
+                                              backgroundColor: Colors.green,
+                                              foregroundColor: Colors.white,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: OutlinedButton.icon(
+                                            onPressed: _clearStoredData,
+                                            icon: const Icon(Icons.delete_outline),
+                                            label: const Text('Delete'),
+                                            style: OutlinedButton.styleFrom(
+                                              foregroundColor: Colors.red,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ],
                                 ),
                               ),
+                              const SizedBox(height: 12),
                             ],
-                            const SizedBox(height: 12),
-                            const Divider(),
-                            const SizedBox(height: 12),
                             ElevatedButton.icon(
                               onPressed: _isSaving ? null : _saveWalletData,
                               icon: _isSaving
@@ -2527,23 +2449,30 @@ class _DebugViewState extends State<DebugView> {
       _saveError = null;
     });
 
-    // Show password dialog
-    final password = await showDialog<String>(
+    // Show save dialog with wallet ID and password
+    final result = await showDialog<Map<String, String>>(
       context: context,
       barrierDismissible: false,
-      builder: (context) => PasswordDialog(
-        isUnlock: false,
-        title: 'Encrypt Wallet Data',
-        submitLabel: 'Save',
+      builder: (context) => _SaveWalletDialog(
+        initialWalletId: _walletId.isEmpty ? 'my_wallet' : _walletId,
+        existingWalletIds: _availableWalletIds,
       ),
     );
 
-    if (password == null) {
+    if (result == null) {
       setState(() {
         _isSaving = false;
       });
       return;
     }
+
+    final walletId = result['walletId']!;
+    final password = result['password']!;
+
+    // Update the current wallet ID to the one being saved
+    setState(() {
+      _walletId = walletId;
+    });
 
     // Warn if password is empty
     if (password.isEmpty) {
@@ -2723,11 +2652,16 @@ class _DebugViewState extends State<DebugView> {
       }
     });
 
+    // Refresh wallet list to include the newly saved wallet
+    if (success) {
+      _refreshAvailableWallets();
+    }
+
     if (success && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Wallet data saved successfully'),
-          duration: Duration(seconds: 2),
+        SnackBar(
+          content: Text('Wallet "$walletId" saved successfully'),
+          duration: const Duration(seconds: 2),
         ),
       );
     } else if (!success && mounted) {
@@ -2747,7 +2681,7 @@ class _DebugViewState extends State<DebugView> {
     debugPrint('[WALLET] Scanning localStorage for available wallets...');
     final walletIds = <String>[];
 
-    // Scan all localStorage keys
+    // Scan all localStorage keys - only include wallets that have saved data
     for (var i = 0; i < html.window.localStorage.length; i++) {
       final key = html.window.localStorage.keys.elementAt(i);
       if (key.startsWith('monero_wallet_')) {
@@ -2756,15 +2690,14 @@ class _DebugViewState extends State<DebugView> {
       }
     }
 
-    // Ensure current wallet is in the list even if no data saved yet
-    if (!walletIds.contains(_walletId)) {
-      walletIds.insert(0, _walletId);
-    }
-
     walletIds.sort();
 
     setState(() {
       _availableWalletIds = walletIds;
+      // If current wallet isn't in the list and there are wallets, select the first one
+      if (walletIds.isNotEmpty && !walletIds.contains(_walletId)) {
+        _walletId = walletIds.first;
+      }
     });
 
     debugPrint('[WALLET] Found ${walletIds.length} wallets: ${walletIds.join(', ')}');
@@ -2817,81 +2750,6 @@ class _DebugViewState extends State<DebugView> {
     }
   }
 
-  /// Create a new wallet with custom ID
-  Future<void> _createNewWallet() async {
-    final controller = TextEditingController();
-
-    final walletId = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Create New Wallet'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text('Enter a unique ID for your new wallet:'),
-            const SizedBox(height: 12),
-            TextField(
-              controller: controller,
-              autofocus: true,
-              decoration: const InputDecoration(
-                labelText: 'Wallet ID',
-                hintText: 'e.g., my_savings, trading_account',
-                border: OutlineInputBorder(),
-              ),
-              onSubmitted: (value) {
-                if (value.trim().isNotEmpty) {
-                  Navigator.of(context).pop(value.trim());
-                }
-              },
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(null),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              final value = controller.text.trim();
-              if (value.isNotEmpty) {
-                Navigator.of(context).pop(value);
-              }
-            },
-            child: const Text('Create'),
-          ),
-        ],
-      ),
-    );
-
-    if (walletId != null && walletId.isNotEmpty) {
-      // Check if wallet ID already exists
-      if (_availableWalletIds.contains(walletId)) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Wallet "$walletId" already exists'),
-              backgroundColor: Colors.orange,
-            ),
-          );
-        }
-        return;
-      }
-
-      // Switch to new wallet
-      await _switchWallet(walletId);
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Created new wallet: $walletId'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-    }
-  }
 
   Future<void> _loadWalletData() async {
     setState(() {
@@ -3070,6 +2928,183 @@ class _DebugViewState extends State<DebugView> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Dialog for saving wallet data with wallet ID and password
+class _SaveWalletDialog extends StatefulWidget {
+  final String initialWalletId;
+  final List<String> existingWalletIds;
+
+  const _SaveWalletDialog({
+    required this.initialWalletId,
+    required this.existingWalletIds,
+  });
+
+  @override
+  State<_SaveWalletDialog> createState() => _SaveWalletDialogState();
+}
+
+class _SaveWalletDialogState extends State<_SaveWalletDialog> {
+  late final TextEditingController _walletIdController;
+  final _passwordController = TextEditingController();
+  final _confirmPasswordController = TextEditingController();
+  String? _error;
+  bool _obscurePassword = true;
+  bool _obscureConfirm = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _walletIdController = TextEditingController(text: widget.initialWalletId);
+  }
+
+  @override
+  void dispose() {
+    _walletIdController.dispose();
+    _passwordController.dispose();
+    _confirmPasswordController.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final walletId = _walletIdController.text.trim();
+    final password = _passwordController.text;
+
+    // Validate wallet ID
+    if (walletId.isEmpty) {
+      setState(() {
+        _error = 'Wallet ID is required';
+      });
+      return;
+    }
+
+    // Check for invalid characters
+    if (!RegExp(r'^[a-zA-Z0-9_-]+$').hasMatch(walletId)) {
+      setState(() {
+        _error = 'Wallet ID can only contain letters, numbers, underscores, and dashes';
+      });
+      return;
+    }
+
+    // Validate password confirmation if password is not empty
+    if (password.isNotEmpty) {
+      final confirm = _confirmPasswordController.text;
+      if (password != confirm) {
+        setState(() {
+          _error = 'Passwords do not match';
+        });
+        return;
+      }
+    }
+
+    Navigator.of(context).pop({
+      'walletId': walletId,
+      'password': password,
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isOverwriting = widget.existingWalletIds.contains(_walletIdController.text.trim());
+
+    return AlertDialog(
+      title: const Text('Save Wallet Data'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextField(
+              controller: _walletIdController,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: 'Wallet ID',
+                hintText: 'e.g., my_wallet, savings',
+                border: OutlineInputBorder(),
+              ),
+              onChanged: (_) => setState(() {}),
+              onSubmitted: (_) => _submit(),
+            ),
+            if (isOverwriting) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.orange.shade50,
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: Colors.orange.shade200),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.warning, color: Colors.orange.shade700, size: 16),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'This will overwrite existing wallet data',
+                        style: TextStyle(color: Colors.orange.shade900, fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            const SizedBox(height: 16),
+            TextField(
+              controller: _passwordController,
+              obscureText: _obscurePassword,
+              decoration: InputDecoration(
+                labelText: 'Password (optional)',
+                border: const OutlineInputBorder(),
+                suffixIcon: IconButton(
+                  icon: Icon(_obscurePassword ? Icons.visibility : Icons.visibility_off),
+                  onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                ),
+              ),
+              onChanged: (_) => setState(() {}),
+              onSubmitted: (_) {
+                if (_passwordController.text.isEmpty) {
+                  _submit();
+                }
+              },
+            ),
+            if (_passwordController.text.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              TextField(
+                controller: _confirmPasswordController,
+                obscureText: _obscureConfirm,
+                decoration: InputDecoration(
+                  labelText: 'Confirm Password',
+                  border: const OutlineInputBorder(),
+                  suffixIcon: IconButton(
+                    icon: Icon(_obscureConfirm ? Icons.visibility : Icons.visibility_off),
+                    onPressed: () => setState(() => _obscureConfirm = !_obscureConfirm),
+                  ),
+                ),
+                onSubmitted: (_) => _submit(),
+              ),
+            ],
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                _error!,
+                style: TextStyle(color: Colors.red.shade700, fontSize: 12),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(null),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: _submit,
+          child: const Text('Save'),
+        ),
+      ],
     );
   }
 }
