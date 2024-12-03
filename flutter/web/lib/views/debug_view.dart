@@ -2963,15 +2963,16 @@ class _DebugViewState extends State<DebugView> {
           ),
           ElevatedButton(
             onPressed: () {
-              debugPrint('[STORAGE] Clearing data for wallet: $_walletId');
+              final deletedWalletId = _walletId;
+              debugPrint('[STORAGE] Clearing data for wallet: $deletedWalletId');
               html.window.localStorage.remove(_storageKey);
-              setState(() {
-                _lastSaveTime = null;
-              });
               Navigator.of(context).pop();
+              // Refresh wallet list and clear state
+              _refreshAvailableWallets();
+              _startNewWallet();
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
-                  content: Text('Stored data cleared for wallet: $_walletId'),
+                  content: Text('Deleted wallet: $deletedWalletId'),
                   duration: const Duration(seconds: 2),
                 ),
               );
