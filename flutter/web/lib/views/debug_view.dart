@@ -2579,7 +2579,7 @@ class _DebugViewState extends State<DebugView> {
 
     // Prepare wallet data to save
     final walletData = {
-      'version': 1,
+      'version': 0,
       'walletId': _walletId,
       'seed': _controller.text.trim(),
       'network': _network,
