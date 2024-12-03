@@ -2922,6 +2922,12 @@ class _DebugViewState extends State<DebugView> {
         _isSynced = scanState['isSynced'] as bool;
         _daemonHeight = scanState['daemonHeight'] as int?;
 
+        // Set block height field to resume scanning from last synced height
+        if (_continuousScanCurrentHeight > 0) {
+          _blockHeightController.text = _continuousScanCurrentHeight.toString();
+          _blockHeightUserEdited = false;
+        }
+
         // Restore selected outputs
         _selectedOutputs = Set<String>.from(walletData['selectedOutputs'] as List);
 
