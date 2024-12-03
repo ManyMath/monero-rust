@@ -1201,117 +1201,6 @@ class _DebugViewState extends State<DebugView> {
                   children: [
                     ExpansionPanel(
                       headerBuilder: (BuildContext context, bool isExpanded) {
-                        return GestureDetector(
-                          onTap: () {
-                            setState(() {
-                              _expandedPanel = (_expandedPanel == 0) ? null : 0;
-                            });
-                          },
-                          child: const ListTile(
-                            title: Text(
-                              'Seed Phrase',
-                              style: TextStyle(fontWeight: FontWeight.bold),
-                            ),
-                          ),
-                        );
-                      },
-                      body: Padding(
-                        padding: const EdgeInsets.all(16.0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Row(
-                              children: [
-                                ElevatedButton.icon(
-                                  onPressed: _generateSeed,
-                                  icon: const Icon(Icons.auto_awesome),
-                                  label: const Text('Generate'),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: DropdownButtonFormField<String>(
-                                    value: _seedType,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Seed Type',
-                                      border: OutlineInputBorder(),
-                                      contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                    ),
-                                    items: const [
-                                      DropdownMenuItem(value: '25 word', child: Text('25 word')),
-                                    ],
-                                    onChanged: null,
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: DropdownButtonFormField<String>(
-                                    value: _network,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Network',
-                                      border: OutlineInputBorder(),
-                                      contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                    ),
-                                    items: const [
-                                      DropdownMenuItem(value: 'mainnet', child: Text('Mainnet')),
-                                      DropdownMenuItem(value: 'testnet', child: Text('Testnet')),
-                                      DropdownMenuItem(value: 'stagenet', child: Text('Stagenet')),
-                                    ],
-                                    onChanged: (value) {
-                                      if (value != null) {
-                                        setState(() {
-                                          _network = value;
-                                        });
-                                        _deriveAddress();
-                                      }
-                                    },
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 16),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: TextField(
-                                    controller: _controller,
-                                    decoration: InputDecoration(
-                                      labelText: 'Seed Phrase',
-                                      hintText: 'Enter or generate a 25-word seed phrase',
-                                      border: const OutlineInputBorder(),
-                                      errorText: _validationError,
-                                    ),
-                                    maxLines: 3,
-                                  ),
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.copy_outlined),
-                                  onPressed: () => _copyToClipboard(_controller.text, 'Seed'),
-                                  tooltip: 'Copy seed',
-                                ),
-                              ],
-                            ),
-                            if (_responseError != null) ...[
-                              const SizedBox(height: 16),
-                              Container(
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: Colors.red.shade50,
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: Colors.red.shade200),
-                                ),
-                                child: SelectableText(
-                                  'Error: $_responseError',
-                                  style: TextStyle(color: Colors.red.shade900),
-                                ),
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                      isExpanded: _expandedPanel == 0,
-                    ),
-                    ExpansionPanel(
-                      headerBuilder: (BuildContext context, bool isExpanded) {
                         final hasData = html.window.localStorage.containsKey(_storageKey);
                         return GestureDetector(
                           onTap: () {
@@ -1429,16 +1318,28 @@ class _DebugViewState extends State<DebugView> {
                               ),
                               const SizedBox(height: 12),
                             ],
-                            ElevatedButton.icon(
-                              onPressed: _isSaving ? null : _saveWalletData,
-                              icon: _isSaving
-                                  ? const SizedBox(
-                                      width: 16,
-                                      height: 16,
-                                      child: CircularProgressIndicator(strokeWidth: 2),
-                                    )
-                                  : const Icon(Icons.save),
-                              label: Text(_isSaving ? 'Saving...' : 'Save Wallet Data'),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: ElevatedButton.icon(
+                                    onPressed: _isSaving ? null : _saveWalletData,
+                                    icon: _isSaving
+                                        ? const SizedBox(
+                                            width: 16,
+                                            height: 16,
+                                            child: CircularProgressIndicator(strokeWidth: 2),
+                                          )
+                                        : const Icon(Icons.save),
+                                    label: Text(_isSaving ? 'Saving...' : 'Save Wallet Data'),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                OutlinedButton.icon(
+                                  onPressed: _startNewWallet,
+                                  icon: const Icon(Icons.add),
+                                  label: const Text('New'),
+                                ),
+                              ],
                             ),
                             if (_saveError != null) ...[
                               const SizedBox(height: 12),
@@ -1474,6 +1375,117 @@ class _DebugViewState extends State<DebugView> {
                         ),
                       ),
                       isExpanded: _expandedPanel == 1,
+                    ),
+                    ExpansionPanel(
+                      headerBuilder: (BuildContext context, bool isExpanded) {
+                        return GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              _expandedPanel = (_expandedPanel == 0) ? null : 0;
+                            });
+                          },
+                          child: const ListTile(
+                            title: Text(
+                              'Seed Phrase',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        );
+                      },
+                      body: Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Row(
+                              children: [
+                                ElevatedButton.icon(
+                                  onPressed: _generateSeed,
+                                  icon: const Icon(Icons.auto_awesome),
+                                  label: const Text('Generate'),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: DropdownButtonFormField<String>(
+                                    value: _seedType,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Seed Type',
+                                      border: OutlineInputBorder(),
+                                      contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                    ),
+                                    items: const [
+                                      DropdownMenuItem(value: '25 word', child: Text('25 word')),
+                                    ],
+                                    onChanged: null,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: DropdownButtonFormField<String>(
+                                    value: _network,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Network',
+                                      border: OutlineInputBorder(),
+                                      contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                    ),
+                                    items: const [
+                                      DropdownMenuItem(value: 'mainnet', child: Text('Mainnet')),
+                                      DropdownMenuItem(value: 'testnet', child: Text('Testnet')),
+                                      DropdownMenuItem(value: 'stagenet', child: Text('Stagenet')),
+                                    ],
+                                    onChanged: (value) {
+                                      if (value != null) {
+                                        setState(() {
+                                          _network = value;
+                                        });
+                                        _deriveAddress();
+                                      }
+                                    },
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 16),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: TextField(
+                                    controller: _controller,
+                                    decoration: InputDecoration(
+                                      labelText: 'Seed Phrase',
+                                      hintText: 'Enter or generate a 25-word seed phrase',
+                                      border: const OutlineInputBorder(),
+                                      errorText: _validationError,
+                                    ),
+                                    maxLines: 3,
+                                  ),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.copy_outlined),
+                                  onPressed: () => _copyToClipboard(_controller.text, 'Seed'),
+                                  tooltip: 'Copy seed',
+                                ),
+                              ],
+                            ),
+                            if (_responseError != null) ...[
+                              const SizedBox(height: 16),
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.red.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: Colors.red.shade200),
+                                ),
+                                child: SelectableText(
+                                  'Error: $_responseError',
+                                  style: TextStyle(color: Colors.red.shade900),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      isExpanded: _expandedPanel == 0,
                     ),
                     ExpansionPanel(
                       headerBuilder: (BuildContext context, bool isExpanded) {
@@ -2701,6 +2713,50 @@ class _DebugViewState extends State<DebugView> {
     });
 
     debugPrint('[WALLET] Found ${walletIds.length} wallets: ${walletIds.join(', ')}');
+  }
+
+  /// Start a new wallet by clearing the current state
+  void _startNewWallet() {
+    debugPrint('[WALLET] Starting new wallet (clearing state)');
+
+    // Stop any ongoing scans
+    _stopPollingTimers();
+
+    setState(() {
+      _walletId = '';
+      _controller.text = '';
+      _derivedAddress = null;
+      _secretSpendKey = null;
+      _secretViewKey = null;
+      _publicSpendKey = null;
+      _publicViewKey = null;
+      _allOutputs = [];
+      _selectedOutputs = {};
+      _isContinuousScanning = false;
+      _isContinuousPaused = false;
+      _continuousScanCurrentHeight = 0;
+      _continuousScanTargetHeight = 0;
+      _isSynced = false;
+      _daemonHeight = null;
+      _scanResult = null;
+      _scanError = null;
+      _txResult = null;
+      _txError = null;
+      _broadcastResult = null;
+      _broadcastError = null;
+      _lastSaveTime = null;
+      _loadError = null;
+      _saveError = null;
+    });
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Ready for new wallet - generate or enter a seed phrase'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   /// Switch to a different wallet
