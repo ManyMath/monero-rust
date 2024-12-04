@@ -10,6 +10,103 @@ import '../services/extension_service.dart';
 import '../widgets/password_dialog.dart';
 import '../services/wallet_storage_service.dart';
 
+/// Represents a wallet transaction with associated inputs and outputs.
+class WalletTransaction {
+  final String txHash;
+  final int blockHeight;
+  final int blockTimestamp;
+  final List<OwnedOutput> receivedOutputs;
+  final List<String> spentKeyImages; // Key images of outputs spent in this tx
+
+  WalletTransaction({
+    required this.txHash,
+    required this.blockHeight,
+    required this.blockTimestamp,
+    required this.receivedOutputs,
+    required this.spentKeyImages,
+  });
+
+  /// Calculate the net balance change from this transaction.
+  /// Positive = received more than spent, Negative = spent more than received.
+  double balanceChange(List<OwnedOutput> allOutputs) {
+    // Sum received outputs
+    double received = 0;
+    for (var output in receivedOutputs) {
+      received += double.tryParse(output.amountXmr) ?? 0;
+    }
+
+    // Sum spent outputs (find outputs with matching key images)
+    double spent = 0;
+    for (var keyImage in spentKeyImages) {
+      final spentOutput = allOutputs.where((o) => o.keyImage == keyImage).firstOrNull;
+      if (spentOutput != null) {
+        spent += double.tryParse(spentOutput.amountXmr) ?? 0;
+      }
+    }
+
+    return received - spent;
+  }
+
+  /// Returns true if this is primarily a receiving transaction.
+  bool isIncoming(List<OwnedOutput> allOutputs) => balanceChange(allOutputs) > 0;
+
+  Map<String, dynamic> toJson() => {
+    'txHash': txHash,
+    'blockHeight': blockHeight,
+    'blockTimestamp': blockTimestamp,
+    'receivedOutputs': receivedOutputs.map((o) => {
+      'txHash': o.txHash,
+      'outputIndex': o.outputIndex,
+      'amount': o.amount.toString(),
+      'amountXmr': o.amountXmr,
+      'key': o.key,
+      'keyOffset': o.keyOffset,
+      'commitmentMask': o.commitmentMask,
+      'subaddressIndex': o.subaddressIndex != null
+          ? [o.subaddressIndex!.item1, o.subaddressIndex!.item2]
+          : null,
+      'paymentId': o.paymentId,
+      'receivedOutputBytes': o.receivedOutputBytes,
+      'blockHeight': o.blockHeight.toString(),
+      'spent': o.spent,
+      'keyImage': o.keyImage,
+    }).toList(),
+    'spentKeyImages': spentKeyImages,
+  };
+
+  factory WalletTransaction.fromJson(Map<String, dynamic> json) {
+    return WalletTransaction(
+      txHash: json['txHash'] as String,
+      blockHeight: json['blockHeight'] as int,
+      blockTimestamp: json['blockTimestamp'] as int,
+      receivedOutputs: (json['receivedOutputs'] as List).map((o) {
+        final outputData = o as Map<String, dynamic>;
+        return OwnedOutput(
+          txHash: outputData['txHash'] as String,
+          outputIndex: outputData['outputIndex'] as int,
+          amount: Uint64(BigInt.parse(outputData['amount'] as String)),
+          amountXmr: outputData['amountXmr'] as String,
+          key: outputData['key'] as String,
+          keyOffset: outputData['keyOffset'] as String,
+          commitmentMask: outputData['commitmentMask'] as String,
+          subaddressIndex: outputData['subaddressIndex'] != null
+              ? Tuple2<int, int>(
+                  outputData['subaddressIndex'][0] as int,
+                  outputData['subaddressIndex'][1] as int,
+                )
+              : null,
+          paymentId: outputData['paymentId'] as String?,
+          receivedOutputBytes: outputData['receivedOutputBytes'] as String,
+          blockHeight: Uint64(BigInt.parse(outputData['blockHeight'] as String)),
+          spent: outputData['spent'] as bool,
+          keyImage: outputData['keyImage'] as String,
+        );
+      }).toList(),
+      spentKeyImages: (json['spentKeyImages'] as List).cast<String>(),
+    );
+  }
+}
+
 class DebugView extends StatefulWidget {
   const DebugView({super.key});
 
@@ -45,6 +142,12 @@ class _DebugViewState extends State<DebugView> {
   String? _scanError;
   List<OwnedOutput> _allOutputs = [];
   int? _daemonHeight;
+
+  // Transaction tracking state
+  List<WalletTransaction> _allTransactions = [];
+  String _txSortBy = 'confirms'; // 'confirms' or 'amount'
+  bool _txSortAscending = false;
+  Set<String> _expandedTransactions = {}; // Track which transaction cards are expanded
 
   /// Returns the current blockchain height for confirmation calculations.
   /// Falls back to 0 if unknown, which safely shows 0 confirmations.
@@ -170,6 +273,9 @@ class _DebugViewState extends State<DebugView> {
               _allOutputs[existingIndex] = output;
             }
           }
+
+          // Track transactions: group outputs by txHash and track spent key images
+          _updateTransactionsFromScan(signal.message);
         } else {
           _scanResult = null;
           _scanError = signal.message.error ?? 'Unknown error during scan';
@@ -520,6 +626,8 @@ class _DebugViewState extends State<DebugView> {
       _continuousScanTargetHeight = 0;
       _isSynced = false;
       _allOutputs = [];
+      _allTransactions = [];
+      _expandedTransactions = {};
       _selectedOutputs = {};
       _daemonHeight = null;
       _scanResult = null;
@@ -1831,6 +1939,258 @@ class _DebugViewState extends State<DebugView> {
                       ),
                       isExpanded: _expandedPanel == 2,
                     ),
+                    // Transactions Panel
+                    ExpansionPanel(
+                      headerBuilder: (BuildContext context, bool isExpanded) {
+                        final txCount = _allTransactions.length;
+                        final incomingCount = _allTransactions.where((t) => t.isIncoming(_allOutputs)).length;
+                        final outgoingCount = txCount - incomingCount;
+                        final subtitle = txCount == 0
+                            ? 'No transactions'
+                            : '$txCount transaction${txCount == 1 ? '' : 's'} ($incomingCount in, $outgoingCount out)';
+
+                        return GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              _expandedPanel = (_expandedPanel == 3) ? null : 3;
+                            });
+                          },
+                          child: ListTile(
+                            title: const Text(
+                              'Transactions',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            subtitle: Text(
+                              subtitle,
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          ),
+                        );
+                      },
+                      body: Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: _allTransactions.isEmpty
+                            ? const Center(
+                                child: Padding(
+                                  padding: EdgeInsets.all(16.0),
+                                  child: Text(
+                                    'No transactions found. Scan blocks to find transactions.',
+                                    style: TextStyle(color: Colors.grey),
+                                  ),
+                                ),
+                              )
+                            : Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  // Sort controls
+                                  Padding(
+                                    padding: const EdgeInsets.only(bottom: 12),
+                                    child: Row(
+                                      children: [
+                                        const Text('Sort: ', style: TextStyle(fontSize: 12)),
+                                        _buildTxSortButton('Confirms', 'confirms'),
+                                        const SizedBox(width: 4),
+                                        _buildTxSortButton('Amount', 'amount'),
+                                      ],
+                                    ),
+                                  ),
+                                  // Transaction cards
+                                  ..._sortedTransactions().map((tx) {
+                                    final isExpanded = _expandedTransactions.contains(tx.txHash);
+                                    final balanceChange = tx.balanceChange(_allOutputs);
+                                    final isIncoming = balanceChange > 0;
+                                    final confirmations = _currentHeight > 0 && tx.blockHeight > 0
+                                        ? _currentHeight - tx.blockHeight
+                                        : 0;
+                                    final statusColor = isIncoming ? Colors.green : Colors.red;
+                                    final amountStr = isIncoming
+                                        ? '+${balanceChange.toStringAsFixed(12)}'
+                                        : balanceChange.toStringAsFixed(12);
+                                    final txIdDisplay = tx.txHash.startsWith('spend:')
+                                        ? 'Outgoing (${tx.txHash.substring(6, 14)}...)'
+                                        : '${tx.txHash.substring(0, 8)}...${tx.txHash.substring(tx.txHash.length - 8)}';
+
+                                    return Card(
+                                      margin: const EdgeInsets.only(bottom: 12),
+                                      elevation: 2,
+                                      child: InkWell(
+                                        onTap: () {
+                                          setState(() {
+                                            if (isExpanded) {
+                                              _expandedTransactions.remove(tx.txHash);
+                                            } else {
+                                              _expandedTransactions.add(tx.txHash);
+                                            }
+                                          });
+                                        },
+                                        borderRadius: BorderRadius.circular(4),
+                                        child: Padding(
+                                          padding: const EdgeInsets.all(12),
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              // Summary row (always visible)
+                                              Row(
+                                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                                children: [
+                                                  Expanded(
+                                                    child: Row(
+                                                      children: [
+                                                        Icon(
+                                                          isIncoming ? Icons.arrow_downward : Icons.arrow_upward,
+                                                          size: 16,
+                                                          color: statusColor,
+                                                        ),
+                                                        const SizedBox(width: 8),
+                                                        Expanded(
+                                                          child: Text(
+                                                            txIdDisplay,
+                                                            style: const TextStyle(
+                                                              fontFamily: 'monospace',
+                                                              fontSize: 12,
+                                                            ),
+                                                            overflow: TextOverflow.ellipsis,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 8),
+                                                  Text(
+                                                    '$amountStr XMR',
+                                                    style: TextStyle(
+                                                      fontWeight: FontWeight.bold,
+                                                      fontSize: 14,
+                                                      color: statusColor,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                              // Confirmation count row
+                                              Padding(
+                                                padding: const EdgeInsets.only(top: 4),
+                                                child: Row(
+                                                  children: [
+                                                    Text(
+                                                      '$confirmations confirmation${confirmations == 1 ? '' : 's'}',
+                                                      style: TextStyle(
+                                                        fontSize: 10,
+                                                        color: Colors.grey.shade600,
+                                                      ),
+                                                    ),
+                                                    const Spacer(),
+                                                    Icon(
+                                                      isExpanded ? Icons.expand_less : Icons.expand_more,
+                                                      size: 16,
+                                                      color: Colors.grey.shade600,
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                              // Expanded details
+                                              if (isExpanded) ...[
+                                                const Divider(height: 16),
+                                                _buildOutputDetailRow('TX Hash', tx.txHash.startsWith('spend:') ? 'Unknown (outgoing)' : tx.txHash, mono: true),
+                                                _buildOutputDetailRow('Block Height', '${tx.blockHeight}'),
+                                                if (tx.blockTimestamp > 0)
+                                                  _buildOutputDetailRow('Timestamp', DateTime.fromMillisecondsSinceEpoch(tx.blockTimestamp * 1000).toString()),
+                                                // Received outputs
+                                                if (tx.receivedOutputs.isNotEmpty) ...[
+                                                  const SizedBox(height: 8),
+                                                  Text(
+                                                    'Received Outputs (${tx.receivedOutputs.length}):',
+                                                    style: const TextStyle(
+                                                      fontWeight: FontWeight.w500,
+                                                      fontSize: 11,
+                                                      color: Colors.black54,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(height: 4),
+                                                  ...tx.receivedOutputs.map((output) {
+                                                    final isSpent = output.spent;
+                                                    return Container(
+                                                      margin: const EdgeInsets.only(left: 8, bottom: 4),
+                                                      padding: const EdgeInsets.all(8),
+                                                      decoration: BoxDecoration(
+                                                        color: Colors.green.shade50,
+                                                        borderRadius: BorderRadius.circular(4),
+                                                        border: Border.all(color: Colors.green.shade200),
+                                                      ),
+                                                      child: Row(
+                                                        children: [
+                                                          Expanded(
+                                                            child: Text(
+                                                              '+${output.amountXmr} XMR (index ${output.outputIndex})',
+                                                              style: TextStyle(
+                                                                fontSize: 11,
+                                                                color: isSpent ? Colors.grey : Colors.green.shade800,
+                                                                decoration: isSpent ? TextDecoration.lineThrough : null,
+                                                              ),
+                                                            ),
+                                                          ),
+                                                          if (isSpent)
+                                                            Container(
+                                                              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                                              decoration: BoxDecoration(
+                                                                color: Colors.grey.shade200,
+                                                                borderRadius: BorderRadius.circular(2),
+                                                              ),
+                                                              child: const Text(
+                                                                'SPENT',
+                                                                style: TextStyle(fontSize: 8, color: Colors.grey),
+                                                              ),
+                                                            ),
+                                                        ],
+                                                      ),
+                                                    );
+                                                  }),
+                                                ],
+                                                // Spent outputs
+                                                if (tx.spentKeyImages.isNotEmpty) ...[
+                                                  const SizedBox(height: 8),
+                                                  Text(
+                                                    'Spent Outputs (${tx.spentKeyImages.length}):',
+                                                    style: const TextStyle(
+                                                      fontWeight: FontWeight.w500,
+                                                      fontSize: 11,
+                                                      color: Colors.black54,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(height: 4),
+                                                  ...tx.spentKeyImages.map((keyImage) {
+                                                    final spentOutput = _allOutputs.where((o) => o.keyImage == keyImage).firstOrNull;
+                                                    final amountStr = spentOutput?.amountXmr ?? 'Unknown';
+                                                    return Container(
+                                                      margin: const EdgeInsets.only(left: 8, bottom: 4),
+                                                      padding: const EdgeInsets.all(8),
+                                                      decoration: BoxDecoration(
+                                                        color: Colors.red.shade50,
+                                                        borderRadius: BorderRadius.circular(4),
+                                                        border: Border.all(color: Colors.red.shade200),
+                                                      ),
+                                                      child: Text(
+                                                        '-$amountStr XMR',
+                                                        style: TextStyle(
+                                                          fontSize: 11,
+                                                          color: Colors.red.shade800,
+                                                        ),
+                                                      ),
+                                                    );
+                                                  }),
+                                                ],
+                                              ],
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  }),
+                                ],
+                              ),
+                      ),
+                      isExpanded: _expandedPanel == 3,
+                    ),
+                    // Coins Panel
                     ExpansionPanel(
                       headerBuilder: (BuildContext context, bool isExpanded) {
                         // Calculate balance from unspent outputs
@@ -1875,7 +2235,7 @@ class _DebugViewState extends State<DebugView> {
                         return GestureDetector(
                           onTap: () {
                             setState(() {
-                              _expandedPanel = (_expandedPanel == 3) ? null : 3;
+                              _expandedPanel = (_expandedPanel == 4) ? null : 4;
                             });
                           },
                           child: ListTile(
@@ -2038,14 +2398,14 @@ class _DebugViewState extends State<DebugView> {
                                 ],
                               ),
                       ),
-                      isExpanded: _expandedPanel == 3,
+                      isExpanded: _expandedPanel == 4,
                     ),
                     ExpansionPanel(
                       headerBuilder: (BuildContext context, bool isExpanded) {
                         return GestureDetector(
                           onTap: () {
                             setState(() {
-                              _expandedPanel = (_expandedPanel == 4) ? null : 4;
+                              _expandedPanel = (_expandedPanel == 5) ? null : 5;
                             });
                           },
                           child: const ListTile(
@@ -2266,7 +2626,7 @@ class _DebugViewState extends State<DebugView> {
                           ],
                         ),
                       ),
-                      isExpanded: _expandedPanel == 4,
+                      isExpanded: _expandedPanel == 5,
                     ),
                   ],
                 ),
@@ -2378,6 +2738,150 @@ class _DebugViewState extends State<DebugView> {
           } else {
             _sortBy = sortKey;
             _sortAscending = false;
+          }
+        });
+      },
+      borderRadius: BorderRadius.circular(4),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: isActive ? Colors.blue.shade100 : Colors.grey.shade200,
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Text(
+          '$label$arrow',
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Updates transaction list from a block scan response.
+  /// Groups outputs by txHash and tracks spent key images.
+  void _updateTransactionsFromScan(BlockScanResponse scan) {
+    final blockHeight = scan.blockHeight.toInt();
+    final blockTimestamp = scan.blockTimestamp.toInt();
+
+    // Group received outputs by transaction hash
+    final outputsByTx = <String, List<OwnedOutput>>{};
+    for (var output in scan.outputs) {
+      outputsByTx.putIfAbsent(output.txHash, () => []).add(output);
+    }
+
+    // Create/update transactions for received outputs
+    for (var entry in outputsByTx.entries) {
+      final txHash = entry.key;
+      final outputs = entry.value;
+
+      final existingIndex = _allTransactions.indexWhere((t) => t.txHash == txHash);
+      if (existingIndex == -1) {
+        // New transaction
+        _allTransactions.add(WalletTransaction(
+          txHash: txHash,
+          blockHeight: blockHeight,
+          blockTimestamp: blockTimestamp,
+          receivedOutputs: outputs,
+          spentKeyImages: [],
+        ));
+      } else {
+        // Update existing transaction with new outputs
+        final existing = _allTransactions[existingIndex];
+        final updatedOutputs = [...existing.receivedOutputs];
+        for (var output in outputs) {
+          if (!updatedOutputs.any((o) =>
+              o.txHash == output.txHash && o.outputIndex == output.outputIndex)) {
+            updatedOutputs.add(output);
+          }
+        }
+        _allTransactions[existingIndex] = WalletTransaction(
+          txHash: txHash,
+          blockHeight: existing.blockHeight > 0 ? existing.blockHeight : blockHeight,
+          blockTimestamp: existing.blockTimestamp > 0 ? existing.blockTimestamp : blockTimestamp,
+          receivedOutputs: updatedOutputs,
+          spentKeyImages: existing.spentKeyImages,
+        );
+      }
+    }
+
+    // Track spent key images - find which transaction spent each of our outputs
+    for (var spentKeyImage in scan.spentKeyImages) {
+      // Find the output that was spent
+      final spentOutput = _allOutputs.where((o) => o.keyImage == spentKeyImage).firstOrNull;
+      if (spentOutput == null) continue;
+
+      // Find which transaction in this block spent it (it's one of the scanned txs)
+      // Since we're scanning the block that spent it, we need to create a transaction
+      // for the spending activity. We can't know the exact txHash of the spending tx
+      // from just the key image, so we'll create a synthetic entry keyed by the key image.
+      // In a full implementation, the scanner would tell us which tx spent the output.
+
+      // For now, check if any transaction already tracks this spent key image
+      final existingTx = _allTransactions.where((t) =>
+          t.spentKeyImages.contains(spentKeyImage)).firstOrNull;
+      if (existingTx == null) {
+        // Check if we received outputs in the same block (could be a self-transfer)
+        // If so, add the spent key image to that transaction
+        final selfTransferTx = _allTransactions.where((t) =>
+            t.blockHeight == blockHeight && t.receivedOutputs.isNotEmpty).firstOrNull;
+        if (selfTransferTx != null) {
+          final txIndex = _allTransactions.indexOf(selfTransferTx);
+          _allTransactions[txIndex] = WalletTransaction(
+            txHash: selfTransferTx.txHash,
+            blockHeight: selfTransferTx.blockHeight,
+            blockTimestamp: selfTransferTx.blockTimestamp,
+            receivedOutputs: selfTransferTx.receivedOutputs,
+            spentKeyImages: [...selfTransferTx.spentKeyImages, spentKeyImage],
+          );
+        } else {
+          // Create a spending-only transaction using key image as identifier
+          // This is a simplification - a full implementation would get the actual txHash
+          _allTransactions.add(WalletTransaction(
+            txHash: 'spend:$spentKeyImage',
+            blockHeight: blockHeight,
+            blockTimestamp: blockTimestamp,
+            receivedOutputs: [],
+            spentKeyImages: [spentKeyImage],
+          ));
+        }
+      }
+    }
+  }
+
+  /// Returns sorted list of transactions based on current sort settings.
+  List<WalletTransaction> _sortedTransactions() {
+    final sorted = List<WalletTransaction>.from(_allTransactions);
+
+    sorted.sort((a, b) {
+      int comparison;
+      if (_txSortBy == 'confirms') {
+        final aConf = _currentHeight - a.blockHeight;
+        final bConf = _currentHeight - b.blockHeight;
+        comparison = aConf.compareTo(bConf);
+      } else {
+        final aAmount = a.balanceChange(_allOutputs).abs();
+        final bAmount = b.balanceChange(_allOutputs).abs();
+        comparison = aAmount.compareTo(bAmount);
+      }
+      return _txSortAscending ? comparison : -comparison;
+    });
+
+    return sorted;
+  }
+
+  Widget _buildTxSortButton(String label, String sortKey) {
+    final isActive = _txSortBy == sortKey;
+    final arrow = isActive ? (_txSortAscending ? ' ↑' : ' ↓') : '';
+    return InkWell(
+      onTap: () {
+        setState(() {
+          if (_txSortBy == sortKey) {
+            _txSortAscending = !_txSortAscending;
+          } else {
+            _txSortBy = sortKey;
+            _txSortAscending = false;
           }
         });
       },
@@ -2601,6 +3105,7 @@ class _DebugViewState extends State<DebugView> {
         'spent': o.spent,
         'keyImage': o.keyImage,
       }).toList(),
+      'transactions': _allTransactions.map((t) => t.toJson()).toList(),
       'scanState': {
         'isContinuousScanning': _isContinuousScanning,
         'isContinuousPaused': _isContinuousPaused,
@@ -2731,6 +3236,8 @@ class _DebugViewState extends State<DebugView> {
       _publicSpendKey = null;
       _publicViewKey = null;
       _allOutputs = [];
+      _allTransactions = [];
+      _expandedTransactions = {};
       _selectedOutputs = {};
       _isContinuousScanning = false;
       _isContinuousPaused = false;
@@ -2778,6 +3285,8 @@ class _DebugViewState extends State<DebugView> {
       _publicSpendKey = null;
       _publicViewKey = null;
       _allOutputs = [];
+      _allTransactions = [];
+      _expandedTransactions = {};
       _selectedOutputs = {};
       _isContinuousScanning = false;
       _isContinuousPaused = false;
@@ -2912,6 +3421,15 @@ class _DebugViewState extends State<DebugView> {
             keyImage: outputData['keyImage'] as String,
           );
         }).toList();
+
+        // Restore transactions
+        if (walletData['transactions'] != null) {
+          _allTransactions = (walletData['transactions'] as List)
+              .map((t) => WalletTransaction.fromJson(t as Map<String, dynamic>))
+              .toList();
+        } else {
+          _allTransactions = [];
+        }
 
         // Restore scan state
         final scanState = walletData['scanState'] as Map<String, dynamic>;
