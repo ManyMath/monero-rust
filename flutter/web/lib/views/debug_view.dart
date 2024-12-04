@@ -2915,12 +2915,14 @@ class _DebugViewState extends State<DebugView> {
 
         // Restore scan state
         final scanState = walletData['scanState'] as Map<String, dynamic>;
-        _isContinuousScanning = scanState['isContinuousScanning'] as bool;
-        _isContinuousPaused = scanState['isContinuousPaused'] as bool;
         _continuousScanCurrentHeight = scanState['continuousScanCurrentHeight'] as int;
         _continuousScanTargetHeight = scanState['continuousScanTargetHeight'] as int;
         _isSynced = scanState['isSynced'] as bool;
         _daemonHeight = scanState['daemonHeight'] as int?;
+        // No scan is actually running after loading, so always set to false.
+        // Set paused state based on whether we have scan progress to resume.
+        _isContinuousScanning = false;
+        _isContinuousPaused = _continuousScanCurrentHeight > 0;
 
         // Set block height field to resume scanning from last synced height
         if (_continuousScanCurrentHeight > 0) {
