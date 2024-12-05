@@ -1661,14 +1661,14 @@ class _DebugViewState extends State<DebugView> {
                             );
                         },
                       ),
-                      isExpanded: _expandedPanel == 1,
+                      isExpanded: _expandedPanel == 2,
                     ),
                     ExpansionPanel(
                       headerBuilder: (BuildContext context, bool isExpanded) {
                         return GestureDetector(
                           onTap: () {
                             setState(() {
-                              _expandedPanel = (_expandedPanel == 2) ? null : 2;
+                              _expandedPanel = (_expandedPanel == 3) ? null : 3;
                             });
                           },
                           child: const ListTile(
@@ -1937,7 +1937,7 @@ class _DebugViewState extends State<DebugView> {
                           ],
                         ),
                       ),
-                      isExpanded: _expandedPanel == 2,
+                      isExpanded: _expandedPanel == 3,
                     ),
                     // Transactions Panel
                     ExpansionPanel(
@@ -1952,7 +1952,7 @@ class _DebugViewState extends State<DebugView> {
                         return GestureDetector(
                           onTap: () {
                             setState(() {
-                              _expandedPanel = (_expandedPanel == 3) ? null : 3;
+                              _expandedPanel = (_expandedPanel == 4) ? null : 4;
                             });
                           },
                           child: ListTile(
@@ -2188,7 +2188,7 @@ class _DebugViewState extends State<DebugView> {
                                 ],
                               ),
                       ),
-                      isExpanded: _expandedPanel == 3,
+                      isExpanded: _expandedPanel == 4,
                     ),
                     // Coins Panel
                     ExpansionPanel(
@@ -2235,7 +2235,7 @@ class _DebugViewState extends State<DebugView> {
                         return GestureDetector(
                           onTap: () {
                             setState(() {
-                              _expandedPanel = (_expandedPanel == 4) ? null : 4;
+                              _expandedPanel = (_expandedPanel == 5) ? null : 5;
                             });
                           },
                           child: ListTile(
@@ -2398,14 +2398,14 @@ class _DebugViewState extends State<DebugView> {
                                 ],
                               ),
                       ),
-                      isExpanded: _expandedPanel == 4,
+                      isExpanded: _expandedPanel == 5,
                     ),
                     ExpansionPanel(
                       headerBuilder: (BuildContext context, bool isExpanded) {
                         return GestureDetector(
                           onTap: () {
                             setState(() {
-                              _expandedPanel = (_expandedPanel == 5) ? null : 5;
+                              _expandedPanel = (_expandedPanel == 6) ? null : 6;
                             });
                           },
                           child: const ListTile(
@@ -2626,7 +2626,7 @@ class _DebugViewState extends State<DebugView> {
                           ],
                         ),
                       ),
-                      isExpanded: _expandedPanel == 5,
+                      isExpanded: _expandedPanel == 6,
                     ),
                   ],
                 ),
