@@ -1,11 +1,12 @@
-# monero-rust/flutter/web
-Flutter web extension demonstrating monero-wasm.  Runs as an extension rather 
-than a local webserver because of CORS restrictions.
+# monero-rust/flutter/rinf
+Flutter web extension demonstrating monero-wasm with 
+[rinf](https://github.com/cunarist/rinf) due to CORS restrictions, which add 
+constraints incompatible with regular Flutter web webpages.
 
 ## Requirements
 - Flutter 3.24.3
 - Rust 1.89.0
-- rinf CLI: `cargo install rinf`
+- rinf CLI: `cargo install rinf_cli`
 
 ## Setup
 ```sh
