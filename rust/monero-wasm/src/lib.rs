@@ -6,6 +6,7 @@ use zeroize::Zeroize;
 pub mod abstractions;
 pub mod scanner;
 pub mod rpc_serai;
+pub mod tx_proof;
 
 pub mod tx_builder;
 pub use tx_builder::native;
@@ -14,6 +15,9 @@ pub use scanner::{BlockScanResult, OwnedOutputInfo, scan_block_for_outputs_with_
 
 #[cfg(target_arch = "wasm32")]
 pub mod wasm_impl;
+
+#[cfg(target_arch = "wasm32")]
+pub mod rpc_adapter;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native_impl;
