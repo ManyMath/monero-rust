@@ -12,6 +12,9 @@ use monero_serai::{
         Scanner, ViewPair,
     },
 };
+#[cfg(target_arch = "wasm32")]
+use monero_serai::ringct::generate_key_image;
+use monero_serai::transaction::Input;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use std::collections::HashSet;
@@ -24,6 +27,8 @@ pub struct BlockScanResult {
     pub block_timestamp: u64,
     pub tx_count: usize,
     pub outputs: Vec<OwnedOutputInfo>,
+    pub daemon_height: u64,
+    pub spent_key_images: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +43,16 @@ pub struct OwnedOutputInfo {
     pub subaddress_index: Option<(u32, u32)>,
     pub payment_id: Option<String>,
     pub received_output_bytes: String,
+    pub block_height: u64,
+    pub spent: bool,
+    pub key_image: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MempoolScanResult {
+    pub tx_count: usize,
+    pub outputs: Vec<OwnedOutputInfo>,
+    pub spent_key_images: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -95,6 +110,20 @@ fn view_key_from_seed(seed: &Seed) -> Scalar {
 
     let view: [u8; 32] = Keccak256::digest(&spend_bytes).into();
     Scalar::from_bytes_mod_order(view)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn spend_key_scalar_from_seed(seed: &Seed) -> Scalar {
+    let entropy = seed.entropy();
+    let mut spend_bytes = [0u8; 32];
+    spend_bytes.copy_from_slice(&entropy[..]);
+    Scalar::from_bytes_mod_order(spend_bytes)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn calculate_key_image(spend_scalar: &Scalar, key_offset: &Scalar) -> EdwardsPoint {
+    let one_time_key_scalar = Zeroizing::new(spend_scalar + key_offset);
+    generate_key_image(&one_time_key_scalar)
 }
 
 fn build_subaddress_indices(lookahead: Lookahead) -> Vec<SubaddressIndex> {
@@ -173,6 +202,29 @@ pub fn derive_keys(mnemonic: &str, network_str: &str) -> Result<DerivedKeys, Str
     })
 }
 
+pub async fn get_daemon_height(node_url: &str) -> Result<u64, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use monero_serai::rpc::HttpRpc;
+        let rpc = HttpRpc::new(node_url.to_string())
+            .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
+        let height = rpc.get_height()
+            .await
+            .map_err(|e| format!("Failed to get height: {:?}", e))?;
+        Ok(height as u64)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        use crate::rpc_serai::WasmRpcConnection;
+        let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
+        let height = rpc.get_height()
+            .await
+            .map_err(|e| format!("Failed to get height: {:?}", e))?;
+        Ok(height as u64)
+    }
+}
+
 /// Scan a single block for outputs belonging to the given wallet.
 ///
 /// This function is generic over the RPC connection type, allowing it to work
@@ -244,6 +296,8 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
 
     let spend_point = spend_key_from_seed(&seed);
     let view_scalar = view_key_from_seed(&seed);
+    #[cfg(target_arch = "wasm32")]
+    let spend_scalar = spend_key_scalar_from_seed(&seed);
 
     let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
     let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
@@ -254,6 +308,11 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
         .await
         .map_err(|e| format!("Failed to fetch block hash: {:?}", e))?;
     let block_hash = hex::encode(block_hash_bytes);
+
+    let daemon_height = rpc
+        .get_height()
+        .await
+        .map_err(|e| format!("Failed to fetch daemon height: {:?}", e))? as u64;
 
     let block = rpc
         .get_block_by_number(block_height as usize)
@@ -274,9 +333,19 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
 
     let tx_count = all_transactions.len();
     let mut outputs = Vec::new();
+    let mut spent_key_images = Vec::new();
 
     for tx in all_transactions.iter() {
         let tx_hash = hex::encode(tx.hash());
+
+        // Extract spent key images from transaction inputs
+        for input in &tx.prefix.inputs {
+            if let Input::ToKey { key_image, .. } = input {
+                let ki_hex = hex::encode(key_image.compress().to_bytes());
+                spent_key_images.push(ki_hex);
+            }
+        }
+
         let scan_result = scanner.scan_transaction(tx);
         let owned_outputs = scan_result.ignore_timelock();
 
@@ -298,6 +367,15 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
             };
             let received_output_bytes = hex::encode(output.serialize());
 
+            // Calculate key image (WASM only due to spend scalar requirement)
+            #[cfg(target_arch = "wasm32")]
+            let key_image = {
+                let key_image_point = calculate_key_image(&spend_scalar, &output.data.key_offset);
+                hex::encode(key_image_point.compress().to_bytes())
+            };
+            #[cfg(not(target_arch = "wasm32"))]
+            let key_image = String::new();
+
             outputs.push(OwnedOutputInfo {
                 tx_hash: tx_hash.clone(),
                 output_index,
@@ -309,6 +387,9 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
                 subaddress_index,
                 payment_id,
                 received_output_bytes,
+                block_height,
+                spent: false,
+                key_image,
             });
         }
     }
@@ -319,6 +400,127 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
         block_timestamp,
         tx_count,
         outputs,
+        daemon_height,
+        spent_key_images,
+    })
+}
+
+pub async fn scan_mempool_for_outputs(
+    node_url: &str,
+    mnemonic: &str,
+    network_str: &str,
+) -> Result<MempoolScanResult, String> {
+    scan_mempool_for_outputs_with_lookahead(node_url, mnemonic, network_str, DEFAULT_LOOKAHEAD).await
+}
+
+pub async fn scan_mempool_for_outputs_with_lookahead(
+    node_url: &str,
+    mnemonic: &str,
+    _network_str: &str,
+    lookahead: Lookahead,
+) -> Result<MempoolScanResult, String> {
+    let seed = Seed::from_string(Zeroizing::new(mnemonic.to_string()))
+        .map_err(|e| format!("Invalid mnemonic: {:?}", e))?;
+
+    let spend_point = spend_key_from_seed(&seed);
+    let view_scalar = view_key_from_seed(&seed);
+    #[cfg(target_arch = "wasm32")]
+    let spend_scalar = spend_key_scalar_from_seed(&seed);
+
+    let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
+    let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+    register_subaddresses(&mut scanner, lookahead);
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let rpc = {
+        use monero_serai::rpc::HttpRpc;
+        HttpRpc::new(node_url.to_string())
+            .map_err(|e| format!("Failed to create RPC client: {:?}", e))?
+    };
+
+    #[cfg(target_arch = "wasm32")]
+    let rpc = {
+        use crate::rpc_serai::WasmRpcConnection;
+        Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()))
+    };
+
+    let (mempool_txs, mempool_spent_key_images) = rpc
+        .get_transaction_pool()
+        .await
+        .map_err(|e| format!("Failed to fetch mempool: {:?}", e))?;
+
+    let tx_count = mempool_txs.len();
+    let mut outputs = Vec::new();
+    let mut spent_key_images: Vec<String> = mempool_spent_key_images
+        .iter()
+        .map(hex::encode)
+        .collect();
+
+    for tx in mempool_txs.iter() {
+        let tx_hash = hex::encode(tx.hash());
+
+        // Also extract spent key images from transaction inputs
+        for input in &tx.prefix.inputs {
+            if let Input::ToKey { key_image, .. } = input {
+                let ki_hex = hex::encode(key_image.compress().to_bytes());
+                if !spent_key_images.contains(&ki_hex) {
+                    spent_key_images.push(ki_hex);
+                }
+            }
+        }
+
+        let scan_result = scanner.scan_transaction(tx);
+        let owned_outputs = scan_result.ignore_timelock();
+
+        for output in owned_outputs {
+            let amount = output.data.commitment.amount;
+            let amount_xmr = format!("{:.12}", amount as f64 / 1_000_000_000_000.0);
+            let output_index = output.absolute.o;
+            let key = hex::encode(output.data.key.compress().to_bytes());
+            let key_offset = hex::encode(output.data.key_offset.to_bytes());
+            let commitment_mask = hex::encode(output.data.commitment.mask.to_bytes());
+            let subaddress_index = output
+                .metadata
+                .subaddress
+                .map(|idx| (idx.account(), idx.address()));
+            let payment_id = if output.metadata.payment_id != [0u8; 8] {
+                Some(hex::encode(output.metadata.payment_id))
+            } else {
+                None
+            };
+            let received_output_bytes = hex::encode(output.serialize());
+
+            // Calculate key image (WASM only due to spend scalar requirement)
+            #[cfg(target_arch = "wasm32")]
+            let key_image = {
+                let key_image_point = calculate_key_image(&spend_scalar, &output.data.key_offset);
+                hex::encode(key_image_point.compress().to_bytes())
+            };
+            #[cfg(not(target_arch = "wasm32"))]
+            let key_image = String::new();
+
+            outputs.push(OwnedOutputInfo {
+                tx_hash: tx_hash.clone(),
+                output_index,
+                amount,
+                amount_xmr,
+                key,
+                key_offset,
+                commitment_mask,
+                subaddress_index,
+                payment_id,
+                received_output_bytes,
+                block_height: 0, // Unconfirmed - in mempool
+                spent: false,
+                key_image,
+            });
+        }
+    }
+
+    Ok(MempoolScanResult {
+        tx_count,
+        outputs,
+        spent_key_images,
     })
 }
 
