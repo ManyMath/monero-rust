@@ -17,6 +17,7 @@ async-trait = "0.1"
 futures = "0.3"
 base64 = "0.21"
 zeroize = "1.7"
+base58-monero = { version = "1", default-features = false, features = ["check"] }
 
 # Scanner dependencies (needed for both WASM and native)
 curve25519-dalek = { version = "3.2", default-features = false }

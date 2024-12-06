@@ -1233,6 +1233,7 @@ name = "monero-wasm"
 version = "0.0.1"
 dependencies = [
  "async-trait",
+ "base58-monero",
  "base64",
  "curve25519-dalek",
  "futures",
