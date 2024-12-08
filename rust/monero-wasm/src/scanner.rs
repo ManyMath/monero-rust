@@ -545,6 +545,31 @@ mod tests {
     const TEST_VECTOR_3_SEED: &str = "honked bagpipe alpine juicy faked afoot jostle claim cowl tunnel orphans negative pheasants feast jetting quote frown teeming cycling tribal womanly hills cottage daytime daytime";
     const TEST_VECTOR_3_ADDRESS: &str = "58aWiYGUeqZc5idYcx31rYR58K1EVsCYkN6thrZppU1MGqMowPh1BYy4frVWH5RjGLPWthZy9sRGm5ZC4fgX44HUCmqtGUf";
 
+    // Additional test vectors from monero-serai test suite
+    const TEST_VECTOR_4_SEED: &str = "washing thirsty occur lectures tuesday fainted toxic adapt abnormal memoir nylon mostly building shrugged online ember northern ruby woes dauntless boil family illness inroads northern";
+    const TEST_VECTOR_4_SPEND_KEY: &str =
+        "c0af65c0dd837e666b9d0dfed62745f4df35aed7ea619b2798a709f0fe545403";
+    const TEST_VECTOR_4_VIEW_KEY: &str =
+        "513ba91c538a5a9069e0094de90e927c0cd147fa10428ce3ac1afd49f63e3b01";
+
+    const TEST_VECTOR_5_SEED: &str = "minero ocupar mirar evadir octubre cal logro miope opaco disco ancla litio clase cuello nasal clase fiar avance deseo mente grumo negro cordón croqueta clase";
+    const TEST_VECTOR_5_SPEND_KEY: &str =
+        "ae2c9bebdddac067d73ec0180147fc92bdf9ac7337f1bcafbbe57dd13558eb02";
+    const TEST_VECTOR_5_VIEW_KEY: &str =
+        "18deafb34d55b7a43cae2c1c1c206a3c80c12cc9d1f84640b484b95b7fec3e05";
+
+    const TEST_VECTOR_6_SEED: &str = "poids vaseux tarte bazar poivre effet entier nuance sensuel ennui pacte osselet poudre battre alibi mouton stade paquet pliage gibier type question position projet pliage";
+    const TEST_VECTOR_6_SPEND_KEY: &str =
+        "2dd39ff1a4628a94b5c2ec3e42fb3dfe15c2b2f010154dc3b3de6791e805b904";
+    const TEST_VECTOR_6_VIEW_KEY: &str =
+        "6725b32230400a1032f31d622b44c3a227f88258939b14a7c72e00939e7bdf0e";
+
+    const TEST_VECTOR_7_SEED: &str = "Kaliber Gabelung Tapir Liveband Favorit Specht Enklave Nabel Jupiter Foliant Chronik nisten löten Vase Aussage Rekord Yeti Gesetz Eleganz Alraune Künstler Almweide Jahr Kastanie Almweide";
+    const TEST_VECTOR_7_SPEND_KEY: &str =
+        "79801b7a1b9796856e2397d862a113862e1fdc289a205e79d8d70995b276db06";
+    const TEST_VECTOR_7_VIEW_KEY: &str =
+        "99f0ec556643bd9c038a4ed86edcb9c6c16032c4622ed2e000299d527a792701";
+
     #[test]
     fn test_generate_seed() {
         let seed = generate_seed().expect("Failed to generate seed");
@@ -590,6 +615,62 @@ mod tests {
             .expect("Failed to derive address from test vector 3");
 
         assert_eq!(address, TEST_VECTOR_3_ADDRESS);
+    }
+
+    #[test]
+    fn test_derive_address_test_vector_4_english() {
+        let _address = derive_address(TEST_VECTOR_4_SEED, "mainnet")
+            .expect("Failed to derive address from test vector 4");
+
+        let seed = Seed::from_string(Zeroizing::new(TEST_VECTOR_4_SEED.to_string())).unwrap();
+        let spend: [u8; 32] = *seed.entropy();
+        assert_eq!(hex::encode(spend), TEST_VECTOR_4_SPEND_KEY);
+
+        let view: [u8; 32] = Keccak256::digest(&spend).into();
+        let view_scalar = Scalar::from_bytes_mod_order(view);
+        assert_eq!(hex::encode(view_scalar.to_bytes()), TEST_VECTOR_4_VIEW_KEY);
+    }
+
+    #[test]
+    fn test_derive_address_test_vector_5_spanish() {
+        let _address = derive_address(TEST_VECTOR_5_SEED, "mainnet")
+            .expect("Failed to derive address from test vector 5");
+
+        let seed = Seed::from_string(Zeroizing::new(TEST_VECTOR_5_SEED.to_string())).unwrap();
+        let spend: [u8; 32] = *seed.entropy();
+        assert_eq!(hex::encode(spend), TEST_VECTOR_5_SPEND_KEY);
+
+        let view: [u8; 32] = Keccak256::digest(&spend).into();
+        let view_scalar = Scalar::from_bytes_mod_order(view);
+        assert_eq!(hex::encode(view_scalar.to_bytes()), TEST_VECTOR_5_VIEW_KEY);
+    }
+
+    #[test]
+    fn test_derive_address_test_vector_6_french() {
+        let _address = derive_address(TEST_VECTOR_6_SEED, "mainnet")
+            .expect("Failed to derive address from test vector 6");
+
+        let seed = Seed::from_string(Zeroizing::new(TEST_VECTOR_6_SEED.to_string())).unwrap();
+        let spend: [u8; 32] = *seed.entropy();
+        assert_eq!(hex::encode(spend), TEST_VECTOR_6_SPEND_KEY);
+
+        let view: [u8; 32] = Keccak256::digest(&spend).into();
+        let view_scalar = Scalar::from_bytes_mod_order(view);
+        assert_eq!(hex::encode(view_scalar.to_bytes()), TEST_VECTOR_6_VIEW_KEY);
+    }
+
+    #[test]
+    fn test_derive_address_test_vector_7_german() {
+        let _address = derive_address(TEST_VECTOR_7_SEED, "mainnet")
+            .expect("Failed to derive address from test vector 7");
+
+        let seed = Seed::from_string(Zeroizing::new(TEST_VECTOR_7_SEED.to_string())).unwrap();
+        let spend: [u8; 32] = *seed.entropy();
+        assert_eq!(hex::encode(spend), TEST_VECTOR_7_SPEND_KEY);
+
+        let view: [u8; 32] = Keccak256::digest(&spend).into();
+        let view_scalar = Scalar::from_bytes_mod_order(view);
+        assert_eq!(hex::encode(view_scalar.to_bytes()), TEST_VECTOR_7_VIEW_KEY);
     }
 
     #[test]
