@@ -22,7 +22,7 @@ serde = { version = "1.0.219", features = ["derive"] }
 tokio = { version = "1.45.0", features = ["rt", "macros", "time"] }
 async-trait = "0.1.87"
 messages = "0.3.1"
-monero-wasm = { path = "../monero-wasm" }
+monero-wasm = { path = "../../../../rust/monero-wasm" }
 
 # Encryption dependencies
 chacha20poly1305 = "0.10"
