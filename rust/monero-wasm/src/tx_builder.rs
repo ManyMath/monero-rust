@@ -506,6 +506,7 @@ pub mod native {
         })
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn broadcast_transaction(
         node_url: &str,
         tx_blob_hex: &str,
@@ -526,6 +527,27 @@ pub mod native {
         Ok(())
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub async fn broadcast_transaction(
+        node_url: &str,
+        tx_blob_hex: &str,
+    ) -> Result<(), String> {
+        let tx_bytes = hex::decode(tx_blob_hex)
+            .map_err(|e| format!("Invalid hex: {:?}", e))?;
+
+        let tx = Transaction::read::<&[u8]>(&mut tx_bytes.as_ref())
+            .map_err(|e| format!("Invalid transaction: {:?}", e))?;
+
+        let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
+
+        rpc.publish_transaction(&tx)
+            .await
+            .map_err(|e| format!("Failed to broadcast: {:?}", e))?;
+
+        Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn get_received_outputs_from_scan(
         node_url: &str,
         block_height: u64,
@@ -540,6 +562,46 @@ pub mod native {
 
         let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
+
+        let block = rpc
+            .get_block_by_number(block_height as usize)
+            .await
+            .map_err(|e| format!("Failed to get block: {:?}", e))?;
+
+        let mut all_transactions = vec![block.miner_tx];
+
+        if !block.txs.is_empty() {
+            let fetched_txs = rpc
+                .get_transactions(&block.txs)
+                .await
+                .map_err(|e| format!("Failed to get transactions: {:?}", e))?;
+            all_transactions.extend(fetched_txs);
+        }
+
+        let mut received_outputs = Vec::new();
+        for tx in all_transactions.iter() {
+            let scan_result = scanner.scan_transaction(tx);
+            let outputs = scan_result.ignore_timelock();
+            received_outputs.extend(outputs);
+        }
+
+        Ok(received_outputs)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub async fn get_received_outputs_from_scan(
+        node_url: &str,
+        block_height: u64,
+        seed_phrase: &str,
+        _network_str: &str,
+    ) -> Result<Vec<ReceivedOutput>, String> {
+        let seed = Seed::from_string(Zeroizing::new(seed_phrase.to_string()))
+            .map_err(|e| format!("Invalid seed: {:?}", e))?;
+
+        let view_pair = view_pair_from_seed(&seed);
+        let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+
+        let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
 
         let block = rpc
             .get_block_by_number(block_height as usize)
