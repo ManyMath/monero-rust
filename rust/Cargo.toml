@@ -1,6 +1,5 @@
 [workspace]
 members = [
     "monero-rust",
-    "monero-wasm",
 ]
 resolver = "2"

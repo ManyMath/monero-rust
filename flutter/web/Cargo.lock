@@ -747,7 +747,7 @@ dependencies = [
  "base64 0.22.1",
  "chacha20poly1305",
  "messages",
- "monero-wasm",
+ "monero-rust",
  "rand",
  "rinf",
  "serde",
@@ -1056,6 +1056,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "monero-rust"
+version = "0.0.4"
+dependencies = [
+ "async-trait",
+ "base58-monero",
+ "base64 0.21.7",
+ "curve25519-dalek",
+ "futures",
+ "getrandom 0.2.17",
+ "gloo-timers",
+ "hex",
+ "js-sys",
+ "monero-serai",
+ "rand",
+ "rand_core 0.6.4",
+ "serde",
+ "serde_json",
+ "sha3",
+ "thiserror",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "zeroize",
+]
+
+[[package]]
 name = "monero-serai"
 version = "0.1.4-alpha"
 dependencies = [
@@ -1083,32 +1109,6 @@ dependencies = [
  "sha3",
  "subtle",
  "thiserror",
- "zeroize",
-]
-
-[[package]]
-name = "monero-wasm"
-version = "0.0.1"
-dependencies = [
- "async-trait",
- "base58-monero",
- "base64 0.21.7",
- "curve25519-dalek",
- "futures",
- "getrandom 0.2.17",
- "gloo-timers",
- "hex",
- "js-sys",
- "monero-serai",
- "rand",
- "rand_core 0.6.4",
- "serde",
- "serde_json",
- "sha3",
- "thiserror",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
  "zeroize",
 ]
 

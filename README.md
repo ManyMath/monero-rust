@@ -7,17 +7,17 @@ Rust Monero wallet tooling compiled to WebAssembly, with a Flutter web extension
 - rinf CLI: `cargo install rinf`
 
 ## Structure
-### rust/monero-wasm
+### rust/monero-rust
 WebAssembly library providing Monero wallet primitives for browser environments. Abstracts networking, storage, and time for web platform constraints.
 
 Test:
 ```sh
-cd rust/monero-wasm
+cd rust/monero-rust
 cargo test --lib
 ```
 
 ### flutter/web
-Flutter web extension demonstrating monero-wasm. See `flutter/web/README.md` for details.
+Flutter web extension demonstrating monero-rust. See `flutter/web/README.md` for details.
 
 Build:
 ```sh

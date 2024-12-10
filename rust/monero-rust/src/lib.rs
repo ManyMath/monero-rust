@@ -20,7 +20,7 @@ pub use scanner::{
 
 /// Simple integration test function
 pub fn test_integration() -> String {
-    "monero-wasm works".to_string()
+    "monero-rust works".to_string()
 }
 
 #[cfg(target_arch = "wasm32")]

@@ -85,7 +85,7 @@ impl WalletActor {
     async fn listen_to_test(mut self_addr: Address<Self>) {
         let receiver = MoneroTestRequest::get_dart_signal_receiver();
         while let Some(_signal_pack) = receiver.recv().await {
-            let result = monero_wasm::test_integration();
+            let result = monero_rust::test_integration();
             MoneroTestResponse { result }.send_signal_to_dart();
         }
     }
@@ -93,7 +93,7 @@ impl WalletActor {
     async fn listen_to_generate_seed(mut self_addr: Address<Self>) {
         let receiver = GenerateSeedRequest::get_dart_signal_receiver();
         while let Some(_signal_pack) = receiver.recv().await {
-            match monero_wasm::generate_seed() {
+            match monero_rust::generate_seed() {
                 Ok(seed) => {
                     SeedGeneratedResponse {
                         seed,
@@ -118,7 +118,7 @@ impl WalletActor {
         let receiver = DeriveAddressRequest::get_dart_signal_receiver();
         while let Some(signal_pack) = receiver.recv().await {
             let request = signal_pack.message;
-            match monero_wasm::derive_address(&request.seed, &request.network) {
+            match monero_rust::derive_address(&request.seed, &request.network) {
                 Ok(address) => {
                     AddressDerivedResponse {
                         address,
@@ -143,7 +143,7 @@ impl WalletActor {
         let receiver = DeriveKeysRequest::get_dart_signal_receiver();
         while let Some(signal_pack) = receiver.recv().await {
             let request = signal_pack.message;
-            match monero_wasm::derive_keys(&request.seed, &request.network) {
+            match monero_rust::derive_keys(&request.seed, &request.network) {
                 Ok(keys) => {
                     KeysDerivedResponse {
                         address: keys.address,
@@ -180,7 +180,7 @@ impl WalletActor {
             let seed = request.seed.clone();
             let network = request.network.clone();
 
-            match monero_wasm::scan_block_for_outputs_with_url(
+            match monero_rust::scan_block_for_outputs_with_url(
                 &request.node_url,
                 request.block_height,
                 &request.seed,
@@ -279,7 +279,7 @@ impl WalletActor {
         while let Some(signal_pack) = receiver.recv().await {
             let request = signal_pack.message;
 
-            match monero_wasm::get_daemon_height(&request.node_url).await {
+            match monero_rust::get_daemon_height(&request.node_url).await {
                 Ok(height) => {
                     DaemonHeightResponse {
                         success: true,
@@ -328,7 +328,7 @@ impl WalletActor {
             let request = signal_pack.message;
 
             wasm_bindgen_futures::spawn_local(async move {
-                match monero_wasm::scan_mempool_for_outputs(
+                match monero_rust::scan_mempool_for_outputs(
                     &request.node_url,
                     &request.seed,
                     &request.network,
@@ -524,7 +524,7 @@ impl Notifiable<StartContinuousScan> for WalletActor {
         let mut self_addr = ctx.address();
 
         wasm_bindgen_futures::spawn_local(async move {
-            match monero_wasm::get_daemon_height(&node_url).await {
+            match monero_rust::get_daemon_height(&node_url).await {
                 Ok(daemon_height) => {
                     // Initialize scanning state
                     let _ = self_addr
@@ -614,7 +614,7 @@ impl Notifiable<ContinueScan> for WalletActor {
         self.scan_current_height += 1;
 
         wasm_bindgen_futures::spawn_local(async move {
-            match monero_wasm::scan_block_for_outputs_with_url(&node_url, block_height, &seed, &network).await {
+            match monero_rust::scan_block_for_outputs_with_url(&node_url, block_height, &seed, &network).await {
                 Ok(result) => {
                     let outputs = result
                         .outputs

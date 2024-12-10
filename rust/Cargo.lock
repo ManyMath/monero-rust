@@ -1229,8 +1229,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "monero-wasm"
-version = "0.0.1"
+name = "monero-rust"
+version = "0.0.4"
 dependencies = [
  "async-trait",
  "base58-monero",

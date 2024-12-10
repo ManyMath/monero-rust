@@ -1,6 +1,6 @@
 [package]
-name = "monero-wasm"
-version = "0.0.1"
+name = "monero-rust"
+version = "0.0.4"
 edition = "2021"
 
 [features]
@@ -19,7 +19,7 @@ base64 = "0.21"
 zeroize = "1.7"
 base58-monero = { version = "1", default-features = false, features = ["check"] }
 
-# Scanner dependencies (needed for both WASM and native)
+# Scanner
 curve25519-dalek = { version = "3.2", default-features = false }
 sha3 = { version = "0.10", default-features = false }
 hex = { version = "0.4", default-features = false, features = ["alloc"] }
@@ -27,7 +27,7 @@ rand_core = { version = "0.6", default-features = false }
 rand = { version = "0.8", default-features = false, features = ["getrandom"] }
 js-sys = "0.3"
 
-# WASM-specific dependencies
+# WASM
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Window", "Storage", "Request", "RequestInit", "RequestMode", "RequestCredentials", "Response", "Headers", "console"] }
@@ -35,7 +35,7 @@ wasm-bindgen-futures = "0.4"
 gloo-timers = { version = "0.3", features = ["futures"] }
 monero-serai = { path = "../monero-serai-mirror", default-features = false, features = ["test-helpers"] }
 
-# Native-specific dependencies (full features)
+# Native
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 monero-serai = { path = "../monero-serai-mirror", features = ["http-rpc", "test-helpers"] }
 curve25519-dalek = { version = "3.2", features = ["std"] }
@@ -47,6 +47,6 @@ rand = "0.8"
 [dev-dependencies]
 monero-serai = { path = "../monero-serai-mirror", features = ["http-rpc", "test-helpers"] }
 
-# Tokio is only needed for non-WASM tests (native async runtime)
+# Tokio is only needed for native tests
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tokio = { version = "1.29", features = ["full"] }

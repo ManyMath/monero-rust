@@ -76,7 +76,7 @@ impl TxBuilderActor {
             let request = signal_pack.message;
 
             // Generate the proof (network is passed as string)
-            match monero_wasm::tx_proof::generate_out_proof_v2(
+            match monero_rust::tx_proof::generate_out_proof_v2(
                 &request.tx_id,
                 &request.tx_key,
                 &request.recipient_address,
@@ -255,12 +255,12 @@ impl TxBuilderActor {
         msg: BuildTransaction,
         wallet_data: WalletData,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(String, u64, String, String, Vec<String>, Vec<ChangeOutput>), String>>>> {
-        use monero_wasm::native::{create_transaction, TransactionResult};
+        use monero_rust::native::{create_transaction, TransactionResult};
 
-        let outputs_vec: Vec<monero_wasm::native::StoredOutputData> = wallet_data
+        let outputs_vec: Vec<monero_rust::native::StoredOutputData> = wallet_data
             .outputs
             .iter()
-            .map(|o| monero_wasm::native::StoredOutputData {
+            .map(|o| monero_rust::native::StoredOutputData {
                 tx_hash: o.tx_hash.clone(),
                 output_index: o.output_index,
                 amount: o.amount,
@@ -316,7 +316,7 @@ impl Notifiable<BroadcastTransaction> for TxBuilderActor {
 
         // Spawn in local task to avoid Send requirements
         wasm_bindgen_futures::spawn_local(async move {
-            match monero_wasm::native::broadcast_transaction(&msg.node_url, &msg.tx_blob).await {
+            match monero_rust::native::broadcast_transaction(&msg.node_url, &msg.tx_blob).await {
                 Ok(()) => {
                     #[cfg(target_arch = "wasm32")]
                     web_sys::console::log_1(&"Transaction broadcast successful!".into());
