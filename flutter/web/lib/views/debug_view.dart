@@ -8,6 +8,7 @@ import '../src/bindings/bindings.dart';
 import '../utils/key_parser.dart';
 import '../services/extension_service.dart';
 import '../widgets/password_dialog.dart';
+import '../widgets/wallet_id_dialog.dart';
 import '../services/wallet_storage_service.dart';
 
 /// Represents a wallet transaction with associated inputs and outputs.
@@ -184,6 +185,10 @@ class _DebugViewState extends State<DebugView> {
   String? _saveError;
   String? _loadError;
   String? _lastSaveTime;
+  bool _isExporting = false;
+  bool _isImporting = false;
+  String? _exportError;
+  String? _importError;
 
   // Helper to get storage key for current wallet
   String get _storageKey => 'monero_wallet_$_walletId';
@@ -1449,6 +1454,44 @@ class _DebugViewState extends State<DebugView> {
                                 ),
                               ],
                             ),
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: OutlinedButton.icon(
+                                    onPressed: _isExporting ? null : _exportWallet,
+                                    icon: _isExporting
+                                        ? const SizedBox(
+                                            width: 16,
+                                            height: 16,
+                                            child: CircularProgressIndicator(strokeWidth: 2),
+                                          )
+                                        : const Icon(Icons.file_download),
+                                    label: Text(_isExporting ? 'Exporting...' : 'Export'),
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: Colors.blue,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: OutlinedButton.icon(
+                                    onPressed: _isImporting ? null : _importWallet,
+                                    icon: _isImporting
+                                        ? const SizedBox(
+                                            width: 16,
+                                            height: 16,
+                                            child: CircularProgressIndicator(strokeWidth: 2),
+                                          )
+                                        : const Icon(Icons.file_upload),
+                                    label: Text(_isImporting ? 'Importing...' : 'Import'),
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: Colors.blue,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
                             if (_saveError != null) ...[
                               const SizedBox(height: 12),
                               Container(
@@ -1475,6 +1518,36 @@ class _DebugViewState extends State<DebugView> {
                                 ),
                                 child: Text(
                                   _loadError!,
+                                  style: TextStyle(color: Colors.red.shade900, fontSize: 12),
+                                ),
+                              ),
+                            ],
+                            if (_exportError != null) ...[
+                              const SizedBox(height: 12),
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: Colors.red.shade50,
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(color: Colors.red.shade200),
+                                ),
+                                child: Text(
+                                  _exportError!,
+                                  style: TextStyle(color: Colors.red.shade900, fontSize: 12),
+                                ),
+                              ),
+                            ],
+                            if (_importError != null) ...[
+                              const SizedBox(height: 12),
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: Colors.red.shade50,
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(color: Colors.red.shade200),
+                                ),
+                                child: Text(
+                                  _importError!,
                                   style: TextStyle(color: Colors.red.shade900, fontSize: 12),
                                 ),
                               ),
@@ -3471,6 +3544,343 @@ class _DebugViewState extends State<DebugView> {
         _isLoadingWallet = false;
         _loadError = 'Failed to parse wallet data: $e';
       });
+    }
+  }
+
+  /// Export wallet data as an encrypted file
+  Future<void> _exportWallet() async {
+    // Validation
+    if (_walletId.isEmpty) {
+      setState(() {
+        _exportError = 'No wallet selected for export';
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Please select or save a wallet first'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+
+    // Check if wallet has saved data
+    if (!html.window.localStorage.containsKey(_storageKey)) {
+      setState(() {
+        _exportError = 'No saved data found for this wallet';
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Please save wallet data before exporting'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+
+    setState(() {
+      _isExporting = true;
+      _exportError = null;
+    });
+
+    try {
+      // Get encrypted data from localStorage
+      final encryptedData = html.window.localStorage[_storageKey];
+      if (encryptedData == null || encryptedData.isEmpty) {
+        throw Exception('Wallet data is empty');
+      }
+
+      // Generate filename with timestamp
+      final now = DateTime.now();
+      final timestamp = '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}-'
+          '${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}';
+      final filename = '${_walletId}_$timestamp.monero-wallet';
+
+      // Create blob and trigger download (WASM-compatible)
+      final bytes = utf8.encode(encryptedData);
+      final blob = html.Blob([bytes], 'application/octet-stream');
+      final url = html.Url.createObjectUrlFromBlob(blob);
+      final anchor = html.AnchorElement(href: url)
+        ..setAttribute('download', filename)
+        ..click();
+      html.Url.revokeObjectUrl(url);
+
+      setState(() {
+        _isExporting = false;
+        _exportError = null;
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Wallet "$_walletId" exported as $filename'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+
+      debugPrint('[EXPORT] Successfully exported wallet: $_walletId');
+    } catch (e) {
+      setState(() {
+        _isExporting = false;
+        _exportError = 'Export failed: $e';
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Export failed: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+
+      debugPrint('[EXPORT] Export failed: $e');
+    }
+  }
+
+  /// Import wallet data from an encrypted file
+  Future<void> _importWallet() async {
+    setState(() {
+      _isImporting = true;
+      _importError = null;
+    });
+
+    try {
+      // Create file input element (WASM-compatible)
+      final uploadInput = html.FileUploadInputElement();
+      uploadInput.accept = '.monero-wallet,*'; // Prefer .monero-wallet, allow all as fallback
+      uploadInput.click();
+
+      // Wait for file selection
+      await uploadInput.onChange.first;
+      final files = uploadInput.files;
+      if (files == null || files.isEmpty) {
+        setState(() {
+          _isImporting = false;
+        });
+        return;
+      }
+
+      final file = files[0];
+      debugPrint('[IMPORT] Selected file: ${file.name} (${file.size} bytes)');
+
+      // Validate file size (max 10MB as sanity check)
+      if (file.size > 10 * 1024 * 1024) {
+        throw Exception('File too large (max 10MB)');
+      }
+
+      // Extract suggested wallet ID from filename
+      String suggestedWalletId = file.name;
+      if (suggestedWalletId.endsWith('.monero-wallet')) {
+        suggestedWalletId = suggestedWalletId.substring(0, suggestedWalletId.length - 14);
+      }
+      // Remove timestamp if present (pattern: _20260204-143025)
+      final timestampRegex = RegExp(r'_\d{8}-\d{6}$');
+      suggestedWalletId = suggestedWalletId.replaceAll(timestampRegex, '');
+
+      // Ensure valid wallet ID
+      if (suggestedWalletId.isEmpty || !RegExp(r'^[a-zA-Z0-9_-]+$').hasMatch(suggestedWalletId)) {
+        suggestedWalletId = 'imported-wallet';
+      }
+
+      // Prompt for wallet ID (loop until valid non-conflicting ID or user cancels)
+      String? walletId;
+      bool shouldOverwrite = false;
+
+      while (true) {
+        if (!mounted) return;
+
+        walletId = await showDialog<String>(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => WalletIdDialog(
+            suggestedWalletId: suggestedWalletId,
+            existingWalletIds: _availableWalletIds,
+          ),
+        );
+
+        if (walletId == null || walletId.isEmpty) {
+          setState(() {
+            _isImporting = false;
+          });
+          return;
+        }
+
+        // Check if wallet ID already exists
+        if (_availableWalletIds.contains(walletId)) {
+          if (!mounted) return;
+
+          // Show overwrite confirmation dialog
+          final result = await showDialog<String>(
+            context: context,
+            barrierDismissible: false,
+            builder: (context) => AlertDialog(
+              title: const Text('Wallet Already Exists'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('A wallet with ID "$walletId" already exists.'),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'What would you like to do?',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop('cancel'),
+                  child: const Text('Cancel Import'),
+                ),
+                OutlinedButton(
+                  onPressed: () => Navigator.of(context).pop('choose_different'),
+                  child: const Text('Choose Different ID'),
+                ),
+                ElevatedButton(
+                  onPressed: () => Navigator.of(context).pop('overwrite'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.orange,
+                    foregroundColor: Colors.white,
+                  ),
+                  child: const Text('Overwrite Existing'),
+                ),
+              ],
+            ),
+          );
+
+          if (result == 'cancel') {
+            setState(() {
+              _isImporting = false;
+            });
+            return;
+          } else if (result == 'choose_different') {
+            // Loop back to prompt for a different wallet ID
+            continue;
+          } else if (result == 'overwrite') {
+            shouldOverwrite = true;
+            break; // Exit loop and proceed with import
+          }
+        } else {
+          // Wallet ID doesn't exist, proceed with import
+          break;
+        }
+      }
+
+      // Read file content (WASM-compatible)
+      final reader = html.FileReader();
+      reader.readAsText(file);
+      await reader.onLoad.first;
+
+      final encryptedData = reader.result as String?;
+      if (encryptedData == null || encryptedData.isEmpty) {
+        throw Exception('File is empty or could not be read');
+      }
+
+      debugPrint('[IMPORT] Read ${encryptedData.length} characters from file');
+
+      // Prompt for password to verify decryption
+      if (!mounted) return;
+      final password = await showDialog<String>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => PasswordDialog(
+          isUnlock: true,
+          title: 'Verify Wallet Password',
+          submitLabel: 'Import',
+        ),
+      );
+
+      if (password == null) {
+        setState(() {
+          _isImporting = false;
+        });
+        return;
+      }
+
+      // Verify decryption by attempting to load
+      final completer = Completer<String?>();
+      final subscription = WalletDataLoadedResponse.rustSignalStream.listen((signal) {
+        if (!completer.isCompleted) {
+          if (signal.message.success && signal.message.walletDataJson != null) {
+            completer.complete(signal.message.walletDataJson);
+          } else {
+            completer.complete(null);
+          }
+        }
+      });
+
+      LoadWalletDataRequest(
+        password: password,
+        encryptedData: encryptedData,
+      ).sendSignalToRust();
+
+      final jsonString = await completer.future.timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => null,
+      );
+
+      await subscription.cancel();
+
+      if (jsonString == null) {
+        throw Exception('Failed to decrypt file (wrong password or corrupted file)');
+      }
+
+      // Verify JSON is valid
+      jsonDecode(jsonString);
+
+      // Store to localStorage with new wallet ID
+      final storageKey = 'monero_wallet_$walletId';
+      html.window.localStorage[storageKey] = encryptedData;
+      debugPrint('[IMPORT] Stored wallet data to: $storageKey');
+
+      setState(() {
+        _isImporting = false;
+        _importError = null;
+      });
+
+      // Refresh wallet list
+      _refreshAvailableWallets();
+
+      // Switch to imported wallet
+      await _switchWallet(walletId);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              shouldOverwrite
+                ? 'Wallet "$walletId" overwritten successfully'
+                : 'Wallet "$walletId" imported successfully'
+            ),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+
+      debugPrint('[IMPORT] Successfully ${shouldOverwrite ? 'overwritten' : 'imported'} wallet: $walletId');
+    } catch (e) {
+      setState(() {
+        _isImporting = false;
+        _importError = 'Import failed: $e';
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Import failed: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+
+      debugPrint('[IMPORT] Import failed: $e');
     }
   }
 
