@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:html' as html;
+import 'dart:js_util' as js_util;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:tuple/tuple.dart';
@@ -3599,14 +3600,74 @@ class _DebugViewState extends State<DebugView> {
           '${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}';
       final filename = '${_walletId}_$timestamp.monero-wallet';
 
-      // Create blob and trigger download (WASM-compatible)
+      // Create blob with wallet data
       final bytes = utf8.encode(encryptedData);
       final blob = html.Blob([bytes], 'application/octet-stream');
-      final url = html.Url.createObjectUrlFromBlob(blob);
-      final anchor = html.AnchorElement(href: url)
-        ..setAttribute('download', filename)
-        ..click();
-      html.Url.revokeObjectUrl(url);
+
+      // Try to use File System Access API for "Save As" dialog (Chrome 86+, Edge 86+)
+      // Falls back to automatic download for unsupported browsers (Firefox, Safari)
+      bool usedSaveAsDialog = false;
+      try {
+        if (js_util.hasProperty(html.window, 'showSaveFilePicker')) {
+          debugPrint('[EXPORT] Using File System Access API (Save As dialog)');
+
+          // Configure file picker options
+          final options = js_util.newObject();
+          js_util.setProperty(options, 'suggestedName', filename);
+
+          // Set file types filter
+          final types = js_util.newObject();
+          js_util.setProperty(types, 'description', 'Monero Wallet Files');
+          final accept = js_util.newObject();
+          js_util.setProperty(accept, 'application/octet-stream', ['.monero-wallet']);
+          js_util.setProperty(types, 'accept', accept);
+          js_util.setProperty(options, 'types', [types]);
+
+          // Show save file picker
+          final fileHandlePromise = js_util.callMethod(
+            html.window,
+            'showSaveFilePicker',
+            [options],
+          );
+          final fileHandle = await js_util.promiseToFuture(fileHandlePromise);
+
+          // Create writable stream
+          final writablePromise = js_util.callMethod(fileHandle, 'createWritable', []);
+          final writable = await js_util.promiseToFuture(writablePromise);
+
+          // Write blob to file
+          final writePromise = js_util.callMethod(writable, 'write', [blob]);
+          await js_util.promiseToFuture(writePromise);
+
+          // Close the file
+          final closePromise = js_util.callMethod(writable, 'close', []);
+          await js_util.promiseToFuture(closePromise);
+
+          usedSaveAsDialog = true;
+          debugPrint('[EXPORT] File saved via Save As dialog');
+        }
+      } catch (e) {
+        // User cancelled the save dialog or API not supported
+        if (e.toString().contains('aborted')) {
+          debugPrint('[EXPORT] User cancelled save dialog');
+          setState(() {
+            _isExporting = false;
+          });
+          return;
+        }
+        debugPrint('[EXPORT] File System Access API not available or failed: $e');
+        // Continue to fallback method
+      }
+
+      // Fallback: Use traditional download method (Firefox, Safari, or if API failed)
+      if (!usedSaveAsDialog) {
+        debugPrint('[EXPORT] Using fallback download method');
+        final url = html.Url.createObjectUrlFromBlob(blob);
+        final anchor = html.AnchorElement(href: url)
+          ..setAttribute('download', filename)
+          ..click();
+        html.Url.revokeObjectUrl(url);
+      }
 
       setState(() {
         _isExporting = false;
@@ -3616,13 +3677,17 @@ class _DebugViewState extends State<DebugView> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Wallet "$_walletId" exported as $filename'),
+            content: Text(
+              usedSaveAsDialog
+                ? 'Wallet "$_walletId" saved'
+                : 'Wallet "$_walletId" exported as $filename'
+            ),
             duration: const Duration(seconds: 3),
           ),
         );
       }
 
-      debugPrint('[EXPORT] Successfully exported wallet: $_walletId');
+      debugPrint('[EXPORT] Successfully exported wallet: $_walletId (method: ${usedSaveAsDialog ? 'Save As dialog' : 'auto-download'})');
     } catch (e) {
       setState(() {
         _isExporting = false;

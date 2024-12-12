@@ -10,7 +10,8 @@
 
   "permissions": [
     "storage",
-    "sidePanel"
+    "sidePanel",
+    "downloads"
   ],
 
   "host_permissions": [
