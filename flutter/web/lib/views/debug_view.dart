@@ -1316,6 +1316,30 @@ class _DebugViewState extends State<DebugView> {
                     ExpansionPanel(
                       headerBuilder: (BuildContext context, bool isExpanded) {
                         final hasData = html.window.localStorage.containsKey(_storageKey);
+
+                        // Calculate total storage size
+                        int totalBytes = 0;
+                        for (var i = 0; i < html.window.localStorage.length; i++) {
+                          final key = html.window.localStorage.keys.elementAt(i);
+                          if (key.startsWith('monero_wallet_')) {
+                            final value = html.window.localStorage[key];
+                            if (value != null) {
+                              totalBytes += value.length;
+                            }
+                          }
+                        }
+
+                        // Format storage size
+                        String formatBytes(int bytes) {
+                          if (bytes >= 1048576) { // 1 MiB = 1024 * 1024
+                            return '${(bytes / 1048576).toStringAsFixed(2)} MiB';
+                          } else if (bytes >= 1024) { // 1 KiB
+                            return '${(bytes / 1024).toStringAsFixed(2)} KiB';
+                          } else {
+                            return '$bytes bytes';
+                          }
+                        }
+
                         return GestureDetector(
                           onTap: () {
                             setState(() {
@@ -1328,7 +1352,9 @@ class _DebugViewState extends State<DebugView> {
                               style: TextStyle(fontWeight: FontWeight.bold),
                             ),
                             subtitle: Text(
-                              hasData ? 'Wallet data stored' : 'No stored data',
+                              hasData
+                                ? 'Data stored: ${formatBytes(totalBytes)}'
+                                : 'No stored data',
                               style: const TextStyle(fontSize: 12),
                             ),
                           ),
