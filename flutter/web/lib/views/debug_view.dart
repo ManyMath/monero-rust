@@ -11,6 +11,7 @@ import '../services/extension_service.dart';
 import '../widgets/password_dialog.dart';
 import '../widgets/wallet_id_dialog.dart';
 import '../services/wallet_storage_service.dart';
+import '../models/wallet_instance.dart';
 
 /// Represents a wallet transaction with associated inputs and outputs.
 class WalletTransaction {
@@ -128,6 +129,19 @@ class _DebugViewState extends State<DebugView> {
   String _walletId = '';
   List<String> _availableWalletIds = [];
 
+  // Multi-wallet instances (wallets currently open/scanning)
+  Map<String, WalletInstance> _openWallets = {};
+  String? _activeWalletId; // Currently displayed wallet
+
+  WalletInstance? get _activeWallet =>
+      _activeWalletId != null ? _openWallets[_activeWalletId] : null;
+
+  List<WalletInstance> get _activeWallets =>
+      _openWallets.values.where((w) => !w.isClosed).toList();
+
+  List<WalletInstance> get _scannableWallets =>
+      _openWallets.values.where((w) => !w.isClosed && w.includeInScan).toList();
+
   String _network = 'stagenet';
   final String _seedType = '25 word';
   String? _validationError;
@@ -217,6 +231,7 @@ class _DebugViewState extends State<DebugView> {
   StreamSubscription? _syncProgressSubscription;
   StreamSubscription? _spentStatusUpdatedSubscription;
   StreamSubscription? _mempoolScanSubscription;
+  StreamSubscription? _multiWalletScanSubscription;
 
   @override
   void initState() {
@@ -496,6 +511,81 @@ class _DebugViewState extends State<DebugView> {
       });
     });
 
+    _multiWalletScanSubscription = MultiWalletScanResponse.rustSignalStream.listen((signalPack) {
+      final response = signalPack.message;
+
+      if (!response.success) {
+        setState(() {
+          _scanError = response.error;
+        });
+        return;
+      }
+
+      setState(() {
+        // Update daemon height
+        _daemonHeight = response.daemonHeight.toInt();
+
+        // Distribute outputs to corresponding wallets
+        for (var walletResult in response.walletResults) {
+          final walletInstance = _openWallets.values.cast<WalletInstance?>().firstWhere(
+            (w) => w != null && w.address == walletResult.address,
+            orElse: () => null,
+          );
+
+          if (walletInstance != null) {
+            // Add new outputs (avoid duplicates)
+            final existingOutputKeys = walletInstance.outputs
+                .map((o) => '${o.txHash}:${o.outputIndex}')
+                .toSet();
+
+            final newOutputs = walletResult.outputs.where((o) {
+              final key = '${o.txHash}:${o.outputIndex}';
+              return !existingOutputKeys.contains(key);
+            }).toList();
+
+            if (newOutputs.isNotEmpty) {
+              walletInstance.outputs = [...walletInstance.outputs, ...newOutputs];
+            }
+
+            // Update heights
+            if (response.blockHeight.toInt() > walletInstance.currentHeight) {
+              walletInstance.currentHeight = response.blockHeight.toInt();
+            }
+            walletInstance.daemonHeight = response.daemonHeight.toInt();
+          }
+        }
+
+        // Mark spent outputs
+        for (var walletInstance in _openWallets.values) {
+          for (int i = 0; i < walletInstance.outputs.length; i++) {
+            if (response.spentKeyImages.contains(walletInstance.outputs[i].keyImage)) {
+              walletInstance.outputs[i] = OwnedOutput(
+                txHash: walletInstance.outputs[i].txHash,
+                outputIndex: walletInstance.outputs[i].outputIndex,
+                amount: walletInstance.outputs[i].amount,
+                amountXmr: walletInstance.outputs[i].amountXmr,
+                key: walletInstance.outputs[i].key,
+                keyOffset: walletInstance.outputs[i].keyOffset,
+                commitmentMask: walletInstance.outputs[i].commitmentMask,
+                subaddressIndex: walletInstance.outputs[i].subaddressIndex,
+                paymentId: walletInstance.outputs[i].paymentId,
+                receivedOutputBytes: walletInstance.outputs[i].receivedOutputBytes,
+                blockHeight: walletInstance.outputs[i].blockHeight,
+                spent: true,
+                keyImage: walletInstance.outputs[i].keyImage,
+              );
+            }
+          }
+        }
+
+        // If viewing active wallet, update its display
+        if (_activeWalletId != null && _activeWallet != null) {
+          _allOutputs = _activeWallet!.outputs;
+          // Transactions will be updated on next scan response
+        }
+      });
+    });
+
     // Load available wallets from localStorage
     _refreshAvailableWallets();
   }
@@ -749,7 +839,6 @@ class _DebugViewState extends State<DebugView> {
       _scanError = null;
     });
 
-    // Prepend http:// if not present
     final fullNodeUrl = nodeUrl.startsWith('http://') || nodeUrl.startsWith('https://')
         ? nodeUrl
         : 'http://$nodeUrl';
@@ -763,19 +852,23 @@ class _DebugViewState extends State<DebugView> {
   }
 
   void _startContinuousScan() {
-    if (_controller.text.trim().isEmpty) {
-      setState(() {
-        _scanError = 'Please enter a seed phrase first';
-      });
-      return;
-    }
+    final walletsToScan = _scannableWallets;
 
-    final result = KeyParser.parse(_controller.text);
-    if (!result.isValid) {
-      setState(() {
-        _scanError = 'Invalid seed phrase: ${result.error}';
-      });
-      return;
+    if (walletsToScan.isEmpty) {
+      if (_controller.text.trim().isEmpty) {
+        setState(() {
+          _scanError = 'Please enter a seed phrase or load a wallet first';
+        });
+        return;
+      }
+
+      final result = KeyParser.parse(_controller.text);
+      if (!result.isValid) {
+        setState(() {
+          _scanError = 'Invalid seed phrase: ${result.error}';
+        });
+        return;
+      }
     }
 
     final heightToStart = _parseBlockHeightForContinuous();
@@ -795,19 +888,44 @@ class _DebugViewState extends State<DebugView> {
       _scanError = null;
       _isContinuousPaused = false;
       _isContinuousScanning = true;
+
+      for (var wallet in walletsToScan) {
+        wallet.isScanning = true;
+      }
     });
 
-    // Prepend http:// if not present
     final fullNodeUrl = nodeUrl.startsWith('http://') || nodeUrl.startsWith('https://')
         ? nodeUrl
         : 'http://$nodeUrl';
 
-    StartContinuousScanRequest(
-      nodeUrl: fullNodeUrl,
-      startHeight: Uint64(BigInt.from(heightToStart)),
-      seed: result.normalizedInput!,
-      network: _network,
-    ).sendSignalToRust();
+    if (walletsToScan.length > 1) {
+      debugPrint('[MULTI-WALLET] Starting multi-wallet scan for ${walletsToScan.length} wallets');
+      final walletConfigs = walletsToScan.map((w) => w.toWalletConfig()).toList();
+
+      StartMultiWalletScanRequest(
+        nodeUrl: fullNodeUrl,
+        startHeight: Uint64(BigInt.from(heightToStart)),
+        wallets: walletConfigs,
+      ).sendSignalToRust();
+    } else if (walletsToScan.length == 1) {
+      debugPrint('[MULTI-WALLET] Starting single-wallet scan (only 1 wallet open)');
+      final wallet = walletsToScan.first;
+      StartContinuousScanRequest(
+        nodeUrl: fullNodeUrl,
+        startHeight: Uint64(BigInt.from(heightToStart)),
+        seed: wallet.seed,
+        network: wallet.network,
+      ).sendSignalToRust();
+    } else {
+      debugPrint('[MULTI-WALLET] Fallback to legacy single-wallet scan');
+      final result = KeyParser.parse(_controller.text);
+      StartContinuousScanRequest(
+        nodeUrl: fullNodeUrl,
+        startHeight: Uint64(BigInt.from(heightToStart)),
+        seed: result.normalizedInput!,
+        network: _network,
+      ).sendSignalToRust();
+    }
   }
 
   void _pauseContinuousScan() {
@@ -847,7 +965,6 @@ class _DebugViewState extends State<DebugView> {
       _scanError = null;
     });
 
-    // Prepend http:// if not present
     final fullNodeUrl = nodeUrl.startsWith('http://') || nodeUrl.startsWith('https://')
         ? nodeUrl
         : 'http://$nodeUrl';
@@ -1458,6 +1575,113 @@ class _DebugViewState extends State<DebugView> {
                               ),
                               const SizedBox(height: 12),
                             ],
+
+                            // Loaded Wallets - show scan control if multiple wallets are loaded
+                            if (_activeWallets.length > 1) ...[
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.green.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: Colors.green.shade200),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Icon(Icons.playlist_add_check, color: Colors.green.shade700, size: 20),
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          'Loaded Wallets (${_activeWallets.length})',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.grey.shade900,
+                                          ),
+                                        ),
+                                        const Spacer(),
+                                        Text(
+                                          '${_scannableWallets.length} will scan',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: Colors.green.shade700,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 12),
+                                    ..._activeWallets.map((wallet) {
+                                      return Padding(
+                                        padding: const EdgeInsets.only(bottom: 8),
+                                        child: Row(
+                                          children: [
+                                            Checkbox(
+                                              value: wallet.includeInScan,
+                                              onChanged: (value) {
+                                                if (value != null) {
+                                                  setState(() {
+                                                    wallet.includeInScan = value;
+                                                  });
+                                                  debugPrint('[SCAN-CONTROL] Wallet ${wallet.walletId}: includeInScan=$value');
+                                                }
+                                              },
+                                            ),
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(
+                                                    wallet.walletId,
+                                                    style: TextStyle(
+                                                      fontWeight: wallet.walletId == _activeWalletId
+                                                          ? FontWeight.bold
+                                                          : FontWeight.normal,
+                                                    ),
+                                                  ),
+                                                  Text(
+                                                    '${wallet.address.substring(0, 20)}... | ${wallet.totalBalance.toStringAsFixed(6)} XMR',
+                                                    style: TextStyle(
+                                                      fontSize: 11,
+                                                      color: Colors.grey.shade600,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                            if (wallet.walletId == _activeWalletId)
+                                              Container(
+                                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.blue.shade100,
+                                                  borderRadius: BorderRadius.circular(4),
+                                                ),
+                                                child: Text(
+                                                  'viewing',
+                                                  style: TextStyle(
+                                                    fontSize: 10,
+                                                    color: Colors.blue.shade700,
+                                                  ),
+                                                ),
+                                              ),
+                                            const SizedBox(width: 8),
+                                            IconButton(
+                                              icon: const Icon(Icons.close, size: 18),
+                                              color: Colors.red.shade400,
+                                              tooltip: 'Close/unload wallet',
+                                              onPressed: () => _closeWallet(wallet.walletId),
+                                              padding: EdgeInsets.zero,
+                                              constraints: const BoxConstraints(),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                    }),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                            ],
+
                             Row(
                               children: [
                                 Expanded(
@@ -3366,7 +3590,6 @@ class _DebugViewState extends State<DebugView> {
     }
   }
 
-  /// Switch to a different wallet
   Future<void> _switchWallet(String newWalletId) async {
     if (newWalletId == _walletId) {
       debugPrint('[WALLET] Already on wallet: $newWalletId');
@@ -3375,44 +3598,122 @@ class _DebugViewState extends State<DebugView> {
 
     debugPrint('[WALLET] Switching from $_walletId to $newWalletId');
 
-    // Clear current state
+    if (_openWallets.containsKey(newWalletId) && !_openWallets[newWalletId]!.isClosed) {
+      _switchToWallet(newWalletId);
+      return;
+    }
+
     setState(() {
       _walletId = newWalletId;
-      _controller.text = '';
-      _derivedAddress = null;
-      _secretSpendKey = null;
-      _secretViewKey = null;
-      _publicSpendKey = null;
-      _publicViewKey = null;
-      _allOutputs = [];
-      _allTransactions = [];
-      _expandedTransactions = {};
-      _selectedOutputs = {};
-      _isContinuousScanning = false;
-      _isContinuousPaused = false;
-      _continuousScanCurrentHeight = 0;
-      _continuousScanTargetHeight = 0;
-      _isSynced = false;
-      _daemonHeight = null;
-      _scanResult = null;
-      _scanError = null;
-      _txResult = null;
-      _txError = null;
-      _broadcastResult = null;
-      _broadcastError = null;
-      _lastSaveTime = null;
-      _loadError = null;
-      _saveError = null;
     });
 
-    // Refresh available wallets
     _refreshAvailableWallets();
 
-    // Auto-load if wallet has saved data
     if (html.window.localStorage.containsKey(_storageKey)) {
       debugPrint('[WALLET] Wallet $newWalletId has saved data, auto-loading...');
       await _loadWalletData();
+    } else {
+      setState(() {
+        _controller.text = '';
+        _derivedAddress = null;
+        _secretSpendKey = null;
+        _secretViewKey = null;
+        _publicSpendKey = null;
+        _publicViewKey = null;
+        _allOutputs = [];
+        _allTransactions = [];
+        _expandedTransactions = {};
+        _selectedOutputs = {};
+        _continuousScanCurrentHeight = 0;
+        _continuousScanTargetHeight = 0;
+        _isSynced = false;
+        _daemonHeight = null;
+        _scanResult = null;
+        _scanError = null;
+        _lastSaveTime = null;
+        _loadError = null;
+        _saveError = null;
+      });
     }
+  }
+
+  void _openWallet(String walletId, String seed, String network, String address) {
+    setState(() {
+      final walletInstance = WalletInstance(
+        walletId: walletId,
+        seed: seed,
+        network: network,
+        address: address,
+        outputs: [],
+        currentHeight: 0,
+        daemonHeight: 0,
+        isScanning: false,
+        isClosed: false,
+      );
+
+      _openWallets[walletId] = walletInstance;
+      _activeWalletId = walletId;
+
+      _allOutputs = walletInstance.outputs;
+      _derivedAddress = address;
+    });
+
+    debugPrint('[MULTI-WALLET] Opened wallet: $walletId (${_openWallets.length} total open)');
+
+    if (_isContinuousScanning) {
+      _pauseContinuousScan();
+      Future.delayed(const Duration(milliseconds: 500), () {
+        _startContinuousScan();
+      });
+    }
+  }
+
+  void _closeWallet(String walletId) {
+    setState(() {
+      final wallet = _openWallets[walletId];
+      if (wallet != null) {
+        wallet.isClosed = true;
+        wallet.isScanning = false;
+
+        if (_activeWalletId == walletId) {
+          final remainingWallets = _activeWallets;
+          if (remainingWallets.isNotEmpty) {
+            _activeWalletId = remainingWallets.first.walletId;
+            _switchToWallet(_activeWalletId!);
+          } else {
+            _activeWalletId = null;
+            _allOutputs = [];
+          }
+        }
+      }
+    });
+
+    debugPrint('[MULTI-WALLET] Closed wallet: $walletId (${_activeWallets.length} remaining open)');
+
+    if (_isContinuousScanning && _activeWallets.isNotEmpty) {
+      _pauseContinuousScan();
+      Future.delayed(const Duration(milliseconds: 500), () {
+        _startContinuousScan();
+      });
+    }
+  }
+
+  void _switchToWallet(String walletId) {
+    final wallet = _openWallets[walletId];
+    if (wallet == null || wallet.isClosed) return;
+
+    setState(() {
+      _activeWalletId = walletId;
+      _walletId = walletId;
+      _controller.text = wallet.seed;
+      _network = wallet.network;
+      _derivedAddress = wallet.address;
+      _allOutputs = wallet.outputs;
+      _daemonHeight = wallet.daemonHeight;
+      _continuousScanCurrentHeight = wallet.currentHeight;
+    });
+
+    debugPrint('[MULTI-WALLET] Switched to wallet: $walletId');
   }
 
 
@@ -3554,6 +3855,20 @@ class _DebugViewState extends State<DebugView> {
         _isLoadingWallet = false;
         _loadError = null;
       });
+
+      // Open this wallet in multi-wallet mode
+      final seed = walletData['seed'] as String? ?? '';
+      final network = walletData['network'] as String? ?? 'stagenet';
+      final address = walletData['address'] as String? ?? _derivedAddress ?? '';
+      if (seed.isNotEmpty && address.isNotEmpty) {
+        _openWallet(_walletId, seed, network, address);
+        // Update the opened wallet's outputs
+        if (_activeWallet != null) {
+          _activeWallet!.outputs = _allOutputs;
+          _activeWallet!.currentHeight = _continuousScanCurrentHeight;
+          _activeWallet!.daemonHeight = _daemonHeight ?? 0;
+        }
+      }
 
       // Derive address to populate keys
       _deriveAddress();

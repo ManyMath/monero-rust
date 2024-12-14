@@ -16,7 +16,16 @@ pub use scanner::{
     DEFAULT_LOOKAHEAD, derive_address, derive_keys, generate_seed, get_daemon_height,
     scan_block_for_outputs_with_url, scan_mempool_for_outputs,
     scan_mempool_for_outputs_with_lookahead,
+    // Multi-wallet scanning exports
+    MultiWalletScanResult, WalletScanConfig, WalletScanData,
+    scan_block_multi_wallet_with_url,
 };
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use scanner::scan_block_multi_wallet;
+
+#[cfg(target_arch = "wasm32")]
+pub use scanner::scan_block_multi_wallet_wasm;
 
 /// Simple integration test function
 pub fn test_integration() -> String {

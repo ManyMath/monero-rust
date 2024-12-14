@@ -265,3 +265,44 @@ pub struct WalletDataLoadedResponse {
     pub error: Option<String>,
     pub wallet_data_json: Option<String>,
 }
+
+// Multi-wallet scanning signals
+
+#[derive(Deserialize, Debug, Clone, SignalPiece)]
+pub struct WalletConfig {
+    pub seed: String,
+    pub network: String,
+}
+
+#[derive(Deserialize, DartSignal)]
+pub struct ScanBlockMultiWalletRequest {
+    pub node_url: String,
+    pub block_height: u64,
+    pub wallets: Vec<WalletConfig>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, SignalPiece)]
+pub struct WalletScanResult {
+    pub address: String,
+    pub outputs: Vec<OwnedOutput>,
+}
+
+#[derive(Serialize, RustSignal)]
+pub struct MultiWalletScanResponse {
+    pub success: bool,
+    pub error: Option<String>,
+    pub block_height: u64,
+    pub block_hash: String,
+    pub block_timestamp: u64,
+    pub tx_count: u32,
+    pub daemon_height: u64,
+    pub spent_key_images: Vec<String>,
+    pub wallet_results: Vec<WalletScanResult>,
+}
+
+#[derive(Deserialize, DartSignal)]
+pub struct StartMultiWalletScanRequest {
+    pub node_url: String,
+    pub start_height: u64,
+    pub wallets: Vec<WalletConfig>,
+}

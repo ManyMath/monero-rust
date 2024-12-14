@@ -17,8 +17,11 @@ use monero_serai::ringct::generate_key_image;
 use monero_serai::transaction::Input;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use zeroize::Zeroizing;
+
+#[cfg(not(target_arch = "wasm32"))]
+use tokio::task::JoinSet;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockScanResult {
@@ -53,6 +56,34 @@ pub struct MempoolScanResult {
     pub tx_count: usize,
     pub outputs: Vec<OwnedOutputInfo>,
     pub spent_key_images: Vec<String>,
+}
+
+/// Multi-wallet scan result containing outputs for each wallet
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultiWalletScanResult {
+    pub block_height: u64,
+    pub block_hash: String,
+    pub block_timestamp: u64,
+    pub tx_count: usize,
+    pub daemon_height: u64,
+    pub spent_key_images: Vec<String>,
+    /// Map of wallet address to its scan result
+    pub wallet_results: HashMap<String, WalletScanData>,
+}
+
+/// Individual wallet's scan data within a multi-wallet scan
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalletScanData {
+    pub address: String,
+    pub outputs: Vec<OwnedOutputInfo>,
+}
+
+/// Configuration for a single wallet in multi-wallet scanning
+#[derive(Debug, Clone)]
+pub struct WalletScanConfig {
+    pub mnemonic: String,
+    pub network: String,
+    pub lookahead: Lookahead,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -403,6 +434,343 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
         daemon_height,
         spent_key_images,
     })
+}
+
+/// Scan a single block for outputs belonging to multiple wallets simultaneously.
+/// This is more efficient than scanning each wallet separately as it fetches
+/// block data only once and processes all wallets in parallel.
+///
+/// # Arguments
+/// * `rpc` - RPC connection to use for fetching block data
+/// * `block_height` - Height of the block to scan
+/// * `wallet_configs` - Vector of wallet configurations to scan for
+///
+/// # Returns
+/// A `MultiWalletScanResult` containing outputs for each wallet
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn scan_block_multi_wallet<R: RpcConnection + Send + Sync + Clone + 'static>(
+    rpc: &Rpc<R>,
+    block_height: u64,
+    wallet_configs: Vec<WalletScanConfig>,
+) -> Result<MultiWalletScanResult, String> {
+    if wallet_configs.is_empty() {
+        return Err("No wallet configurations provided".to_string());
+    }
+
+    // Step 1: Fetch block data once (shared across all wallets)
+    let block_hash_bytes = rpc
+        .get_block_hash(block_height as usize)
+        .await
+        .map_err(|e| format!("Failed to fetch block hash: {:?}", e))?;
+    let block_hash = hex::encode(block_hash_bytes);
+
+    let daemon_height = rpc
+        .get_height()
+        .await
+        .map_err(|e| format!("Failed to fetch daemon height: {:?}", e))? as u64;
+
+    let block = rpc
+        .get_block_by_number(block_height as usize)
+        .await
+        .map_err(|e| format!("Failed to fetch block: {:?}", e))?;
+
+    let block_timestamp = block.header.timestamp;
+    let tx_hashes = block.txs.clone();
+    let mut all_transactions = vec![block.miner_tx.clone()];
+
+    if !tx_hashes.is_empty() {
+        let fetched_txs = rpc
+            .get_transactions(&tx_hashes)
+            .await
+            .map_err(|e| format!("Failed to fetch transactions: {:?}", e))?;
+        all_transactions.extend(fetched_txs);
+    }
+
+    let tx_count = all_transactions.len();
+
+    // Extract spent key images (shared across all wallets)
+    let mut spent_key_images = Vec::new();
+    for tx in all_transactions.iter() {
+        for input in &tx.prefix.inputs {
+            if let Input::ToKey { key_image, .. } = input {
+                let ki_hex = hex::encode(key_image.compress().to_bytes());
+                spent_key_images.push(ki_hex);
+            }
+        }
+    }
+
+    // Step 2: Spawn parallel scanning tasks for each wallet
+    let mut join_set = JoinSet::new();
+
+    for wallet_config in wallet_configs {
+        let txs_clone = all_transactions.clone();
+        let rpc_clone = rpc.clone();
+
+        join_set.spawn(async move {
+            // Derive wallet address for result mapping
+            let address = derive_address(&wallet_config.mnemonic, &wallet_config.network)?;
+
+            // Parse wallet seed and create scanner
+            let _network = parse_network(&wallet_config.network)?;
+            let seed = Seed::from_string(Zeroizing::new(wallet_config.mnemonic.clone()))
+                .map_err(|e| format!("Invalid mnemonic: {:?}", e))?;
+
+            let spend_point = spend_key_from_seed(&seed);
+            let view_scalar = view_key_from_seed(&seed);
+            #[cfg(target_arch = "wasm32")]
+            let spend_scalar = spend_key_scalar_from_seed(&seed);
+
+            let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
+            let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+            register_subaddresses(&mut scanner, wallet_config.lookahead);
+
+            // Scan all transactions for this wallet
+            let mut outputs = Vec::new();
+
+            for tx in txs_clone.iter() {
+                let tx_hash = hex::encode(tx.hash());
+                let scan_result = scanner.scan_transaction(tx);
+                let owned_outputs = scan_result.ignore_timelock();
+
+                for output in owned_outputs {
+                    let amount = output.data.commitment.amount;
+                    let amount_xmr = format!("{:.12}", amount as f64 / 1_000_000_000_000.0);
+                    let output_index = output.absolute.o;
+                    let key = hex::encode(output.data.key.compress().to_bytes());
+                    let key_offset = hex::encode(output.data.key_offset.to_bytes());
+                    let commitment_mask = hex::encode(output.data.commitment.mask.to_bytes());
+                    let subaddress_index = output
+                        .metadata
+                        .subaddress
+                        .map(|idx| (idx.account(), idx.address()));
+                    let payment_id = if output.metadata.payment_id != [0u8; 8] {
+                        Some(hex::encode(output.metadata.payment_id))
+                    } else {
+                        None
+                    };
+                    let received_output_bytes = hex::encode(output.serialize());
+
+                    // Calculate key image (WASM only due to spend scalar requirement)
+                    #[cfg(target_arch = "wasm32")]
+                    let key_image = {
+                        let key_image_point = calculate_key_image(&spend_scalar, &output.data.key_offset);
+                        hex::encode(key_image_point.compress().to_bytes())
+                    };
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let key_image = String::new();
+
+                    outputs.push(OwnedOutputInfo {
+                        tx_hash: tx_hash.clone(),
+                        output_index,
+                        amount,
+                        amount_xmr,
+                        key,
+                        key_offset,
+                        commitment_mask,
+                        subaddress_index,
+                        payment_id,
+                        received_output_bytes,
+                        block_height,
+                        spent: false,
+                        key_image,
+                    });
+                }
+            }
+
+            Ok::<(String, WalletScanData), String>((
+                address.clone(),
+                WalletScanData { address, outputs }
+            ))
+        });
+    }
+
+    // Step 3: Collect results from all wallet scanning tasks
+    let mut wallet_results = HashMap::new();
+
+    while let Some(result) = join_set.join_next().await {
+        let join_result = result.map_err(|e| format!("Task join error: {:?}", e))?;
+        let (address, wallet_data) = join_result?;
+        wallet_results.insert(address, wallet_data);
+    }
+
+    Ok(MultiWalletScanResult {
+        block_height,
+        block_hash,
+        block_timestamp,
+        tx_count,
+        daemon_height,
+        spent_key_images,
+        wallet_results,
+    })
+}
+
+/// Convenience wrapper for multi-wallet scanning with URL-based RPC creation
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn scan_block_multi_wallet_with_url(
+    node_url: &str,
+    block_height: u64,
+    wallet_configs: Vec<WalletScanConfig>,
+) -> Result<MultiWalletScanResult, String> {
+    use monero_serai::rpc::HttpRpc;
+    let rpc = HttpRpc::new(node_url.to_string())
+        .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
+    scan_block_multi_wallet(&rpc, block_height, wallet_configs).await
+}
+
+/// WASM-compatible multi-wallet scanning (sequential, not parallel)
+#[cfg(target_arch = "wasm32")]
+pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
+    rpc: &Rpc<R>,
+    block_height: u64,
+    wallet_configs: Vec<WalletScanConfig>,
+) -> Result<MultiWalletScanResult, String> {
+    if wallet_configs.is_empty() {
+        return Err("No wallet configurations provided".to_string());
+    }
+
+    // Step 1: Fetch block data once (shared across all wallets)
+    let block_hash_bytes = rpc
+        .get_block_hash(block_height as usize)
+        .await
+        .map_err(|e| format!("Failed to fetch block hash: {:?}", e))?;
+    let block_hash = hex::encode(block_hash_bytes);
+
+    let daemon_height = rpc
+        .get_height()
+        .await
+        .map_err(|e| format!("Failed to fetch daemon height: {:?}", e))? as u64;
+
+    let block = rpc
+        .get_block_by_number(block_height as usize)
+        .await
+        .map_err(|e| format!("Failed to fetch block: {:?}", e))?;
+
+    let block_timestamp = block.header.timestamp;
+    let tx_hashes = block.txs.clone();
+    let mut all_transactions = vec![block.miner_tx.clone()];
+
+    if !tx_hashes.is_empty() {
+        let fetched_txs = rpc
+            .get_transactions(&tx_hashes)
+            .await
+            .map_err(|e| format!("Failed to fetch transactions: {:?}", e))?;
+        all_transactions.extend(fetched_txs);
+    }
+
+    let tx_count = all_transactions.len();
+
+    // Extract spent key images (shared across all wallets)
+    let mut spent_key_images = Vec::new();
+    for tx in all_transactions.iter() {
+        for input in &tx.prefix.inputs {
+            if let monero_serai::transaction::Input::ToKey { key_image, .. } = input {
+                let ki_hex = hex::encode(key_image.compress().to_bytes());
+                spent_key_images.push(ki_hex);
+            }
+        }
+    }
+
+    // Step 2: Scan sequentially for each wallet (WASM is single-threaded)
+    let mut wallet_results = HashMap::new();
+
+    for wallet_config in wallet_configs {
+        // Derive wallet address for result mapping
+        let address = derive_address(&wallet_config.mnemonic, &wallet_config.network)?;
+
+        // Parse wallet seed and create scanner
+        let _network = parse_network(&wallet_config.network)?;
+        let seed = Seed::from_string(Zeroizing::new(wallet_config.mnemonic.clone()))
+            .map_err(|e| format!("Invalid mnemonic: {:?}", e))?;
+
+        let spend_point = spend_key_from_seed(&seed);
+        let view_scalar = view_key_from_seed(&seed);
+        #[cfg(target_arch = "wasm32")]
+        let spend_scalar = spend_key_scalar_from_seed(&seed);
+
+        let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
+        let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+        register_subaddresses(&mut scanner, wallet_config.lookahead);
+
+        // Scan all transactions for this wallet
+        let mut outputs = Vec::new();
+
+        for tx in all_transactions.iter() {
+            let tx_hash = hex::encode(tx.hash());
+            let scan_result = scanner.scan_transaction(tx);
+            let owned_outputs = scan_result.ignore_timelock();
+
+            for output in owned_outputs {
+                let amount = output.data.commitment.amount;
+                let amount_xmr = format!("{:.12}", amount as f64 / 1_000_000_000_000.0);
+                let output_index = output.absolute.o;
+                let key = hex::encode(output.data.key.compress().to_bytes());
+                let key_offset = hex::encode(output.data.key_offset.to_bytes());
+                let commitment_mask = hex::encode(output.data.commitment.mask.to_bytes());
+                let subaddress_index = output
+                    .metadata
+                    .subaddress
+                    .map(|idx| (idx.account(), idx.address()));
+                let payment_id = if output.metadata.payment_id != [0u8; 8] {
+                    Some(hex::encode(output.metadata.payment_id))
+                } else {
+                    None
+                };
+                let received_output_bytes = hex::encode(output.serialize());
+
+                // Calculate key image (WASM only due to spend scalar requirement)
+                #[cfg(target_arch = "wasm32")]
+                let key_image = {
+                    let key_image_point = calculate_key_image(&spend_scalar, &output.data.key_offset);
+                    hex::encode(key_image_point.compress().to_bytes())
+                };
+                #[cfg(not(target_arch = "wasm32"))]
+                let key_image = String::new();
+
+                outputs.push(OwnedOutputInfo {
+                    tx_hash: tx_hash.clone(),
+                    output_index,
+                    amount,
+                    amount_xmr,
+                    key,
+                    key_offset,
+                    commitment_mask,
+                    subaddress_index,
+                    payment_id,
+                    received_output_bytes,
+                    block_height,
+                    spent: false,
+                    key_image,
+                });
+            }
+        }
+
+        wallet_results.insert(
+            address.clone(),
+            WalletScanData { address, outputs }
+        );
+    }
+
+    Ok(MultiWalletScanResult {
+        block_height,
+        block_hash,
+        block_timestamp,
+        tx_count,
+        daemon_height,
+        spent_key_images,
+        wallet_results,
+    })
+}
+
+/// WASM convenience wrapper
+#[cfg(target_arch = "wasm32")]
+pub async fn scan_block_multi_wallet_with_url(
+    node_url: &str,
+    block_height: u64,
+    wallet_configs: Vec<WalletScanConfig>,
+) -> Result<MultiWalletScanResult, String> {
+    use crate::rpc_serai::WasmRpcConnection;
+    let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
+    scan_block_multi_wallet_wasm(&rpc, block_height, wallet_configs).await
 }
 
 pub async fn scan_mempool_for_outputs(

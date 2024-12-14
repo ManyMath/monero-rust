@@ -38,6 +38,8 @@ impl WalletActor {
         _owned_tasks.spawn(Self::listen_to_start_continuous_scan(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_stop_scan(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_mempool_scan());
+        _owned_tasks.spawn(Self::listen_to_scan_block_multi_wallet());
+        _owned_tasks.spawn(Self::listen_to_start_multi_wallet_scan(self_addr.clone()));
 
         WalletActor {
             state: WalletState {
@@ -372,6 +374,230 @@ impl WalletActor {
                             tx_count: 0,
                             outputs: Vec::new(),
                             spent_key_images: Vec::new(),
+                        }
+                        .send_signal_to_dart();
+                    }
+                }
+            });
+        }
+    }
+
+    async fn listen_to_scan_block_multi_wallet() {
+        let receiver = ScanBlockMultiWalletRequest::get_dart_signal_receiver();
+        while let Some(signal_pack) = receiver.recv().await {
+            let request = signal_pack.message;
+
+            wasm_bindgen_futures::spawn_local(async move {
+                // Convert wallet configs to the format expected by the scanner
+                let wallet_configs: Vec<monero_rust::WalletScanConfig> = request
+                    .wallets
+                    .iter()
+                    .map(|w| monero_rust::WalletScanConfig {
+                        mnemonic: w.seed.clone(),
+                        network: w.network.clone(),
+                        lookahead: monero_rust::DEFAULT_LOOKAHEAD,
+                    })
+                    .collect();
+
+                match monero_rust::scan_block_multi_wallet_with_url(
+                    &request.node_url,
+                    request.block_height,
+                    wallet_configs,
+                )
+                .await
+                {
+                    Ok(result) => {
+                        // Convert each wallet's results
+                        let wallet_results: Vec<WalletScanResult> = result
+                            .wallet_results
+                            .into_iter()
+                            .map(|(address, wallet_data)| {
+                                let outputs = wallet_data
+                                    .outputs
+                                    .iter()
+                                    .map(|o| OwnedOutput {
+                                        tx_hash: o.tx_hash.clone(),
+                                        output_index: o.output_index,
+                                        amount: o.amount,
+                                        amount_xmr: o.amount_xmr.clone(),
+                                        key: o.key.clone(),
+                                        key_offset: o.key_offset.clone(),
+                                        commitment_mask: o.commitment_mask.clone(),
+                                        subaddress_index: o.subaddress_index,
+                                        payment_id: o.payment_id.clone(),
+                                        received_output_bytes: o.received_output_bytes.clone(),
+                                        block_height: o.block_height,
+                                        spent: o.spent,
+                                        key_image: o.key_image.clone(),
+                                    })
+                                    .collect();
+
+                                WalletScanResult { address, outputs }
+                            })
+                            .collect();
+
+                        MultiWalletScanResponse {
+                            success: true,
+                            error: None,
+                            block_height: result.block_height,
+                            block_hash: result.block_hash,
+                            block_timestamp: result.block_timestamp,
+                            tx_count: result.tx_count as u32,
+                            daemon_height: result.daemon_height,
+                            spent_key_images: result.spent_key_images,
+                            wallet_results,
+                        }
+                        .send_signal_to_dart();
+                    }
+                    Err(e) => {
+                        MultiWalletScanResponse {
+                            success: false,
+                            error: Some(e),
+                            block_height: request.block_height,
+                            block_hash: String::new(),
+                            block_timestamp: 0,
+                            tx_count: 0,
+                            daemon_height: 0,
+                            spent_key_images: Vec::new(),
+                            wallet_results: Vec::new(),
+                        }
+                        .send_signal_to_dart();
+                    }
+                }
+            });
+        }
+    }
+
+    async fn listen_to_start_multi_wallet_scan(mut self_addr: Address<Self>) {
+        let receiver = StartMultiWalletScanRequest::get_dart_signal_receiver();
+        while let Some(signal_pack) = receiver.recv().await {
+            let request = signal_pack.message;
+
+            // Spawn a background task for continuous multi-wallet scanning
+            wasm_bindgen_futures::spawn_local(async move {
+                let node_url = request.node_url.clone();
+                let mut current_height = request.start_height;
+
+                // Query daemon height
+                match monero_rust::get_daemon_height(&node_url).await {
+                    Ok(daemon_height) => {
+                        let target_height = daemon_height;
+
+                        // Scan blocks from start_height to target_height
+                        while current_height < target_height {
+                            // Convert wallet configs
+                            let wallet_configs: Vec<monero_rust::WalletScanConfig> = request
+                                .wallets
+                                .iter()
+                                .map(|w| monero_rust::WalletScanConfig {
+                                    mnemonic: w.seed.clone(),
+                                    network: w.network.clone(),
+                                    lookahead: monero_rust::DEFAULT_LOOKAHEAD,
+                                })
+                                .collect();
+
+                            // Scan current block for all wallets
+                            match monero_rust::scan_block_multi_wallet_with_url(
+                                &node_url,
+                                current_height,
+                                wallet_configs,
+                            )
+                            .await
+                            {
+                                Ok(result) => {
+                                    // Send progress update with results
+                                    let wallet_results: Vec<WalletScanResult> = result
+                                        .wallet_results
+                                        .into_iter()
+                                        .map(|(address, wallet_data)| {
+                                            let outputs = wallet_data
+                                                .outputs
+                                                .iter()
+                                                .map(|o| OwnedOutput {
+                                                    tx_hash: o.tx_hash.clone(),
+                                                    output_index: o.output_index,
+                                                    amount: o.amount,
+                                                    amount_xmr: o.amount_xmr.clone(),
+                                                    key: o.key.clone(),
+                                                    key_offset: o.key_offset.clone(),
+                                                    commitment_mask: o.commitment_mask.clone(),
+                                                    subaddress_index: o.subaddress_index,
+                                                    payment_id: o.payment_id.clone(),
+                                                    received_output_bytes: o.received_output_bytes.clone(),
+                                                    block_height: o.block_height,
+                                                    spent: o.spent,
+                                                    key_image: o.key_image.clone(),
+                                                })
+                                                .collect();
+
+                                            WalletScanResult { address, outputs }
+                                        })
+                                        .collect();
+
+                                    MultiWalletScanResponse {
+                                        success: true,
+                                        error: None,
+                                        block_height: result.block_height,
+                                        block_hash: result.block_hash,
+                                        block_timestamp: result.block_timestamp,
+                                        tx_count: result.tx_count as u32,
+                                        daemon_height: result.daemon_height,
+                                        spent_key_images: result.spent_key_images.clone(),
+                                        wallet_results,
+                                    }
+                                    .send_signal_to_dart();
+
+                                    // Send sync progress
+                                    SyncProgressResponse {
+                                        current_height,
+                                        daemon_height: result.daemon_height,
+                                        is_synced: current_height >= target_height,
+                                        is_scanning: true,
+                                    }
+                                    .send_signal_to_dart();
+                                }
+                                Err(e) => {
+                                    MultiWalletScanResponse {
+                                        success: false,
+                                        error: Some(e),
+                                        block_height: current_height,
+                                        block_hash: String::new(),
+                                        block_timestamp: 0,
+                                        tx_count: 0,
+                                        daemon_height: 0,
+                                        spent_key_images: Vec::new(),
+                                        wallet_results: Vec::new(),
+                                    }
+                                    .send_signal_to_dart();
+
+                                    // Stop scanning on error
+                                    break;
+                                }
+                            }
+
+                            current_height += 1;
+                        }
+
+                        // Send final sync complete signal
+                        SyncProgressResponse {
+                            current_height,
+                            daemon_height: target_height,
+                            is_synced: true,
+                            is_scanning: false,
+                        }
+                        .send_signal_to_dart();
+                    }
+                    Err(e) => {
+                        MultiWalletScanResponse {
+                            success: false,
+                            error: Some(format!("Failed to get daemon height: {}", e)),
+                            block_height: 0,
+                            block_hash: String::new(),
+                            block_timestamp: 0,
+                            tx_count: 0,
+                            daemon_height: 0,
+                            spent_key_images: Vec::new(),
+                            wallet_results: Vec::new(),
                         }
                         .send_signal_to_dart();
                     }
