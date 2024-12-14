@@ -1075,6 +1075,7 @@ dependencies = [
  "serde_json",
  "sha3",
  "thiserror",
+ "tokio",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
