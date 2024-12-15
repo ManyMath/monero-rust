@@ -3683,22 +3683,55 @@ class _DebugViewState extends State<DebugView> {
     }
   }
 
-  void _closeWallet(String walletId) {
-    setState(() {
-      final wallet = _openWallets[walletId];
-      if (wallet != null) {
-        wallet.isClosed = true;
-        wallet.isScanning = false;
+  Future<void> _closeWallet(String walletId) async {
+    final wallet = _openWallets[walletId];
+    if (wallet == null) return;
 
-        if (_activeWalletId == walletId) {
-          final remainingWallets = _activeWallets;
-          if (remainingWallets.isNotEmpty) {
-            _activeWalletId = remainingWallets.first.walletId;
-            _switchToWallet(_activeWalletId!);
-          } else {
-            _activeWalletId = null;
-            _allOutputs = [];
-          }
+    final shouldSave = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Close Wallet'),
+        content: Text('Save changes to "$walletId" before closing?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Close Without Saving'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(null),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Save & Close'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldSave == null) return;
+
+    if (shouldSave) {
+      final previousWalletId = _activeWalletId;
+      _switchToWallet(walletId);
+      await _saveWalletData();
+      if (previousWalletId != null && previousWalletId != walletId) {
+        _switchToWallet(previousWalletId);
+      }
+    }
+
+    setState(() {
+      wallet.isClosed = true;
+      wallet.isScanning = false;
+
+      if (_activeWalletId == walletId) {
+        final remainingWallets = _activeWallets;
+        if (remainingWallets.isNotEmpty) {
+          _activeWalletId = remainingWallets.first.walletId;
+          _switchToWallet(_activeWalletId!);
+        } else {
+          _activeWalletId = null;
+          _allOutputs = [];
         }
       }
     });
