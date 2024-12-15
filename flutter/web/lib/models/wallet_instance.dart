@@ -11,7 +11,6 @@ class WalletInstance {
   int daemonHeight;
   bool isScanning;
   bool isClosed;
-  bool includeInScan;
 
   WalletInstance({
     required this.walletId,
@@ -23,7 +22,6 @@ class WalletInstance {
     this.daemonHeight = 0,
     this.isScanning = false,
     this.isClosed = false,
-    this.includeInScan = true,
   });
   double get confirmedBalance {
     const minConfirmations = 10;
@@ -75,7 +73,6 @@ class WalletInstance {
     int? daemonHeight,
     bool? isScanning,
     bool? isClosed,
-    bool? includeInScan,
   }) {
     return WalletInstance(
       walletId: walletId ?? this.walletId,
@@ -87,7 +84,6 @@ class WalletInstance {
       daemonHeight: daemonHeight ?? this.daemonHeight,
       isScanning: isScanning ?? this.isScanning,
       isClosed: isClosed ?? this.isClosed,
-      includeInScan: includeInScan ?? this.includeInScan,
     );
   }
 

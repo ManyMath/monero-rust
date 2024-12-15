@@ -139,8 +139,13 @@ class _DebugViewState extends State<DebugView> {
   List<WalletInstance> get _activeWallets =>
       _openWallets.values.where((w) => !w.isClosed).toList();
 
-  List<WalletInstance> get _scannableWallets =>
-      _openWallets.values.where((w) => !w.isClosed && w.includeInScan).toList();
+  int get _lowestSyncedHeight {
+    final heights = _activeWallets
+        .where((w) => w.currentHeight > 0)
+        .map((w) => w.currentHeight)
+        .toList();
+    return heights.isEmpty ? 0 : heights.reduce((a, b) => a < b ? a : b);
+  }
 
   String _network = 'stagenet';
   final String _seedType = '25 word';
@@ -550,6 +555,7 @@ class _DebugViewState extends State<DebugView> {
             // Update heights
             if (response.blockHeight.toInt() > walletInstance.currentHeight) {
               walletInstance.currentHeight = response.blockHeight.toInt();
+              _updateBlockHeightFromWallets();
             }
             walletInstance.daemonHeight = response.daemonHeight.toInt();
           }
@@ -648,23 +654,37 @@ class _DebugViewState extends State<DebugView> {
 
   void _onBlockRefreshTimer() {
     debugPrint('[Dart] Block refresh timer fired');
-    final seed = _controller.text.trim();
-    if (seed.isEmpty) return;
+
+    if (_isContinuousPaused || !_isContinuousScanning) {
+      debugPrint('[Dart] Scan is paused or not scanning, skipping block refresh');
+      return;
+    }
 
     final nodeUrl = _normalizeNodeUrl(_nodeUrlController.text);
+    final walletsToScan = _activeWallets;
 
-    // Query daemon height - if higher than current, a scan will be triggered
+    if (walletsToScan.isEmpty) return;
+
     QueryDaemonHeightRequest(
       nodeUrl: nodeUrl,
     ).sendSignalToRust();
 
-    // Start a continuous scan from current height to check for new blocks
-    StartContinuousScanRequest(
-      nodeUrl: nodeUrl,
-      startHeight: Uint64(BigInt.from(_continuousScanCurrentHeight)),
-      seed: seed,
-      network: _network,
-    ).sendSignalToRust();
+    if (walletsToScan.length > 1) {
+      final walletConfigs = walletsToScan.map((w) => w.toWalletConfig()).toList();
+      StartMultiWalletScanRequest(
+        nodeUrl: nodeUrl,
+        startHeight: Uint64(BigInt.from(_continuousScanCurrentHeight)),
+        wallets: walletConfigs,
+      ).sendSignalToRust();
+    } else {
+      final wallet = walletsToScan.first;
+      StartContinuousScanRequest(
+        nodeUrl: nodeUrl,
+        startHeight: Uint64(BigInt.from(_continuousScanCurrentHeight)),
+        seed: wallet.seed,
+        network: wallet.network,
+      ).sendSignalToRust();
+    }
   }
 
   void _onMempoolPollTimer() {
@@ -852,7 +872,7 @@ class _DebugViewState extends State<DebugView> {
   }
 
   void _startContinuousScan() {
-    final walletsToScan = _scannableWallets;
+    final walletsToScan = _activeWallets;
 
     if (walletsToScan.isEmpty) {
       if (_controller.text.trim().isEmpty) {
@@ -1590,21 +1610,13 @@ class _DebugViewState extends State<DebugView> {
                                   children: [
                                     Row(
                                       children: [
-                                        Icon(Icons.playlist_add_check, color: Colors.green.shade700, size: 20),
+                                        Icon(Icons.wallet, color: Colors.green.shade700, size: 20),
                                         const SizedBox(width: 8),
                                         Text(
                                           'Loaded Wallets (${_activeWallets.length})',
                                           style: TextStyle(
                                             fontWeight: FontWeight.bold,
                                             color: Colors.grey.shade900,
-                                          ),
-                                        ),
-                                        const Spacer(),
-                                        Text(
-                                          '${_scannableWallets.length} will scan',
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            color: Colors.green.shade700,
                                           ),
                                         ),
                                       ],
@@ -1615,17 +1627,6 @@ class _DebugViewState extends State<DebugView> {
                                         padding: const EdgeInsets.only(bottom: 8),
                                         child: Row(
                                           children: [
-                                            Checkbox(
-                                              value: wallet.includeInScan,
-                                              onChanged: (value) {
-                                                if (value != null) {
-                                                  setState(() {
-                                                    wallet.includeInScan = value;
-                                                  });
-                                                  debugPrint('[SCAN-CONTROL] Wallet ${wallet.walletId}: includeInScan=$value');
-                                                }
-                                              },
-                                            ),
                                             Expanded(
                                               child: Column(
                                                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1645,6 +1646,14 @@ class _DebugViewState extends State<DebugView> {
                                                       color: Colors.grey.shade600,
                                                     ),
                                                   ),
+                                                  if (wallet.currentHeight > 0)
+                                                    Text(
+                                                      'Block: ${wallet.currentHeight}',
+                                                      style: TextStyle(
+                                                        fontSize: 10,
+                                                        color: Colors.grey.shade500,
+                                                      ),
+                                                    ),
                                                 ],
                                               ),
                                             ),
@@ -3660,11 +3669,17 @@ class _DebugViewState extends State<DebugView> {
 
     debugPrint('[MULTI-WALLET] Opened wallet: $walletId (${_openWallets.length} total open)');
 
-    if (_isContinuousScanning) {
-      _pauseContinuousScan();
-      Future.delayed(const Duration(milliseconds: 500), () {
-        _startContinuousScan();
-      });
+    _updateBlockHeightFromWallets();
+  }
+
+  void _updateBlockHeightFromWallets() {
+    if (_activeWallets.isNotEmpty) {
+      final lowestHeight = _lowestSyncedHeight;
+      if (lowestHeight > 0 && !_blockHeightUserEdited) {
+        setState(() {
+          _blockHeightController.text = lowestHeight.toString();
+        });
+      }
     }
   }
 
@@ -3689,6 +3704,8 @@ class _DebugViewState extends State<DebugView> {
     });
 
     debugPrint('[MULTI-WALLET] Closed wallet: $walletId (${_activeWallets.length} remaining open)');
+
+    _updateBlockHeightFromWallets();
 
     if (_isContinuousScanning && _activeWallets.isNotEmpty) {
       _pauseContinuousScan();
@@ -3832,14 +3849,11 @@ class _DebugViewState extends State<DebugView> {
           _allTransactions = [];
         }
 
-        // Restore scan state
         final scanState = walletData['scanState'] as Map<String, dynamic>;
         _continuousScanCurrentHeight = scanState['continuousScanCurrentHeight'] as int;
-        _continuousScanTargetHeight = scanState['continuousScanTargetHeight'] as int;
-        _isSynced = scanState['isSynced'] as bool;
-        _daemonHeight = scanState['daemonHeight'] as int?;
-        // No scan is actually running after loading, so always set to false.
-        // Set paused state based on whether we have scan progress to resume.
+        _continuousScanTargetHeight = 0;
+        _isSynced = false;
+        _daemonHeight = null;
         _isContinuousScanning = false;
         _isContinuousPaused = _continuousScanCurrentHeight > 0;
 
