@@ -480,11 +480,11 @@ impl WalletActor {
 
                 // Query daemon height
                 match monero_rust::get_daemon_height(&node_url).await {
-                    Ok(daemon_height) => {
-                        let target_height = daemon_height;
+                    Ok(initial_daemon_height) => {
+                        let mut target_height = initial_daemon_height;
 
-                        // Scan blocks from start_height to target_height
-                        while current_height < target_height {
+                        // Scan blocks continuously, updating target as we go
+                        loop {
                             // Convert wallet configs
                             let wallet_configs: Vec<monero_rust::WalletScanConfig> = request
                                 .wallets
@@ -547,14 +547,31 @@ impl WalletActor {
                                     }
                                     .send_signal_to_dart();
 
+                                    // Update target height from scan result (fresher data)
+                                    target_height = result.daemon_height;
+
                                     // Send sync progress
                                     SyncProgressResponse {
                                         current_height,
                                         daemon_height: result.daemon_height,
-                                        is_synced: current_height >= target_height,
+                                        is_synced: current_height >= target_height - 1,
                                         is_scanning: true,
                                     }
                                     .send_signal_to_dart();
+
+                                    current_height += 1;
+
+                                    // If caught up, send synced message and exit (polling will restart)
+                                    if current_height >= target_height {
+                                        SyncProgressResponse {
+                                            current_height,
+                                            daemon_height: target_height,
+                                            is_synced: true,
+                                            is_scanning: false,
+                                        }
+                                        .send_signal_to_dart();
+                                        break;
+                                    }
                                 }
                                 Err(e) => {
                                     MultiWalletScanResponse {
@@ -574,18 +591,7 @@ impl WalletActor {
                                     break;
                                 }
                             }
-
-                            current_height += 1;
                         }
-
-                        // Send final sync complete signal
-                        SyncProgressResponse {
-                            current_height,
-                            daemon_height: target_height,
-                            is_synced: true,
-                            is_scanning: false,
-                        }
-                        .send_signal_to_dart();
                     }
                     Err(e) => {
                         MultiWalletScanResponse {
