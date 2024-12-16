@@ -409,7 +409,11 @@ class _DebugViewState extends State<DebugView> {
         _continuousScanCurrentHeight = signal.message.currentHeight.toInt();
         _continuousScanTargetHeight = signal.message.daemonHeight.toInt();
         _isSynced = signal.message.isSynced;
-        _isContinuousScanning = signal.message.isScanning;
+        if (!_isContinuousPaused) {
+          _isContinuousScanning = signal.message.isScanning;
+        } else if (!signal.message.isScanning) {
+          _isContinuousScanning = false;
+        }
         if (_isContinuousScanning && !wasScanning) {
           _isContinuousPaused = false;
         }
