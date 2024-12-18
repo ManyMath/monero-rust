@@ -5,3 +5,5 @@ dart/monero_extension/node_modules/
 
 .idea/
 .DS_Store
+
+node_modules/
