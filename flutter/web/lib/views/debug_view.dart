@@ -16,6 +16,7 @@ import '../models/wallet_transaction.dart';
 import '../utils/clipboard_utils.dart';
 import '../utils/output_utils.dart';
 import '../utils/transaction_utils.dart';
+import '../services/wallet_scan_service.dart';
 
 class DebugView extends StatefulWidget {
   const DebugView({super.key});
@@ -556,11 +557,7 @@ class _DebugViewState extends State<DebugView> {
 
   /// Normalizes a node URL by trimming whitespace and adding http:// if no scheme is present.
   String _normalizeNodeUrl(String url) {
-    final trimmed = url.trim();
-    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-      return trimmed;
-    }
-    return 'http://$trimmed';
+    return WalletScanService.normalizeNodeUrl(url);
   }
 
   void _onBlockRefreshTimer() {
@@ -576,9 +573,7 @@ class _DebugViewState extends State<DebugView> {
 
     if (walletsToScan.isEmpty) return;
 
-    QueryDaemonHeightRequest(
-      nodeUrl: nodeUrl,
-    ).sendSignalToRust();
+    WalletScanService.queryDaemonHeight(nodeUrl);
 
     if (walletsToScan.length > 1) {
       final walletConfigs = walletsToScan.map((w) => w.toWalletConfig()).toList();
@@ -725,41 +720,15 @@ class _DebugViewState extends State<DebugView> {
   }
 
   void _scanBlock() {
-    if (_controller.text.trim().isEmpty) {
-      setState(() {
-        _scanError = 'Please enter a seed phrase first';
-      });
-      return;
-    }
+    final validation = WalletScanService.validateScanBlock(
+      seed: _controller.text,
+      blockHeight: _blockHeightController.text,
+      nodeUrl: _nodeUrlController.text,
+    );
 
-    final result = KeyParser.parse(_controller.text);
-    if (!result.isValid) {
+    if (!validation.isValid) {
       setState(() {
-        _scanError = 'Invalid seed phrase: ${result.error}';
-      });
-      return;
-    }
-
-    final blockHeightStr = _blockHeightController.text.trim();
-    if (blockHeightStr.isEmpty) {
-      setState(() {
-        _scanError = 'Please enter a block height';
-      });
-      return;
-    }
-
-    final blockHeight = int.tryParse(blockHeightStr);
-    if (blockHeight == null || blockHeight < 0) {
-      setState(() {
-        _scanError = 'Invalid block height';
-      });
-      return;
-    }
-
-    final nodeUrl = _nodeUrlController.text.trim();
-    if (nodeUrl.isEmpty) {
-      setState(() {
-        _scanError = 'Please enter a node URL';
+        _scanError = validation.error;
       });
       return;
     }
@@ -770,47 +739,27 @@ class _DebugViewState extends State<DebugView> {
       _scanError = null;
     });
 
-    final fullNodeUrl = nodeUrl.startsWith('http://') || nodeUrl.startsWith('https://')
-        ? nodeUrl
-        : 'http://$nodeUrl';
-
-    ScanBlockRequest(
-      nodeUrl: fullNodeUrl,
-      blockHeight: Uint64(BigInt.from(blockHeight)),
-      seed: result.normalizedInput!,
+    WalletScanService.scanBlock(
+      seed: validation.normalizedSeed!,
+      blockHeight: validation.blockHeight!,
+      nodeUrl: validation.nodeUrl!,
       network: _network,
-    ).sendSignalToRust();
+    );
   }
 
   void _startContinuousScan() {
     final walletsToScan = _activeWallets;
 
-    if (walletsToScan.isEmpty) {
-      if (_controller.text.trim().isEmpty) {
-        setState(() {
-          _scanError = 'Please enter a seed phrase or load a wallet first';
-        });
-        return;
-      }
+    final validation = WalletScanService.validateContinuousScan(
+      seed: _controller.text,
+      blockHeight: _blockHeightController.text,
+      nodeUrl: _nodeUrlController.text,
+      activeWallets: walletsToScan,
+    );
 
-      final result = KeyParser.parse(_controller.text);
-      if (!result.isValid) {
-        setState(() {
-          _scanError = 'Invalid seed phrase: ${result.error}';
-        });
-        return;
-      }
-    }
-
-    final heightToStart = _parseBlockHeightForContinuous();
-    if (heightToStart == null) {
-      return;
-    }
-
-    final nodeUrl = _nodeUrlController.text.trim();
-    if (nodeUrl.isEmpty) {
+    if (!validation.isValid) {
       setState(() {
-        _scanError = 'Please enter a node URL';
+        _scanError = validation.error;
       });
       return;
     }
@@ -825,38 +774,14 @@ class _DebugViewState extends State<DebugView> {
       }
     });
 
-    final fullNodeUrl = nodeUrl.startsWith('http://') || nodeUrl.startsWith('https://')
-        ? nodeUrl
-        : 'http://$nodeUrl';
-
-    if (walletsToScan.length > 1) {
-      debugPrint('[MULTI-WALLET] Starting multi-wallet scan for ${walletsToScan.length} wallets');
-      final walletConfigs = walletsToScan.map((w) => w.toWalletConfig()).toList();
-
-      StartMultiWalletScanRequest(
-        nodeUrl: fullNodeUrl,
-        startHeight: Uint64(BigInt.from(heightToStart)),
-        wallets: walletConfigs,
-      ).sendSignalToRust();
-    } else if (walletsToScan.length == 1) {
-      debugPrint('[MULTI-WALLET] Starting single-wallet scan (only 1 wallet open)');
-      final wallet = walletsToScan.first;
-      StartContinuousScanRequest(
-        nodeUrl: fullNodeUrl,
-        startHeight: Uint64(BigInt.from(heightToStart)),
-        seed: wallet.seed,
-        network: wallet.network,
-      ).sendSignalToRust();
-    } else {
-      debugPrint('[MULTI-WALLET] Fallback to legacy single-wallet scan');
-      final result = KeyParser.parse(_controller.text);
-      StartContinuousScanRequest(
-        nodeUrl: fullNodeUrl,
-        startHeight: Uint64(BigInt.from(heightToStart)),
-        seed: result.normalizedInput!,
-        network: _network,
-      ).sendSignalToRust();
-    }
+    final result = walletsToScan.isEmpty ? KeyParser.parse(_controller.text) : null;
+    WalletScanService.startContinuousScan(
+      nodeUrl: validation.nodeUrl!,
+      startHeight: validation.startHeight!,
+      walletsToScan: walletsToScan,
+      seed: result?.normalizedInput,
+      network: walletsToScan.isEmpty ? _network : null,
+    );
   }
 
   void _pauseContinuousScan() {
@@ -864,29 +789,18 @@ class _DebugViewState extends State<DebugView> {
       _isContinuousPaused = true;
       _isContinuousScanning = false;
     });
-    StopScanRequest().sendSignalToRust();
+    WalletScanService.pauseContinuousScan();
   }
 
   void _scanMempool() {
-    if (_controller.text.trim().isEmpty) {
-      setState(() {
-        _scanError = 'Please enter a seed phrase first';
-      });
-      return;
-    }
+    final validation = WalletScanService.validateMempoolScan(
+      seed: _controller.text,
+      nodeUrl: _nodeUrlController.text,
+    );
 
-    final result = KeyParser.parse(_controller.text);
-    if (!result.isValid) {
+    if (!validation.isValid) {
       setState(() {
-        _scanError = 'Invalid seed phrase: ${result.error}';
-      });
-      return;
-    }
-
-    final nodeUrl = _nodeUrlController.text.trim();
-    if (nodeUrl.isEmpty) {
-      setState(() {
-        _scanError = 'Please enter a node URL';
+        _scanError = validation.error;
       });
       return;
     }
@@ -896,15 +810,11 @@ class _DebugViewState extends State<DebugView> {
       _scanError = null;
     });
 
-    final fullNodeUrl = nodeUrl.startsWith('http://') || nodeUrl.startsWith('https://')
-        ? nodeUrl
-        : 'http://$nodeUrl';
-
-    MempoolScanRequest(
-      nodeUrl: fullNodeUrl,
-      seed: result.normalizedInput!,
+    WalletScanService.scanMempool(
+      seed: validation.normalizedSeed!,
+      nodeUrl: validation.nodeUrl!,
       network: _network,
-    ).sendSignalToRust();
+    );
   }
 
   int? _parseBlockHeightForContinuous() {
