@@ -13,6 +13,9 @@ import '../widgets/wallet_id_dialog.dart';
 import '../services/wallet_storage_service.dart';
 import '../models/wallet_instance.dart';
 import '../models/wallet_transaction.dart';
+import '../utils/clipboard_utils.dart';
+import '../utils/output_utils.dart';
+import '../utils/transaction_utils.dart';
 
 class DebugView extends StatefulWidget {
   const DebugView({super.key});
@@ -1070,29 +1073,11 @@ class _DebugViewState extends State<DebugView> {
   }
 
   double _getRecipientsTotal() {
-    double total = 0;
-    for (var controller in _amountControllers) {
-      final amount = double.tryParse(controller.text.trim());
-      if (amount != null && amount > 0) {
-        total += amount;
-      }
-    }
-    return total;
+    return OutputUtils.getRecipientsTotal(_amountControllers);
   }
 
   int _getSelectedOutputsTotal() {
-    int total = 0;
-    for (var output in _allOutputs) {
-      if (output.spent) continue;
-      final outputHeight = output.blockHeight.toInt();
-      final confirmations = outputHeight > 0 ? _currentHeight - outputHeight : 0;
-      if (confirmations < 10) continue;
-      final outputKey = '${output.txHash}:${output.outputIndex}';
-      if (_selectedOutputs.contains(outputKey)) {
-        total += output.amount.toInt();
-      }
-    }
-    return total;
+    return OutputUtils.getSelectedOutputsTotal(_allOutputs, _selectedOutputs, _currentHeight);
   }
 
   void _broadcastTransaction() {
@@ -1309,15 +1294,7 @@ class _DebugViewState extends State<DebugView> {
   }
 
   Future<void> _copyToClipboard(String text, String label) async {
-    await Clipboard.setData(ClipboardData(text: text));
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('$label copied to clipboard'),
-          duration: const Duration(seconds: 2),
-        ),
-      );
-    }
+    await ClipboardUtils.copyToClipboard(context, text, label);
   }
 
   void _toggleViewMode() {
@@ -3003,113 +2980,18 @@ class _DebugViewState extends State<DebugView> {
   /// Updates transaction list from a block scan response.
   /// Groups outputs by txHash and tracks spent key images.
   void _updateTransactionsFromScan(BlockScanResponse scan) {
-    final blockHeight = scan.blockHeight.toInt();
-    final blockTimestamp = scan.blockTimestamp.toInt();
-
-    // Group received outputs by transaction hash
-    final outputsByTx = <String, List<OwnedOutput>>{};
-    for (var output in scan.outputs) {
-      outputsByTx.putIfAbsent(output.txHash, () => []).add(output);
-    }
-
-    // Create/update transactions for received outputs
-    for (var entry in outputsByTx.entries) {
-      final txHash = entry.key;
-      final outputs = entry.value;
-
-      final existingIndex = _allTransactions.indexWhere((t) => t.txHash == txHash);
-      if (existingIndex == -1) {
-        // New transaction
-        _allTransactions.add(WalletTransaction(
-          txHash: txHash,
-          blockHeight: blockHeight,
-          blockTimestamp: blockTimestamp,
-          receivedOutputs: outputs,
-          spentKeyImages: [],
-        ));
-      } else {
-        // Update existing transaction with new outputs
-        final existing = _allTransactions[existingIndex];
-        final updatedOutputs = [...existing.receivedOutputs];
-        for (var output in outputs) {
-          if (!updatedOutputs.any((o) =>
-              o.txHash == output.txHash && o.outputIndex == output.outputIndex)) {
-            updatedOutputs.add(output);
-          }
-        }
-        _allTransactions[existingIndex] = WalletTransaction(
-          txHash: txHash,
-          blockHeight: existing.blockHeight > 0 ? existing.blockHeight : blockHeight,
-          blockTimestamp: existing.blockTimestamp > 0 ? existing.blockTimestamp : blockTimestamp,
-          receivedOutputs: updatedOutputs,
-          spentKeyImages: existing.spentKeyImages,
-        );
-      }
-    }
-
-    // Track spent key images - find which transaction spent each of our outputs
-    for (var spentKeyImage in scan.spentKeyImages) {
-      // Find the output that was spent
-      final spentOutput = _allOutputs.where((o) => o.keyImage == spentKeyImage).firstOrNull;
-      if (spentOutput == null) continue;
-
-      // Find which transaction in this block spent it (it's one of the scanned txs)
-      // Since we're scanning the block that spent it, we need to create a transaction
-      // for the spending activity. We can't know the exact txHash of the spending tx
-      // from just the key image, so we'll create a synthetic entry keyed by the key image.
-      // In a full implementation, the scanner would tell us which tx spent the output.
-
-      // For now, check if any transaction already tracks this spent key image
-      final existingTx = _allTransactions.where((t) =>
-          t.spentKeyImages.contains(spentKeyImage)).firstOrNull;
-      if (existingTx == null) {
-        // Check if we received outputs in the same block (could be a self-transfer)
-        // If so, add the spent key image to that transaction
-        final selfTransferTx = _allTransactions.where((t) =>
-            t.blockHeight == blockHeight && t.receivedOutputs.isNotEmpty).firstOrNull;
-        if (selfTransferTx != null) {
-          final txIndex = _allTransactions.indexOf(selfTransferTx);
-          _allTransactions[txIndex] = WalletTransaction(
-            txHash: selfTransferTx.txHash,
-            blockHeight: selfTransferTx.blockHeight,
-            blockTimestamp: selfTransferTx.blockTimestamp,
-            receivedOutputs: selfTransferTx.receivedOutputs,
-            spentKeyImages: [...selfTransferTx.spentKeyImages, spentKeyImage],
-          );
-        } else {
-          // Create a spending-only transaction using key image as identifier
-          // This is a simplification - a full implementation would get the actual txHash
-          _allTransactions.add(WalletTransaction(
-            txHash: 'spend:$spentKeyImage',
-            blockHeight: blockHeight,
-            blockTimestamp: blockTimestamp,
-            receivedOutputs: [],
-            spentKeyImages: [spentKeyImage],
-          ));
-        }
-      }
-    }
+    _allTransactions = TransactionUtils.updateTransactionsFromScan(_allTransactions, scan);
   }
 
   /// Returns sorted list of transactions based on current sort settings.
   List<WalletTransaction> _sortedTransactions() {
-    final sorted = List<WalletTransaction>.from(_allTransactions);
-
-    sorted.sort((a, b) {
-      int comparison;
-      if (_txSortBy == 'confirms') {
-        final aConf = _currentHeight - a.blockHeight;
-        final bConf = _currentHeight - b.blockHeight;
-        comparison = aConf.compareTo(bConf);
-      } else {
-        final aAmount = a.balanceChange(_allOutputs).abs();
-        final bAmount = b.balanceChange(_allOutputs).abs();
-        comparison = aAmount.compareTo(bAmount);
-      }
-      return _txSortAscending ? comparison : -comparison;
-    });
-
-    return sorted;
+    return TransactionUtils.sortTransactions(
+      _allTransactions,
+      _allOutputs,
+      _txSortBy,
+      _txSortAscending,
+      _currentHeight,
+    );
   }
 
   Widget _buildTxSortButton(String label, String sortKey) {
@@ -3145,21 +3027,13 @@ class _DebugViewState extends State<DebugView> {
   }
 
   List<OwnedOutput> _sortedOutputs() {
-    final filtered = _allOutputs.where((o) => _showSpentOutputs || !o.spent).toList();
-
-    filtered.sort((a, b) {
-      int comparison;
-      if (_sortBy == 'confirms') {
-        final aConf = _currentHeight - a.blockHeight.toInt();
-        final bConf = _currentHeight - b.blockHeight.toInt();
-        comparison = aConf.compareTo(bConf);
-      } else {
-        comparison = a.amount.toInt().compareTo(b.amount.toInt());
-      }
-      return _sortAscending ? comparison : -comparison;
-    });
-
-    return filtered;
+    return TransactionUtils.sortOutputs(
+      _allOutputs,
+      _sortBy,
+      _sortAscending,
+      _currentHeight,
+      _showSpentOutputs,
+    );
   }
 
   Widget _buildSelectButton(String label, VoidCallback onPressed) {
@@ -3182,15 +3056,7 @@ class _DebugViewState extends State<DebugView> {
 
   void _selectAllSpendable() {
     setState(() {
-      for (var output in _allOutputs) {
-        if (output.spent) continue;
-        final outputHeight = output.blockHeight.toInt();
-        final confirmations = outputHeight > 0 ? _currentHeight - outputHeight : 0;
-        if (confirmations >= 10) {
-          final outputKey = '${output.txHash}:${output.outputIndex}';
-          _selectedOutputs.add(outputKey);
-        }
-      }
+      _selectedOutputs = OutputUtils.selectAllSpendable(_allOutputs, _currentHeight);
     });
   }
 
