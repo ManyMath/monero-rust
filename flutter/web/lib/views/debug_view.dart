@@ -17,6 +17,7 @@ import '../utils/clipboard_utils.dart';
 import '../utils/output_utils.dart';
 import '../utils/transaction_utils.dart';
 import '../services/wallet_scan_service.dart';
+import '../services/transaction_service.dart';
 
 class DebugView extends StatefulWidget {
   const DebugView({super.key});
@@ -863,84 +864,28 @@ class _DebugViewState extends State<DebugView> {
   }
 
   void _createTransaction() {
-    final result = KeyParser.parse(_controller.text);
+    // Build recipient inputs from UI controllers
+    final recipientInputs = List.generate(
+      _destinationControllers.length,
+      (i) => RecipientInput(
+        address: _destinationControllers[i].text,
+        amount: _amountControllers[i].text,
+      ),
+    );
 
-    if (!result.isValid || result.normalizedInput == null) {
+    // Validate transaction creation parameters
+    final validation = TransactionService.validateTransactionCreation(
+      seed: _controller.text,
+      availableOutputs: _allOutputs,
+      recipients: recipientInputs,
+      nodeUrl: _nodeUrlController.text,
+      selectedOutputs: _selectedOutputs.isNotEmpty ? _selectedOutputs : null,
+      currentHeight: _currentHeight,
+    );
+
+    if (!validation.isValid) {
       setState(() {
-        _txError = 'Please enter a valid seed phrase first';
-      });
-      return;
-    }
-
-    if (_allOutputs.isEmpty) {
-      setState(() {
-        _txError = 'No outputs available. Scan blocks to find outputs first.';
-      });
-      return;
-    }
-
-    // Validate all recipients
-    List<Recipient> recipients = [];
-    int totalAtomic = 0;
-
-    for (int i = 0; i < _destinationControllers.length; i++) {
-      final destination = _destinationControllers[i].text.trim();
-      if (destination.isEmpty) {
-        setState(() {
-          _txError = 'Please enter a destination address for recipient ${i + 1}';
-        });
-        return;
-      }
-
-      final amountStr = _amountControllers[i].text.trim();
-      if (amountStr.isEmpty) {
-        setState(() {
-          _txError = 'Please enter an amount for recipient ${i + 1}';
-        });
-        return;
-      }
-
-      final amountXmr = double.tryParse(amountStr);
-      if (amountXmr == null || amountXmr <= 0) {
-        setState(() {
-          _txError = 'Please enter a valid amount for recipient ${i + 1}';
-        });
-        return;
-      }
-
-      // Convert XMR to atomic units (1 XMR = 1e12 atomic units)
-      final amountAtomic = (amountXmr * 1e12).round();
-      if (amountAtomic <= 0) {
-        setState(() {
-          _txError = 'Amount too small for recipient ${i + 1}';
-        });
-        return;
-      }
-
-      totalAtomic += amountAtomic;
-      recipients.add(Recipient(
-        address: destination,
-        amount: Uint64(BigInt.from(amountAtomic)),
-      ));
-    }
-
-    // Validate coin selection if outputs are selected
-    if (_selectedOutputs.isNotEmpty) {
-      final selectedTotal = _getSelectedOutputsTotal();
-      if (selectedTotal < totalAtomic) {
-        final selectedXmr = (selectedTotal / 1e12).toStringAsFixed(12);
-        final totalXmr = (totalAtomic / 1e12).toStringAsFixed(12);
-        setState(() {
-          _txError = 'Selected outputs ($selectedXmr XMR) insufficient for $totalXmr XMR + fees';
-        });
-        return;
-      }
-    }
-
-    final nodeUrl = _nodeUrlController.text.trim();
-    if (nodeUrl.isEmpty) {
-      setState(() {
-        _txError = 'Please enter a node URL';
+        _txError = validation.error;
       });
       return;
     }
@@ -951,17 +896,14 @@ class _DebugViewState extends State<DebugView> {
       _txError = null;
     });
 
-    final fullNodeUrl = nodeUrl.startsWith('http://') || nodeUrl.startsWith('https://')
-        ? nodeUrl
-        : 'http://$nodeUrl';
-
-    CreateTransactionRequest(
-      nodeUrl: fullNodeUrl,
-      seed: result.normalizedInput!,
+    // Execute transaction creation
+    TransactionService.createTransaction(
+      seed: validation.normalizedSeed!,
       network: _network,
-      recipients: recipients,
-      selectedOutputs: _selectedOutputs.isNotEmpty ? _selectedOutputs.toList() : null,
-    ).sendSignalToRust();
+      recipients: validation.recipients!,
+      nodeUrl: validation.nodeUrl!,
+      selectedOutputs: validation.selectedOutputs,
+    );
   }
 
   void _addRecipient() {
@@ -986,22 +928,16 @@ class _DebugViewState extends State<DebugView> {
     return OutputUtils.getRecipientsTotal(_amountControllers);
   }
 
-  int _getSelectedOutputsTotal() {
-    return OutputUtils.getSelectedOutputsTotal(_allOutputs, _selectedOutputs, _currentHeight);
-  }
-
   void _broadcastTransaction() {
-    if (_txResult == null || _txResult!.txBlob == null) {
-      setState(() {
-        _broadcastError = 'No transaction to broadcast';
-      });
-      return;
-    }
+    // Validate broadcast parameters
+    final validation = TransactionService.validateTransactionBroadcast(
+      txResult: _txResult,
+      nodeUrl: _nodeUrlController.text,
+    );
 
-    final nodeUrl = _nodeUrlController.text.trim();
-    if (nodeUrl.isEmpty) {
+    if (!validation.isValid) {
       setState(() {
-        _broadcastError = 'Please enter a node URL';
+        _broadcastError = validation.error;
       });
       return;
     }
@@ -1012,15 +948,12 @@ class _DebugViewState extends State<DebugView> {
       _broadcastError = null;
     });
 
-    final fullNodeUrl = nodeUrl.startsWith('http://') || nodeUrl.startsWith('https://')
-        ? nodeUrl
-        : 'http://$nodeUrl';
-
-    BroadcastTransactionRequest(
-      nodeUrl: fullNodeUrl,
-      txBlob: _txResult!.txBlob!,
-      spentOutputHashes: _txResult!.spentOutputHashes,
-    ).sendSignalToRust();
+    // Execute transaction broadcast
+    TransactionService.broadcastTransaction(
+      nodeUrl: validation.nodeUrl!,
+      txBlob: validation.txBlob!,
+      spentOutputHashes: validation.spentOutputHashes!,
+    );
   }
 
   void _showProvePaymentDialog() {
