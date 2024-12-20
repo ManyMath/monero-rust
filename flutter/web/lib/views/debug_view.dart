@@ -1,16 +1,13 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:html' as html;
-import 'dart:js_util' as js_util;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:tuple/tuple.dart';
 import '../src/bindings/bindings.dart';
 import '../utils/key_parser.dart';
 import '../services/extension_service.dart';
 import '../widgets/password_dialog.dart';
 import '../widgets/wallet_id_dialog.dart';
-import '../services/wallet_storage_service.dart';
+import '../services/wallet_persistence_service.dart';
 import '../models/wallet_instance.dart';
 import '../models/wallet_transaction.dart';
 import '../utils/clipboard_utils.dart';
@@ -18,6 +15,7 @@ import '../utils/output_utils.dart';
 import '../utils/transaction_utils.dart';
 import '../services/wallet_scan_service.dart';
 import '../services/transaction_service.dart';
+import '../services/wallet_polling_service.dart';
 
 class DebugView extends StatefulWidget {
   const DebugView({super.key});
@@ -29,6 +27,7 @@ class DebugView extends StatefulWidget {
 class _DebugViewState extends State<DebugView> {
   final _controller = TextEditingController();
   final _extensionService = ExtensionService();
+  final _pollingService = WalletPollingService();
   final _nodeUrlController = TextEditingController(text: 'http://127.0.0.1:38081');
   final _blockHeightController = TextEditingController();
   final _blockHeightFocusNode = FocusNode();
@@ -108,7 +107,6 @@ class _DebugViewState extends State<DebugView> {
   bool _isScanningMempool = false;
 
   // File management state
-  final _storageService = WalletStorageService();
   bool _isSaving = false;
   bool _isLoadingWallet = false;
   String? _saveError;
@@ -120,18 +118,7 @@ class _DebugViewState extends State<DebugView> {
   String? _importError;
 
   // Helper to get storage key for current wallet
-  String get _storageKey => 'monero_wallet_$_walletId';
-
-  // Polling timers (managed in Dart)
-  Timer? _blockRefreshTimer;
-  Timer? _mempoolPollTimer;
-  Timer? _mempoolDelayTimer; // Initial 45s delay before first periodic
-  Timer? _countdownTimer;
-  int _blockRefreshCountdown = 0;
-  int _mempoolCountdown = 0;
-  static const _blockRefreshInterval = Duration(seconds: 90);
-  static const _mempoolPollInterval = Duration(seconds: 90);
-  static const _mempoolPollOffset = Duration(seconds: 45);
+  String get _storageKey => WalletPersistenceService.getStorageKey(_walletId);
 
   int? _expandedPanel;
 
@@ -510,50 +497,17 @@ class _DebugViewState extends State<DebugView> {
   }
 
   void _startPollingTimers() {
-    debugPrint('[Dart] Starting polling timers (block: ${_blockRefreshInterval.inSeconds}s, mempool: ${_mempoolPollInterval.inSeconds}s with ${_mempoolPollOffset.inSeconds}s offset)');
-    _stopPollingTimers(); // Cancel any existing timers first
-
-    _blockRefreshCountdown = _blockRefreshInterval.inSeconds;
-    _mempoolCountdown = _mempoolPollOffset.inSeconds;
-
-    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      setState(() {
-        if (_blockRefreshCountdown > 0) _blockRefreshCountdown--;
-        if (_mempoolCountdown > 0) _mempoolCountdown--;
-      });
-    });
-
-    _blockRefreshTimer = Timer.periodic(_blockRefreshInterval, (_) {
-      _onBlockRefreshTimer();
-      setState(() => _blockRefreshCountdown = _blockRefreshInterval.inSeconds);
-    });
-
-    // Start mempool polling with offset to stagger requests
-    _mempoolDelayTimer = Timer(_mempoolPollOffset, () {
-      _mempoolDelayTimer = null;
-      _onMempoolPollTimer(); // First poll at 45s
-      setState(() => _mempoolCountdown = _mempoolPollInterval.inSeconds);
-      _mempoolPollTimer = Timer.periodic(_mempoolPollInterval, (_) {
-        _onMempoolPollTimer();
-        setState(() => _mempoolCountdown = _mempoolPollInterval.inSeconds);
-      });
-    });
+    _pollingService.startPolling(
+      onBlockRefresh: _onBlockRefreshTimer,
+      onMempoolPoll: _onMempoolPollTimer,
+      onCountdownUpdate: () {
+        setState(() {}); // Trigger UI update for countdown changes
+      },
+    );
   }
 
   void _stopPollingTimers() {
-    if (_blockRefreshTimer != null || _mempoolPollTimer != null || _mempoolDelayTimer != null) {
-      debugPrint('[Dart] Stopping polling timers');
-    }
-    _countdownTimer?.cancel();
-    _countdownTimer = null;
-    _blockRefreshTimer?.cancel();
-    _blockRefreshTimer = null;
-    _mempoolDelayTimer?.cancel();
-    _mempoolDelayTimer = null;
-    _mempoolPollTimer?.cancel();
-    _mempoolPollTimer = null;
-    _blockRefreshCountdown = 0;
-    _mempoolCountdown = 0;
+    _pollingService.stopPolling();
   }
 
   /// Normalizes a node URL by trimming whitespace and adding http:// if no scheme is present.
@@ -1180,7 +1134,7 @@ class _DebugViewState extends State<DebugView> {
                   children: [
                     ExpansionPanel(
                       headerBuilder: (BuildContext context, bool isExpanded) {
-                        final hasData = html.window.localStorage.containsKey(_storageKey);
+                        final hasData = WalletPersistenceService.hasWalletData(_walletId);
 
                         // Calculate total storage size
                         int totalBytes = 0;
@@ -1893,10 +1847,10 @@ class _DebugViewState extends State<DebugView> {
                                       ),
                                     ),
                                     // Polling countdown when synced
-                                    if (_isSynced && (_blockRefreshCountdown > 0 || _mempoolCountdown > 0)) ...[
+                                    if (_isSynced && (_pollingService.blockRefreshCountdown > 0 || _pollingService.mempoolCountdown > 0)) ...[
                                       const SizedBox(height: 12),
                                       Text(
-                                        'Next poll: ${_mempoolCountdown > 0 && (_blockRefreshCountdown == 0 || _mempoolCountdown < _blockRefreshCountdown) ? _mempoolCountdown : _blockRefreshCountdown}s',
+                                        'Next poll: ${_pollingService.mempoolCountdown > 0 && (_pollingService.blockRefreshCountdown == 0 || _pollingService.mempoolCountdown < _pollingService.blockRefreshCountdown) ? _pollingService.mempoolCountdown : _pollingService.blockRefreshCountdown}s',
                                         style: TextStyle(
                                           fontSize: 11,
                                           color: Colors.green.shade700,
@@ -2947,7 +2901,7 @@ class _DebugViewState extends State<DebugView> {
         barrierDismissible: false,
         builder: (context) => AlertDialog(
           icon: const Icon(Icons.warning, color: Colors.orange, size: 48),
-          title: const Text('⚠️ Security Warning'),
+          title: const Text('Security Warning'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -3031,91 +2985,29 @@ class _DebugViewState extends State<DebugView> {
       }
     }
 
-    // Prepare wallet data to save
-    final walletData = {
-      'version': 0,
-      'walletId': _walletId,
-      'seed': _controller.text.trim(),
-      'network': _network,
-      'address': _derivedAddress,
-      'outputs': _allOutputs.map((o) => {
-        'txHash': o.txHash,
-        'outputIndex': o.outputIndex,
-        'amount': o.amount.toString(),
-        'amountXmr': o.amountXmr,
-        'key': o.key,
-        'keyOffset': o.keyOffset,
-        'commitmentMask': o.commitmentMask,
-        'subaddressIndex': o.subaddressIndex != null
-            ? [o.subaddressIndex!.item1, o.subaddressIndex!.item2]
-            : null,
-        'paymentId': o.paymentId,
-        'receivedOutputBytes': o.receivedOutputBytes,
-        'blockHeight': o.blockHeight.toString(),
-        'spent': o.spent,
-        'keyImage': o.keyImage,
-      }).toList(),
-      'transactions': _allTransactions.map((t) => t.toJson()).toList(),
-      'scanState': {
-        'isContinuousScanning': _isContinuousScanning,
-        'isContinuousPaused': _isContinuousPaused,
-        'continuousScanCurrentHeight': _continuousScanCurrentHeight,
-        'continuousScanTargetHeight': _continuousScanTargetHeight,
-        'isSynced': _isSynced,
-        'daemonHeight': _daemonHeight,
-      },
-      'selectedOutputs': _selectedOutputs.toList(),
-      'nodeUrl': _nodeUrlController.text,
-    };
-
-    final jsonString = jsonEncode(walletData);
-
-    // Wait for encrypted response
-    final completer = Completer<bool>();
-    final subscription = WalletDataSavedResponse.rustSignalStream.listen((signal) {
-      debugPrint('[SAVE] Received save response - success: ${signal.message.success}');
-      if (!completer.isCompleted) {
-        if (signal.message.success && signal.message.encryptedData != null) {
-          // Store the encrypted data to localStorage with wallet-specific key
-          debugPrint('[SAVE] Storing encrypted data to localStorage key: $_storageKey (${signal.message.encryptedData!.length} chars)');
-          html.window.localStorage[_storageKey] = signal.message.encryptedData!;
-          // Also store the active wallet ID
-          html.window.localStorage['monero_active_wallet'] = _walletId;
-          debugPrint('[SAVE] Data successfully written to localStorage for wallet: $_walletId');
-          completer.complete(true);
-        } else {
-          debugPrint('[SAVE] Failed - no encrypted data in response');
-          completer.complete(false);
-        }
-      }
-    });
-
-    // Send save request
-    debugPrint('[SAVE] Sending SaveWalletDataRequest to Rust...');
-    SaveWalletDataRequest(
+    // Use the persistence service to save wallet data
+    final saveResult = await WalletPersistenceService.saveWalletData(
+      walletId: walletId,
       password: password,
-      walletDataJson: jsonString,
-    ).sendSignalToRust();
-
-    final success = await completer.future.timeout(
-      const Duration(seconds: 10),
-      onTimeout: () {
-        debugPrint('[SAVE] Timeout waiting for save response');
-        return false;
-      },
+      seed: _controller.text.trim(),
+      network: _network,
+      address: _derivedAddress,
+      nodeUrl: _nodeUrlController.text,
+      outputs: _allOutputs,
+      transactions: _allTransactions,
+      continuousScanCurrentHeight: _continuousScanCurrentHeight,
+      selectedOutputs: _selectedOutputs,
     );
 
-    await subscription.cancel();
+    final success = saveResult.success;
 
     setState(() {
       _isSaving = false;
       if (success) {
         _saveError = null;
         _lastSaveTime = DateTime.now().toString().substring(0, 19);
-        debugPrint('[SAVE] Save completed successfully');
       } else {
-        _saveError = 'Failed to save wallet data';
-        debugPrint('[SAVE] Save failed with error: $_saveError');
+        _saveError = saveResult.error ?? 'Failed to save wallet data';
       }
     });
 
@@ -3132,7 +3024,6 @@ class _DebugViewState extends State<DebugView> {
         ),
       );
     } else if (!success && mounted) {
-      debugPrint('[SAVE] Showing error snackbar');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Save failed: $_saveError'),
@@ -3145,19 +3036,7 @@ class _DebugViewState extends State<DebugView> {
 
   /// Scan localStorage for all available wallet IDs
   void _refreshAvailableWallets() {
-    debugPrint('[WALLET] Scanning localStorage for available wallets...');
-    final walletIds = <String>[];
-
-    // Scan all localStorage keys - only include wallets that have saved data
-    for (var i = 0; i < html.window.localStorage.length; i++) {
-      final key = html.window.localStorage.keys.elementAt(i);
-      if (key.startsWith('monero_wallet_')) {
-        final walletId = key.substring('monero_wallet_'.length);
-        walletIds.add(walletId);
-      }
-    }
-
-    walletIds.sort();
+    final walletIds = WalletPersistenceService.listAvailableWallets();
 
     setState(() {
       _availableWalletIds = walletIds;
@@ -3166,8 +3045,6 @@ class _DebugViewState extends State<DebugView> {
         _walletId = walletIds.first;
       }
     });
-
-    debugPrint('[WALLET] Found ${walletIds.length} wallets: ${walletIds.join(', ')}');
   }
 
   /// Start a new wallet by clearing the current state
@@ -3235,7 +3112,7 @@ class _DebugViewState extends State<DebugView> {
 
     _refreshAvailableWallets();
 
-    if (html.window.localStorage.containsKey(_storageKey)) {
+    if (WalletPersistenceService.hasWalletData(newWalletId)) {
       debugPrint('[WALLET] Wallet $newWalletId has saved data, auto-loading...');
       await _loadWalletData();
     } else {
@@ -3408,148 +3285,72 @@ class _DebugViewState extends State<DebugView> {
       return;
     }
 
-    // Get encrypted data from storage for this wallet
-    debugPrint('[LOAD] Looking for wallet data at key: $_storageKey');
-    final encryptedData = html.window.localStorage[_storageKey];
-    if (encryptedData == null) {
-      setState(() {
-        _isLoadingWallet = false;
-        _loadError = 'No stored wallet data found for wallet: $_walletId';
-      });
-      debugPrint('[LOAD] No data found at key: $_storageKey');
-      return;
-    }
-    debugPrint('[LOAD] Found encrypted data (${encryptedData.length} chars)');
-
-    // Wait for decrypted response
-    final completer = Completer<String?>();
-    final subscription = WalletDataLoadedResponse.rustSignalStream.listen((signal) {
-      if (!completer.isCompleted) {
-        if (signal.message.success && signal.message.walletDataJson != null) {
-          completer.complete(signal.message.walletDataJson);
-        } else {
-          completer.complete(null);
-        }
-      }
-    });
-
-    // Send load request
-    LoadWalletDataRequest(
+    // Use the persistence service to load wallet data
+    final loadResult = await WalletPersistenceService.loadWalletData(
+      walletId: _walletId,
       password: password,
-      encryptedData: encryptedData,
-    ).sendSignalToRust();
-
-    final jsonString = await completer.future.timeout(
-      const Duration(seconds: 10),
-      onTimeout: () => null,
     );
 
-    await subscription.cancel();
-
-    if (jsonString == null) {
+    if (!loadResult.success) {
       setState(() {
         _isLoadingWallet = false;
-        _loadError = 'Failed to decrypt wallet data (wrong password?)';
+        _loadError = loadResult.error ?? 'Failed to load wallet data';
       });
       return;
     }
 
-    try {
-      final walletData = jsonDecode(jsonString) as Map<String, dynamic>;
+    // Restore wallet state
+    setState(() {
+      _controller.text = loadResult.seed!;
+      _network = loadResult.network!;
+      _derivedAddress = loadResult.address;
+      _nodeUrlController.text = loadResult.nodeUrl!;
+      _allOutputs = loadResult.outputs!;
+      _allTransactions = loadResult.transactions!;
+      _continuousScanCurrentHeight = loadResult.continuousScanCurrentHeight!;
+      _continuousScanTargetHeight = 0;
+      _isSynced = false;
+      _daemonHeight = null;
+      _isContinuousScanning = false;
+      _isContinuousPaused = _continuousScanCurrentHeight > 0;
 
-      // Restore wallet state
-      setState(() {
-        // Restore seed and network
-        _controller.text = walletData['seed'] as String? ?? '';
-        _network = walletData['network'] as String? ?? 'stagenet';
-        _derivedAddress = walletData['address'] as String?;
-        _nodeUrlController.text = walletData['nodeUrl'] as String? ?? 'http://127.0.0.1:38081';
-
-        // Restore outputs
-        _allOutputs = (walletData['outputs'] as List).map((o) {
-          final outputData = o as Map<String, dynamic>;
-          return OwnedOutput(
-            txHash: outputData['txHash'] as String,
-            outputIndex: outputData['outputIndex'] as int,
-            amount: Uint64(BigInt.parse(outputData['amount'] as String)),
-            amountXmr: outputData['amountXmr'] as String,
-            key: outputData['key'] as String,
-            keyOffset: outputData['keyOffset'] as String,
-            commitmentMask: outputData['commitmentMask'] as String,
-            subaddressIndex: outputData['subaddressIndex'] != null
-                ? Tuple2<int, int>(
-                    outputData['subaddressIndex'][0] as int,
-                    outputData['subaddressIndex'][1] as int,
-                  )
-                : null,
-            paymentId: outputData['paymentId'] as String?,
-            receivedOutputBytes: outputData['receivedOutputBytes'] as String,
-            blockHeight: Uint64(BigInt.parse(outputData['blockHeight'] as String)),
-            spent: outputData['spent'] as bool,
-            keyImage: outputData['keyImage'] as String,
-          );
-        }).toList();
-
-        // Restore transactions
-        if (walletData['transactions'] != null) {
-          _allTransactions = (walletData['transactions'] as List)
-              .map((t) => WalletTransaction.fromJson(t as Map<String, dynamic>))
-              .toList();
-        } else {
-          _allTransactions = [];
-        }
-
-        final scanState = walletData['scanState'] as Map<String, dynamic>;
-        _continuousScanCurrentHeight = scanState['continuousScanCurrentHeight'] as int;
-        _continuousScanTargetHeight = 0;
-        _isSynced = false;
-        _daemonHeight = null;
-        _isContinuousScanning = false;
-        _isContinuousPaused = _continuousScanCurrentHeight > 0;
-
-        // Set block height field to resume scanning from last synced height
-        if (_continuousScanCurrentHeight > 0) {
-          _blockHeightController.text = _continuousScanCurrentHeight.toString();
-          _blockHeightUserEdited = false;
-        }
-
-        // Restore selected outputs
-        _selectedOutputs = Set<String>.from(walletData['selectedOutputs'] as List);
-
-        _isLoadingWallet = false;
-        _loadError = null;
-      });
-
-      // Open this wallet in multi-wallet mode
-      final seed = walletData['seed'] as String? ?? '';
-      final network = walletData['network'] as String? ?? 'stagenet';
-      final address = walletData['address'] as String? ?? _derivedAddress ?? '';
-      if (seed.isNotEmpty && address.isNotEmpty) {
-        _openWallet(_walletId, seed, network, address);
-        // Update the opened wallet's outputs
-        if (_activeWallet != null) {
-          _activeWallet!.outputs = _allOutputs;
-          _activeWallet!.currentHeight = _continuousScanCurrentHeight;
-          _activeWallet!.daemonHeight = _daemonHeight ?? 0;
-        }
+      // Set block height field to resume scanning from last synced height
+      if (_continuousScanCurrentHeight > 0) {
+        _blockHeightController.text = _continuousScanCurrentHeight.toString();
+        _blockHeightUserEdited = false;
       }
 
-      // Derive address to populate keys
-      _deriveAddress();
+      // Restore selected outputs
+      _selectedOutputs = loadResult.selectedOutputs!;
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Wallet data loaded successfully'),
-            duration: Duration(seconds: 2),
-          ),
-        );
+      _isLoadingWallet = false;
+      _loadError = null;
+    });
+
+    // Open this wallet in multi-wallet mode
+    final seed = loadResult.seed!;
+    final network = loadResult.network!;
+    final address = loadResult.address ?? _derivedAddress ?? '';
+    if (seed.isNotEmpty && address.isNotEmpty) {
+      _openWallet(_walletId, seed, network, address);
+      // Update the opened wallet's outputs
+      if (_activeWallet != null) {
+        _activeWallet!.outputs = _allOutputs;
+        _activeWallet!.currentHeight = _continuousScanCurrentHeight;
+        _activeWallet!.daemonHeight = _daemonHeight ?? 0;
       }
-    } catch (e) {
-      setState(() {
-        _isLoadingWallet = false;
-        _loadError = 'Failed to parse wallet data: $e';
-      });
+    }
+
+    // Derive address to populate keys
+    _deriveAddress();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Wallet data loaded successfully'),
+          duration: Duration(seconds: 2),
+        ),
+      );
     }
   }
 
@@ -3572,7 +3373,7 @@ class _DebugViewState extends State<DebugView> {
     }
 
     // Check if wallet has saved data
-    if (!html.window.localStorage.containsKey(_storageKey)) {
+    if (!WalletPersistenceService.hasWalletData(_walletId)) {
       setState(() {
         _exportError = 'No saved data found for this wallet';
       });
@@ -3592,124 +3393,44 @@ class _DebugViewState extends State<DebugView> {
       _exportError = null;
     });
 
-    try {
-      // Get encrypted data from localStorage
-      final encryptedData = html.window.localStorage[_storageKey];
-      if (encryptedData == null || encryptedData.isEmpty) {
-        throw Exception('Wallet data is empty');
-      }
+    // Use the persistence service to export wallet
+    final exportResult = await WalletPersistenceService.exportWallet(
+      walletId: _walletId,
+    );
 
-      // Generate filename with timestamp
-      final now = DateTime.now();
-      final timestamp = '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}-'
-          '${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}';
-      final filename = '${_walletId}_$timestamp.monero-wallet';
-
-      // Create blob with wallet data
-      final bytes = utf8.encode(encryptedData);
-      final blob = html.Blob([bytes], 'application/octet-stream');
-
-      // Try to use File System Access API for "Save As" dialog (Chrome 86+, Edge 86+)
-      // Falls back to automatic download for unsupported browsers (Firefox, Safari)
-      bool usedSaveAsDialog = false;
-      try {
-        if (js_util.hasProperty(html.window, 'showSaveFilePicker')) {
-          debugPrint('[EXPORT] Using File System Access API (Save As dialog)');
-
-          // Configure file picker options
-          final options = js_util.newObject();
-          js_util.setProperty(options, 'suggestedName', filename);
-
-          // Set file types filter
-          final types = js_util.newObject();
-          js_util.setProperty(types, 'description', 'Monero Wallet Files');
-          final accept = js_util.newObject();
-          js_util.setProperty(accept, 'application/octet-stream', ['.monero-wallet']);
-          js_util.setProperty(types, 'accept', accept);
-          js_util.setProperty(options, 'types', [types]);
-
-          // Show save file picker
-          final fileHandlePromise = js_util.callMethod(
-            html.window,
-            'showSaveFilePicker',
-            [options],
-          );
-          final fileHandle = await js_util.promiseToFuture(fileHandlePromise);
-
-          // Create writable stream
-          final writablePromise = js_util.callMethod(fileHandle, 'createWritable', []);
-          final writable = await js_util.promiseToFuture(writablePromise);
-
-          // Write blob to file
-          final writePromise = js_util.callMethod(writable, 'write', [blob]);
-          await js_util.promiseToFuture(writePromise);
-
-          // Close the file
-          final closePromise = js_util.callMethod(writable, 'close', []);
-          await js_util.promiseToFuture(closePromise);
-
-          usedSaveAsDialog = true;
-          debugPrint('[EXPORT] File saved via Save As dialog');
-        }
-      } catch (e) {
-        // User cancelled the save dialog or API not supported
-        if (e.toString().contains('aborted')) {
-          debugPrint('[EXPORT] User cancelled save dialog');
-          setState(() {
-            _isExporting = false;
-          });
-          return;
-        }
-        debugPrint('[EXPORT] File System Access API not available or failed: $e');
-        // Continue to fallback method
-      }
-
-      // Fallback: Use traditional download method (Firefox, Safari, or if API failed)
-      if (!usedSaveAsDialog) {
-        debugPrint('[EXPORT] Using fallback download method');
-        final url = html.Url.createObjectUrlFromBlob(blob);
-        final anchor = html.AnchorElement(href: url)
-          ..setAttribute('download', filename)
-          ..click();
-        html.Url.revokeObjectUrl(url);
-      }
-
-      setState(() {
-        _isExporting = false;
+    setState(() {
+      _isExporting = false;
+      if (!exportResult.success) {
+        _exportError = exportResult.error;
+      } else {
         _exportError = null;
-      });
+      }
+    });
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              usedSaveAsDialog
+    if (exportResult.cancelled) {
+      // User cancelled, do nothing
+      return;
+    }
+
+    if (exportResult.success && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            exportResult.usedSaveAsDialog!
                 ? 'Wallet "$_walletId" saved'
-                : 'Wallet "$_walletId" exported as $filename'
-            ),
-            duration: const Duration(seconds: 3),
+                : 'Wallet "$_walletId" exported as ${exportResult.filename}'
           ),
-        );
-      }
-
-      debugPrint('[EXPORT] Successfully exported wallet: $_walletId (method: ${usedSaveAsDialog ? 'Save As dialog' : 'auto-download'})');
-    } catch (e) {
-      setState(() {
-        _isExporting = false;
-        _exportError = 'Export failed: $e';
-      });
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Export failed: $e'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 4),
-          ),
-        );
-      }
-
-      debugPrint('[EXPORT] Export failed: $e');
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } else if (!exportResult.success && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Export failed: ${exportResult.error}'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 4),
+        ),
+      );
     }
   }
 
@@ -3737,26 +3458,9 @@ class _DebugViewState extends State<DebugView> {
       }
 
       final file = files[0];
-      debugPrint('[IMPORT] Selected file: ${file.name} (${file.size} bytes)');
-
-      // Validate file size (max 10MB as sanity check)
-      if (file.size > 10 * 1024 * 1024) {
-        throw Exception('File too large (max 10MB)');
-      }
 
       // Extract suggested wallet ID from filename
-      String suggestedWalletId = file.name;
-      if (suggestedWalletId.endsWith('.monero-wallet')) {
-        suggestedWalletId = suggestedWalletId.substring(0, suggestedWalletId.length - 14);
-      }
-      // Remove timestamp if present (pattern: _20260204-143025)
-      final timestampRegex = RegExp(r'_\d{8}-\d{6}$');
-      suggestedWalletId = suggestedWalletId.replaceAll(timestampRegex, '');
-
-      // Ensure valid wallet ID
-      if (suggestedWalletId.isEmpty || !RegExp(r'^[a-zA-Z0-9_-]+$').hasMatch(suggestedWalletId)) {
-        suggestedWalletId = 'imported-wallet';
-      }
+      final suggestedWalletId = WalletPersistenceService.extractWalletIdFromFilename(file.name);
 
       // Prompt for wallet ID (loop until valid non-conflicting ID or user cancels)
       String? walletId;
@@ -3842,18 +3546,6 @@ class _DebugViewState extends State<DebugView> {
         }
       }
 
-      // Read file content (WASM-compatible)
-      final reader = html.FileReader();
-      reader.readAsText(file);
-      await reader.onLoad.first;
-
-      final encryptedData = reader.result as String?;
-      if (encryptedData == null || encryptedData.isEmpty) {
-        throw Exception('File is empty or could not be read');
-      }
-
-      debugPrint('[IMPORT] Read ${encryptedData.length} characters from file');
-
       // Prompt for password to verify decryption
       if (!mounted) return;
       final password = await showDialog<String>(
@@ -3873,67 +3565,53 @@ class _DebugViewState extends State<DebugView> {
         return;
       }
 
-      // Verify decryption by attempting to load
-      final completer = Completer<String?>();
-      final subscription = WalletDataLoadedResponse.rustSignalStream.listen((signal) {
-        if (!completer.isCompleted) {
-          if (signal.message.success && signal.message.walletDataJson != null) {
-            completer.complete(signal.message.walletDataJson);
-          } else {
-            completer.complete(null);
-          }
-        }
-      });
-
-      LoadWalletDataRequest(
+      // Use the persistence service to import wallet
+      final importResult = await WalletPersistenceService.importWallet(
+        file: file,
+        walletId: walletId,
         password: password,
-        encryptedData: encryptedData,
-      ).sendSignalToRust();
-
-      final jsonString = await completer.future.timeout(
-        const Duration(seconds: 10),
-        onTimeout: () => null,
+        shouldOverwrite: shouldOverwrite,
       );
-
-      await subscription.cancel();
-
-      if (jsonString == null) {
-        throw Exception('Failed to decrypt file (wrong password or corrupted file)');
-      }
-
-      // Verify JSON is valid
-      jsonDecode(jsonString);
-
-      // Store to localStorage with new wallet ID
-      final storageKey = 'monero_wallet_$walletId';
-      html.window.localStorage[storageKey] = encryptedData;
-      debugPrint('[IMPORT] Stored wallet data to: $storageKey');
 
       setState(() {
         _isImporting = false;
-        _importError = null;
+        if (!importResult.success) {
+          _importError = importResult.error;
+        } else {
+          _importError = null;
+        }
       });
 
-      // Refresh wallet list
-      _refreshAvailableWallets();
+      if (importResult.success) {
+        // Refresh wallet list
+        _refreshAvailableWallets();
 
-      // Switch to imported wallet
-      await _switchWallet(walletId);
+        // Switch to imported wallet
+        await _switchWallet(walletId);
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              shouldOverwrite
-                ? 'Wallet "$walletId" overwritten successfully'
-                : 'Wallet "$walletId" imported successfully'
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                shouldOverwrite
+                    ? 'Wallet "$walletId" overwritten successfully'
+                    : 'Wallet "$walletId" imported successfully'
+              ),
+              duration: const Duration(seconds: 3),
             ),
-            duration: const Duration(seconds: 3),
-          ),
-        );
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Import failed: ${importResult.error}'),
+              backgroundColor: Colors.red,
+              duration: const Duration(seconds: 4),
+            ),
+          );
+        }
       }
-
-      debugPrint('[IMPORT] Successfully ${shouldOverwrite ? 'overwritten' : 'imported'} wallet: $walletId');
     } catch (e) {
       setState(() {
         _isImporting = false;
@@ -3949,8 +3627,6 @@ class _DebugViewState extends State<DebugView> {
           ),
         );
       }
-
-      debugPrint('[IMPORT] Import failed: $e');
     }
   }
 
@@ -3970,8 +3646,7 @@ class _DebugViewState extends State<DebugView> {
           ElevatedButton(
             onPressed: () {
               final deletedWalletId = _walletId;
-              debugPrint('[STORAGE] Clearing data for wallet: $deletedWalletId');
-              html.window.localStorage.remove(_storageKey);
+              WalletPersistenceService.clearWalletData(deletedWalletId);
               Navigator.of(context).pop();
               // Refresh wallet list and clear state
               _refreshAvailableWallets();
