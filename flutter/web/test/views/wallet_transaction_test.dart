@@ -1,0 +1,283 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:tuple/tuple.dart';
+import '../../lib/models/wallet_transaction.dart';
+import '../../lib/src/bindings/bindings.dart';
+import '../test_helpers.dart';
+
+void main() {
+  group('WalletTransaction', () {
+    group('Balance Change Calculations', () {
+      test('Incoming transaction with single output has positive balance', () {
+        final output = TestHelpers.createMockOutput(
+          txHash: 'tx123',
+          outputIndex: 0,
+          amountXmr: '1.5',
+          blockHeight: 1000,
+        );
+
+        final transaction = WalletTransaction(
+          txHash: 'tx123',
+          blockHeight: 1000,
+          blockTimestamp: 1234567890,
+          receivedOutputs: [output],
+          spentKeyImages: [],
+        );
+
+        final allOutputs = [output];
+        expect(transaction.balanceChange(allOutputs), equals(1.5));
+        expect(transaction.isIncoming(allOutputs), isTrue);
+      });
+
+      test('Incoming transaction with multiple outputs sums correctly', () {
+        final output1 = TestHelpers.createMockOutput(
+          txHash: 'tx123',
+          outputIndex: 0,
+          amountXmr: '1.5',
+          blockHeight: 1000,
+        );
+        final output2 = TestHelpers.createMockOutput(
+          txHash: 'tx123',
+          outputIndex: 1,
+          amountXmr: '2.3',
+          blockHeight: 1000,
+        );
+
+        final transaction = WalletTransaction(
+          txHash: 'tx123',
+          blockHeight: 1000,
+          blockTimestamp: 1234567890,
+          receivedOutputs: [output1, output2],
+          spentKeyImages: [],
+        );
+
+        final allOutputs = [output1, output2];
+        expect(transaction.balanceChange(allOutputs), equals(3.8));
+        expect(transaction.isIncoming(allOutputs), isTrue);
+      });
+
+      test('Outgoing transaction with spent outputs has negative balance', () {
+        final ownedOutput = TestHelpers.createMockOutput(
+          txHash: 'previous_tx',
+          outputIndex: 0,
+          amountXmr: '5.0',
+          blockHeight: 900,
+          keyImage: 'keyimage_previous',
+        );
+
+        final spendTx = WalletTransaction(
+          txHash: 'synthetic_spend_previous_tx_0',
+          blockHeight: 1000,
+          blockTimestamp: 1234567890,
+          receivedOutputs: [],
+          spentKeyImages: ['keyimage_previous'],
+        );
+
+        final allOutputs = [ownedOutput];
+        expect(spendTx.balanceChange(allOutputs), equals(-5.0));
+        expect(spendTx.isIncoming(allOutputs), isFalse);
+      });
+
+      test('Self-send transaction (consolidation) has zero net balance', () {
+        final receivedOutput = TestHelpers.createMockOutput(
+          txHash: 'tx123',
+          outputIndex: 0,
+          amountXmr: '3.0',
+          blockHeight: 1000,
+          keyImage: 'keyimage_new',
+        );
+
+        final spentOutput = TestHelpers.createMockOutput(
+          txHash: 'previous_tx',
+          outputIndex: 0,
+          amountXmr: '3.0',
+          blockHeight: 900,
+          keyImage: 'keyimage_old',
+        );
+
+        final transaction = WalletTransaction(
+          txHash: 'tx123',
+          blockHeight: 1000,
+          blockTimestamp: 1234567890,
+          receivedOutputs: [receivedOutput],
+          spentKeyImages: ['keyimage_old'],
+        );
+
+        final allOutputs = [receivedOutput, spentOutput];
+        expect(transaction.balanceChange(allOutputs), equals(0.0));
+      });
+
+      test('Balance calculation handles missing key images gracefully', () {
+        final output = TestHelpers.createMockOutput(
+          txHash: 'tx123',
+          outputIndex: 0,
+          amountXmr: '2.0',
+          blockHeight: 1000,
+        );
+
+        final transaction = WalletTransaction(
+          txHash: 'tx123',
+          blockHeight: 1000,
+          blockTimestamp: 1234567890,
+          receivedOutputs: [output],
+          spentKeyImages: ['nonexistent_keyimage'],
+        );
+
+        final allOutputs = [output];
+        expect(transaction.balanceChange(allOutputs), equals(2.0));
+      });
+
+      test('Balance calculation handles invalid amount strings', () {
+        final output = OwnedOutput(
+          txHash: 'tx123',
+          outputIndex: 0,
+          amount: Uint64(BigInt.from(1000000000000)),
+          amountXmr: 'invalid_amount',
+          key: 'mock_key',
+          keyOffset: 'mock_offset',
+          commitmentMask: 'mock_mask',
+          subaddressIndex: null,
+          paymentId: null,
+          receivedOutputBytes: 'mock_bytes',
+          blockHeight: Uint64(BigInt.from(1000)),
+          spent: false,
+          keyImage: 'keyimage_123',
+        );
+
+        final transaction = WalletTransaction(
+          txHash: 'tx123',
+          blockHeight: 1000,
+          blockTimestamp: 1234567890,
+          receivedOutputs: [output],
+          spentKeyImages: [],
+        );
+
+        final allOutputs = [output];
+        expect(transaction.balanceChange(allOutputs), equals(0.0));
+      });
+    });
+
+    group('JSON Serialization', () {
+      test('toJson creates correct JSON structure', () {
+        final output = TestHelpers.createMockOutput(
+          txHash: 'tx123',
+          outputIndex: 0,
+          amountXmr: '1.5',
+          blockHeight: 1000,
+          subaddressIndex: const Tuple2(0, 1),
+          paymentId: 'payment123',
+        );
+
+        final transaction = WalletTransaction(
+          txHash: 'tx123',
+          blockHeight: 1000,
+          blockTimestamp: 1234567890,
+          receivedOutputs: [output],
+          spentKeyImages: ['keyimage1'],
+        );
+
+        final json = transaction.toJson();
+
+        expect(json['txHash'], equals('tx123'));
+        expect(json['blockHeight'], equals(1000));
+        expect(json['blockTimestamp'], equals(1234567890));
+        expect(json['receivedOutputs'], isA<List>());
+        expect(json['receivedOutputs'].length, equals(1));
+        expect(json['spentKeyImages'], equals(['keyimage1']));
+      });
+
+      test('fromJson reconstructs transaction correctly', () {
+        final json = {
+          'txHash': 'tx123',
+          'blockHeight': 1000,
+          'blockTimestamp': 1234567890,
+          'receivedOutputs': [
+            {
+              'txHash': 'tx123',
+              'outputIndex': 0,
+              'amount': '1500000000000',
+              'amountXmr': '1.5',
+              'key': 'mock_key',
+              'keyOffset': 'mock_offset',
+              'commitmentMask': 'mock_mask',
+              'subaddressIndex': [0, 1],
+              'paymentId': 'payment123',
+              'receivedOutputBytes': 'mock_bytes',
+              'blockHeight': '1000',
+              'spent': false,
+              'keyImage': 'keyimage_tx123_0',
+            }
+          ],
+          'spentKeyImages': ['keyimage1'],
+        };
+
+        final transaction = WalletTransaction.fromJson(json);
+
+        expect(transaction.txHash, equals('tx123'));
+        expect(transaction.blockHeight, equals(1000));
+        expect(transaction.blockTimestamp, equals(1234567890));
+        expect(transaction.receivedOutputs.length, equals(1));
+        expect(transaction.spentKeyImages, equals(['keyimage1']));
+      });
+
+      test('Serialization round-trip preserves all data', () {
+        final output = TestHelpers.createMockOutput(
+          txHash: 'tx123',
+          outputIndex: 0,
+          amountXmr: '1.5',
+          blockHeight: 1000,
+          subaddressIndex: const Tuple2(0, 1),
+          paymentId: 'payment123',
+        );
+
+        final original = WalletTransaction(
+          txHash: 'tx123',
+          blockHeight: 1000,
+          blockTimestamp: 1234567890,
+          receivedOutputs: [output],
+          spentKeyImages: ['keyimage1', 'keyimage2'],
+        );
+
+        final json = original.toJson();
+        final reconstructed = WalletTransaction.fromJson(json);
+
+        expect(reconstructed.txHash, equals(original.txHash));
+        expect(reconstructed.blockHeight, equals(original.blockHeight));
+        expect(reconstructed.blockTimestamp, equals(original.blockTimestamp));
+        expect(reconstructed.receivedOutputs.length, equals(original.receivedOutputs.length));
+        expect(reconstructed.spentKeyImages, equals(original.spentKeyImages));
+      });
+
+      test('fromJson handles null subaddressIndex and paymentId', () {
+        final json = {
+          'txHash': 'tx123',
+          'blockHeight': 1000,
+          'blockTimestamp': 1234567890,
+          'receivedOutputs': [
+            {
+              'txHash': 'tx123',
+              'outputIndex': 0,
+              'amount': '1500000000000',
+              'amountXmr': '1.5',
+              'key': 'mock_key',
+              'keyOffset': 'mock_offset',
+              'commitmentMask': 'mock_mask',
+              'subaddressIndex': null,
+              'paymentId': null,
+              'receivedOutputBytes': 'mock_bytes',
+              'blockHeight': '1000',
+              'spent': false,
+              'keyImage': 'keyimage_tx123_0',
+            }
+          ],
+          'spentKeyImages': [],
+        };
+
+        final transaction = WalletTransaction.fromJson(json);
+
+        expect(transaction.receivedOutputs.length, equals(1));
+        expect(transaction.receivedOutputs[0].subaddressIndex, isNull);
+        expect(transaction.receivedOutputs[0].paymentId, isNull);
+      });
+    });
+  });
+}
