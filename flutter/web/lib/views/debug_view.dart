@@ -18,6 +18,10 @@ import '../services/wallet_scan_service.dart';
 import '../services/transaction_service.dart';
 import '../services/wallet_polling_service.dart';
 import '../widgets/common_widgets.dart';
+import '../widgets/keys_display_panel.dart';
+import '../widgets/scanning_panel.dart';
+import '../widgets/transactions_panel.dart';
+import '../widgets/outputs_panel.dart';
 
 class DebugView extends StatefulWidget {
   const DebugView({super.key});
@@ -1603,55 +1607,14 @@ class _DebugViewState extends State<DebugView> {
                           ),
                         );
                       },
-                      body: Builder(
-                        builder: (context) {
-                          final address = _derivedAddress;
-                          if (address == null) {
-                            return const Padding(
-                              padding: EdgeInsets.all(16.0),
-                              child: Text('Enter a seed phrase to view keys'),
-                            );
-                          }
-                          return Column(
-                              children: [
-                                Padding(
-                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        '${_network[0].toUpperCase()}${_network.substring(1)} Address',
-                                        style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Row(
-                                        children: [
-                                          Expanded(
-                                            child: SelectableText(
-                                              address,
-                                              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-                                            ),
-                                          ),
-                                          IconButton(
-                                            icon: const Icon(Icons.copy_outlined, size: 16),
-                                            onPressed: () => _copyToClipboard(address, 'Address'),
-                                            tooltip: 'Copy address',
-                                            padding: EdgeInsets.zero,
-                                            constraints: const BoxConstraints(),
-                                          ),
-                                        ],
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                const Divider(height: 1),
-                                CommonWidgets.buildKeyRow(label: 'Secret Spend Key', value: _secretSpendKey ?? 'TODO', onCopyPressed: () => _copyToClipboard(_secretSpendKey ?? '', 'Secret Spend Key')),
-                                CommonWidgets.buildKeyRow(label: 'Secret View Key', value: _secretViewKey ?? 'TODO', onCopyPressed: () => _copyToClipboard(_secretViewKey ?? '', 'Secret View Key')),
-                                CommonWidgets.buildKeyRow(label: 'Public Spend Key', value: _publicSpendKey ?? 'TODO', onCopyPressed: () => _copyToClipboard(_publicSpendKey ?? '', 'Public Spend Key')),
-                                CommonWidgets.buildKeyRow(label: 'Public View Key', value: _publicViewKey ?? 'TODO', onCopyPressed: () => _copyToClipboard(_publicViewKey ?? '', 'Public View Key')),
-                              ],
-                            );
-                        },
+                      body: KeysDisplayPanel(
+                        address: _derivedAddress,
+                        secretSpendKey: _secretSpendKey,
+                        secretViewKey: _secretViewKey,
+                        publicSpendKey: _publicSpendKey,
+                        publicViewKey: _publicViewKey,
+                        network: _network,
+                        onCopyToClipboard: _copyToClipboard,
                       ),
                       isExpanded: _expandedPanel == 2,
                     ),
@@ -1671,263 +1634,26 @@ class _DebugViewState extends State<DebugView> {
                           ),
                         );
                       },
-                      body: Padding(
-                        padding: const EdgeInsets.all(16.0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            TextField(
-                              controller: _nodeUrlController,
-                              decoration: const InputDecoration(
-                                labelText: 'Node Address',
-                                hintText: '127.0.0.1:38081',
-                                border: OutlineInputBorder(),
-                                helperText: 'For local stagenet node',
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: TextField(
-                                    controller: _blockHeightController,
-                                    focusNode: _blockHeightFocusNode,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Block Height',
-                                      hintText: 'Block height for scan',
-                                      border: OutlineInputBorder(),
-                                    ),
-                                    keyboardType: TextInputType.number,
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: ElevatedButton.icon(
-                                    onPressed: (_isScanning || _isContinuousScanning) ? null : _scanBlock,
-                                    icon: _isScanning
-                                        ? const SizedBox(
-                                            width: 16,
-                                            height: 16,
-                                            child: CircularProgressIndicator(strokeWidth: 2),
-                                          )
-                                        : const Icon(Icons.search),
-                                    label: Text(_isScanning ? 'Scanning...' : 'Scan One'),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: ElevatedButton.icon(
-                                    onPressed: _isScanning
-                                        ? null
-                                        : _isContinuousScanning
-                                            ? _pauseContinuousScan
-                                            : _startContinuousScan,
-                                    icon: Icon(_isContinuousScanning ? Icons.pause : Icons.play_arrow),
-                                    label: Text(_continuousScanButtonLabel()),
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: _continuousScanButtonColor(),
-                                      foregroundColor: Colors.white,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: ElevatedButton.icon(
-                                    onPressed: (_isScanningMempool || _controller.text.trim().isEmpty)
-                                        ? null
-                                        : _scanMempool,
-                                    icon: _isScanningMempool
-                                        ? const SizedBox(
-                                            width: 16,
-                                            height: 16,
-                                            child: CircularProgressIndicator(strokeWidth: 2),
-                                          )
-                                        : const Icon(Icons.memory),
-                                    label: Text(_isScanningMempool ? 'Scanning...' : 'Scan Mempool'),
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: Colors.purple,
-                                      foregroundColor: Colors.white,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            if (_isContinuousScanning || _isSynced) ...[
-                              const SizedBox(height: 16),
-                              Container(
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: _isSynced ? Colors.green.shade50 : Colors.blue.shade50,
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(
-                                    color: _isSynced ? Colors.green.shade200 : Colors.blue.shade200,
-                                  ),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                      children: [
-                                        Text(
-                                          _isSynced ? 'Synced' : 'Scanning Progress',
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            color: _isSynced ? Colors.green.shade900 : Colors.blue.shade900,
-                                          ),
-                                        ),
-                                        if (_isSynced)
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                            decoration: BoxDecoration(
-                                              color: Colors.green,
-                                              borderRadius: BorderRadius.circular(12),
-                                            ),
-                                            child: const Text(
-                                              'SYNCED',
-                                              style: TextStyle(
-                                                color: Colors.white,
-                                                fontSize: 10,
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                            ),
-                                          ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Text(
-                                      'Block $_continuousScanCurrentHeight / $_continuousScanTargetHeight',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: _isSynced ? Colors.green.shade900 : Colors.blue.shade900,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    LinearProgressIndicator(
-                                      value: _continuousScanTargetHeight > 0
-                                          ? _continuousScanCurrentHeight / _continuousScanTargetHeight
-                                          : 0,
-                                      backgroundColor: Colors.grey.shade300,
-                                      valueColor: AlwaysStoppedAnimation<Color>(
-                                        _isSynced ? Colors.green : Colors.blue,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      _continuousScanTargetHeight > 0
-                                          ? '${((_continuousScanCurrentHeight / _continuousScanTargetHeight) * 100).toStringAsFixed(1)}%'
-                                          : '0%',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.bold,
-                                        color: _isSynced ? Colors.green.shade900 : Colors.blue.shade900,
-                                      ),
-                                    ),
-                                    // Polling countdown when synced
-                                    if (_isSynced && (_pollingService.blockRefreshCountdown > 0 || _pollingService.mempoolCountdown > 0)) ...[
-                                      const SizedBox(height: 12),
-                                      Text(
-                                        'Next poll: ${_pollingService.mempoolCountdown > 0 && (_pollingService.blockRefreshCountdown == 0 || _pollingService.mempoolCountdown < _pollingService.blockRefreshCountdown) ? _pollingService.mempoolCountdown : _pollingService.blockRefreshCountdown}s',
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          color: Colors.green.shade700,
-                                        ),
-                                      ),
-                                    ],
-                                  ],
-                                ),
-                              ),
-                            ],
-                            const SizedBox(height: 16),
-                            if (_scanError != null) ...[
-                              const SizedBox(height: 16),
-                              Container(
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: Colors.red.shade50,
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: Colors.red.shade200),
-                                ),
-                                child: SelectableText(
-                                  'Scan Error: $_scanError',
-                                  style: TextStyle(color: Colors.red.shade900),
-                                ),
-                              ),
-                            ],
-                            if (_scanResult != null) ...[
-                              const SizedBox(height: 16),
-                              Container(
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: Colors.green.shade50,
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: Colors.green.shade200),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      'Scan Results',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.green.shade900,
-                                        fontSize: 16,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    CommonWidgets.buildScanResultRow(label: 'Block Height', value: _scanResult!.blockHeight.toString()),
-                                    CommonWidgets.buildScanResultRow(label: 'Block Hash', value: _scanResult!.blockHash),
-                                    CommonWidgets.buildScanResultRow(label: 'Timestamp', value: DateTime.fromMillisecondsSinceEpoch(
-                                      _scanResult!.blockTimestamp.toInt() * 1000,
-                                    ).toString()),
-                                    CommonWidgets.buildScanResultRow(label: 'Transactions', value: _scanResult!.txCount.toString()),
-                                    CommonWidgets.buildScanResultRow(label: 'Outputs Found', value: _scanResult!.outputs.length.toString()),
-                                    if (_scanResult!.outputs.isNotEmpty) ...[
-                                      const Divider(height: 24),
-                                      Text(
-                                        'Owned Outputs:',
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.green.shade900,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 8),
-                                      ..._scanResult!.outputs.map((output) => Card(
-                                        margin: const EdgeInsets.only(bottom: 8),
-                                        child: Padding(
-                                          padding: const EdgeInsets.all(12),
-                                          child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              Row(
-                                                children: [
-                                                  Text(
-                                                    'Amount: ${output.amountXmr} XMR',
-                                                    style: const TextStyle(
-                                                      fontWeight: FontWeight.bold,
-                                                      fontSize: 14,
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                              const SizedBox(height: 4),
-                                              Text('TX Hash: ${output.txHash}', style: const TextStyle(fontSize: 10, fontFamily: 'monospace')),
-                                              Text('Output Index: ${output.outputIndex}', style: const TextStyle(fontSize: 10)),
-                                              if (output.subaddressIndex != null)
-                                                Text('Subaddress: ${output.subaddressIndex!.item1}/${output.subaddressIndex!.item2}', style: const TextStyle(fontSize: 10)),
-                                              if (output.paymentId != null)
-                                                Text('Payment ID: ${output.paymentId}', style: const TextStyle(fontSize: 10)),
-                                            ],
-                                          ),
-                                        ),
-                                      )),
-                                    ],
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ],
-                        ),
+                      body: ScanningPanel(
+                        nodeUrlController: _nodeUrlController,
+                        blockHeightController: _blockHeightController,
+                        blockHeightFocusNode: _blockHeightFocusNode,
+                        isScanning: _isScanning,
+                        isContinuousScanning: _isContinuousScanning,
+                        isSynced: _isSynced,
+                        isScanningMempool: _isScanningMempool,
+                        continuousScanCurrentHeight: _continuousScanCurrentHeight,
+                        continuousScanTargetHeight: _continuousScanTargetHeight,
+                        scanError: _scanError,
+                        scanResult: _scanResult,
+                        hasSeedPhrase: _controller.text.trim().isNotEmpty,
+                        pollingService: _pollingService,
+                        onScanBlock: _scanBlock,
+                        onStartContinuousScan: _startContinuousScan,
+                        onPauseContinuousScan: _pauseContinuousScan,
+                        onScanMempool: _scanMempool,
+                        getContinuousScanButtonLabel: _continuousScanButtonLabel,
+                        getContinuousScanButtonColor: _continuousScanButtonColor,
                       ),
                       isExpanded: _expandedPanel == 3,
                     ),
@@ -1959,260 +1685,131 @@ class _DebugViewState extends State<DebugView> {
                           ),
                         );
                       },
-                      body: Padding(
-                        padding: const EdgeInsets.all(16.0),
-                        child: _allTransactions.isEmpty
-                            ? const Center(
-                                child: Padding(
-                                  padding: EdgeInsets.all(16.0),
-                                  child: Text(
-                                    'No transactions found. Scan blocks to find transactions.',
-                                    style: TextStyle(color: Colors.grey),
-                                  ),
-                                ),
-                              )
-                            : Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  // Sort controls
-                                  Padding(
-                                    padding: const EdgeInsets.only(bottom: 12),
-                                    child: Row(
-                                      children: [
-                                        const Text('Sort: ', style: TextStyle(fontSize: 12)),
-                                        CommonWidgets.buildTxSortButton(
-                                          label: 'Confirms',
-                                          sortKey: 'confirms',
-                                          currentSortKey: _txSortBy,
-                                          isAscending: _txSortAscending,
-                                          onTap: () {
-                                            setState(() {
-                                              if (_txSortBy == 'confirms') {
-                                                _txSortAscending = !_txSortAscending;
-                                              } else {
-                                                _txSortBy = 'confirms';
-                                                _txSortAscending = false;
-                                              }
-                                            });
-                                          },
-                                        ),
-                                        const SizedBox(width: 4),
-                                        CommonWidgets.buildTxSortButton(
-                                          label: 'Amount',
-                                          sortKey: 'amount',
-                                          currentSortKey: _txSortBy,
-                                          isAscending: _txSortAscending,
-                                          onTap: () {
-                                            setState(() {
-                                              if (_txSortBy == 'amount') {
-                                                _txSortAscending = !_txSortAscending;
-                                              } else {
-                                                _txSortBy = 'amount';
-                                                _txSortAscending = false;
-                                              }
-                                            });
-                                          },
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  // Transaction cards
-                                  ..._sortedTransactions().map((tx) {
-                                    final isExpanded = _expandedTransactions.contains(tx.txHash);
-                                    final balanceChange = tx.balanceChange(_allOutputs);
-                                    final isIncoming = balanceChange > 0;
-                                    final confirmations = _currentHeight > 0 && tx.blockHeight > 0
-                                        ? _currentHeight - tx.blockHeight
-                                        : 0;
-                                    final statusColor = isIncoming ? Colors.green : Colors.red;
-                                    final amountStr = isIncoming
-                                        ? '+${balanceChange.toStringAsFixed(12)}'
-                                        : balanceChange.toStringAsFixed(12);
-                                    final txIdDisplay = tx.txHash.startsWith('spend:')
-                                        ? 'Outgoing (${tx.txHash.substring(6, 14)}...)'
-                                        : '${tx.txHash.substring(0, 8)}...${tx.txHash.substring(tx.txHash.length - 8)}';
-
-                                    return Card(
-                                      margin: const EdgeInsets.only(bottom: 12),
-                                      elevation: 2,
-                                      child: InkWell(
-                                        onTap: () {
-                                          setState(() {
-                                            if (isExpanded) {
-                                              _expandedTransactions.remove(tx.txHash);
-                                            } else {
-                                              _expandedTransactions.add(tx.txHash);
-                                            }
-                                          });
-                                        },
-                                        borderRadius: BorderRadius.circular(4),
-                                        child: Padding(
-                                          padding: const EdgeInsets.all(12),
-                                          child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              // Summary row (always visible)
-                                              Row(
-                                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                                children: [
-                                                  Expanded(
-                                                    child: Row(
-                                                      children: [
-                                                        Icon(
-                                                          isIncoming ? Icons.arrow_downward : Icons.arrow_upward,
-                                                          size: 16,
-                                                          color: statusColor,
-                                                        ),
-                                                        const SizedBox(width: 8),
-                                                        Expanded(
-                                                          child: Text(
-                                                            txIdDisplay,
-                                                            style: const TextStyle(
-                                                              fontFamily: 'monospace',
-                                                              fontSize: 12,
-                                                            ),
-                                                            overflow: TextOverflow.ellipsis,
-                                                          ),
-                                                        ),
-                                                      ],
-                                                    ),
-                                                  ),
-                                                  const SizedBox(width: 8),
-                                                  Text(
-                                                    '$amountStr XMR',
-                                                    style: TextStyle(
-                                                      fontWeight: FontWeight.bold,
-                                                      fontSize: 14,
-                                                      color: statusColor,
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                              // Confirmation count row
-                                              Padding(
-                                                padding: const EdgeInsets.only(top: 4),
-                                                child: Row(
-                                                  children: [
-                                                    Text(
-                                                      '$confirmations confirmation${confirmations == 1 ? '' : 's'}',
-                                                      style: TextStyle(
-                                                        fontSize: 10,
-                                                        color: Colors.grey.shade600,
-                                                      ),
-                                                    ),
-                                                    const Spacer(),
-                                                    Icon(
-                                                      isExpanded ? Icons.expand_less : Icons.expand_more,
-                                                      size: 16,
-                                                      color: Colors.grey.shade600,
-                                                    ),
-                                                  ],
-                                                ),
-                                              ),
-                                              // Expanded details
-                                              if (isExpanded) ...[
-                                                const Divider(height: 16),
-                                                CommonWidgets.buildOutputDetailRow(label: 'TX Hash', value: tx.txHash.startsWith('spend:') ? 'Unknown (outgoing)' : tx.txHash, mono: true),
-                                                CommonWidgets.buildOutputDetailRow(label: 'Block Height', value: '${tx.blockHeight}'),
-                                                if (tx.blockTimestamp > 0)
-                                                  CommonWidgets.buildOutputDetailRow(label: 'Timestamp', value: DateTime.fromMillisecondsSinceEpoch(tx.blockTimestamp * 1000).toString()),
-                                                // Received outputs
-                                                if (tx.receivedOutputs.isNotEmpty) ...[
-                                                  const SizedBox(height: 8),
-                                                  Text(
-                                                    'Received Outputs (${tx.receivedOutputs.length}):',
-                                                    style: const TextStyle(
-                                                      fontWeight: FontWeight.w500,
-                                                      fontSize: 11,
-                                                      color: Colors.black54,
-                                                    ),
-                                                  ),
-                                                  const SizedBox(height: 4),
-                                                  ...tx.receivedOutputs.map((output) {
-                                                    final isSpent = output.spent;
-                                                    return Container(
-                                                      margin: const EdgeInsets.only(left: 8, bottom: 4),
-                                                      padding: const EdgeInsets.all(8),
-                                                      decoration: BoxDecoration(
-                                                        color: Colors.green.shade50,
-                                                        borderRadius: BorderRadius.circular(4),
-                                                        border: Border.all(color: Colors.green.shade200),
-                                                      ),
-                                                      child: Row(
-                                                        children: [
-                                                          Expanded(
-                                                            child: Text(
-                                                              '+${output.amountXmr} XMR (index ${output.outputIndex})',
-                                                              style: TextStyle(
-                                                                fontSize: 11,
-                                                                color: isSpent ? Colors.grey : Colors.green.shade800,
-                                                                decoration: isSpent ? TextDecoration.lineThrough : null,
-                                                              ),
-                                                            ),
-                                                          ),
-                                                          if (isSpent)
-                                                            Container(
-                                                              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                                                              decoration: BoxDecoration(
-                                                                color: Colors.grey.shade200,
-                                                                borderRadius: BorderRadius.circular(2),
-                                                              ),
-                                                              child: const Text(
-                                                                'SPENT',
-                                                                style: TextStyle(fontSize: 8, color: Colors.grey),
-                                                              ),
-                                                            ),
-                                                        ],
-                                                      ),
-                                                    );
-                                                  }),
-                                                ],
-                                                // Spent outputs
-                                                if (tx.spentKeyImages.isNotEmpty) ...[
-                                                  const SizedBox(height: 8),
-                                                  Text(
-                                                    'Spent Outputs (${tx.spentKeyImages.length}):',
-                                                    style: const TextStyle(
-                                                      fontWeight: FontWeight.w500,
-                                                      fontSize: 11,
-                                                      color: Colors.black54,
-                                                    ),
-                                                  ),
-                                                  const SizedBox(height: 4),
-                                                  ...tx.spentKeyImages.map((keyImage) {
-                                                    final spentOutput = _allOutputs.where((o) => o.keyImage == keyImage).firstOrNull;
-                                                    final amountStr = spentOutput?.amountXmr ?? 'Unknown';
-                                                    return Container(
-                                                      margin: const EdgeInsets.only(left: 8, bottom: 4),
-                                                      padding: const EdgeInsets.all(8),
-                                                      decoration: BoxDecoration(
-                                                        color: Colors.red.shade50,
-                                                        borderRadius: BorderRadius.circular(4),
-                                                        border: Border.all(color: Colors.red.shade200),
-                                                      ),
-                                                      child: Text(
-                                                        '-$amountStr XMR',
-                                                        style: TextStyle(
-                                                          fontSize: 11,
-                                                          color: Colors.red.shade800,
-                                                        ),
-                                                      ),
-                                                    );
-                                                  }),
-                                                ],
-                                              ],
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                                    );
-                                  }),
-                                ],
-                              ),
+                      body: TransactionsPanel(
+                        allTransactions: _sortedTransactions(),
+                        allOutputs: _allOutputs,
+                        currentHeight: _currentHeight,
+                        txSortBy: _txSortBy,
+                        txSortAscending: _txSortAscending,
+                        expandedTransactions: _expandedTransactions,
+                        onSortChanged: (sortKey) {
+                          setState(() {
+                            if (_txSortBy == sortKey) {
+                              _txSortAscending = !_txSortAscending;
+                            } else {
+                              _txSortBy = sortKey;
+                              _txSortAscending = false;
+                            }
+                          });
+                        },
+                        onToggleExpanded: (txHash) {
+                          setState(() {
+                            if (_expandedTransactions.contains(txHash)) {
+                              _expandedTransactions.remove(txHash);
+                            } else {
+                              _expandedTransactions.add(txHash);
+                            }
+                          });
+                        },
                       ),
                       isExpanded: _expandedPanel == 4,
                     ),
                     // Coins Panel
+                    ExpansionPanel(
+                      headerBuilder: (BuildContext context, bool isExpanded) {
+                        // Calculate balance from unspent outputs
+                        double totalBalance = 0;
+                        double unlockedBalance = 0;
+                        double selectedBalance = 0;
+                        int spendableCount = 0;
+                        int lockedCount = 0;
+                        int selectedCount = 0;
+                        for (var output in _allOutputs) {
+                          if (!output.spent) {
+                            final amount = double.tryParse(output.amountXmr) ?? 0;
+                            totalBalance += amount;
+                            final outputHeight = output.blockHeight.toInt();
+                            final confirmations = outputHeight > 0 ? _currentHeight - outputHeight : 0;
+                            if (confirmations >= 10) {
+                              unlockedBalance += amount;
+                              spendableCount++;
+                              final outputKey = '${output.txHash}:${output.outputIndex}';
+                              if (_selectedOutputs.contains(outputKey)) {
+                                selectedBalance += amount;
+                                selectedCount++;
+                              }
+                            } else {
+                              lockedCount++;
+                            }
+                          }
+                        }
+                        final hasLockedBalance = unlockedBalance < totalBalance;
+                        final balanceStr = hasLockedBalance
+                            ? '${totalBalance.toStringAsFixed(12)} XMR (Unlocked: ${unlockedBalance.toStringAsFixed(12)})'
+                            : '${totalBalance.toStringAsFixed(12)} XMR';
+                        final outputCountStr = spendableCount > 0
+                            ? '$spendableCount spendable output${spendableCount == 1 ? '' : 's'}'
+                            : lockedCount > 0
+                                ? '$lockedCount locked output${lockedCount == 1 ? '' : 's'}'
+                                : 'No outputs';
+                        final selectedStr = selectedCount > 0
+                            ? ' | Selected: ${selectedBalance.toStringAsFixed(12)} XMR ($selectedCount)'
+                            : '';
+
+                        return GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              _expandedPanel = (_expandedPanel == 5) ? null : 5;
+                            });
+                          },
+                          child: ListTile(
+                            title: const Text(
+                              'Coins',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            subtitle: Text(
+                              '$balanceStr - $outputCountStr$selectedStr',
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          ),
+                        );
+                      },
+                      body: OutputsPanel(
+                        allOutputs: _allOutputs,
+                        currentHeight: _currentHeight,
+                        showSpentOutputs: _showSpentOutputs,
+                        sortBy: _sortBy,
+                        sortAscending: _sortAscending,
+                        selectedOutputs: _selectedOutputs,
+                        onToggleShowSpent: () {
+                          setState(() {
+                            _showSpentOutputs = !_showSpentOutputs;
+                          });
+                        },
+                        onSelectAllSpendable: _selectAllSpendable,
+                        onClearSelection: _clearSelection,
+                        onSortChanged: (sortKey) {
+                          setState(() {
+                            if (_sortBy == sortKey) {
+                              _sortAscending = !_sortAscending;
+                            } else {
+                              _sortBy = sortKey;
+                              _sortAscending = false;
+                            }
+                          });
+                        },
+                        onOutputSelectionChanged: (outputKey, selected) {
+                          setState(() {
+                            if (selected) {
+                              _selectedOutputs.add(outputKey);  
+                            } else {
+                              _selectedOutputs.remove(outputKey);
+                            }
+                          });
+                        },
+                      ),
+                      isExpanded: _expandedPanel == 5,
+                    ),
                     ExpansionPanel(
                       headerBuilder: (BuildContext context, bool isExpanded) {
                         // Calculate balance from unspent outputs
