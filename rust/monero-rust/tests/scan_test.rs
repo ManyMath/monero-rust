@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use monero_serai::rpc::HttpRpc;
-use monero_wasm::scanner::scan_block_for_outputs;
+use monero_rust::scanner::scan_block_for_outputs;
 
 const HONKED_BAGPIPE_SEED: &str = "honked bagpipe alpine juicy faked afoot jostle claim cowl tunnel orphans negative pheasants feast jetting quote frown teeming cycling tribal womanly hills cottage daytime daytime";
 const LOCAL_NODE: &str = "http://127.0.0.1:38081";
