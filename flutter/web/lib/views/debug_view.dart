@@ -2797,9 +2797,10 @@ class _DebugViewState extends State<DebugView> {
       _openWallet(_walletId, seed, network, address);
       // Update the opened wallet's outputs
       if (_activeWallet != null) {
-        _activeWallet!.outputs = _allOutputs;
+        _activeWallet!.outputs = loadResult.outputs!;
         _activeWallet!.currentHeight = _continuousScanCurrentHeight;
         _activeWallet!.daemonHeight = _daemonHeight ?? 0;
+        _allOutputs = _activeWallet!.outputs;
       }
     }
 
