@@ -4,10 +4,9 @@
   "description": "E2E tests for Monero WASM Browser Extension",
   "private": true,
   "scripts": {
-    "test": "jest",
-    "test:chrome": "jest test/e2e/extension.test.js",
-    "test:firefox": "jest test/e2e/firefox.test.js",
-    "test:all": "jest test/e2e/",
+    "pretest": "dart run tool/build_extension.dart",
+    "test": "jest --runInBand",
+    "test:e2e": "jest test/e2e/monero_operations.test.js",
     "build": "dart run tool/build_extension.dart"
   },
   "devDependencies": {
