@@ -119,7 +119,6 @@ class _DebugViewState extends State<DebugView> {
   String? _loadError;
   String? _lastSaveTime;
   bool _isExporting = false;
-  bool _isImporting = false;
   String? _exportError;
   String? _importError;
 
@@ -1399,15 +1398,9 @@ class _DebugViewState extends State<DebugView> {
                                 const SizedBox(width: 8),
                                 Expanded(
                                   child: OutlinedButton.icon(
-                                    onPressed: _isImporting ? null : _importWallet,
-                                    icon: _isImporting
-                                        ? const SizedBox(
-                                            width: 16,
-                                            height: 16,
-                                            child: CircularProgressIndicator(strokeWidth: 2),
-                                          )
-                                        : const Icon(Icons.file_upload),
-                                    label: Text(_isImporting ? 'Importing...' : 'Import'),
+                                    onPressed: _importWallet,
+                                    icon: const Icon(Icons.file_upload),
+                                    label: const Text('Import'),
                                     style: OutlinedButton.styleFrom(
                                       foregroundColor: Colors.blue,
                                     ),
@@ -2661,7 +2654,6 @@ class _DebugViewState extends State<DebugView> {
   /// Import wallet data from an encrypted file
   Future<void> _importWallet() async {
     setState(() {
-      _isImporting = true;
       _importError = null;
     });
 
@@ -2673,11 +2665,9 @@ class _DebugViewState extends State<DebugView> {
 
       // Wait for file selection
       await uploadInput.onChange.first;
+
       final files = uploadInput.files;
       if (files == null || files.isEmpty) {
-        setState(() {
-          _isImporting = false;
-        });
         return;
       }
 
@@ -2703,9 +2693,6 @@ class _DebugViewState extends State<DebugView> {
         );
 
         if (walletId == null || walletId.isEmpty) {
-          setState(() {
-            _isImporting = false;
-          });
           return;
         }
 
@@ -2753,9 +2740,6 @@ class _DebugViewState extends State<DebugView> {
           );
 
           if (result == 'cancel') {
-            setState(() {
-              _isImporting = false;
-            });
             return;
           } else if (result == 'choose_different') {
             // Loop back to prompt for a different wallet ID
@@ -2783,9 +2767,6 @@ class _DebugViewState extends State<DebugView> {
       );
 
       if (password == null) {
-        setState(() {
-          _isImporting = false;
-        });
         return;
       }
 
@@ -2797,14 +2778,11 @@ class _DebugViewState extends State<DebugView> {
         shouldOverwrite: shouldOverwrite,
       );
 
-      setState(() {
-        _isImporting = false;
-        if (!importResult.success) {
+      if (!importResult.success) {
+        setState(() {
           _importError = importResult.error;
-        } else {
-          _importError = null;
-        }
-      });
+        });
+      }
 
       if (importResult.success) {
         // Refresh wallet list
@@ -2838,7 +2816,6 @@ class _DebugViewState extends State<DebugView> {
       }
     } catch (e) {
       setState(() {
-        _isImporting = false;
         _importError = 'Import failed: $e';
       });
 
