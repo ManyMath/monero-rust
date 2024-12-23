@@ -492,7 +492,7 @@ class _DebugViewState extends State<DebugView> {
         // If viewing active wallet, update its display
         if (_activeWalletId != null && _activeWallet != null) {
           _allOutputs = _activeWallet!.outputs;
-          // Transactions will be updated on next scan response
+          _allTransactions = _activeWallet!.transactions;
         }
       });
     });
@@ -2364,6 +2364,7 @@ class _DebugViewState extends State<DebugView> {
         network: network,
         address: address,
         outputs: [],
+        transactions: [],
         currentHeight: 0,
         daemonHeight: 0,
         isScanning: false,
@@ -2374,6 +2375,7 @@ class _DebugViewState extends State<DebugView> {
       _activeWalletId = walletId;
 
       _allOutputs = walletInstance.outputs;
+      _allTransactions = walletInstance.transactions;
       _derivedAddress = address;
     });
 
@@ -2469,6 +2471,7 @@ class _DebugViewState extends State<DebugView> {
       _network = wallet.network;
       _derivedAddress = wallet.address;
       _allOutputs = wallet.outputs;
+      _allTransactions = wallet.transactions;
       _daemonHeight = wallet.daemonHeight;
       _continuousScanCurrentHeight = wallet.currentHeight;
     });
@@ -2549,12 +2552,14 @@ class _DebugViewState extends State<DebugView> {
     final address = loadResult.address ?? _derivedAddress ?? '';
     if (seed.isNotEmpty && address.isNotEmpty) {
       _openWallet(_walletId, seed, network, address);
-      // Update the opened wallet's outputs
+      // Update the opened wallet's outputs and transactions
       if (_activeWallet != null) {
         _activeWallet!.outputs = loadResult.outputs!;
+        _activeWallet!.transactions = loadResult.transactions!;
         _activeWallet!.currentHeight = _continuousScanCurrentHeight;
         _activeWallet!.daemonHeight = _daemonHeight ?? 0;
         _allOutputs = _activeWallet!.outputs;
+        _allTransactions = _activeWallet!.transactions;
       }
     }
 
