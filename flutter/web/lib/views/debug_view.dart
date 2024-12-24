@@ -2080,7 +2080,7 @@ class _DebugViewState extends State<DebugView> {
 
   void _clearSelection() {
     setState(() {
-      _selectedOutputs.clear();
+      _selectedOutputs = {};
     });
   }
 
