@@ -118,9 +118,8 @@ class OutputsPanel extends StatelessWidget {
           ),
           ..._sortedOutputs().map((output) {
             final outputHeight = output.blockHeight.toInt();
-            final confirmations = outputHeight > 0
-                ? currentHeight - outputHeight
-                : 0;
+            final rawConfirmations = outputHeight > 0 ? currentHeight - outputHeight : 0;
+            final confirmations = rawConfirmations < 0 ? 0 : rawConfirmations;
             final isSpendable = confirmations >= 10 && !output.spent;
             final statusColor = output.spent
                 ? Colors.grey
