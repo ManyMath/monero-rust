@@ -2043,13 +2043,18 @@ class _DebugViewState extends State<DebugView> {
   /// Updates transaction list from a block scan response.
   /// Groups outputs by txHash and tracks spent key images.
   void _updateTransactionsFromScan(BlockScanResponse scan) {
-    _allTransactions = TransactionUtils.updateTransactionsFromScan(_allTransactions, scan);
+    _allTransactions = TransactionUtils.updateTransactionsFromScan(_allTransactions, scan, _allOutputs);
   }
 
   /// Returns sorted list of transactions based on current sort settings.
   List<WalletTransaction> _sortedTransactions() {
+    final relevantTransactions = _allTransactions.where((tx) {
+      final balanceChange = tx.balanceChange(_allOutputs);
+      return balanceChange != 0 || tx.receivedOutputs.isNotEmpty;
+    }).toList();
+
     return TransactionUtils.sortTransactions(
-      _allTransactions,
+      relevantTransactions,
       _allOutputs,
       _txSortBy,
       _txSortAscending,
@@ -2529,7 +2534,10 @@ class _DebugViewState extends State<DebugView> {
       _continuousScanCurrentHeight = loadResult.continuousScanCurrentHeight!;
       _continuousScanTargetHeight = 0;
       _isSynced = false;
-      _daemonHeight = null;
+      final maxOutputHeight = loadResult.outputs!.isEmpty
+          ? 0
+          : loadResult.outputs!.map((o) => o.blockHeight.toInt()).reduce((a, b) => a > b ? a : b);
+      _daemonHeight = maxOutputHeight > 0 ? maxOutputHeight : null;
       _isContinuousScanning = false;
       _isContinuousPaused = _continuousScanCurrentHeight > 0;
 

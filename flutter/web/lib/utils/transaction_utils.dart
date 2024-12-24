@@ -6,6 +6,7 @@ class TransactionUtils {
   static List<WalletTransaction> updateTransactionsFromScan(
     List<WalletTransaction> allTransactions,
     BlockScanResponse scan,
+    List<OwnedOutput> walletOutputs,
   ) {
     final updatedTransactions = List<WalletTransaction>.from(allTransactions);
     final blockHeight = scan.blockHeight.toInt();
@@ -53,7 +54,13 @@ class TransactionUtils {
     }
 
     // Record spent key images
+    final ownedKeyImages = walletOutputs.map((o) => o.keyImage).toSet();
+
     for (var keyImage in scan.spentKeyImages) {
+      if (!ownedKeyImages.contains(keyImage)) {
+        continue;
+      }
+
       // Find which transaction this spend belongs to
       final spendTxHash = 'spend:$keyImage';
       final existingIndex = updatedTransactions.indexWhere((t) => t.txHash == spendTxHash);
