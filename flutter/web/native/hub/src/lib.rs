@@ -6,6 +6,9 @@ mod signals;
 mod messages;
 mod encryption;
 
+#[cfg(target_arch = "wasm32")]
+pub mod test_api;
+
 use actors::create_actors;
 use rinf::{dart_shutdown, write_interface};
 use tokio::spawn;
