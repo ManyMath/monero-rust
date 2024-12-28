@@ -7,6 +7,7 @@
     "pretest": "dart run tool/build_extension.dart",
     "test": "jest --runInBand",
     "test:e2e": "jest test/e2e/monero_operations.test.js",
+    "test:core": "jest test/e2e/core_functionality.test.js",
     "build": "dart run tool/build_extension.dart"
   },
   "devDependencies": {
