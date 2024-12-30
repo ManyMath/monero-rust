@@ -55,13 +55,11 @@ class WalletPollingService {
   }) {
     debugPrint('[WalletPollingService] Starting polling timers (block: ${_blockRefreshInterval.inSeconds}s, mempool: ${_mempoolPollInterval.inSeconds}s with ${_mempoolPollOffset.inSeconds}s offset)');
 
-    // Store callbacks
+    stopPolling();
+
     _onBlockRefresh = onBlockRefresh;
     _onMempoolPoll = onMempoolPoll;
     _onCountdownUpdate = onCountdownUpdate;
-
-    // Cancel any existing timers first
-    stopPolling();
 
     // Initialize countdowns
     _blockRefreshCountdown = _blockRefreshInterval.inSeconds;
