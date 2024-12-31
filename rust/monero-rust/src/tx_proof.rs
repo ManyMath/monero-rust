@@ -240,6 +240,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_hash_to_scalar() {
+        let data = b"test data";
+        let scalar = hash_to_scalar(data);
+
+        // Same input should produce same scalar
+        let scalar2 = hash_to_scalar(data);
+        assert_eq!(scalar.to_bytes(), scalar2.to_bytes());
+
+        // Different input should produce different scalar
+        let scalar3 = hash_to_scalar(b"different data");
+        assert_ne!(scalar.to_bytes(), scalar3.to_bytes());
+    }
+
+    #[test]
     fn test_generate_out_proof() {
         // Test with known values
         let tx_id = "46d9f3eaf8d25b6a5d0847ad0beaece8b153d1b8c25ce317934ec17223025806";
@@ -253,5 +267,122 @@ mod tests {
         assert!(proof.signature.starts_with("OutProofV2"));
         assert!(proof.formatted.contains("BEGIN OUTPROOF"));
         assert!(proof.formatted.contains("Monero Stagenet"));
+    }
+
+    #[test]
+    fn test_generate_out_proof_with_message() {
+        let tx_id = "46d9f3eaf8d25b6a5d0847ad0beaece8b153d1b8c25ce317934ec17223025806";
+        let tx_key = "0000000000000000000000000000000000000000000000000000000000000001";
+        let address = "55LTR8KniP4LQGJSPtbYDacR7dz8RBFnsfAKMaMuwUNYX6aQbBcovzDPyrQF9KXF9tVU6Xk3K8no1BywnJX6GvZX8yJsXvt";
+        let message = "Payment for services";
+
+        let result = generate_out_proof_v2(tx_id, tx_key, address, message, "stagenet");
+        assert!(result.is_ok());
+
+        let proof = result.unwrap();
+        assert!(proof.formatted.contains(message));
+        assert!(proof.signature.starts_with("OutProofV2"));
+    }
+
+    #[test]
+    fn test_generate_out_proof_mainnet() {
+        let tx_id = "46d9f3eaf8d25b6a5d0847ad0beaece8b153d1b8c25ce317934ec17223025806";
+        let tx_key = "0000000000000000000000000000000000000000000000000000000000000001";
+        let address = "45wsWad9EwZgF3VpxQumrUCRaEtdyyh6NG8sVD3YRVVJbK1jkpJ3zq8WHLijVzodQ22LxwkdWx7fS2a6JzaRGzkNU8K2Dhi";
+
+        let result = generate_out_proof_v2(tx_id, tx_key, address, "", "mainnet");
+        assert!(result.is_ok());
+
+        let proof = result.unwrap();
+        assert!(proof.formatted.contains("Monero Mainnet"));
+    }
+
+    #[test]
+    fn test_generate_out_proof_invalid_tx_id() {
+        let tx_id = "invalid";
+        let tx_key = "0000000000000000000000000000000000000000000000000000000000000001";
+        let address = "55LTR8KniP4LQGJSPtbYDacR7dz8RBFnsfAKMaMuwUNYX6aQbBcovzDPyrQF9KXF9tVU6Xk3K8no1BywnJX6GvZX8yJsXvt";
+
+        let result = generate_out_proof_v2(tx_id, tx_key, address, "", "stagenet");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_generate_out_proof_invalid_tx_key() {
+        let tx_id = "46d9f3eaf8d25b6a5d0847ad0beaece8b153d1b8c25ce317934ec17223025806";
+        let tx_key = "invalid";
+        let address = "55LTR8KniP4LQGJSPtbYDacR7dz8RBFnsfAKMaMuwUNYX6aQbBcovzDPyrQF9KXF9tVU6Xk3K8no1BywnJX6GvZX8yJsXvt";
+
+        let result = generate_out_proof_v2(tx_id, tx_key, address, "", "stagenet");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_generate_out_proof_invalid_address() {
+        let tx_id = "46d9f3eaf8d25b6a5d0847ad0beaece8b153d1b8c25ce317934ec17223025806";
+        let tx_key = "0000000000000000000000000000000000000000000000000000000000000001";
+        let address = "invalid_address";
+
+        let result = generate_out_proof_v2(tx_id, tx_key, address, "", "stagenet");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_generate_out_proof_wrong_network() {
+        let tx_id = "46d9f3eaf8d25b6a5d0847ad0beaece8b153d1b8c25ce317934ec17223025806";
+        let tx_key = "0000000000000000000000000000000000000000000000000000000000000001";
+        // This is a stagenet address
+        let address = "55LTR8KniP4LQGJSPtbYDacR7dz8RBFnsfAKMaMuwUNYX6aQbBcovzDPyrQF9KXF9tVU6Xk3K8no1BywnJX6GvZX8yJsXvt";
+
+        // Should fail when trying to parse stagenet address as mainnet
+        let result = generate_out_proof_v2(tx_id, tx_key, address, "", "mainnet");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_verify_out_proof_invalid_prefix() {
+        let tx_id = "46d9f3eaf8d25b6a5d0847ad0beaece8b153d1b8c25ce317934ec17223025806";
+        let address = "55LTR8KniP4LQGJSPtbYDacR7dz8RBFnsfAKMaMuwUNYX6aQbBcovzDPyrQF9KXF9tVU6Xk3K8no1BywnJX6GvZX8yJsXvt";
+        let signature = "InvalidPrefix123";
+
+        let result = verify_out_proof_v2(tx_id, address, "", signature, "stagenet");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_verify_out_proof_invalid_base58() {
+        let tx_id = "46d9f3eaf8d25b6a5d0847ad0beaece8b153d1b8c25ce317934ec17223025806";
+        let address = "55LTR8KniP4LQGJSPtbYDacR7dz8RBFnsfAKMaMuwUNYX6aQbBcovzDPyrQF9KXF9tVU6Xk3K8no1BywnJX6GvZX8yJsXvt";
+        let signature = "OutProofV2!@#$%^&*()";
+
+        let result = verify_out_proof_v2(tx_id, address, "", signature, "stagenet");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_verify_out_proof_format_validation() {
+        let tx_id = "46d9f3eaf8d25b6a5d0847ad0beaece8b153d1b8c25ce317934ec17223025806";
+        let tx_key = "0000000000000000000000000000000000000000000000000000000000000001";
+        let address = "55LTR8KniP4LQGJSPtbYDacR7dz8RBFnsfAKMaMuwUNYX6aQbBcovzDPyrQF9KXF9tVU6Xk3K8no1BywnJX6GvZX8yJsXvt";
+
+        // Generate a valid proof
+        let proof = generate_out_proof_v2(tx_id, tx_key, address, "", "stagenet").unwrap();
+
+        // Verify should accept valid format (note: full verification needs blockchain data)
+        let result = verify_out_proof_v2(tx_id, address, "", &proof.signature, "stagenet");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_out_proof_result_serialization() {
+        let result = OutProofResult {
+            signature: "OutProofV2abc123".to_string(),
+            formatted: "formatted proof".to_string(),
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        let deserialized: OutProofResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(result.signature, deserialized.signature);
+        assert_eq!(result.formatted, deserialized.formatted);
     }
 }
