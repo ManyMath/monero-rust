@@ -306,3 +306,11 @@ pub struct StartMultiWalletScanRequest {
     pub start_height: u64,
     pub wallets: Vec<WalletConfig>,
 }
+
+#[derive(Deserialize, DartSignal)]
+pub struct RestoreWalletDataRequest {
+    pub seed: String,
+    pub network: String,
+    pub outputs: Vec<OwnedOutput>,
+    pub daemon_height: u64,
+}

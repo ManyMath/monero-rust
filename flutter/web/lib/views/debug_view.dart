@@ -2481,6 +2481,15 @@ class _DebugViewState extends State<DebugView> {
       _continuousScanCurrentHeight = wallet.currentHeight;
     });
 
+    if (wallet.outputs.isNotEmpty) {
+      RestoreWalletDataRequest(
+        seed: wallet.seed,
+        network: wallet.network,
+        outputs: wallet.outputs,
+        daemonHeight: Uint64(BigInt.from(wallet.daemonHeight)),
+      ).sendSignalToRust();
+    }
+
     debugPrint('[MULTI-WALLET] Switched to wallet: $walletId');
   }
 
@@ -2573,6 +2582,15 @@ class _DebugViewState extends State<DebugView> {
 
     // Derive address to populate keys
     _deriveAddress();
+
+    if (loadResult.outputs!.isNotEmpty) {
+      RestoreWalletDataRequest(
+        seed: loadResult.seed!,
+        network: loadResult.network!,
+        outputs: loadResult.outputs!,
+        daemonHeight: Uint64(BigInt.from(_daemonHeight ?? 0)),
+      ).sendSignalToRust();
+    }
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(

@@ -101,6 +101,14 @@ pub struct StoreOutputs {
 }
 
 #[derive(Debug, Clone)]
+pub struct RestoreOutputs {
+    pub seed: String,
+    pub network: String,
+    pub outputs: Vec<StoredOutput>,
+    pub daemon_height: u64,
+}
+
+#[derive(Debug, Clone)]
 pub struct MarkOutputsSpent {
     pub output_keys: Vec<String>, // "txHash:outputIndex" format
 }

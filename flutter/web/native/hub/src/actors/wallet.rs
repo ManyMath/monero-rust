@@ -40,6 +40,7 @@ impl WalletActor {
         _owned_tasks.spawn(Self::listen_to_mempool_scan());
         _owned_tasks.spawn(Self::listen_to_scan_block_multi_wallet());
         _owned_tasks.spawn(Self::listen_to_start_multi_wallet_scan(self_addr.clone()));
+        _owned_tasks.spawn(Self::listen_to_restore_wallet_data(self_addr.clone()));
 
         WalletActor {
             state: WalletState {
@@ -468,6 +469,40 @@ impl WalletActor {
         }
     }
 
+    async fn listen_to_restore_wallet_data(mut self_addr: Address<Self>) {
+        let receiver = RestoreWalletDataRequest::get_dart_signal_receiver();
+        while let Some(signal_pack) = receiver.recv().await {
+            let request = signal_pack.message;
+            let stored_outputs: Vec<StoredOutput> = request
+                .outputs
+                .iter()
+                .map(|o| StoredOutput {
+                    tx_hash: o.tx_hash.clone(),
+                    output_index: o.output_index,
+                    amount: o.amount,
+                    key: o.key.clone(),
+                    key_offset: o.key_offset.clone(),
+                    commitment_mask: o.commitment_mask.clone(),
+                    subaddress: o.subaddress_index,
+                    payment_id: o.payment_id.clone(),
+                    received_output_bytes: o.received_output_bytes.clone(),
+                    block_height: o.block_height,
+                    spent: o.spent,
+                    key_image: o.key_image.clone(),
+                })
+                .collect();
+
+            let _ = self_addr
+                .notify(RestoreOutputs {
+                    seed: request.seed,
+                    network: request.network,
+                    outputs: stored_outputs,
+                    daemon_height: request.daemon_height,
+                })
+                .await;
+        }
+    }
+
     async fn listen_to_start_multi_wallet_scan(mut self_addr: Address<Self>) {
         let receiver = StartMultiWalletScanRequest::get_dart_signal_receiver();
         while let Some(signal_pack) = receiver.recv().await {
@@ -660,6 +695,26 @@ impl Notifiable<StoreOutputs> for WalletActor {
         self.state.outputs.extend(msg.outputs);
 
         // Recalculate balances after adding outputs
+        self.recalculate_balances();
+    }
+}
+
+#[async_trait]
+impl Notifiable<RestoreOutputs> for WalletActor {
+    async fn notify(&mut self, msg: RestoreOutputs, _ctx: &Context<Self>) {
+        self.state.seed = Some(msg.seed);
+        self.state.network = Some(msg.network);
+        self.state.daemon_height = msg.daemon_height;
+        self.state.outputs = msg.outputs;
+
+        // Update current_height to the highest block_height among outputs
+        self.state.current_height = 0;
+        for output in &self.state.outputs {
+            if output.block_height > self.state.current_height {
+                self.state.current_height = output.block_height;
+            }
+        }
+
         self.recalculate_balances();
     }
 }
