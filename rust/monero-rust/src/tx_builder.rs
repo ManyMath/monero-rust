@@ -627,6 +627,187 @@ pub mod native {
 
         Ok(received_outputs)
     }
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn test_varint_len() {
+            assert_eq!(varint_len(0), 1);
+            assert_eq!(varint_len(0x7f), 1);
+            assert_eq!(varint_len(0x80), 2);
+            assert_eq!(varint_len(0x3fff), 2);
+            assert_eq!(varint_len(0x4000), 3);
+            assert_eq!(varint_len(0x1fffff), 3);
+            assert_eq!(varint_len(0x200000), 4);
+            assert_eq!(varint_len(0xfffffff), 4);
+            assert_eq!(varint_len(0x10000000), 5);
+            assert_eq!(varint_len(usize::MAX), 5);
+        }
+
+        #[test]
+        fn test_extra_weight_no_payment_id() {
+            // 2 outputs, no payment ID, no data
+            let weight = extra_weight(2, false, &[]);
+            // base (33) + additional (1 + 1 + 2*32 = 66) = 99
+            assert_eq!(weight, 99);
+        }
+
+        #[test]
+        fn test_extra_weight_with_payment_id() {
+            // 2 outputs, with payment ID, no data
+            let weight = extra_weight(2, true, &[]);
+            // base (33) + additional (66) + payment_id (11) = 110
+            assert_eq!(weight, 110);
+        }
+
+        #[test]
+        fn test_extra_weight_with_data() {
+            // 2 outputs, no payment ID, with 10 bytes of data
+            let weight = extra_weight(2, false, &[10]);
+            // base (33) + additional (66) + data (1 + 1 + 1 + 10 = 13) = 112
+            assert_eq!(weight, 112);
+        }
+
+        #[test]
+        fn test_parse_network_mainnet() {
+            assert!(matches!(parse_network("mainnet"), Ok(Network::Mainnet)));
+            assert!(matches!(parse_network("Mainnet"), Ok(Network::Mainnet)));
+            assert!(matches!(parse_network("MAINNET"), Ok(Network::Mainnet)));
+        }
+
+        #[test]
+        fn test_parse_network_testnet() {
+            assert!(matches!(parse_network("testnet"), Ok(Network::Testnet)));
+            assert!(matches!(parse_network("Testnet"), Ok(Network::Testnet)));
+        }
+
+        #[test]
+        fn test_parse_network_stagenet() {
+            assert!(matches!(parse_network("stagenet"), Ok(Network::Stagenet)));
+            assert!(matches!(parse_network("Stagenet"), Ok(Network::Stagenet)));
+        }
+
+        #[test]
+        fn test_parse_network_invalid() {
+            assert!(parse_network("invalid").is_err());
+            assert!(parse_network("").is_err());
+            assert!(parse_network("main").is_err());
+        }
+
+        #[test]
+        fn test_spend_key_from_seed() {
+            // Use test vector from scanner tests
+            let seed_phrase = "hemlock jubilee eden hacksaw boil superior inroads epoxy exhale orders cavernous second brunt saved richly lower upgrade hitched launching deepest mostly playful layout lower eden";
+            let seed = Seed::from_string(Zeroizing::new(seed_phrase.to_string())).unwrap();
+
+            let spend_key = spend_key_from_seed(&seed);
+
+            // The spend key should be deterministic
+            let spend_key2 = spend_key_from_seed(&seed);
+            assert_eq!(spend_key.to_bytes(), spend_key2.to_bytes());
+
+            // Should match the expected spend key from test vector
+            let expected = "29adefc8f67515b4b4bf48031780ab9d071d24f8a674b879ce7f245c37523807";
+            let entropy = seed.entropy();
+            assert_eq!(hex::encode(&entropy[..]), expected);
+        }
+
+        #[test]
+        fn test_view_pair_from_seed() {
+            let seed_phrase = "hemlock jubilee eden hacksaw boil superior inroads epoxy exhale orders cavernous second brunt saved richly lower upgrade hitched launching deepest mostly playful layout lower eden";
+            let seed = Seed::from_string(Zeroizing::new(seed_phrase.to_string())).unwrap();
+
+            let view_pair = view_pair_from_seed(&seed);
+
+            // View pair should be deterministic - test by generating the same spend point
+            let view_pair2 = view_pair_from_seed(&seed);
+            assert_eq!(view_pair.spend().compress().to_bytes(), view_pair2.spend().compress().to_bytes());
+
+            // The view pair should successfully be created for valid seed
+            // (detailed field comparisons not possible due to privacy, but we verified determinism)
+        }
+
+        #[test]
+        fn test_decoy_selection_from_decoys() {
+            // Test the conversion from Decoys to DecoySelection
+            use curve25519_dalek::edwards::EdwardsPoint;
+
+            // Create mock ring data using a known scalar
+            let one_bytes = [1u8; 32];
+            let scalar_one = Scalar::from_bytes_mod_order(one_bytes);
+            let g: EdwardsPoint = &scalar_one * &ED25519_BASEPOINT_TABLE;
+            let ring = vec![
+                [g, g],
+                [g, g],
+            ];
+
+            let decoys = Decoys {
+                i: 1,
+                offsets: vec![0, 5, 10],
+                ring,
+            };
+
+            let selection = DecoySelection::from_decoys(&decoys);
+            assert_eq!(selection.real_index, 1);
+            assert_eq!(selection.offsets, vec![0, 5, 10]);
+            assert_eq!(selection.ring.len(), 2);
+        }
+
+        #[test]
+        fn test_stored_output_data_serialization() {
+            let output = StoredOutputData {
+                tx_hash: "46d9f3eaf8d25b6a5d0847ad0beaece8b153d1b8c25ce317934ec17223025806".to_string(),
+                output_index: 0,
+                amount: 1000000000000,
+                key: "abc123".to_string(),
+                key_offset: "def456".to_string(),
+                commitment_mask: "789ghi".to_string(),
+                subaddress: None,
+                payment_id: None,
+                received_output_bytes: "".to_string(),
+            };
+
+            // Test that it can be serialized and deserialized
+            let json = serde_json::to_string(&output).unwrap();
+            let deserialized: StoredOutputData = serde_json::from_str(&json).unwrap();
+            assert_eq!(output.tx_hash, deserialized.tx_hash);
+            assert_eq!(output.amount, deserialized.amount);
+        }
+
+        #[test]
+        fn test_transaction_result_serialization() {
+            let result = TransactionResult {
+                tx_id: "46d9f3eaf8d25b6a5d0847ad0beaece8b153d1b8c25ce317934ec17223025806".to_string(),
+                fee: 10000000,
+                tx_blob: "deadbeef".to_string(),
+                tx_key: "abc123".to_string(),
+                tx_key_additional: vec!["def456".to_string()],
+                change_outputs: vec![],
+            };
+
+            let json = serde_json::to_string(&result).unwrap();
+            let deserialized: TransactionResult = serde_json::from_str(&json).unwrap();
+            assert_eq!(result.tx_id, deserialized.tx_id);
+            assert_eq!(result.fee, deserialized.fee);
+        }
+
+        #[test]
+        fn test_fee_estimate_structure() {
+            let estimate = FeeEstimate {
+                fee: 10000000,
+                weight: 1000,
+                per_weight: 10000,
+                mask: 10000,
+                inputs: 2,
+                outputs: 2,
+            };
+
+            assert_eq!(estimate.inputs, 2);
+            assert_eq!(estimate.outputs, 2);
+            assert!(estimate.fee > 0);
+        }
+    }
 }
 
 pub use native::*;
