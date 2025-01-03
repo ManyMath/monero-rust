@@ -1141,4 +1141,210 @@ mod tests {
         assert_eq!(software.len(), (51 * 201) - 1);
         assert_eq!(hardware.len(), (6 * 21) - 1);
     }
+
+    #[test]
+    fn test_lookahead_constants() {
+        // Verify DEFAULT_LOOKAHEAD structure
+        assert_eq!(DEFAULT_LOOKAHEAD.account, 0);
+        assert_eq!(DEFAULT_LOOKAHEAD.subaddress, 20);
+
+        // Verify WALLET_CLI_SOFTWARE_LOOKAHEAD
+        assert_eq!(WALLET_CLI_SOFTWARE_LOOKAHEAD.account, 50);
+        assert_eq!(WALLET_CLI_SOFTWARE_LOOKAHEAD.subaddress, 200);
+
+        // Verify WALLET_CLI_HARDWARE_LOOKAHEAD
+        assert_eq!(WALLET_CLI_HARDWARE_LOOKAHEAD.account, 5);
+        assert_eq!(WALLET_CLI_HARDWARE_LOOKAHEAD.subaddress, 20);
+    }
+
+    #[test]
+    fn test_build_subaddress_indices_zero() {
+        let lookahead = Lookahead {
+            account: 0,
+            subaddress: 0,
+        };
+        let indices = build_subaddress_indices(lookahead);
+        // Should be empty since we skip (0, 0) which is the main address
+        assert_eq!(indices.len(), 0);
+    }
+
+    #[test]
+    fn test_build_subaddress_indices_single() {
+        let lookahead = Lookahead {
+            account: 0,
+            subaddress: 1,
+        };
+        let indices = build_subaddress_indices(lookahead);
+        assert_eq!(indices.len(), 1);
+        assert!(indices.contains(&SubaddressIndex::new(0, 1).unwrap()));
+    }
+
+    #[test]
+    fn test_parse_network_case_insensitive() {
+        // Already tested in other tests, but let's be explicit
+        assert!(matches!(parse_network("MAINNET"), Ok(Network::Mainnet)));
+        assert!(matches!(parse_network("mainnet"), Ok(Network::Mainnet)));
+        assert!(matches!(parse_network("Mainnet"), Ok(Network::Mainnet)));
+        assert!(matches!(parse_network("MaInNeT"), Ok(Network::Mainnet)));
+    }
+
+    #[test]
+    fn test_spend_key_from_seed_different_seeds() {
+        let seed1 = Seed::from_string(Zeroizing::new(TEST_VECTOR_1_SEED.to_string())).unwrap();
+        let seed2 = Seed::from_string(Zeroizing::new(TEST_VECTOR_2_SEED.to_string())).unwrap();
+
+        let spend1 = spend_key_from_seed(&seed1);
+        let spend2 = spend_key_from_seed(&seed2);
+
+        // Different seeds should produce different spend keys
+        assert_ne!(spend1.compress().to_bytes(), spend2.compress().to_bytes());
+    }
+
+    #[test]
+    fn test_view_key_from_seed_different_seeds() {
+        let seed1 = Seed::from_string(Zeroizing::new(TEST_VECTOR_1_SEED.to_string())).unwrap();
+        let seed2 = Seed::from_string(Zeroizing::new(TEST_VECTOR_2_SEED.to_string())).unwrap();
+
+        let view1 = view_key_from_seed(&seed1);
+        let view2 = view_key_from_seed(&seed2);
+
+        // Different seeds should produce different view keys
+        assert_ne!(view1.to_bytes(), view2.to_bytes());
+    }
+
+    #[test]
+    fn test_derive_keys_invalid_seed() {
+        let result = derive_keys("invalid seed phrase", "mainnet");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_derive_keys_invalid_network() {
+        let result = derive_keys(TEST_VECTOR_1_SEED, "invalidnet");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_derive_keys_hex_format() {
+        let keys = derive_keys(TEST_VECTOR_1_SEED, "mainnet").unwrap();
+
+        // All hex strings should be 64 characters (32 bytes)
+        assert_eq!(keys.secret_spend_key.len(), 64);
+        assert_eq!(keys.secret_view_key.len(), 64);
+        assert_eq!(keys.public_spend_key.len(), 64);
+        assert_eq!(keys.public_view_key.len(), 64);
+
+        // Should be valid hex
+        assert!(hex::decode(&keys.secret_spend_key).is_ok());
+        assert!(hex::decode(&keys.secret_view_key).is_ok());
+        assert!(hex::decode(&keys.public_spend_key).is_ok());
+        assert!(hex::decode(&keys.public_view_key).is_ok());
+    }
+
+    #[test]
+    fn test_block_scan_result_serialization() {
+        let result = BlockScanResult {
+            block_height: 12345,
+            block_hash: "abc123".to_string(),
+            block_timestamp: 1234567890,
+            tx_count: 5,
+            outputs: vec![],
+            daemon_height: 12350,
+            spent_key_images: vec!["key1".to_string(), "key2".to_string()],
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        let deserialized: BlockScanResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(result.block_height, deserialized.block_height);
+        assert_eq!(result.tx_count, deserialized.tx_count);
+        assert_eq!(result.spent_key_images.len(), 2);
+    }
+
+    #[test]
+    fn test_owned_output_info_serialization() {
+        let output = OwnedOutputInfo {
+            tx_hash: "deadbeef".to_string(),
+            output_index: 0,
+            amount: 1000000000000,
+            amount_xmr: "1.000000000000".to_string(),
+            key: "key123".to_string(),
+            key_offset: "offset456".to_string(),
+            commitment_mask: "mask789".to_string(),
+            subaddress_index: Some((0, 1)),
+            payment_id: None,
+            received_output_bytes: "bytes".to_string(),
+            block_height: 100,
+            spent: false,
+            key_image: "keyimage".to_string(),
+        };
+
+        let json = serde_json::to_string(&output).unwrap();
+        let deserialized: OwnedOutputInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(output.tx_hash, deserialized.tx_hash);
+        assert_eq!(output.amount, deserialized.amount);
+        assert_eq!(output.subaddress_index, deserialized.subaddress_index);
+    }
+
+    #[test]
+    fn test_mempool_scan_result_serialization() {
+        let result = MempoolScanResult {
+            tx_count: 3,
+            outputs: vec![],
+            spent_key_images: vec!["ki1".to_string()],
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        let deserialized: MempoolScanResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(result.tx_count, deserialized.tx_count);
+    }
+
+    #[test]
+    fn test_wallet_scan_config_clone() {
+        let config = WalletScanConfig {
+            mnemonic: TEST_VECTOR_1_SEED.to_string(),
+            network: "mainnet".to_string(),
+            lookahead: DEFAULT_LOOKAHEAD,
+        };
+
+        let cloned = config.clone();
+        assert_eq!(config.mnemonic, cloned.mnemonic);
+        assert_eq!(config.network, cloned.network);
+        assert_eq!(config.lookahead.account, cloned.lookahead.account);
+        assert_eq!(config.lookahead.subaddress, cloned.lookahead.subaddress);
+    }
+
+    #[test]
+    fn test_derived_keys_serialization() {
+        let keys = DerivedKeys {
+            secret_spend_key: "abc123".to_string(),
+            secret_view_key: "def456".to_string(),
+            public_spend_key: "ghi789".to_string(),
+            public_view_key: "jkl012".to_string(),
+            address: "test_address".to_string(),
+        };
+
+        let json = serde_json::to_string(&keys).unwrap();
+        let deserialized: DerivedKeys = serde_json::from_str(&json).unwrap();
+        assert_eq!(keys.secret_spend_key, deserialized.secret_spend_key);
+        assert_eq!(keys.address, deserialized.address);
+    }
+
+    #[test]
+    fn test_lookahead_equality() {
+        let lookahead1 = Lookahead {
+            account: 0,
+            subaddress: 20,
+        };
+        let lookahead2 = Lookahead {
+            account: 0,
+            subaddress: 20,
+        };
+        let lookahead3 = Lookahead {
+            account: 1,
+            subaddress: 20,
+        };
+
+        assert_eq!(lookahead1, lookahead2);
+        assert_ne!(lookahead1, lookahead3);
+    }
 }
