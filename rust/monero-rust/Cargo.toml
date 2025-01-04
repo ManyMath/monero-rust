@@ -6,6 +6,7 @@ edition = "2021"
 [features]
 default = []
 test-helpers = []
+mock-rpc = []
 
 [dependencies]
 serde = { version = "1.0.214", features = ["derive"] }
