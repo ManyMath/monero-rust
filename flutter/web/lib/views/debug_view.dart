@@ -7,6 +7,7 @@ import '../utils/key_parser.dart';
 import '../services/extension_service.dart';
 import '../widgets/password_dialog.dart';
 import '../widgets/wallet_id_dialog.dart';
+import '../widgets/save_wallet_dialog.dart';
 import '../services/wallet_persistence_service.dart';
 import '../models/wallet_instance.dart';
 import '../models/wallet_transaction.dart';
@@ -16,6 +17,7 @@ import '../utils/transaction_utils.dart';
 import '../services/wallet_scan_service.dart';
 import '../services/transaction_service.dart';
 import '../services/wallet_polling_service.dart';
+import '../widgets/common_widgets.dart';
 
 class DebugView extends StatefulWidget {
   const DebugView({super.key});
@@ -1038,12 +1040,12 @@ class _DebugViewState extends State<DebugView> {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              _buildProofRow('Tx ID', txId, context),
+              CommonWidgets.buildProofRow(label: 'Tx ID', value: txId, context: context),
               const SizedBox(height: 8),
-              _buildProofRow('Tx Key', txKey, context),
+              CommonWidgets.buildProofRow(label: 'Tx Key', value: txKey, context: context),
               if (recipients.isNotEmpty) ...[
                 const SizedBox(height: 8),
-                ...recipients.map((addr) => _buildProofRow('Address', addr, context)),
+                ...recipients.map((addr) => CommonWidgets.buildProofRow(label: 'Address', value: addr, context: context)),
               ],
             ],
           ),
@@ -1062,31 +1064,6 @@ class _DebugViewState extends State<DebugView> {
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildProofRow(String label, String value, BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          width: 70,
-          child: Text(label, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-        ),
-        Expanded(
-          child: SelectableText(value, style: const TextStyle(fontFamily: 'monospace', fontSize: 11)),
-        ),
-        IconButton(
-          icon: const Icon(Icons.copy, size: 16),
-          padding: EdgeInsets.zero,
-          constraints: const BoxConstraints(),
-          tooltip: 'Copy',
-          onPressed: () {
-            Clipboard.setData(ClipboardData(text: value));
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$label copied')));
-          },
-        ),
-      ],
     );
   }
 
@@ -1668,10 +1645,10 @@ class _DebugViewState extends State<DebugView> {
                                   ),
                                 ),
                                 const Divider(height: 1),
-                                _buildKeyRow('Secret Spend Key', _secretSpendKey ?? 'TODO'),
-                                _buildKeyRow('Secret View Key', _secretViewKey ?? 'TODO'),
-                                _buildKeyRow('Public Spend Key', _publicSpendKey ?? 'TODO'),
-                                _buildKeyRow('Public View Key', _publicViewKey ?? 'TODO'),
+                                CommonWidgets.buildKeyRow(label: 'Secret Spend Key', value: _secretSpendKey ?? 'TODO', onCopyPressed: () => _copyToClipboard(_secretSpendKey ?? '', 'Secret Spend Key')),
+                                CommonWidgets.buildKeyRow(label: 'Secret View Key', value: _secretViewKey ?? 'TODO', onCopyPressed: () => _copyToClipboard(_secretViewKey ?? '', 'Secret View Key')),
+                                CommonWidgets.buildKeyRow(label: 'Public Spend Key', value: _publicSpendKey ?? 'TODO', onCopyPressed: () => _copyToClipboard(_publicSpendKey ?? '', 'Public Spend Key')),
+                                CommonWidgets.buildKeyRow(label: 'Public View Key', value: _publicViewKey ?? 'TODO', onCopyPressed: () => _copyToClipboard(_publicViewKey ?? '', 'Public View Key')),
                               ],
                             );
                         },
@@ -1898,13 +1875,13 @@ class _DebugViewState extends State<DebugView> {
                                       ),
                                     ),
                                     const SizedBox(height: 8),
-                                    _buildScanResultRow('Block Height', _scanResult!.blockHeight.toString()),
-                                    _buildScanResultRow('Block Hash', _scanResult!.blockHash),
-                                    _buildScanResultRow('Timestamp', DateTime.fromMillisecondsSinceEpoch(
+                                    CommonWidgets.buildScanResultRow(label: 'Block Height', value: _scanResult!.blockHeight.toString()),
+                                    CommonWidgets.buildScanResultRow(label: 'Block Hash', value: _scanResult!.blockHash),
+                                    CommonWidgets.buildScanResultRow(label: 'Timestamp', value: DateTime.fromMillisecondsSinceEpoch(
                                       _scanResult!.blockTimestamp.toInt() * 1000,
                                     ).toString()),
-                                    _buildScanResultRow('Transactions', _scanResult!.txCount.toString()),
-                                    _buildScanResultRow('Outputs Found', _scanResult!.outputs.length.toString()),
+                                    CommonWidgets.buildScanResultRow(label: 'Transactions', value: _scanResult!.txCount.toString()),
+                                    CommonWidgets.buildScanResultRow(label: 'Outputs Found', value: _scanResult!.outputs.length.toString()),
                                     if (_scanResult!.outputs.isNotEmpty) ...[
                                       const Divider(height: 24),
                                       Text(
@@ -2003,9 +1980,39 @@ class _DebugViewState extends State<DebugView> {
                                     child: Row(
                                       children: [
                                         const Text('Sort: ', style: TextStyle(fontSize: 12)),
-                                        _buildTxSortButton('Confirms', 'confirms'),
+                                        CommonWidgets.buildTxSortButton(
+                                          label: 'Confirms',
+                                          sortKey: 'confirms',
+                                          currentSortKey: _txSortBy,
+                                          isAscending: _txSortAscending,
+                                          onTap: () {
+                                            setState(() {
+                                              if (_txSortBy == 'confirms') {
+                                                _txSortAscending = !_txSortAscending;
+                                              } else {
+                                                _txSortBy = 'confirms';
+                                                _txSortAscending = false;
+                                              }
+                                            });
+                                          },
+                                        ),
                                         const SizedBox(width: 4),
-                                        _buildTxSortButton('Amount', 'amount'),
+                                        CommonWidgets.buildTxSortButton(
+                                          label: 'Amount',
+                                          sortKey: 'amount',
+                                          currentSortKey: _txSortBy,
+                                          isAscending: _txSortAscending,
+                                          onTap: () {
+                                            setState(() {
+                                              if (_txSortBy == 'amount') {
+                                                _txSortAscending = !_txSortAscending;
+                                              } else {
+                                                _txSortBy = 'amount';
+                                                _txSortAscending = false;
+                                              }
+                                            });
+                                          },
+                                        ),
                                       ],
                                     ),
                                   ),
@@ -2105,10 +2112,10 @@ class _DebugViewState extends State<DebugView> {
                                               // Expanded details
                                               if (isExpanded) ...[
                                                 const Divider(height: 16),
-                                                _buildOutputDetailRow('TX Hash', tx.txHash.startsWith('spend:') ? 'Unknown (outgoing)' : tx.txHash, mono: true),
-                                                _buildOutputDetailRow('Block Height', '${tx.blockHeight}'),
+                                                CommonWidgets.buildOutputDetailRow(label: 'TX Hash', value: tx.txHash.startsWith('spend:') ? 'Unknown (outgoing)' : tx.txHash, mono: true),
+                                                CommonWidgets.buildOutputDetailRow(label: 'Block Height', value: '${tx.blockHeight}'),
                                                 if (tx.blockTimestamp > 0)
-                                                  _buildOutputDetailRow('Timestamp', DateTime.fromMillisecondsSinceEpoch(tx.blockTimestamp * 1000).toString()),
+                                                  CommonWidgets.buildOutputDetailRow(label: 'Timestamp', value: DateTime.fromMillisecondsSinceEpoch(tx.blockTimestamp * 1000).toString()),
                                                 // Received outputs
                                                 if (tx.receivedOutputs.isNotEmpty) ...[
                                                   const SizedBox(height: 8),
@@ -2304,14 +2311,44 @@ class _DebugViewState extends State<DebugView> {
                                           const SizedBox(width: 12),
                                         ],
                                         const Text('Select: ', style: TextStyle(fontSize: 12)),
-                                        _buildSelectButton('All', _selectAllSpendable),
+                                        CommonWidgets.buildSelectButton(label: 'All', onPressed: _selectAllSpendable),
                                         const SizedBox(width: 4),
-                                        _buildSelectButton('None', _clearSelection),
+                                        CommonWidgets.buildSelectButton(label: 'None', onPressed: _clearSelection),
                                         const Spacer(),
                                         const Text('Sort: ', style: TextStyle(fontSize: 12)),
-                                        _buildSortButton('Confirms', 'confirms'),
+                                        CommonWidgets.buildSortButton(
+                                          label: 'Confirms',
+                                          sortKey: 'confirms',
+                                          currentSortKey: _sortBy,
+                                          isAscending: _sortAscending,
+                                          onTap: () {
+                                            setState(() {
+                                              if (_sortBy == 'confirms') {
+                                                _sortAscending = !_sortAscending;
+                                              } else {
+                                                _sortBy = 'confirms';
+                                                _sortAscending = false;
+                                              }
+                                            });
+                                          },
+                                        ),
                                         const SizedBox(width: 4),
-                                        _buildSortButton('Value', 'value'),
+                                        CommonWidgets.buildSortButton(
+                                          label: 'Value',
+                                          sortKey: 'value',
+                                          currentSortKey: _sortBy,
+                                          isAscending: _sortAscending,
+                                          onTap: () {
+                                            setState(() {
+                                              if (_sortBy == 'value') {
+                                                _sortAscending = !_sortAscending;
+                                              } else {
+                                                _sortBy = 'value';
+                                                _sortAscending = false;
+                                              }
+                                            });
+                                          },
+                                        ),
                                       ],
                                     ),
                                   ),
@@ -2395,16 +2432,16 @@ class _DebugViewState extends State<DebugView> {
                                             ],
                                           ),
                                           const SizedBox(height: 8),
-                                          _buildOutputDetailRow('TX Hash', output.txHash, mono: true),
-                                          _buildOutputDetailRow('Output Index', '${output.outputIndex}'),
-                                          _buildOutputDetailRow('Block Height', '$outputHeight'),
+                                          CommonWidgets.buildOutputDetailRow(label: 'TX Hash', value: output.txHash, mono: true),
+                                          CommonWidgets.buildOutputDetailRow(label: 'Output Index', value: '${output.outputIndex}'),
+                                          CommonWidgets.buildOutputDetailRow(label: 'Block Height', value: '$outputHeight'),
                                           if (output.subaddressIndex != null)
-                                            _buildOutputDetailRow(
-                                              'Subaddress',
-                                              '${output.subaddressIndex!.item1}/${output.subaddressIndex!.item2}',
+                                            CommonWidgets.buildOutputDetailRow(
+                                              label: 'Subaddress',
+                                              value: '${output.subaddressIndex!.item1}/${output.subaddressIndex!.item2}',
                                             ),
                                           if (output.paymentId != null)
-                                            _buildOutputDetailRow('Payment ID', output.paymentId!, mono: true),
+                                            CommonWidgets.buildOutputDetailRow(label: 'Payment ID', value: output.paymentId!, mono: true),
                                         ],
                                       ),
                                     ),
@@ -2559,10 +2596,10 @@ class _DebugViewState extends State<DebugView> {
                                       ),
                                     ),
                                     const SizedBox(height: 8),
-                                    _buildScanResultRow('TX ID', _txResult!.txId),
-                                    _buildScanResultRow('Fee', '${(_txResult!.fee.toInt() / 1e12).toStringAsFixed(12)} XMR'),
+                                    CommonWidgets.buildScanResultRow(label: 'TX ID', value: _txResult!.txId),
+                                    CommonWidgets.buildScanResultRow(label: 'Fee', value: '${(_txResult!.fee.toInt() / 1e12).toStringAsFixed(12)} XMR'),
                                     if (_txResult!.txBlob != null)
-                                      _buildScanResultRow('TX Blob', '${_txResult!.txBlob!.substring(0, 64)}...'),
+                                      CommonWidgets.buildScanResultRow(label: 'TX Blob', value: '${_txResult!.txBlob!.substring(0, 64)}...'),
                                     const SizedBox(height: 12),
                                     ElevatedButton.icon(
                                       onPressed: _isBroadcasting ? null : _broadcastTransaction,
@@ -2652,128 +2689,6 @@ class _DebugViewState extends State<DebugView> {
     );
   }
 
-  Widget _buildKeyRow(String label, String value) {
-    final bool isTodo = value == 'TODO';
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
-                ),
-                const SizedBox(height: 4),
-                SelectableText(
-                  value,
-                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-                ),
-              ],
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.copy_outlined, size: 16),
-            onPressed: !isTodo ? () => _copyToClipboard(value, label) : null,
-            tooltip: isTodo ? null : 'Copy $label',
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildScanResultRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 120,
-            child: Text(
-              '$label:',
-              style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 12),
-            ),
-          ),
-          Expanded(
-            child: SelectableText(
-              value,
-              style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildOutputDetailRow(String label, String value, {bool mono = false}) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 100,
-            child: Text(
-              '$label:',
-              style: const TextStyle(
-                fontWeight: FontWeight.w500,
-                fontSize: 11,
-                color: Colors.black54,
-              ),
-            ),
-          ),
-          Expanded(
-            child: SelectableText(
-              value,
-              style: TextStyle(
-                fontSize: 11,
-                fontFamily: mono ? 'monospace' : null,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSortButton(String label, String sortKey) {
-    final isActive = _sortBy == sortKey;
-    final arrow = isActive ? (_sortAscending ? ' ↑' : ' ↓') : '';
-    return InkWell(
-      onTap: () {
-        setState(() {
-          if (_sortBy == sortKey) {
-            _sortAscending = !_sortAscending;
-          } else {
-            _sortBy = sortKey;
-            _sortAscending = false;
-          }
-        });
-      },
-      borderRadius: BorderRadius.circular(4),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        decoration: BoxDecoration(
-          color: isActive ? Colors.blue.shade100 : Colors.grey.shade200,
-          borderRadius: BorderRadius.circular(4),
-        ),
-        child: Text(
-          '$label$arrow',
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
-          ),
-        ),
-      ),
-    );
-  }
-
   /// Updates transaction list from a block scan response.
   /// Groups outputs by txHash and tracks spent key images.
   void _updateTransactionsFromScan(BlockScanResponse scan) {
@@ -2791,38 +2706,6 @@ class _DebugViewState extends State<DebugView> {
     );
   }
 
-  Widget _buildTxSortButton(String label, String sortKey) {
-    final isActive = _txSortBy == sortKey;
-    final arrow = isActive ? (_txSortAscending ? ' ↑' : ' ↓') : '';
-    return InkWell(
-      onTap: () {
-        setState(() {
-          if (_txSortBy == sortKey) {
-            _txSortAscending = !_txSortAscending;
-          } else {
-            _txSortBy = sortKey;
-            _txSortAscending = false;
-          }
-        });
-      },
-      borderRadius: BorderRadius.circular(4),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        decoration: BoxDecoration(
-          color: isActive ? Colors.blue.shade100 : Colors.grey.shade200,
-          borderRadius: BorderRadius.circular(4),
-        ),
-        child: Text(
-          '$label$arrow',
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
-          ),
-        ),
-      ),
-    );
-  }
-
   List<OwnedOutput> _sortedOutputs() {
     return TransactionUtils.sortOutputs(
       _allOutputs,
@@ -2830,24 +2713,6 @@ class _DebugViewState extends State<DebugView> {
       _sortAscending,
       _currentHeight,
       _showSpentOutputs,
-    );
-  }
-
-  Widget _buildSelectButton(String label, VoidCallback onPressed) {
-    return InkWell(
-      onTap: onPressed,
-      borderRadius: BorderRadius.circular(4),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        decoration: BoxDecoration(
-          color: Colors.grey.shade200,
-          borderRadius: BorderRadius.circular(4),
-        ),
-        child: Text(
-          label,
-          style: const TextStyle(fontSize: 12),
-        ),
-      ),
     );
   }
 
@@ -2873,7 +2738,7 @@ class _DebugViewState extends State<DebugView> {
     final result = await showDialog<Map<String, String>>(
       context: context,
       barrierDismissible: false,
-      builder: (context) => _SaveWalletDialog(
+      builder: (context) => SaveWalletDialog(
         initialWalletId: _walletId.isEmpty ? 'my_wallet' : _walletId,
         existingWalletIds: _availableWalletIds,
       ),
@@ -3670,179 +3535,3 @@ class _DebugViewState extends State<DebugView> {
   }
 }
 
-/// Dialog for saving wallet data with wallet ID and password
-class _SaveWalletDialog extends StatefulWidget {
-  final String initialWalletId;
-  final List<String> existingWalletIds;
-
-  const _SaveWalletDialog({
-    required this.initialWalletId,
-    required this.existingWalletIds,
-  });
-
-  @override
-  State<_SaveWalletDialog> createState() => _SaveWalletDialogState();
-}
-
-class _SaveWalletDialogState extends State<_SaveWalletDialog> {
-  late final TextEditingController _walletIdController;
-  final _passwordController = TextEditingController();
-  final _confirmPasswordController = TextEditingController();
-  String? _error;
-  bool _obscurePassword = true;
-  bool _obscureConfirm = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _walletIdController = TextEditingController(text: widget.initialWalletId);
-  }
-
-  @override
-  void dispose() {
-    _walletIdController.dispose();
-    _passwordController.dispose();
-    _confirmPasswordController.dispose();
-    super.dispose();
-  }
-
-  void _submit() {
-    final walletId = _walletIdController.text.trim();
-    final password = _passwordController.text;
-
-    // Validate wallet ID
-    if (walletId.isEmpty) {
-      setState(() {
-        _error = 'Wallet ID is required';
-      });
-      return;
-    }
-
-    // Check for invalid characters
-    if (!RegExp(r'^[a-zA-Z0-9_-]+$').hasMatch(walletId)) {
-      setState(() {
-        _error = 'Wallet ID can only contain letters, numbers, underscores, and dashes';
-      });
-      return;
-    }
-
-    // Validate password confirmation if password is not empty
-    if (password.isNotEmpty) {
-      final confirm = _confirmPasswordController.text;
-      if (password != confirm) {
-        setState(() {
-          _error = 'Passwords do not match';
-        });
-        return;
-      }
-    }
-
-    Navigator.of(context).pop({
-      'walletId': walletId,
-      'password': password,
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final isOverwriting = widget.existingWalletIds.contains(_walletIdController.text.trim());
-
-    return AlertDialog(
-      title: const Text('Save Wallet Data'),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            TextField(
-              controller: _walletIdController,
-              autofocus: true,
-              decoration: const InputDecoration(
-                labelText: 'Wallet ID',
-                hintText: 'e.g., my_wallet, savings',
-                border: OutlineInputBorder(),
-              ),
-              onChanged: (_) => setState(() {}),
-              onSubmitted: (_) => _submit(),
-            ),
-            if (isOverwriting) ...[
-              const SizedBox(height: 8),
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.orange.shade50,
-                  borderRadius: BorderRadius.circular(4),
-                  border: Border.all(color: Colors.orange.shade200),
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.warning, color: Colors.orange.shade700, size: 16),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'This will overwrite existing wallet data',
-                        style: TextStyle(color: Colors.orange.shade900, fontSize: 12),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-            const SizedBox(height: 16),
-            TextField(
-              controller: _passwordController,
-              obscureText: _obscurePassword,
-              decoration: InputDecoration(
-                labelText: 'Password (optional)',
-                border: const OutlineInputBorder(),
-                suffixIcon: IconButton(
-                  icon: Icon(_obscurePassword ? Icons.visibility : Icons.visibility_off),
-                  onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
-                ),
-              ),
-              onChanged: (_) => setState(() {}),
-              onSubmitted: (_) {
-                if (_passwordController.text.isEmpty) {
-                  _submit();
-                }
-              },
-            ),
-            if (_passwordController.text.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              TextField(
-                controller: _confirmPasswordController,
-                obscureText: _obscureConfirm,
-                decoration: InputDecoration(
-                  labelText: 'Confirm Password',
-                  border: const OutlineInputBorder(),
-                  suffixIcon: IconButton(
-                    icon: Icon(_obscureConfirm ? Icons.visibility : Icons.visibility_off),
-                    onPressed: () => setState(() => _obscureConfirm = !_obscureConfirm),
-                  ),
-                ),
-                onSubmitted: (_) => _submit(),
-              ),
-            ],
-            if (_error != null) ...[
-              const SizedBox(height: 12),
-              Text(
-                _error!,
-                style: TextStyle(color: Colors.red.shade700, fontSize: 12),
-              ),
-            ],
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(null),
-          child: const Text('Cancel'),
-        ),
-        ElevatedButton(
-          onPressed: _submit,
-          child: const Text('Save'),
-        ),
-      ],
-    );
-  }
-}
