@@ -5,7 +5,9 @@
   "private": true,
   "scripts": {
     "pretest": "dart run tool/build_extension.dart",
-    "test": "jest --runInBand",
+    "test": "npm run test:rust && jest --runInBand",
+    "test:rust": "cd ../../rust/monero-rust && cargo test --features mock-rpc --lib && env RUST_MIN_STACK=8388608 cargo test --features mock-rpc --test tx_construction_test --test honked_bagpipe_tx",
+    "test:rust:all": "cd ../../rust/monero-rust && env RUST_MIN_STACK=8388608 cargo test --features mock-rpc",
     "test:e2e": "jest test/e2e/monero_operations.test.js",
     "test:core": "jest test/e2e/core_functionality.test.js",
     "build": "dart run tool/build_extension.dart"
