@@ -22,6 +22,7 @@ import '../widgets/keys_display_panel.dart';
 import '../widgets/scanning_panel.dart';
 import '../widgets/transactions_panel.dart';
 import '../widgets/outputs_panel.dart';
+import '../widgets/seed_phrase_panel.dart';
 
 class DebugView extends StatefulWidget {
   const DebugView({super.key});
@@ -1496,98 +1497,19 @@ class _DebugViewState extends State<DebugView> {
                           ),
                         );
                       },
-                      body: Padding(
-                        padding: const EdgeInsets.all(16.0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Row(
-                              children: [
-                                ElevatedButton.icon(
-                                  onPressed: _generateSeed,
-                                  icon: const Icon(Icons.auto_awesome),
-                                  label: const Text('Generate'),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: DropdownButtonFormField<String>(
-                                    value: _seedType,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Seed Type',
-                                      border: OutlineInputBorder(),
-                                      contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                    ),
-                                    items: const [
-                                      DropdownMenuItem(value: '25 word', child: Text('25 word')),
-                                    ],
-                                    onChanged: null,
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: DropdownButtonFormField<String>(
-                                    value: _network,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Network',
-                                      border: OutlineInputBorder(),
-                                      contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                    ),
-                                    items: const [
-                                      DropdownMenuItem(value: 'mainnet', child: Text('Mainnet')),
-                                      DropdownMenuItem(value: 'testnet', child: Text('Testnet')),
-                                      DropdownMenuItem(value: 'stagenet', child: Text('Stagenet')),
-                                    ],
-                                    onChanged: (value) {
-                                      if (value != null) {
-                                        setState(() {
-                                          _network = value;
-                                        });
-                                        _deriveAddress();
-                                      }
-                                    },
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 16),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: TextField(
-                                    controller: _controller,
-                                    decoration: InputDecoration(
-                                      labelText: 'Seed Phrase',
-                                      hintText: 'Enter or generate a 25-word seed phrase',
-                                      border: const OutlineInputBorder(),
-                                      errorText: _validationError,
-                                    ),
-                                    maxLines: 3,
-                                  ),
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.copy_outlined),
-                                  onPressed: () => _copyToClipboard(_controller.text, 'Seed'),
-                                  tooltip: 'Copy seed',
-                                ),
-                              ],
-                            ),
-                            if (_responseError != null) ...[
-                              const SizedBox(height: 16),
-                              Container(
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: Colors.red.shade50,
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: Colors.red.shade200),
-                                ),
-                                child: SelectableText(
-                                  'Error: $_responseError',
-                                  style: TextStyle(color: Colors.red.shade900),
-                                ),
-                              ),
-                            ],
-                          ],
-                        ),
+                      body: SeedPhrasePanel(
+                        controller: _controller,
+                        seedType: _seedType,
+                        network: _network,
+                        validationError: _validationError,
+                        responseError: _responseError,
+                        onGenerateSeed: _generateSeed,
+                        onNetworkChanged: (value) {
+                          setState(() {
+                            _network = value;
+                          });
+                          _deriveAddress();
+                        },
                       ),
                       isExpanded: _expandedPanel == 0,
                     ),
