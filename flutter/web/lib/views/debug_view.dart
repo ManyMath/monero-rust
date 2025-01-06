@@ -111,6 +111,7 @@ class _DebugViewState extends State<DebugView> {
   String? _lastSaveTime;
   bool _isExporting = false;
   bool _isImporting = false;
+  bool _isRestoringWallet = false;
   String? _exportError;
   String? _importError;
 
@@ -640,6 +641,7 @@ class _DebugViewState extends State<DebugView> {
   }
 
   void _onSeedChanged() {
+    if (_isRestoringWallet) return;
     _debounceTimer?.cancel();
 
     if (_isContinuousScanning) {
@@ -3470,6 +3472,8 @@ class _DebugViewState extends State<DebugView> {
 
     setState(() {
       _walletId = '';
+      _openWallets.clear();
+      _activeWalletId = null;
       _controller.text = '';
       _derivedAddress = null;
       _secretSpendKey = null;
@@ -3660,6 +3664,7 @@ class _DebugViewState extends State<DebugView> {
     final wallet = _openWallets[walletId];
     if (wallet == null || wallet.isClosed) return;
 
+    _isRestoringWallet = true;
     setState(() {
       _activeWalletId = walletId;
       _walletId = walletId;
@@ -3670,6 +3675,7 @@ class _DebugViewState extends State<DebugView> {
       _daemonHeight = wallet.daemonHeight;
       _continuousScanCurrentHeight = wallet.currentHeight;
     });
+    _isRestoringWallet = false;
 
     debugPrint('[MULTI-WALLET] Switched to wallet: $walletId');
   }
@@ -3748,81 +3754,96 @@ class _DebugViewState extends State<DebugView> {
     try {
       final walletData = jsonDecode(jsonString) as Map<String, dynamic>;
 
-      // Restore wallet state
-      setState(() {
-        // Restore seed and network
-        _controller.text = walletData['seed'] as String? ?? '';
-        _network = walletData['network'] as String? ?? 'stagenet';
-        _derivedAddress = walletData['address'] as String?;
-        _nodeUrlController.text = walletData['nodeUrl'] as String? ?? 'http://127.0.0.1:38081';
+      // Capture loaded data before any state changes can wipe it
+      final seed = walletData['seed'] as String? ?? '';
+      final network = walletData['network'] as String? ?? 'stagenet';
+      final address = walletData['address'] as String?;
+      final nodeUrl = walletData['nodeUrl'] as String? ?? 'http://127.0.0.1:38081';
 
-        // Restore outputs
-        _allOutputs = (walletData['outputs'] as List).map((o) {
-          final outputData = o as Map<String, dynamic>;
-          return OwnedOutput(
-            txHash: outputData['txHash'] as String,
-            outputIndex: outputData['outputIndex'] as int,
-            amount: Uint64(BigInt.parse(outputData['amount'] as String)),
-            amountXmr: outputData['amountXmr'] as String,
-            key: outputData['key'] as String,
-            keyOffset: outputData['keyOffset'] as String,
-            commitmentMask: outputData['commitmentMask'] as String,
-            subaddressIndex: outputData['subaddressIndex'] != null
-                ? Tuple2<int, int>(
-                    outputData['subaddressIndex'][0] as int,
-                    outputData['subaddressIndex'][1] as int,
-                  )
-                : null,
-            paymentId: outputData['paymentId'] as String?,
-            receivedOutputBytes: outputData['receivedOutputBytes'] as String,
-            blockHeight: Uint64(BigInt.parse(outputData['blockHeight'] as String)),
-            spent: outputData['spent'] as bool,
-            keyImage: outputData['keyImage'] as String,
-          );
-        }).toList();
+      final loadedOutputs = (walletData['outputs'] as List).map((o) {
+        final outputData = o as Map<String, dynamic>;
+        return OwnedOutput(
+          txHash: outputData['txHash'] as String,
+          outputIndex: outputData['outputIndex'] as int,
+          amount: Uint64(BigInt.parse(outputData['amount'] as String)),
+          amountXmr: outputData['amountXmr'] as String,
+          key: outputData['key'] as String,
+          keyOffset: outputData['keyOffset'] as String,
+          commitmentMask: outputData['commitmentMask'] as String,
+          subaddressIndex: outputData['subaddressIndex'] != null
+              ? Tuple2<int, int>(
+                  outputData['subaddressIndex'][0] as int,
+                  outputData['subaddressIndex'][1] as int,
+                )
+              : null,
+          paymentId: outputData['paymentId'] as String?,
+          receivedOutputBytes: outputData['receivedOutputBytes'] as String,
+          blockHeight: Uint64(BigInt.parse(outputData['blockHeight'] as String)),
+          spent: outputData['spent'] as bool,
+          keyImage: outputData['keyImage'] as String,
+        );
+      }).toList();
 
-        // Restore transactions
-        if (walletData['transactions'] != null) {
-          _allTransactions = (walletData['transactions'] as List)
+      final loadedTransactions = walletData['transactions'] != null
+          ? (walletData['transactions'] as List)
               .map((t) => WalletTransaction.fromJson(t as Map<String, dynamic>))
-              .toList();
-        } else {
-          _allTransactions = [];
-        }
+              .toList()
+          : <WalletTransaction>[];
 
-        final scanState = walletData['scanState'] as Map<String, dynamic>;
-        _continuousScanCurrentHeight = scanState['continuousScanCurrentHeight'] as int;
+      final scanState = walletData['scanState'] as Map<String, dynamic>;
+      final loadedHeight = scanState['continuousScanCurrentHeight'] as int;
+      final loadedSelectedOutputs = Set<String>.from(walletData['selectedOutputs'] as List);
+
+      _isRestoringWallet = true;
+      setState(() {
+        _controller.text = seed;
+        _network = network;
+        _derivedAddress = address;
+        _nodeUrlController.text = nodeUrl;
+        _continuousScanCurrentHeight = loadedHeight;
         _continuousScanTargetHeight = 0;
         _isSynced = false;
         _daemonHeight = null;
         _isContinuousScanning = false;
-        _isContinuousPaused = _continuousScanCurrentHeight > 0;
+        _isContinuousPaused = loadedHeight > 0;
 
-        // Set block height field to resume scanning from last synced height
-        if (_continuousScanCurrentHeight > 0) {
-          _blockHeightController.text = _continuousScanCurrentHeight.toString();
+        if (loadedHeight > 0) {
+          _blockHeightController.text = loadedHeight.toString();
           _blockHeightUserEdited = false;
         }
-
-        // Restore selected outputs
-        _selectedOutputs = Set<String>.from(walletData['selectedOutputs'] as List);
 
         _isLoadingWallet = false;
         _loadError = null;
       });
+      _isRestoringWallet = false;
 
       // Open this wallet in multi-wallet mode
-      final seed = walletData['seed'] as String? ?? '';
-      final network = walletData['network'] as String? ?? 'stagenet';
-      final address = walletData['address'] as String? ?? _derivedAddress ?? '';
-      if (seed.isNotEmpty && address.isNotEmpty) {
-        _openWallet(_walletId, seed, network, address);
+      final resolvedAddress = address ?? _derivedAddress ?? '';
+      if (seed.isNotEmpty && resolvedAddress.isNotEmpty) {
+        _openWallet(_walletId, seed, network, resolvedAddress);
+      }
+
         // Update the opened wallet's outputs
-        if (_activeWallet != null) {
-          _activeWallet!.outputs = _allOutputs;
-          _activeWallet!.currentHeight = _continuousScanCurrentHeight;
-          _activeWallet!.daemonHeight = _daemonHeight ?? 0;
-        }
+      setState(() {
+        _allOutputs = loadedOutputs;
+        _allTransactions = loadedTransactions;
+        _selectedOutputs = loadedSelectedOutputs;
+      });
+
+      if (_activeWallet != null) {
+        _activeWallet!.outputs = _allOutputs;
+        _activeWallet!.currentHeight = loadedHeight;
+        _activeWallet!.daemonHeight = _daemonHeight ?? 0;
+      }
+
+      if (loadedOutputs.isNotEmpty) {
+        RestoreWalletDataRequest(
+          seed: seed,
+          network: network,
+          outputs: loadedOutputs,
+          daemonHeight: Uint64(BigInt.from(_daemonHeight ?? 0)),
+          currentHeight: Uint64(BigInt.from(loadedHeight)),
+        ).sendSignalToRust();
       }
 
       // Derive address to populate keys
@@ -4204,9 +4225,6 @@ class _DebugViewState extends State<DebugView> {
         _isImporting = false;
         _importError = null;
       });
-
-      // Refresh wallet list
-      _refreshAvailableWallets();
 
       // Switch to imported wallet
       await _switchWallet(walletId);
