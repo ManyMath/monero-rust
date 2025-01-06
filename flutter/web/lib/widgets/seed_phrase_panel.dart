@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../utils/key_parser.dart';
 import '../src/bindings/bindings.dart';
 import '../utils/clipboard_utils.dart';
+import 'error_message_container.dart';
 
 class SeedPhrasePanel extends StatelessWidget {
   final TextEditingController controller;
@@ -103,18 +104,7 @@ class SeedPhrasePanel extends StatelessWidget {
           ),
           if (responseError != null) ...[
             const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.red.shade50,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.red.shade200),
-              ),
-              child: SelectableText(
-                'Error: $responseError',
-                style: TextStyle(color: Colors.red.shade900),
-              ),
-            ),
+            ErrorMessageContainer(message: 'Error: $responseError'),
           ],
         ],
       ),
