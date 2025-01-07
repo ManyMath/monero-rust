@@ -23,6 +23,7 @@ import '../widgets/scanning_panel.dart';
 import '../widgets/transactions_panel.dart';
 import '../widgets/outputs_panel.dart';
 import '../widgets/seed_phrase_panel.dart';
+import '../widgets/file_management_panel.dart';
 
 class DebugView extends StatefulWidget {
   const DebugView({super.key});
@@ -1161,323 +1162,28 @@ class _DebugViewState extends State<DebugView> {
                           ),
                         );
                       },
-                      body: Padding(
-                        padding: const EdgeInsets.all(16.0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            // Wallet Switcher - only show if there are wallets
-                            if (_availableWalletIds.isNotEmpty) ...[
-                              Container(
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: Colors.grey.shade100,
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: Colors.grey.shade300),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        Icon(Icons.account_balance_wallet, color: Colors.grey.shade700, size: 20),
-                                        const SizedBox(width: 8),
-                                        Text(
-                                          'Stored Wallets',
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            color: Colors.grey.shade900,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 12),
-                                    DropdownButtonFormField<String>(
-                                      value: _availableWalletIds.contains(_walletId) ? _walletId : null,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Select Wallet',
-                                        border: OutlineInputBorder(),
-                                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                      ),
-                                      items: _availableWalletIds.map((id) {
-                                        return DropdownMenuItem(
-                                          value: id,
-                                          child: Text(id),
-                                        );
-                                      }).toList(),
-                                      onChanged: (newId) {
-                                        if (newId != null) {
-                                          _switchWallet(newId);
-                                        }
-                                      },
-                                    ),
-                                    if (_lastSaveTime != null) ...[
-                                      const SizedBox(height: 8),
-                                      Text(
-                                        'Last saved: $_lastSaveTime',
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          color: Colors.grey.shade700,
-                                        ),
-                                      ),
-                                    ],
-                                    const SizedBox(height: 12),
-                                    Row(
-                                      children: [
-                                        Expanded(
-                                          child: ElevatedButton.icon(
-                                            onPressed: _isLoadingWallet ? null : _loadWalletData,
-                                            icon: _isLoadingWallet
-                                                ? const SizedBox(
-                                                    width: 16,
-                                                    height: 16,
-                                                    child: CircularProgressIndicator(strokeWidth: 2),
-                                                  )
-                                                : const Icon(Icons.folder_open),
-                                            label: Text(_isLoadingWallet ? 'Loading...' : 'Load'),
-                                            style: ElevatedButton.styleFrom(
-                                              backgroundColor: Colors.green,
-                                              foregroundColor: Colors.white,
-                                            ),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Expanded(
-                                          child: OutlinedButton.icon(
-                                            onPressed: _clearStoredData,
-                                            icon: const Icon(Icons.delete_outline),
-                                            label: const Text('Delete'),
-                                            style: OutlinedButton.styleFrom(
-                                              foregroundColor: Colors.red,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                            ],
-
-                            // Loaded Wallets - show scan control if multiple wallets are loaded
-                            if (_activeWallets.length > 1) ...[
-                              Container(
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: Colors.green.shade50,
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: Colors.green.shade200),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        Icon(Icons.wallet, color: Colors.green.shade700, size: 20),
-                                        const SizedBox(width: 8),
-                                        Text(
-                                          'Loaded Wallets (${_activeWallets.length})',
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            color: Colors.grey.shade900,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 12),
-                                    ..._activeWallets.map((wallet) {
-                                      return Padding(
-                                        padding: const EdgeInsets.only(bottom: 8),
-                                        child: Row(
-                                          children: [
-                                            Expanded(
-                                              child: Column(
-                                                crossAxisAlignment: CrossAxisAlignment.start,
-                                                children: [
-                                                  Text(
-                                                    wallet.walletId,
-                                                    style: TextStyle(
-                                                      fontWeight: wallet.walletId == _activeWalletId
-                                                          ? FontWeight.bold
-                                                          : FontWeight.normal,
-                                                    ),
-                                                  ),
-                                                  Text(
-                                                    '${wallet.address.substring(0, 20)}... | ${wallet.totalBalance.toStringAsFixed(6)} XMR',
-                                                    style: TextStyle(
-                                                      fontSize: 11,
-                                                      color: Colors.grey.shade600,
-                                                    ),
-                                                  ),
-                                                  if (wallet.currentHeight > 0)
-                                                    Text(
-                                                      'Block: ${wallet.currentHeight}',
-                                                      style: TextStyle(
-                                                        fontSize: 10,
-                                                        color: Colors.grey.shade500,
-                                                      ),
-                                                    ),
-                                                ],
-                                              ),
-                                            ),
-                                            if (wallet.walletId == _activeWalletId)
-                                              Container(
-                                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                                decoration: BoxDecoration(
-                                                  color: Colors.blue.shade100,
-                                                  borderRadius: BorderRadius.circular(4),
-                                                ),
-                                                child: Text(
-                                                  'viewing',
-                                                  style: TextStyle(
-                                                    fontSize: 10,
-                                                    color: Colors.blue.shade700,
-                                                  ),
-                                                ),
-                                              ),
-                                            const SizedBox(width: 8),
-                                            IconButton(
-                                              icon: const Icon(Icons.close, size: 18),
-                                              color: Colors.red.shade400,
-                                              tooltip: 'Close/unload wallet',
-                                              onPressed: () => _closeWallet(wallet.walletId),
-                                              padding: EdgeInsets.zero,
-                                              constraints: const BoxConstraints(),
-                                            ),
-                                          ],
-                                        ),
-                                      );
-                                    }),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                            ],
-
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: ElevatedButton.icon(
-                                    onPressed: _isSaving ? null : _saveWalletData,
-                                    icon: _isSaving
-                                        ? const SizedBox(
-                                            width: 16,
-                                            height: 16,
-                                            child: CircularProgressIndicator(strokeWidth: 2),
-                                          )
-                                        : const Icon(Icons.save),
-                                    label: Text(_isSaving ? 'Saving...' : 'Save Wallet Data'),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                OutlinedButton.icon(
-                                  onPressed: _startNewWallet,
-                                  icon: const Icon(Icons.add),
-                                  label: const Text('New'),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: OutlinedButton.icon(
-                                    onPressed: _isExporting ? null : _exportWallet,
-                                    icon: _isExporting
-                                        ? const SizedBox(
-                                            width: 16,
-                                            height: 16,
-                                            child: CircularProgressIndicator(strokeWidth: 2),
-                                          )
-                                        : const Icon(Icons.file_download),
-                                    label: Text(_isExporting ? 'Exporting...' : 'Export'),
-                                    style: OutlinedButton.styleFrom(
-                                      foregroundColor: Colors.blue,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: OutlinedButton.icon(
-                                    onPressed: _isImporting ? null : _importWallet,
-                                    icon: _isImporting
-                                        ? const SizedBox(
-                                            width: 16,
-                                            height: 16,
-                                            child: CircularProgressIndicator(strokeWidth: 2),
-                                          )
-                                        : const Icon(Icons.file_upload),
-                                    label: Text(_isImporting ? 'Importing...' : 'Import'),
-                                    style: OutlinedButton.styleFrom(
-                                      foregroundColor: Colors.blue,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            if (_saveError != null) ...[
-                              const SizedBox(height: 12),
-                              Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: Colors.red.shade50,
-                                  borderRadius: BorderRadius.circular(4),
-                                  border: Border.all(color: Colors.red.shade200),
-                                ),
-                                child: Text(
-                                  _saveError!,
-                                  style: TextStyle(color: Colors.red.shade900, fontSize: 12),
-                                ),
-                              ),
-                            ],
-                            if (_loadError != null) ...[
-                              const SizedBox(height: 12),
-                              Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: Colors.red.shade50,
-                                  borderRadius: BorderRadius.circular(4),
-                                  border: Border.all(color: Colors.red.shade200),
-                                ),
-                                child: Text(
-                                  _loadError!,
-                                  style: TextStyle(color: Colors.red.shade900, fontSize: 12),
-                                ),
-                              ),
-                            ],
-                            if (_exportError != null) ...[
-                              const SizedBox(height: 12),
-                              Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: Colors.red.shade50,
-                                  borderRadius: BorderRadius.circular(4),
-                                  border: Border.all(color: Colors.red.shade200),
-                                ),
-                                child: Text(
-                                  _exportError!,
-                                  style: TextStyle(color: Colors.red.shade900, fontSize: 12),
-                                ),
-                              ),
-                            ],
-                            if (_importError != null) ...[
-                              const SizedBox(height: 12),
-                              Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: Colors.red.shade50,
-                                  borderRadius: BorderRadius.circular(4),
-                                  border: Border.all(color: Colors.red.shade200),
-                                ),
-                                child: Text(
-                                  _importError!,
-                                  style: TextStyle(color: Colors.red.shade900, fontSize: 12),
-                                ),
-                              ),
-                            ],
-                          ],
-                        ),
+                      body: FileManagementPanel(
+                        walletId: _walletId,
+                        availableWalletIds: _availableWalletIds,
+                        activeWallets: _activeWallets,
+                        activeWalletId: _activeWalletId,
+                        lastSaveTime: _lastSaveTime,
+                        isSaving: _isSaving,
+                        isLoadingWallet: _isLoadingWallet,
+                        isExporting: _isExporting,
+                        isImporting: _isImporting,
+                        saveError: _saveError,
+                        loadError: _loadError,
+                        exportError: _exportError,
+                        importError: _importError,
+                        onWalletChanged: _switchWallet,
+                        onLoad: _loadWalletData,
+                        onDelete: _clearStoredData,
+                        onSave: _saveWalletData,
+                        onNew: _startNewWallet,
+                        onExport: _exportWallet,
+                        onImport: _importWallet,
+                        onCloseWallet: _closeWallet,
                       ),
                       isExpanded: _expandedPanel == 1,
                     ),
