@@ -24,6 +24,7 @@ import '../widgets/transactions_panel.dart';
 import '../widgets/outputs_panel.dart';
 import '../widgets/seed_phrase_panel.dart';
 import '../widgets/file_management_panel.dart';
+import '../widgets/create_transaction_panel.dart';
 
 class DebugView extends StatefulWidget {
   const DebugView({super.key});
@@ -1693,215 +1694,21 @@ class _DebugViewState extends State<DebugView> {
                           ),
                         );
                       },
-                      body: Padding(
-                        padding: const EdgeInsets.all(16.0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text(
-                                  'Recipients: ${_destinationControllers.length}/15',
-                                  style: const TextStyle(fontWeight: FontWeight.bold),
-                                ),
-                                Text(
-                                  'Total: ${_getRecipientsTotal().toStringAsFixed(12)} XMR',
-                                  style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-                            ...List.generate(_destinationControllers.length, (index) {
-                              return Container(
-                                margin: const EdgeInsets.only(bottom: 12),
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  border: Border.all(color: Colors.grey.shade300),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        Text(
-                                          'Recipient ${index + 1}',
-                                          style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 12),
-                                        ),
-                                        const Spacer(),
-                                        if (_destinationControllers.length > 1)
-                                          IconButton(
-                                            icon: const Icon(Icons.close, size: 18),
-                                            onPressed: () => _removeRecipient(index),
-                                            tooltip: 'Remove recipient',
-                                            padding: EdgeInsets.zero,
-                                            constraints: const BoxConstraints(),
-                                          ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 8),
-                                    TextField(
-                                      controller: _destinationControllers[index],
-                                      decoration: const InputDecoration(
-                                        labelText: 'Address',
-                                        hintText: 'Enter recipient Monero address',
-                                        border: OutlineInputBorder(),
-                                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                                      ),
-                                      style: const TextStyle(fontSize: 12),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    TextField(
-                                      controller: _amountControllers[index],
-                                      decoration: const InputDecoration(
-                                        labelText: 'Amount (XMR)',
-                                        border: OutlineInputBorder(),
-                                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                                      ),
-                                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                      style: const TextStyle(fontSize: 12),
-                                      onChanged: (_) => setState(() {}),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            }),
-                            if (_destinationControllers.length < 15)
-                              OutlinedButton.icon(
-                                onPressed: _addRecipient,
-                                icon: const Icon(Icons.add),
-                                label: const Text('Add Recipient'),
-                              ),
-                            const SizedBox(height: 16),
-                            ElevatedButton.icon(
-                              onPressed: _isCreatingTx ? null : _createTransaction,
-                              icon: _isCreatingTx
-                                  ? const SizedBox(
-                                      width: 16,
-                                      height: 16,
-                                      child: CircularProgressIndicator(strokeWidth: 2),
-                                    )
-                                  : const Icon(Icons.send),
-                              label: Text(_isCreatingTx ? 'Creating Transaction...' : 'Create Transaction'),
-                            ),
-                            if (_txError != null) ...[
-                              const SizedBox(height: 16),
-                              Container(
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: Colors.red.shade50,
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: Colors.red.shade200),
-                                ),
-                                child: SelectableText(
-                                  'Transaction Error: $_txError',
-                                  style: TextStyle(color: Colors.red.shade900),
-                                ),
-                              ),
-                            ],
-                            if (_txResult != null && _txResult!.success) ...[
-                              const SizedBox(height: 16),
-                              Container(
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: Colors.green.shade50,
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: Colors.green.shade200),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      'Transaction Created',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.green.shade900,
-                                        fontSize: 16,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    CommonWidgets.buildScanResultRow(label: 'TX ID', value: _txResult!.txId),
-                                    CommonWidgets.buildScanResultRow(label: 'Fee', value: '${(_txResult!.fee.toInt() / 1e12).toStringAsFixed(12)} XMR'),
-                                    if (_txResult!.txBlob != null)
-                                      CommonWidgets.buildScanResultRow(label: 'TX Blob', value: '${_txResult!.txBlob!.substring(0, 64)}...'),
-                                    const SizedBox(height: 12),
-                                    ElevatedButton.icon(
-                                      onPressed: _isBroadcasting ? null : _broadcastTransaction,
-                                      icon: _isBroadcasting
-                                          ? const SizedBox(
-                                              width: 16,
-                                              height: 16,
-                                              child: CircularProgressIndicator(strokeWidth: 2),
-                                            )
-                                          : const Icon(Icons.upload),
-                                      label: Text(_isBroadcasting ? 'Broadcasting...' : 'Broadcast Transaction'),
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: Colors.green.shade700,
-                                        foregroundColor: Colors.white,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                            if (_broadcastError != null) ...[
-                              const SizedBox(height: 16),
-                              Container(
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: Colors.red.shade50,
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: Colors.red.shade200),
-                                ),
-                                child: SelectableText(
-                                  'Broadcast Error: $_broadcastError',
-                                  style: TextStyle(color: Colors.red.shade900),
-                                ),
-                              ),
-                            ],
-                            if (_broadcastResult != null && _broadcastResult!.success) ...[
-                              const SizedBox(height: 16),
-                              Container(
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: Colors.blue.shade50,
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: Colors.blue.shade200),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      'Transaction Broadcast Successfully!',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.blue.shade900,
-                                        fontSize: 16,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Text(
-                                      'The transaction has been submitted to the network.',
-                                      style: TextStyle(color: Colors.blue.shade900),
-                                    ),
-                                    if (_txResult?.txKey != null) ...[
-                                      const SizedBox(height: 12),
-                                      ElevatedButton(
-                                        onPressed: _showProvePaymentDialog,
-                                        style: ElevatedButton.styleFrom(
-                                          backgroundColor: Colors.blue.shade700,
-                                          foregroundColor: Colors.white,
-                                        ),
-                                        child: const Text('Prove Payment'),
-                                      ),
-                                    ],
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ],
-                        ),
+                      body: CreateTransactionPanel(
+                        destinationControllers: _destinationControllers,
+                        amountControllers: _amountControllers,
+                        isCreatingTx: _isCreatingTx,
+                        isBroadcasting: _isBroadcasting,
+                        txResult: _txResult,
+                        broadcastResult: _broadcastResult,
+                        txError: _txError,
+                        broadcastError: _broadcastError,
+                        onAddRecipient: _addRecipient,
+                        onRemoveRecipient: _removeRecipient,
+                        onCreateTransaction: _createTransaction,
+                        onBroadcastTransaction: _broadcastTransaction,
+                        onProvePayment: _showProvePaymentDialog,
+                        onAmountChanged: () => setState(() {}),
                       ),
                       isExpanded: _expandedPanel == 6,
                     ),

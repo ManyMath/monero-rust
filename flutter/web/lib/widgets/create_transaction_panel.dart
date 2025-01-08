@@ -1,0 +1,127 @@
+import 'package:flutter/material.dart';
+import '../src/bindings/bindings.dart';
+import 'recipient_form.dart';
+import 'transaction_success_display.dart';
+import 'broadcast_success_display.dart';
+import 'error_message_container.dart';
+
+class CreateTransactionPanel extends StatelessWidget {
+  final List<TextEditingController> destinationControllers;
+  final List<TextEditingController> amountControllers;
+  final bool isCreatingTx;
+  final bool isBroadcasting;
+  final TransactionCreatedResponse? txResult;
+  final TransactionBroadcastResponse? broadcastResult;
+  final String? txError;
+  final String? broadcastError;
+  final VoidCallback onAddRecipient;
+  final Function(int) onRemoveRecipient;
+  final VoidCallback onCreateTransaction;
+  final VoidCallback onBroadcastTransaction;
+  final VoidCallback? onProvePayment;
+  final VoidCallback onAmountChanged;
+
+  const CreateTransactionPanel({
+    super.key,
+    required this.destinationControllers,
+    required this.amountControllers,
+    required this.isCreatingTx,
+    required this.isBroadcasting,
+    required this.txResult,
+    required this.broadcastResult,
+    required this.txError,
+    required this.broadcastError,
+    required this.onAddRecipient,
+    required this.onRemoveRecipient,
+    required this.onCreateTransaction,
+    required this.onBroadcastTransaction,
+    this.onProvePayment,
+    required this.onAmountChanged,
+  });
+
+  double _getRecipientsTotal() {
+    double total = 0.0;
+    for (var controller in amountControllers) {
+      final value = double.tryParse(controller.text) ?? 0.0;
+      total += value;
+    }
+    return total;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Recipients: ${destinationControllers.length}/15',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              Text(
+                'Total: ${_getRecipientsTotal().toStringAsFixed(12)} XMR',
+                style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ...List.generate(destinationControllers.length, (index) {
+            return RecipientForm(
+              index: index,
+              destinationController: destinationControllers[index],
+              amountController: amountControllers[index],
+              canRemove: destinationControllers.length > 1,
+              onRemove: () => onRemoveRecipient(index),
+              onAmountChanged: onAmountChanged,
+            );
+          }),
+          if (destinationControllers.length < 15)
+            OutlinedButton.icon(
+              onPressed: onAddRecipient,
+              icon: const Icon(Icons.add),
+              label: const Text('Add Recipient'),
+            ),
+          const SizedBox(height: 16),
+          ElevatedButton.icon(
+            onPressed: isCreatingTx ? null : onCreateTransaction,
+            icon: isCreatingTx
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.send),
+            label: Text(isCreatingTx ? 'Creating Transaction...' : 'Create Transaction'),
+          ),
+          if (txError != null) ...[
+            const SizedBox(height: 16),
+            ErrorMessageContainer(message: 'Transaction Error: $txError'),
+          ],
+          if (txResult != null && txResult!.success) ...[
+            const SizedBox(height: 16),
+            TransactionSuccessDisplay(
+              txResult: txResult!,
+              isBroadcasting: isBroadcasting,
+              onBroadcast: onBroadcastTransaction,
+            ),
+          ],
+          if (broadcastError != null) ...[
+            const SizedBox(height: 16),
+            ErrorMessageContainer(message: 'Broadcast Error: $broadcastError'),
+          ],
+          if (broadcastResult != null && broadcastResult!.success) ...[
+            const SizedBox(height: 16),
+            BroadcastSuccessDisplay(
+              hasTxKey: txResult?.txKey != null,
+              onProvePayment: onProvePayment,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
