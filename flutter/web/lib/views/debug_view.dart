@@ -87,8 +87,7 @@ class _DebugViewState extends State<DebugView> {
   bool _txSortAscending = false;
   Set<String> _expandedTransactions = {}; // Track which transaction cards are expanded
 
-  /// Returns the current blockchain height for confirmation calculations.
-  /// Falls back to 0 if unknown, which safely shows 0 confirmations.
+  // Current blockchain height (defaults to 0)
   int get _currentHeight => _daemonHeight ?? _scanResult?.blockHeight.toInt() ?? 0;
 
   // Continuous scan state
@@ -1119,29 +1118,7 @@ class _DebugViewState extends State<DebugView> {
                     ExpansionPanel(
                       headerBuilder: (BuildContext context, bool isExpanded) {
                         final hasData = WalletPersistenceService.hasWalletData(_walletId);
-
-                        // Calculate total storage size
-                        int totalBytes = 0;
-                        for (var i = 0; i < html.window.localStorage.length; i++) {
-                          final key = html.window.localStorage.keys.elementAt(i);
-                          if (key.startsWith('monero_wallet_')) {
-                            final value = html.window.localStorage[key];
-                            if (value != null) {
-                              totalBytes += value.length;
-                            }
-                          }
-                        }
-
-                        // Format storage size
-                        String formatBytes(int bytes) {
-                          if (bytes >= 1048576) { // 1 MiB = 1024 * 1024
-                            return '${(bytes / 1048576).toStringAsFixed(2)} MiB';
-                          } else if (bytes >= 1024) { // 1 KiB
-                            return '${(bytes / 1024).toStringAsFixed(2)} KiB';
-                          } else {
-                            return '$bytes bytes';
-                          }
-                        }
+                        final totalBytes = _calculateTotalStorageBytes();
 
                         return GestureDetector(
                           onTap: () {
@@ -1156,7 +1133,7 @@ class _DebugViewState extends State<DebugView> {
                             ),
                             subtitle: Text(
                               hasData
-                                ? 'Data stored: ${formatBytes(totalBytes)}'
+                                ? 'Data stored: ${_formatBytes(totalBytes)}'
                                 : 'No stored data',
                               style: const TextStyle(fontSize: 12),
                             ),
@@ -1721,13 +1698,38 @@ class _DebugViewState extends State<DebugView> {
     );
   }
 
-  /// Updates transaction list from a block scan response.
-  /// Groups outputs by txHash and tracks spent key images.
+  // Helper methods for storage size calculation
+  int _calculateTotalStorageBytes() {
+    int totalBytes = 0;
+    for (var i = 0; i < html.window.localStorage.length; i++) {
+      final key = html.window.localStorage.keys.elementAt(i);
+      if (key.startsWith('monero_wallet_')) {
+        final value = html.window.localStorage[key];
+        if (value != null) {
+          totalBytes += value.length;
+        }
+      }
+    }
+    return totalBytes;
+  }
+
+  String _formatBytes(int bytes) {
+    if (bytes >= 1048576) {
+      // 1 MiB = 1024 * 1024
+      return '${(bytes / 1048576).toStringAsFixed(2)} MiB';
+    } else if (bytes >= 1024) {
+      // 1 KiB
+      return '${(bytes / 1024).toStringAsFixed(2)} KiB';
+    } else {
+      return '$bytes bytes';
+    }
+  }
+
+  // Update transactions from scan results
   void _updateTransactionsFromScan(BlockScanResponse scan) {
     _allTransactions = TransactionUtils.updateTransactionsFromScan(_allTransactions, scan, _allOutputs);
   }
 
-  /// Returns sorted list of transactions based on current sort settings.
   List<WalletTransaction> _sortedTransactions() {
     return TransactionUtils.sortTransactions(
       _allTransactions,
@@ -1931,7 +1933,6 @@ class _DebugViewState extends State<DebugView> {
     }
   }
 
-  /// Scan localStorage for all available wallet IDs
   void _refreshAvailableWallets() {
     final walletIds = WalletPersistenceService.listAvailableWallets();
 
@@ -1944,7 +1945,6 @@ class _DebugViewState extends State<DebugView> {
     });
   }
 
-  /// Start a new wallet by clearing the current state
   void _startNewWallet() {
     debugPrint('[WALLET] Starting new wallet (clearing state)');
 
@@ -2251,7 +2251,6 @@ class _DebugViewState extends State<DebugView> {
     }
   }
 
-  /// Export wallet data as an encrypted file
   Future<void> _exportWallet() async {
     // Validation
     if (_walletId.isEmpty) {
@@ -2331,7 +2330,6 @@ class _DebugViewState extends State<DebugView> {
     }
   }
 
-  /// Import wallet data from an encrypted file
   Future<void> _importWallet() async {
     setState(() {
       _isImporting = true;
