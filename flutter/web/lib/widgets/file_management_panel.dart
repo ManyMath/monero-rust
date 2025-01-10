@@ -59,7 +59,6 @@ class FileManagementPanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Wallet Switcher - only show if there are wallets
           if (availableWalletIds.isNotEmpty) ...[
             WalletSwitcher(
               availableWalletIds: availableWalletIds,
@@ -73,7 +72,6 @@ class FileManagementPanel extends StatelessWidget {
             const SizedBox(height: 12),
           ],
 
-          // Loaded Wallets - show scan control if multiple wallets are loaded
           if (activeWallets.length > 1) ...[
             LoadedWalletsDisplay(
               activeWallets: activeWallets,
