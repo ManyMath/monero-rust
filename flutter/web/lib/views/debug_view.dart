@@ -25,6 +25,7 @@ import '../widgets/outputs_panel.dart';
 import '../widgets/seed_phrase_panel.dart';
 import '../widgets/file_management_panel.dart';
 import '../widgets/create_transaction_panel.dart';
+import '../widgets/overwrite_wallet_dialog.dart';
 
 class DebugView extends StatefulWidget {
   const DebugView({super.key});
@@ -2146,43 +2147,7 @@ class _DebugViewState extends State<DebugView> {
           if (!mounted) return;
 
           // Show overwrite confirmation dialog
-          final result = await showDialog<String>(
-            context: context,
-            barrierDismissible: false,
-            builder: (context) => AlertDialog(
-              title: const Text('Wallet Already Exists'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('A wallet with ID "$walletId" already exists.'),
-                  const SizedBox(height: 12),
-                  const Text(
-                    'What would you like to do?',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop('cancel'),
-                  child: const Text('Cancel Import'),
-                ),
-                OutlinedButton(
-                  onPressed: () => Navigator.of(context).pop('choose_different'),
-                  child: const Text('Choose Different ID'),
-                ),
-                ElevatedButton(
-                  onPressed: () => Navigator.of(context).pop('overwrite'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.orange,
-                    foregroundColor: Colors.white,
-                  ),
-                  child: const Text('Overwrite Existing'),
-                ),
-              ],
-            ),
-          );
+          final result = await OverwriteWalletDialog.show(context, walletId);
 
           if (result == 'cancel') {
             setState(() {
