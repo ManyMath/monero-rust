@@ -8,6 +8,7 @@ import '../services/extension_service.dart';
 import '../widgets/password_dialog.dart';
 import '../widgets/wallet_id_dialog.dart';
 import '../widgets/save_wallet_dialog.dart';
+import '../widgets/delete_confirmation_dialog.dart';
 import '../services/wallet_persistence_service.dart';
 import '../models/wallet_instance.dart';
 import '../models/wallet_transaction.dart';
@@ -2172,43 +2173,22 @@ class _DebugViewState extends State<DebugView> {
     }
   }
 
-  void _clearStoredData() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Clear Stored Data'),
-        content: Text(
-          'Are you sure you want to clear stored data for wallet "$_walletId"? This cannot be undone.',
+  Future<void> _clearStoredData() async {
+    final confirmed = await DeleteConfirmationDialog.show(context, _walletId);
+    if (confirmed != true) return;
+
+    final deletedWalletId = _walletId;
+    WalletPersistenceService.clearWalletData(deletedWalletId);
+    _refreshAvailableWallets();
+    _startNewWallet();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Deleted wallet: $deletedWalletId'),
+          duration: const Duration(seconds: 2),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              final deletedWalletId = _walletId;
-              WalletPersistenceService.clearWalletData(deletedWalletId);
-              Navigator.of(context).pop();
-              // Refresh wallet list and clear state
-              _refreshAvailableWallets();
-              _startNewWallet();
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('Deleted wallet: $deletedWalletId'),
-                  duration: const Duration(seconds: 2),
-                ),
-              );
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
-              foregroundColor: Colors.white,
-            ),
-            child: const Text('Clear'),
-          ),
-        ],
-      ),
-    );
+      );
+    }
   }
 }
 
