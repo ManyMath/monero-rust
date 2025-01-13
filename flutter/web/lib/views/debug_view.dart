@@ -25,6 +25,7 @@ import '../widgets/transactions_panel.dart';
 import '../widgets/outputs_panel.dart';
 import '../widgets/seed_phrase_panel.dart';
 import '../widgets/file_management_panel.dart';
+import '../widgets/close_wallet_dialog.dart';
 import '../widgets/create_transaction_panel.dart';
 import '../widgets/overwrite_wallet_dialog.dart';
 import '../widgets/security_warning_dialog.dart';
@@ -1762,27 +1763,7 @@ class _DebugViewState extends State<DebugView> {
     final wallet = _openWallets[walletId];
     if (wallet == null) return;
 
-    final shouldSave = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Close Wallet'),
-        content: Text('Save changes to "$walletId" before closing?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Close Without Saving'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(null),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Save & Close'),
-          ),
-        ],
-      ),
-    );
+    final shouldSave = await CloseWalletDialog.show(context, walletId);
 
     if (shouldSave == null) return;
 

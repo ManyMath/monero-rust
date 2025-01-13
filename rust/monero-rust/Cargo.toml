@@ -11,7 +11,7 @@ mock-rpc = []
 [dependencies]
 serde = { version = "1.0.214", features = ["derive"] }
 serde_json = "1.0"
-wasm-bindgen = "0.2.95"
+wasm-bindgen = "0.2.100"
 getrandom = { version = "0.2", features = ["js"] }
 thiserror = "1.0"
 async-trait = "0.1"
