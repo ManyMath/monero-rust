@@ -13,6 +13,7 @@ import '../services/wallet_persistence_service.dart';
 import '../models/wallet_instance.dart';
 import '../models/wallet_transaction.dart';
 import '../utils/clipboard_utils.dart';
+import '../utils/balance_utils.dart';
 import '../utils/output_utils.dart';
 import '../utils/transaction_utils.dart';
 import '../services/wallet_scan_service.dart';
@@ -1327,44 +1328,7 @@ class _DebugViewState extends State<DebugView> {
                     // Coins Panel
                     ExpansionPanel(
                       headerBuilder: (BuildContext context, bool isExpanded) {
-                        // Calculate balance from unspent outputs
-                        double totalBalance = 0;
-                        double unlockedBalance = 0;
-                        double selectedBalance = 0;
-                        int spendableCount = 0;
-                        int lockedCount = 0;
-                        int selectedCount = 0;
-                        for (var output in _allOutputs) {
-                          if (!output.spent) {
-                            final amount = double.tryParse(output.amountXmr) ?? 0;
-                            totalBalance += amount;
-                            final outputHeight = output.blockHeight.toInt();
-                            final confirmations = outputHeight > 0 ? _currentHeight - outputHeight : 0;
-                            if (confirmations >= 10) {
-                              unlockedBalance += amount;
-                              spendableCount++;
-                              final outputKey = '${output.txHash}:${output.outputIndex}';
-                              if (_selectedOutputs.contains(outputKey)) {
-                                selectedBalance += amount;
-                                selectedCount++;
-                              }
-                            } else {
-                              lockedCount++;
-                            }
-                          }
-                        }
-                        final hasLockedBalance = unlockedBalance < totalBalance;
-                        final balanceStr = hasLockedBalance
-                            ? '${totalBalance.toStringAsFixed(12)} XMR (Unlocked: ${unlockedBalance.toStringAsFixed(12)})'
-                            : '${totalBalance.toStringAsFixed(12)} XMR';
-                        final outputCountStr = spendableCount > 0
-                            ? '$spendableCount spendable output${spendableCount == 1 ? '' : 's'}'
-                            : lockedCount > 0
-                                ? '$lockedCount locked output${lockedCount == 1 ? '' : 's'}'
-                                : 'No outputs';
-                        final selectedStr = selectedCount > 0
-                            ? ' | Selected: ${selectedBalance.toStringAsFixed(12)} XMR ($selectedCount)'
-                            : '';
+                        final balance = BalanceUtils.calculate(_allOutputs, _currentHeight, _selectedOutputs);
 
                         return GestureDetector(
                           onTap: () {
@@ -1378,7 +1342,7 @@ class _DebugViewState extends State<DebugView> {
                               style: TextStyle(fontWeight: FontWeight.bold),
                             ),
                             subtitle: Text(
-                              '$balanceStr - $outputCountStr$selectedStr',
+                              '${balance.balanceStr} - ${balance.outputCountStr}${balance.selectedStr}',
                               style: const TextStyle(fontSize: 12),
                             ),
                           ),
