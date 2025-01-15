@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../src/bindings/bindings.dart';
+import '../utils/output_utils.dart';
 import 'recipient_form.dart';
 import 'transaction_success_display.dart';
 import 'broadcast_success_display.dart';
@@ -39,15 +40,6 @@ class CreateTransactionPanel extends StatelessWidget {
     required this.onAmountChanged,
   });
 
-  double _getRecipientsTotal() {
-    double total = 0.0;
-    for (var controller in amountControllers) {
-      final value = double.tryParse(controller.text) ?? 0.0;
-      total += value;
-    }
-    return total;
-  }
-
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -63,7 +55,7 @@ class CreateTransactionPanel extends StatelessWidget {
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
               Text(
-                'Total: ${_getRecipientsTotal().toStringAsFixed(12)} XMR',
+                'Total: ${OutputUtils.getRecipientsTotal(amountControllers).toStringAsFixed(12)} XMR',
                 style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue),
               ),
             ],

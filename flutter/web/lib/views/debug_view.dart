@@ -211,7 +211,7 @@ class _DebugViewState extends State<DebugView> {
           }
 
           // Track transactions: group outputs by txHash and track spent key images
-          _updateTransactionsFromScan(signal.message);
+          _allTransactions = TransactionUtils.updateTransactionsFromScan(_allTransactions, signal.message);
         } else {
           _scanResult = null;
           _scanError = signal.message.error ?? 'Unknown error during scan';
@@ -786,26 +786,6 @@ class _DebugViewState extends State<DebugView> {
     );
   }
 
-  int? _parseBlockHeightForContinuous() {
-    final startHeightStr = _blockHeightController.text.trim();
-    if (startHeightStr.isEmpty) {
-      setState(() {
-        _scanError = 'Please enter a block height';
-      });
-      return null;
-    }
-
-    final startHeight = int.tryParse(startHeightStr);
-    if (startHeight == null || startHeight < 0) {
-      setState(() {
-        _scanError = 'Invalid block height';
-      });
-      return null;
-    }
-
-    return startHeight;
-  }
-
   String _continuousScanButtonLabel() {
     if (_isContinuousScanning) {
       return 'Pause Scan';
@@ -890,10 +870,6 @@ class _DebugViewState extends State<DebugView> {
       _destinationControllers.removeAt(index);
       _amountControllers.removeAt(index);
     });
-  }
-
-  double _getRecipientsTotal() {
-    return OutputUtils.getRecipientsTotal(_amountControllers);
   }
 
   void _broadcastTransaction() {
@@ -1305,11 +1281,6 @@ class _DebugViewState extends State<DebugView> {
     }
   }
 
-  // Update transactions from scan results
-  void _updateTransactionsFromScan(BlockScanResponse scan) {
-    _allTransactions = TransactionUtils.updateTransactionsFromScan(_allTransactions, scan, _allOutputs);
-  }
-
   List<WalletTransaction> _sortedTransactions() {
     return TransactionUtils.sortTransactions(
       _allTransactions,
@@ -1317,16 +1288,6 @@ class _DebugViewState extends State<DebugView> {
       _txSortBy,
       _txSortAscending,
       _currentHeight,
-    );
-  }
-
-  List<OwnedOutput> _sortedOutputs() {
-    return TransactionUtils.sortOutputs(
-      _allOutputs,
-      _sortBy,
-      _sortAscending,
-      _currentHeight,
-      _showSpentOutputs,
     );
   }
 
