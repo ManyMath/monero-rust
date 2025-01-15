@@ -20,6 +20,7 @@ import '../services/wallet_scan_service.dart';
 import '../services/transaction_service.dart';
 import '../services/wallet_polling_service.dart';
 import '../widgets/common_widgets.dart';
+import '../widgets/payment_proof_dialog.dart';
 import '../widgets/keys_display_panel.dart';
 import '../widgets/scanning_panel.dart';
 import '../widgets/transactions_panel.dart';
@@ -923,161 +924,6 @@ class _DebugViewState extends State<DebugView> {
     );
   }
 
-  void _showProvePaymentDialog() {
-    if (_txResult == null) return;
-
-    final txId = _txResult!.txId;
-    final txKey = _txResult!.txKey ?? 'Not available';
-
-    final recipients = <String>[];
-    for (int i = 0; i < _destinationControllers.length; i++) {
-      final addr = _destinationControllers[i].text.trim();
-      if (addr.isNotEmpty) recipients.add(addr);
-    }
-
-    // Show loading dialog first
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => const AlertDialog(
-        content: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(width: 16),
-            Text('Generating OutProof...'),
-          ],
-        ),
-      ),
-    );
-
-    // Generate OutProof for the first recipient
-    final recipientAddr = recipients.isNotEmpty ? recipients.first : '';
-    if (recipientAddr.isEmpty || txKey == 'Not available') {
-      Navigator.of(context).pop();
-      _showSimpleProofDialog(txId, txKey, recipients);
-      return;
-    }
-
-    // Subscribe to proof response
-    StreamSubscription? sub;
-    sub = OutProofGeneratedResponse.rustSignalStream.listen((signal) {
-      sub?.cancel();
-      Navigator.of(context).pop();
-
-      final response = signal.message;
-      if (response.success && response.formatted != null) {
-        _showOutProofDialog(response.formatted!, txId, txKey, recipients);
-      } else {
-        _showSimpleProofDialog(txId, txKey, recipients);
-      }
-    });
-
-    GenerateOutProofRequest(
-      txId: txId,
-      txKey: txKey,
-      recipientAddress: recipientAddr,
-      message: '',
-      network: _network,
-    ).sendSignalToRust();
-  }
-
-  void _showOutProofDialog(String formattedProof, String txId, String txKey, List<String> recipients) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('OutProof'),
-        content: SizedBox(
-          width: 520,
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade100,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.grey.shade300),
-                  ),
-                  child: SelectableText(
-                    formattedProof,
-                    style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
-                  ),
-                ),
-                if (recipients.length > 1) ...[
-                  const SizedBox(height: 12),
-                  Text(
-                    'Note: Proof generated for first recipient only.',
-                    style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: formattedProof));
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('OutProof copied')));
-            },
-            child: const Text('Copy'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showSimpleProofDialog(String txId, String txKey, List<String> recipients) {
-    final allText = [
-      'Tx ID: $txId',
-      'Tx Key: $txKey',
-      ...recipients.map((addr) => 'Address: $addr'),
-    ].join('\n');
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Tx Key'),
-        content: SizedBox(
-          width: 480,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              CommonWidgets.buildProofRow(label: 'Tx ID', value: txId, context: context),
-              const SizedBox(height: 8),
-              CommonWidgets.buildProofRow(label: 'Tx Key', value: txKey, context: context),
-              if (recipients.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                ...recipients.map((addr) => CommonWidgets.buildProofRow(label: 'Address', value: addr, context: context)),
-              ],
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: allText));
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied')));
-            },
-            child: const Text('Copy All'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
-    );
-  }
-
   Future<void> _copyToClipboard(String text, String label) async {
     await ClipboardUtils.copyToClipboard(context, text, label);
   }
@@ -1413,7 +1259,12 @@ class _DebugViewState extends State<DebugView> {
                         onRemoveRecipient: _removeRecipient,
                         onCreateTransaction: _createTransaction,
                         onBroadcastTransaction: _broadcastTransaction,
-                        onProvePayment: _showProvePaymentDialog,
+                        onProvePayment: () => PaymentProofDialog.show(
+                          context,
+                          txResult: _txResult,
+                          destinationControllers: _destinationControllers,
+                          network: _network,
+                        ),
                         onAmountChanged: () => setState(() {}),
                       ),
                       isExpanded: _expandedPanel == 6,
