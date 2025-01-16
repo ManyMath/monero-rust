@@ -40,6 +40,11 @@ class OutputUtils {
     return total;
   }
 
+  /// Create a copy of the output with spent set to true
+  static OwnedOutput markAsSpent(OwnedOutput output) {
+    return output.copyWith(spent: true);
+  }
+
   /// Calculate total XMR from recipient amount controllers
   static double getRecipientsTotal(List<TextEditingController> amountControllers) {
     double total = 0;

@@ -211,7 +211,7 @@ class _DebugViewState extends State<DebugView> {
           }
 
           // Track transactions: group outputs by txHash and track spent key images
-          _allTransactions = TransactionUtils.updateTransactionsFromScan(_allTransactions, signal.message);
+          _allTransactions = TransactionUtils.updateTransactionsFromScan(_allTransactions, signal.message, _allOutputs);
         } else {
           _scanResult = null;
           _scanError = signal.message.error ?? 'Unknown error during scan';
@@ -285,21 +285,7 @@ class _DebugViewState extends State<DebugView> {
                 final output = _allOutputs[i];
                 final key = '${output.txHash}:${output.outputIndex}';
                 if (key == outputKey) {
-                  _allOutputs[i] = OwnedOutput(
-                    txHash: output.txHash,
-                    outputIndex: output.outputIndex,
-                    amount: output.amount,
-                    amountXmr: output.amountXmr,
-                    key: output.key,
-                    keyOffset: output.keyOffset,
-                    commitmentMask: output.commitmentMask,
-                    subaddressIndex: output.subaddressIndex,
-                    paymentId: output.paymentId,
-                    receivedOutputBytes: output.receivedOutputBytes,
-                    blockHeight: output.blockHeight,
-                    spent: true,
-                    keyImage: output.keyImage,
-                  );
+                  _allOutputs[i] = OutputUtils.markAsSpent(output);
                   break;
                 }
               }
@@ -352,21 +338,7 @@ class _DebugViewState extends State<DebugView> {
               // Remove from selected outputs since it's now spent
               final outputKey = '${output.txHash}:${output.outputIndex}';
               _selectedOutputs.remove(outputKey);
-              _allOutputs[index] = OwnedOutput(
-                txHash: output.txHash,
-                outputIndex: output.outputIndex,
-                amount: output.amount,
-                amountXmr: output.amountXmr,
-                key: output.key,
-                keyOffset: output.keyOffset,
-                commitmentMask: output.commitmentMask,
-                subaddressIndex: output.subaddressIndex,
-                paymentId: output.paymentId,
-                receivedOutputBytes: output.receivedOutputBytes,
-                blockHeight: output.blockHeight,
-                spent: true,
-                keyImage: output.keyImage,
-              );
+              _allOutputs[index] = OutputUtils.markAsSpent(output);
             }
           }
         }
@@ -408,21 +380,7 @@ class _DebugViewState extends State<DebugView> {
               if (output.keyImage == keyImage && !output.spent) {
                 final outputKey = '${output.txHash}:${output.outputIndex}';
                 _selectedOutputs.remove(outputKey);
-                _allOutputs[i] = OwnedOutput(
-                  txHash: output.txHash,
-                  outputIndex: output.outputIndex,
-                  amount: output.amount,
-                  amountXmr: output.amountXmr,
-                  key: output.key,
-                  keyOffset: output.keyOffset,
-                  commitmentMask: output.commitmentMask,
-                  subaddressIndex: output.subaddressIndex,
-                  paymentId: output.paymentId,
-                  receivedOutputBytes: output.receivedOutputBytes,
-                  blockHeight: output.blockHeight,
-                  spent: true,
-                  keyImage: output.keyImage,
-                );
+                _allOutputs[i] = OutputUtils.markAsSpent(output);
               }
             }
           }
@@ -479,21 +437,7 @@ class _DebugViewState extends State<DebugView> {
         for (var walletInstance in _openWallets.values) {
           for (int i = 0; i < walletInstance.outputs.length; i++) {
             if (response.spentKeyImages.contains(walletInstance.outputs[i].keyImage)) {
-              walletInstance.outputs[i] = OwnedOutput(
-                txHash: walletInstance.outputs[i].txHash,
-                outputIndex: walletInstance.outputs[i].outputIndex,
-                amount: walletInstance.outputs[i].amount,
-                amountXmr: walletInstance.outputs[i].amountXmr,
-                key: walletInstance.outputs[i].key,
-                keyOffset: walletInstance.outputs[i].keyOffset,
-                commitmentMask: walletInstance.outputs[i].commitmentMask,
-                subaddressIndex: walletInstance.outputs[i].subaddressIndex,
-                paymentId: walletInstance.outputs[i].paymentId,
-                receivedOutputBytes: walletInstance.outputs[i].receivedOutputBytes,
-                blockHeight: walletInstance.outputs[i].blockHeight,
-                spent: true,
-                keyImage: walletInstance.outputs[i].keyImage,
-              );
+              walletInstance.outputs[i] = OutputUtils.markAsSpent(walletInstance.outputs[i]);
             }
           }
         }
