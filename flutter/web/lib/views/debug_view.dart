@@ -854,9 +854,56 @@ class _DebugViewState extends State<DebugView> {
         : _extensionService.openSidePanel();
   }
 
+  ExpansionPanel _buildPanel({
+    required int index,
+    required String title,
+    String? subtitle,
+    required Widget body,
+  }) {
+    return ExpansionPanel(
+      headerBuilder: (BuildContext context, bool isExpanded) {
+        return GestureDetector(
+          onTap: () {
+            setState(() {
+              _expandedPanel = (_expandedPanel == index) ? null : index;
+            });
+          },
+          child: ListTile(
+            title: Text(
+              title,
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            subtitle: subtitle != null
+                ? Text(subtitle, style: const TextStyle(fontSize: 12))
+                : null,
+          ),
+        );
+      },
+      body: body,
+      isExpanded: _expandedPanel == index,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isSidePanel = _extensionService.isSidePanel;
+
+    // Pre-compute dynamic subtitles
+    final hasData = WalletPersistenceService.hasWalletData(_walletId);
+    final totalBytes = _calculateTotalStorageBytes();
+    final fileManagementSubtitle = hasData
+        ? 'Data stored: ${_formatBytes(totalBytes)}'
+        : 'No stored data';
+
+    final txCount = _allTransactions.length;
+    final incomingCount = _allTransactions.where((t) => t.isIncoming(_allOutputs)).length;
+    final outgoingCount = txCount - incomingCount;
+    final transactionsSubtitle = txCount == 0
+        ? 'No transactions'
+        : '$txCount transaction${txCount == 1 ? '' : 's'} ($incomingCount in, $outgoingCount out)';
+
+    final balance = BalanceUtils.calculate(_allOutputs, _currentHeight, _selectedOutputs);
+    final coinsSubtitle = '${balance.balanceStr} - ${balance.outputCountStr}${balance.selectedStr}';
 
     return Scaffold(
       appBar: AppBar(
@@ -886,31 +933,10 @@ class _DebugViewState extends State<DebugView> {
                   elevation: 1,
                   expandedHeaderPadding: EdgeInsets.zero,
                   children: [
-                    ExpansionPanel(
-                      headerBuilder: (BuildContext context, bool isExpanded) {
-                        final hasData = WalletPersistenceService.hasWalletData(_walletId);
-                        final totalBytes = _calculateTotalStorageBytes();
-
-                        return GestureDetector(
-                          onTap: () {
-                            setState(() {
-                              _expandedPanel = (_expandedPanel == 1) ? null : 1;
-                            });
-                          },
-                          child: ListTile(
-                            title: const Text(
-                              'File Management',
-                              style: TextStyle(fontWeight: FontWeight.bold),
-                            ),
-                            subtitle: Text(
-                              hasData
-                                ? 'Data stored: ${_formatBytes(totalBytes)}'
-                                : 'No stored data',
-                              style: const TextStyle(fontSize: 12),
-                            ),
-                          ),
-                        );
-                      },
+                    _buildPanel(
+                      index: 1,
+                      title: 'File Management',
+                      subtitle: fileManagementSubtitle,
                       body: FileManagementPanel(
                         walletId: _walletId,
                         availableWalletIds: _availableWalletIds,
@@ -934,24 +960,10 @@ class _DebugViewState extends State<DebugView> {
                         onImport: _importWallet,
                         onCloseWallet: _closeWallet,
                       ),
-                      isExpanded: _expandedPanel == 1,
                     ),
-                    ExpansionPanel(
-                      headerBuilder: (BuildContext context, bool isExpanded) {
-                        return GestureDetector(
-                          onTap: () {
-                            setState(() {
-                              _expandedPanel = (_expandedPanel == 0) ? null : 0;
-                            });
-                          },
-                          child: const ListTile(
-                            title: Text(
-                              'Seed Phrase',
-                              style: TextStyle(fontWeight: FontWeight.bold),
-                            ),
-                          ),
-                        );
-                      },
+                    _buildPanel(
+                      index: 0,
+                      title: 'Seed Phrase',
                       body: SeedPhrasePanel(
                         controller: _controller,
                         seedType: _seedType,
@@ -966,24 +978,10 @@ class _DebugViewState extends State<DebugView> {
                           _deriveAddress();
                         },
                       ),
-                      isExpanded: _expandedPanel == 0,
                     ),
-                    ExpansionPanel(
-                      headerBuilder: (BuildContext context, bool isExpanded) {
-                        return GestureDetector(
-                          onTap: () {
-                            setState(() {
-                              _expandedPanel = (_expandedPanel == 2) ? null : 2;
-                            });
-                          },
-                          child: const ListTile(
-                            title: Text(
-                              'Keys',
-                              style: TextStyle(fontWeight: FontWeight.bold),
-                            ),
-                          ),
-                        );
-                      },
+                    _buildPanel(
+                      index: 2,
+                      title: 'Keys',
                       body: KeysDisplayPanel(
                         address: _derivedAddress,
                         secretSpendKey: _secretSpendKey,
@@ -993,24 +991,10 @@ class _DebugViewState extends State<DebugView> {
                         network: _network,
                         onCopyToClipboard: _copyToClipboard,
                       ),
-                      isExpanded: _expandedPanel == 2,
                     ),
-                    ExpansionPanel(
-                      headerBuilder: (BuildContext context, bool isExpanded) {
-                        return GestureDetector(
-                          onTap: () {
-                            setState(() {
-                              _expandedPanel = (_expandedPanel == 3) ? null : 3;
-                            });
-                          },
-                          child: const ListTile(
-                            title: Text(
-                              'Scanning',
-                              style: TextStyle(fontWeight: FontWeight.bold),
-                            ),
-                          ),
-                        );
-                      },
+                    _buildPanel(
+                      index: 3,
+                      title: 'Scanning',
                       body: ScanningPanel(
                         nodeUrlController: _nodeUrlController,
                         blockHeightController: _blockHeightController,
@@ -1032,36 +1016,11 @@ class _DebugViewState extends State<DebugView> {
                         getContinuousScanButtonLabel: _continuousScanButtonLabel,
                         getContinuousScanButtonColor: _continuousScanButtonColor,
                       ),
-                      isExpanded: _expandedPanel == 3,
                     ),
-                    // Transactions Panel
-                    ExpansionPanel(
-                      headerBuilder: (BuildContext context, bool isExpanded) {
-                        final txCount = _allTransactions.length;
-                        final incomingCount = _allTransactions.where((t) => t.isIncoming(_allOutputs)).length;
-                        final outgoingCount = txCount - incomingCount;
-                        final subtitle = txCount == 0
-                            ? 'No transactions'
-                            : '$txCount transaction${txCount == 1 ? '' : 's'} ($incomingCount in, $outgoingCount out)';
-
-                        return GestureDetector(
-                          onTap: () {
-                            setState(() {
-                              _expandedPanel = (_expandedPanel == 4) ? null : 4;
-                            });
-                          },
-                          child: ListTile(
-                            title: const Text(
-                              'Transactions',
-                              style: TextStyle(fontWeight: FontWeight.bold),
-                            ),
-                            subtitle: Text(
-                              subtitle,
-                              style: const TextStyle(fontSize: 12),
-                            ),
-                          ),
-                        );
-                      },
+                    _buildPanel(
+                      index: 4,
+                      title: 'Transactions',
+                      subtitle: transactionsSubtitle,
                       body: TransactionsPanel(
                         allTransactions: _sortedTransactions(),
                         allOutputs: _allOutputs,
@@ -1089,31 +1048,11 @@ class _DebugViewState extends State<DebugView> {
                           });
                         },
                       ),
-                      isExpanded: _expandedPanel == 4,
                     ),
-                    // Coins Panel
-                    ExpansionPanel(
-                      headerBuilder: (BuildContext context, bool isExpanded) {
-                        final balance = BalanceUtils.calculate(_allOutputs, _currentHeight, _selectedOutputs);
-
-                        return GestureDetector(
-                          onTap: () {
-                            setState(() {
-                              _expandedPanel = (_expandedPanel == 5) ? null : 5;
-                            });
-                          },
-                          child: ListTile(
-                            title: const Text(
-                              'Coins',
-                              style: TextStyle(fontWeight: FontWeight.bold),
-                            ),
-                            subtitle: Text(
-                              '${balance.balanceStr} - ${balance.outputCountStr}${balance.selectedStr}',
-                              style: const TextStyle(fontSize: 12),
-                            ),
-                          ),
-                        );
-                      },
+                    _buildPanel(
+                      index: 5,
+                      title: 'Coins',
+                      subtitle: coinsSubtitle,
                       body: OutputsPanel(
                         allOutputs: _allOutputs,
                         currentHeight: _currentHeight,
@@ -1141,31 +1080,17 @@ class _DebugViewState extends State<DebugView> {
                         onOutputSelectionChanged: (outputKey, selected) {
                           setState(() {
                             if (selected) {
-                              _selectedOutputs.add(outputKey);  
+                              _selectedOutputs.add(outputKey);
                             } else {
                               _selectedOutputs.remove(outputKey);
                             }
                           });
                         },
                       ),
-                      isExpanded: _expandedPanel == 5,
                     ),
-                    ExpansionPanel(
-                      headerBuilder: (BuildContext context, bool isExpanded) {
-                        return GestureDetector(
-                          onTap: () {
-                            setState(() {
-                              _expandedPanel = (_expandedPanel == 6) ? null : 6;
-                            });
-                          },
-                          child: const ListTile(
-                            title: Text(
-                              'Create Transaction',
-                              style: TextStyle(fontWeight: FontWeight.bold),
-                            ),
-                          ),
-                        );
-                      },
+                    _buildPanel(
+                      index: 6,
+                      title: 'Create Transaction',
                       body: CreateTransactionPanel(
                         destinationControllers: _destinationControllers,
                         amountControllers: _amountControllers,
@@ -1187,7 +1112,6 @@ class _DebugViewState extends State<DebugView> {
                         ),
                         onAmountChanged: () => setState(() {}),
                       ),
-                      isExpanded: _expandedPanel == 6,
                     ),
                   ],
                 ),
