@@ -854,6 +854,39 @@ class _DebugViewState extends State<DebugView> {
         : _extensionService.openSidePanel();
   }
 
+  void _showSnackBar(String message, {Color? backgroundColor, int seconds = 2}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: backgroundColor,
+        duration: Duration(seconds: seconds),
+      ),
+    );
+  }
+
+  void _resetWalletState() {
+    _controller.text = '';
+    _derivedAddress = null;
+    _secretSpendKey = null;
+    _secretViewKey = null;
+    _publicSpendKey = null;
+    _publicViewKey = null;
+    _allOutputs = [];
+    _allTransactions = [];
+    _expandedTransactions = {};
+    _selectedOutputs = {};
+    _continuousScanCurrentHeight = 0;
+    _continuousScanTargetHeight = 0;
+    _isSynced = false;
+    _daemonHeight = null;
+    _scanResult = null;
+    _scanError = null;
+    _lastSaveTime = null;
+    _loadError = null;
+    _saveError = null;
+  }
+
   ExpansionPanel _buildPanel({
     required int index,
     required String title,
@@ -1244,21 +1277,10 @@ class _DebugViewState extends State<DebugView> {
       _refreshAvailableWallets();
     }
 
-    if (success && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Wallet "$walletId" saved successfully'),
-          duration: const Duration(seconds: 2),
-        ),
-      );
-    } else if (!success && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Save failed: $_saveError'),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 3),
-        ),
-      );
+    if (success) {
+      _showSnackBar('Wallet "$walletId" saved successfully');
+    } else {
+      _showSnackBar('Save failed: $_saveError', backgroundColor: Colors.red, seconds: 3);
     }
   }
 
@@ -1282,41 +1304,16 @@ class _DebugViewState extends State<DebugView> {
 
     setState(() {
       _walletId = '';
-      _controller.text = '';
-      _derivedAddress = null;
-      _secretSpendKey = null;
-      _secretViewKey = null;
-      _publicSpendKey = null;
-      _publicViewKey = null;
-      _allOutputs = [];
-      _allTransactions = [];
-      _expandedTransactions = {};
-      _selectedOutputs = {};
+      _resetWalletState();
       _isContinuousScanning = false;
       _isContinuousPaused = false;
-      _continuousScanCurrentHeight = 0;
-      _continuousScanTargetHeight = 0;
-      _isSynced = false;
-      _daemonHeight = null;
-      _scanResult = null;
-      _scanError = null;
       _txResult = null;
       _txError = null;
       _broadcastResult = null;
       _broadcastError = null;
-      _lastSaveTime = null;
-      _loadError = null;
-      _saveError = null;
     });
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Ready for new wallet - generate or enter a seed phrase'),
-          duration: Duration(seconds: 2),
-        ),
-      );
-    }
+    _showSnackBar('Ready for new wallet - generate or enter a seed phrase');
   }
 
   Future<void> _switchWallet(String newWalletId) async {
@@ -1343,25 +1340,7 @@ class _DebugViewState extends State<DebugView> {
       await _loadWalletData();
     } else {
       setState(() {
-        _controller.text = '';
-        _derivedAddress = null;
-        _secretSpendKey = null;
-        _secretViewKey = null;
-        _publicSpendKey = null;
-        _publicViewKey = null;
-        _allOutputs = [];
-        _allTransactions = [];
-        _expandedTransactions = {};
-        _selectedOutputs = {};
-        _continuousScanCurrentHeight = 0;
-        _continuousScanTargetHeight = 0;
-        _isSynced = false;
-        _daemonHeight = null;
-        _scanResult = null;
-        _scanError = null;
-        _lastSaveTime = null;
-        _loadError = null;
-        _saveError = null;
+        _resetWalletState();
       });
     }
   }
@@ -1550,14 +1529,7 @@ class _DebugViewState extends State<DebugView> {
     // Derive address to populate keys
     _deriveAddress();
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Wallet data loaded successfully'),
-          duration: Duration(seconds: 2),
-        ),
-      );
-    }
+    _showSnackBar('Wallet data loaded successfully');
   }
 
   Future<void> _exportWallet() async {
@@ -1566,14 +1538,7 @@ class _DebugViewState extends State<DebugView> {
       setState(() {
         _exportError = 'No wallet selected for export';
       });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Please select or save a wallet first'),
-            backgroundColor: Colors.orange,
-          ),
-        );
-      }
+      _showSnackBar('Please select or save a wallet first', backgroundColor: Colors.orange);
       return;
     }
 
@@ -1582,14 +1547,7 @@ class _DebugViewState extends State<DebugView> {
       setState(() {
         _exportError = 'No saved data found for this wallet';
       });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Please save wallet data before exporting'),
-            backgroundColor: Colors.orange,
-          ),
-        );
-      }
+      _showSnackBar('Please save wallet data before exporting', backgroundColor: Colors.orange);
       return;
     }
 
@@ -1617,25 +1575,13 @@ class _DebugViewState extends State<DebugView> {
       return;
     }
 
-    if (exportResult.success && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            exportResult.usedSaveAsDialog!
-                ? 'Wallet "$_walletId" saved'
-                : 'Wallet "$_walletId" exported as ${exportResult.filename}'
-          ),
-          duration: const Duration(seconds: 3),
-        ),
-      );
-    } else if (!exportResult.success && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Export failed: ${exportResult.error}'),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 4),
-        ),
-      );
+    if (exportResult.success) {
+      final msg = exportResult.usedSaveAsDialog!
+          ? 'Wallet "$_walletId" saved'
+          : 'Wallet "$_walletId" exported as ${exportResult.filename}';
+      _showSnackBar(msg, seconds: 3);
+    } else {
+      _showSnackBar('Export failed: ${exportResult.error}', backgroundColor: Colors.red, seconds: 4);
     }
   }
 
@@ -1757,28 +1703,12 @@ class _DebugViewState extends State<DebugView> {
         // Switch to imported wallet
         await _switchWallet(walletId);
 
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                shouldOverwrite
-                    ? 'Wallet "$walletId" overwritten successfully'
-                    : 'Wallet "$walletId" imported successfully'
-              ),
-              duration: const Duration(seconds: 3),
-            ),
-          );
-        }
+        final msg = shouldOverwrite
+            ? 'Wallet "$walletId" overwritten successfully'
+            : 'Wallet "$walletId" imported successfully';
+        _showSnackBar(msg, seconds: 3);
       } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Import failed: ${importResult.error}'),
-              backgroundColor: Colors.red,
-              duration: const Duration(seconds: 4),
-            ),
-          );
-        }
+        _showSnackBar('Import failed: ${importResult.error}', backgroundColor: Colors.red, seconds: 4);
       }
     } catch (e) {
       setState(() {
@@ -1786,15 +1716,7 @@ class _DebugViewState extends State<DebugView> {
         _importError = 'Import failed: $e';
       });
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Import failed: $e'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 4),
-          ),
-        );
-      }
+      _showSnackBar('Import failed: $e', backgroundColor: Colors.red, seconds: 4);
     }
   }
 
@@ -1806,14 +1728,7 @@ class _DebugViewState extends State<DebugView> {
     WalletPersistenceService.clearWalletData(deletedWalletId);
     _refreshAvailableWallets();
     _startNewWallet();
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Deleted wallet: $deletedWalletId'),
-          duration: const Duration(seconds: 2),
-        ),
-      );
-    }
+    _showSnackBar('Deleted wallet: $deletedWalletId');
   }
 }
 
