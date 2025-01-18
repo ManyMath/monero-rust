@@ -166,46 +166,6 @@ class CommonWidgets {
     );
   }
 
-  /// Builds a transaction sort button.
-  ///
-  /// Similar to buildSortButton but specifically for transaction sorting.
-  /// Displays a button that shows the current sort state (active/inactive)
-  /// and direction (ascending/descending) with arrow indicators.
-  ///
-  /// - [label]: The label text to display
-  /// - [sortKey]: The sort key identifier
-  /// - [currentSortKey]: The currently active sort key
-  /// - [isAscending]: Whether the current sort is ascending
-  /// - [onTap]: Callback when the button is tapped
-  static Widget buildTxSortButton({
-    required String label,
-    required String sortKey,
-    required String currentSortKey,
-    required bool isAscending,
-    required VoidCallback onTap,
-  }) {
-    final isActive = currentSortKey == sortKey;
-    final arrow = isActive ? (isAscending ? ' ↑' : ' ↓') : '';
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(4),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        decoration: BoxDecoration(
-          color: isActive ? Colors.blue.shade100 : Colors.grey.shade200,
-          borderRadius: BorderRadius.circular(4),
-        ),
-        child: Text(
-          '$label$arrow',
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
-          ),
-        ),
-      ),
-    );
-  }
-
   /// Builds a selection button for selecting/deselecting items.
   ///
   /// Used for actions like "Select All" or "Clear Selection".

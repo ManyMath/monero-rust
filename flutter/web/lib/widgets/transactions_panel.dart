@@ -54,7 +54,7 @@ class TransactionsPanel extends StatelessWidget {
             child: Row(
               children: [
                 const Text('Sort: ', style: TextStyle(fontSize: 12)),
-                CommonWidgets.buildTxSortButton(
+                CommonWidgets.buildSortButton(
                   label: 'Confirms',
                   sortKey: 'confirms',
                   currentSortKey: txSortBy,
@@ -62,7 +62,7 @@ class TransactionsPanel extends StatelessWidget {
                   onTap: () => onSortChanged('confirms'),
                 ),
                 const SizedBox(width: 4),
-                CommonWidgets.buildTxSortButton(
+                CommonWidgets.buildSortButton(
                   label: 'Amount',
                   sortKey: 'amount',
                   currentSortKey: txSortBy,
