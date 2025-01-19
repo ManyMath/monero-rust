@@ -128,6 +128,7 @@ class _DebugViewState extends State<DebugView> {
   String? _lastSaveTime;
   bool _isExporting = false;
   bool _isImporting = false;
+  bool _isRestoringWallet = false;
   String? _exportError;
   String? _importError;
 
@@ -551,6 +552,7 @@ class _DebugViewState extends State<DebugView> {
   }
 
   void _onSeedChanged() {
+    if (_isRestoringWallet) return;
     _debounceTimer?.cancel();
 
     if (_isContinuousScanning) {
@@ -1431,6 +1433,7 @@ class _DebugViewState extends State<DebugView> {
     final wallet = _openWallets[walletId];
     if (wallet == null || wallet.isClosed) return;
 
+    _isRestoringWallet = true;
     setState(() {
       _activeWalletId = walletId;
       _walletId = walletId;
@@ -1441,6 +1444,7 @@ class _DebugViewState extends State<DebugView> {
       _daemonHeight = wallet.daemonHeight;
       _continuousScanCurrentHeight = wallet.currentHeight;
     });
+    _isRestoringWallet = false;
 
     debugPrint('[MULTI-WALLET] Switched to wallet: $walletId');
   }
@@ -1484,7 +1488,8 @@ class _DebugViewState extends State<DebugView> {
       return;
     }
 
-    // Restore wallet state
+    // Restore wallet state (flag prevents _onSeedChanged from wiping data)
+    _isRestoringWallet = true;
     setState(() {
       _controller.text = loadResult.seed!;
       _network = loadResult.network!;
@@ -1511,6 +1516,7 @@ class _DebugViewState extends State<DebugView> {
       _isLoadingWallet = false;
       _loadError = null;
     });
+    _isRestoringWallet = false;
 
     // Open this wallet in multi-wallet mode
     final seed = loadResult.seed!;
@@ -1524,6 +1530,17 @@ class _DebugViewState extends State<DebugView> {
         _activeWallet!.currentHeight = _continuousScanCurrentHeight;
         _activeWallet!.daemonHeight = _daemonHeight ?? 0;
       }
+    }
+
+    // Hydrate Rust WalletActor with restored outputs so transactions work
+    if (_allOutputs.isNotEmpty) {
+      RestoreWalletDataRequest(
+        seed: seed,
+        network: network,
+        outputs: _allOutputs,
+        daemonHeight: Uint64(BigInt.from(_daemonHeight ?? 0)),
+        currentHeight: Uint64(BigInt.from(_continuousScanCurrentHeight)),
+      ).sendSignalToRust();
     }
 
     // Derive address to populate keys

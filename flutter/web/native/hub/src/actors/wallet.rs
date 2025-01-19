@@ -624,7 +624,7 @@ impl WalletActor {
                 key: o.key.clone(),
                 key_offset: o.key_offset.clone(),
                 commitment_mask: o.commitment_mask.clone(),
-                subaddress: o.subaddress_index.map(|t| (t.0, t.1)),
+                subaddress: o.subaddress_index,
                 payment_id: o.payment_id.clone(),
                 received_output_bytes: o.received_output_bytes.clone(),
                 block_height: o.block_height,
@@ -640,7 +640,27 @@ impl WalletActor {
             }).await;
         }
     }
+}
 
+#[derive(Debug, Clone)]
+struct RestoreOutputs {
+    seed: String,
+    network: String,
+    outputs: Vec<StoredOutput>,
+    daemon_height: u64,
+    current_height: u64,
+}
+
+#[async_trait]
+impl Notifiable<RestoreOutputs> for WalletActor {
+    async fn notify(&mut self, msg: RestoreOutputs, _ctx: &Context<Self>) {
+        self.state.seed = Some(msg.seed);
+        self.state.network = Some(msg.network);
+        self.state.daemon_height = msg.daemon_height;
+        self.state.current_height = msg.current_height;
+        self.state.outputs = msg.outputs;
+        self.recalculate_balances();
+    }
 }
 
 #[async_trait]
@@ -995,27 +1015,6 @@ impl Notifiable<ContinueScan> for WalletActor {
                 }
             }
         });
-    }
-}
-
-#[derive(Debug, Clone)]
-struct RestoreOutputs {
-    seed: String,
-    network: String,
-    outputs: Vec<StoredOutput>,
-    daemon_height: u64,
-    current_height: u64,
-}
-
-#[async_trait]
-impl Notifiable<RestoreOutputs> for WalletActor {
-    async fn notify(&mut self, msg: RestoreOutputs, _ctx: &Context<Self>) {
-        self.state.seed = Some(msg.seed);
-        self.state.network = Some(msg.network);
-        self.state.daemon_height = msg.daemon_height;
-        self.state.current_height = msg.current_height;
-        self.state.outputs = msg.outputs;
-        self.recalculate_balances();
     }
 }
 
