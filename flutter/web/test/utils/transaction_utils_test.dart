@@ -219,6 +219,57 @@ void main() {
       expect(existing, isEmpty);
       expect(result.length, 1);
     });
+
+    test('preserves existing non-zero blockHeight when merging outputs', () {
+      final out1 = TestHelpers.createMockOutput(
+        txHash: 'tx1', outputIndex: 0, amountXmr: '1.0', blockHeight: 500,
+      );
+      final out2 = TestHelpers.createMockOutput(
+        txHash: 'tx1', outputIndex: 1, amountXmr: '0.5', blockHeight: 500,
+      );
+      final existing = [
+        WalletTransaction(
+          txHash: 'tx1', blockHeight: 450, blockTimestamp: 1699000000,
+          receivedOutputs: [out1], spentKeyImages: [],
+        ),
+      ];
+      // Scan at a different height sees the same tx
+      final scan = TestHelpers.createMockScanResponse(
+        blockHeight: 600, blockTimestamp: 1700000000, outputs: [out2],
+      );
+
+      final result = TransactionUtils.updateTransactionsFromScan(existing, scan, []);
+
+      expect(result.length, 1);
+      // Should keep existing height 450, not overwrite with scan's 600
+      expect(result[0].blockHeight, 450);
+      expect(result[0].blockTimestamp, 1699000000);
+    });
+
+    test('uses scan blockHeight when existing has zero height', () {
+      final out1 = TestHelpers.createMockOutput(
+        txHash: 'tx1', outputIndex: 0, amountXmr: '1.0', blockHeight: 500,
+      );
+      final out2 = TestHelpers.createMockOutput(
+        txHash: 'tx1', outputIndex: 1, amountXmr: '0.5', blockHeight: 500,
+      );
+      final existing = [
+        WalletTransaction(
+          txHash: 'tx1', blockHeight: 0, blockTimestamp: 0,
+          receivedOutputs: [out1], spentKeyImages: [],
+        ),
+      ];
+      final scan = TestHelpers.createMockScanResponse(
+        blockHeight: 600, blockTimestamp: 1700000000, outputs: [out2],
+      );
+
+      final result = TransactionUtils.updateTransactionsFromScan(existing, scan, []);
+
+      expect(result.length, 1);
+      // Should use scan's height since existing is 0
+      expect(result[0].blockHeight, 600);
+      expect(result[0].blockTimestamp, 1700000000);
+    });
   });
 
   group('TransactionUtils.sortTransactions', () {
@@ -267,6 +318,52 @@ void main() {
       expect(sorted[0].txHash, 'tx2');
       expect(sorted[1].txHash, 'tx1');
     });
+
+    test('sorts by confirmations ascending', () {
+      final out1 = TestHelpers.createMockOutput(
+        txHash: 'tx1', outputIndex: 0, amountXmr: '1.0', blockHeight: 100,
+      );
+      final out2 = TestHelpers.createMockOutput(
+        txHash: 'tx2', outputIndex: 0, amountXmr: '2.0', blockHeight: 200,
+      );
+      final transactions = [
+        WalletTransaction(txHash: 'tx1', blockHeight: 100, blockTimestamp: 0,
+          receivedOutputs: [out1], spentKeyImages: []),
+        WalletTransaction(txHash: 'tx2', blockHeight: 200, blockTimestamp: 0,
+          receivedOutputs: [out2], spentKeyImages: []),
+      ];
+
+      final sorted = TransactionUtils.sortTransactions(
+        transactions, [out1, out2], 'confirms', true, 300,
+      );
+
+      // Ascending: tx2 first (fewer confirms)
+      expect(sorted[0].txHash, 'tx2');
+      expect(sorted[1].txHash, 'tx1');
+    });
+
+    test('sorts by amount ascending', () {
+      final out1 = TestHelpers.createMockOutput(
+        txHash: 'tx1', outputIndex: 0, amountXmr: '1.0', blockHeight: 100,
+      );
+      final out2 = TestHelpers.createMockOutput(
+        txHash: 'tx2', outputIndex: 0, amountXmr: '5.0', blockHeight: 100,
+      );
+      final transactions = [
+        WalletTransaction(txHash: 'tx1', blockHeight: 100, blockTimestamp: 0,
+          receivedOutputs: [out1], spentKeyImages: []),
+        WalletTransaction(txHash: 'tx2', blockHeight: 100, blockTimestamp: 0,
+          receivedOutputs: [out2], spentKeyImages: []),
+      ];
+
+      final sorted = TransactionUtils.sortTransactions(
+        transactions, [out1, out2], 'amount', true, 300,
+      );
+
+      // Ascending: smallest first
+      expect(sorted[0].txHash, 'tx1');
+      expect(sorted[1].txHash, 'tx2');
+    });
   });
 
   group('TransactionUtils.sortOutputs', () {
@@ -301,6 +398,77 @@ void main() {
       );
 
       expect(sorted.length, 2);
+    });
+
+    test('sorts by amount ascending', () {
+      final out1 = TestHelpers.createMockOutput(
+        txHash: 'tx1', outputIndex: 0, amountXmr: '3.0', blockHeight: 100,
+      );
+      final out2 = TestHelpers.createMockOutput(
+        txHash: 'tx2', outputIndex: 0, amountXmr: '1.0', blockHeight: 100,
+      );
+      final out3 = TestHelpers.createMockOutput(
+        txHash: 'tx3', outputIndex: 0, amountXmr: '5.0', blockHeight: 100,
+      );
+
+      final sorted = TransactionUtils.sortOutputs(
+        [out1, out2, out3], 'amount', true, 300, true,
+      );
+
+      expect(sorted[0].txHash, 'tx2');
+      expect(sorted[1].txHash, 'tx1');
+      expect(sorted[2].txHash, 'tx3');
+    });
+
+    test('sorts by amount descending', () {
+      final out1 = TestHelpers.createMockOutput(
+        txHash: 'tx1', outputIndex: 0, amountXmr: '3.0', blockHeight: 100,
+      );
+      final out2 = TestHelpers.createMockOutput(
+        txHash: 'tx2', outputIndex: 0, amountXmr: '1.0', blockHeight: 100,
+      );
+
+      final sorted = TransactionUtils.sortOutputs(
+        [out1, out2], 'amount', false, 300, true,
+      );
+
+      expect(sorted[0].txHash, 'tx1');
+      expect(sorted[1].txHash, 'tx2');
+    });
+
+    test('sorts by confirmations descending', () {
+      final out1 = TestHelpers.createMockOutput(
+        txHash: 'tx1', outputIndex: 0, amountXmr: '1.0', blockHeight: 100,
+      );
+      final out2 = TestHelpers.createMockOutput(
+        txHash: 'tx2', outputIndex: 0, amountXmr: '1.0', blockHeight: 250,
+      );
+
+      final sorted = TransactionUtils.sortOutputs(
+        [out1, out2], 'confirms', false, 300, true,
+      );
+
+      // tx1 at 100 has 200 confirms, tx2 at 250 has 50 confirms
+      // Descending: tx1 first
+      expect(sorted[0].txHash, 'tx1');
+      expect(sorted[1].txHash, 'tx2');
+    });
+
+    test('sorts by confirmations ascending', () {
+      final out1 = TestHelpers.createMockOutput(
+        txHash: 'tx1', outputIndex: 0, amountXmr: '1.0', blockHeight: 100,
+      );
+      final out2 = TestHelpers.createMockOutput(
+        txHash: 'tx2', outputIndex: 0, amountXmr: '1.0', blockHeight: 250,
+      );
+
+      final sorted = TransactionUtils.sortOutputs(
+        [out1, out2], 'confirms', true, 300, true,
+      );
+
+      // Ascending: tx2 first (fewer confirms)
+      expect(sorted[0].txHash, 'tx2');
+      expect(sorted[1].txHash, 'tx1');
     });
   });
 }
