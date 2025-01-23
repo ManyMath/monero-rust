@@ -3,18 +3,37 @@ import 'dart:convert';
 import 'dart:html' as html;
 import 'dart:js_util' as js_util;
 import 'package:flutter/foundation.dart';
-import 'package:tuple/tuple.dart';
 import '../src/bindings/bindings.dart';
 import '../models/wallet_transaction.dart';
+import 'wallet_storage_service.dart';
+import 'crypto_backend.dart';
+import 'wallet_serializer.dart';
 
 /// Service for handling wallet data persistence operations
 /// including save, load, import, export, and localStorage management.
 class WalletPersistenceService {
-  /// Get the localStorage key for a specific wallet ID
-  static String getStorageKey(String walletId) => 'monero_wallet_$walletId';
+  final StorageBackend _storage;
+  final CryptoBackend _crypto;
 
-  /// Save wallet data to localStorage with encryption
-  static Future<SaveWalletResult> saveWalletData({
+  WalletPersistenceService({
+    required StorageBackend storage,
+    required CryptoBackend crypto,
+  })  : _storage = storage,
+        _crypto = crypto;
+
+  static WalletPersistenceService? _default;
+  static WalletPersistenceService get _defaultInstance =>
+      _default ??= WalletPersistenceService(
+        storage: LocalStorageBackend(),
+        crypto: RustCryptoBackend(),
+      );
+
+  /// Get the localStorage key for a specific wallet ID
+  static String getStorageKey(String walletId) =>
+      WalletSerializer.getStorageKey(walletId);
+
+  /// Save wallet data to storage with encryption (instance method)
+  Future<SaveWalletResult> save({
     required String walletId,
     required String password,
     required String seed,
@@ -28,73 +47,28 @@ class WalletPersistenceService {
   }) async {
     try {
       final storageKey = getStorageKey(walletId);
-
-      // Serialize wallet state to JSON
-      final walletData = {
-        'seed': seed,
-        'network': network,
-        'address': address,
-        'nodeUrl': nodeUrl,
-        'outputs': outputs.map((o) => {
-          'txHash': o.txHash,
-          'outputIndex': o.outputIndex,
-          'amount': o.amount.toString(),
-          'amountXmr': o.amountXmr,
-          'key': o.key,
-          'keyOffset': o.keyOffset,
-          'commitmentMask': o.commitmentMask,
-          'subaddressIndex': o.subaddressIndex != null
-              ? [o.subaddressIndex!.item1, o.subaddressIndex!.item2]
-              : null,
-          'paymentId': o.paymentId,
-          'receivedOutputBytes': o.receivedOutputBytes,
-          'blockHeight': o.blockHeight.toString(),
-          'spent': o.spent,
-          'keyImage': o.keyImage,
-        }).toList(),
-        'transactions': transactions.map((t) => t.toJson()).toList(),
-        'scanState': {
-          'continuousScanCurrentHeight': continuousScanCurrentHeight,
-        },
-        'selectedOutputs': selectedOutputs.toList(),
-      };
-
-      final jsonString = jsonEncode(walletData);
-      debugPrint('[SAVE] Serialized ${outputs.length} outputs, ${transactions.length} transactions');
-
-      // Wait for encrypted response from Rust
-      final completer = Completer<String?>();
-      final subscription = WalletDataSavedResponse.rustSignalStream.listen((signal) {
-        if (!completer.isCompleted) {
-          if (signal.message.success && signal.message.encryptedData != null) {
-            completer.complete(signal.message.encryptedData);
-          } else {
-            completer.complete(null);
-          }
-        }
-      });
-
-      // Send save request to Rust for encryption
-      SaveWalletDataRequest(
-        password: password,
-        walletDataJson: jsonString,
-      ).sendSignalToRust();
-
-      final encryptedData = await completer.future.timeout(
-        const Duration(seconds: 10),
-        onTimeout: () => null,
+      final walletData = WalletSerializer.serialize(
+        seed: seed,
+        network: network,
+        address: address,
+        nodeUrl: nodeUrl,
+        outputs: outputs,
+        transactions: transactions,
+        continuousScanCurrentHeight: continuousScanCurrentHeight,
+        selectedOutputs: selectedOutputs,
       );
 
-      await subscription.cancel();
+      final jsonString = jsonEncode(walletData);
+      debugPrint(
+          '[SAVE] Serialized ${outputs.length} outputs, ${transactions.length} transactions');
 
+      final encryptedData = await _crypto.encrypt(password, jsonString);
       if (encryptedData == null) {
         return SaveWalletResult.error('Encryption failed');
       }
 
-      // Store encrypted data in localStorage
-      html.window.localStorage[storageKey] = encryptedData;
-      debugPrint('[SAVE] Stored to localStorage key: $storageKey');
-
+      _storage.set(storageKey, encryptedData);
+      debugPrint('[SAVE] Stored to key: $storageKey');
       return SaveWalletResult.success();
     } catch (e) {
       debugPrint('[SAVE] Error: $e');
@@ -102,8 +76,8 @@ class WalletPersistenceService {
     }
   }
 
-  /// Load wallet data from localStorage with decryption
-  static Future<LoadWalletResult> loadWalletData({
+  /// Load wallet data from storage with decryption (instance method)
+  Future<LoadWalletResult> load({
     required String walletId,
     required String password,
   }) async {
@@ -111,91 +85,31 @@ class WalletPersistenceService {
       final storageKey = getStorageKey(walletId);
       debugPrint('[LOAD] Looking for wallet data at key: $storageKey');
 
-      final encryptedData = html.window.localStorage[storageKey];
+      final encryptedData = _storage.get(storageKey);
       if (encryptedData == null) {
-        return LoadWalletResult.error('No stored wallet data found for wallet: $walletId');
+        return LoadWalletResult.error(
+            'No stored wallet data found for wallet: $walletId');
       }
       debugPrint('[LOAD] Found encrypted data (${encryptedData.length} chars)');
 
-      // Wait for decrypted response from Rust
-      final completer = Completer<String?>();
-      final subscription = WalletDataLoadedResponse.rustSignalStream.listen((signal) {
-        if (!completer.isCompleted) {
-          if (signal.message.success && signal.message.walletDataJson != null) {
-            completer.complete(signal.message.walletDataJson);
-          } else {
-            completer.complete(null);
-          }
-        }
-      });
-
-      // Send load request to Rust for decryption
-      LoadWalletDataRequest(
-        password: password,
-        encryptedData: encryptedData,
-      ).sendSignalToRust();
-
-      final jsonString = await completer.future.timeout(
-        const Duration(seconds: 10),
-        onTimeout: () => null,
-      );
-
-      await subscription.cancel();
-
+      final jsonString = await _crypto.decrypt(password, encryptedData);
       if (jsonString == null) {
-        return LoadWalletResult.error('Failed to decrypt wallet data (wrong password?)');
+        return LoadWalletResult.error(
+            'Failed to decrypt wallet data (wrong password?)');
       }
 
-      // Parse wallet data
       final walletData = jsonDecode(jsonString) as Map<String, dynamic>;
-
-      // Restore outputs
-      final outputs = (walletData['outputs'] as List).map((o) {
-        final outputData = o as Map<String, dynamic>;
-        return OwnedOutput(
-          txHash: outputData['txHash'] as String,
-          outputIndex: outputData['outputIndex'] as int,
-          amount: Uint64(BigInt.parse(outputData['amount'] as String)),
-          amountXmr: outputData['amountXmr'] as String,
-          key: outputData['key'] as String,
-          keyOffset: outputData['keyOffset'] as String,
-          commitmentMask: outputData['commitmentMask'] as String,
-          subaddressIndex: outputData['subaddressIndex'] != null
-              ? Tuple2<int, int>(
-                  outputData['subaddressIndex'][0] as int,
-                  outputData['subaddressIndex'][1] as int,
-                )
-              : null,
-          paymentId: outputData['paymentId'] as String?,
-          receivedOutputBytes: outputData['receivedOutputBytes'] as String,
-          blockHeight: Uint64(BigInt.parse(outputData['blockHeight'] as String)),
-          spent: outputData['spent'] as bool,
-          keyImage: outputData['keyImage'] as String,
-        );
-      }).toList();
-
-      // Restore transactions
-      final transactions = walletData['transactions'] != null
-          ? (walletData['transactions'] as List)
-              .map((t) => WalletTransaction.fromJson(t as Map<String, dynamic>))
-              .toList()
-          : <WalletTransaction>[];
-
-      final scanState = walletData['scanState'] as Map<String, dynamic>;
-      final continuousScanCurrentHeight = scanState['continuousScanCurrentHeight'] as int;
-
-      // Restore selected outputs
-      final selectedOutputs = Set<String>.from(walletData['selectedOutputs'] as List);
+      final parsed = WalletSerializer.deserialize(walletData);
 
       return LoadWalletResult.success(
-        seed: walletData['seed'] as String? ?? '',
-        network: walletData['network'] as String? ?? 'stagenet',
-        address: walletData['address'] as String?,
-        nodeUrl: walletData['nodeUrl'] as String? ?? 'http://127.0.0.1:38081',
-        outputs: outputs,
-        transactions: transactions,
-        continuousScanCurrentHeight: continuousScanCurrentHeight,
-        selectedOutputs: selectedOutputs,
+        seed: parsed.seed,
+        network: parsed.network,
+        address: parsed.address,
+        nodeUrl: parsed.nodeUrl,
+        outputs: parsed.outputs,
+        transactions: parsed.transactions,
+        continuousScanCurrentHeight: parsed.continuousScanCurrentHeight,
+        selectedOutputs: parsed.selectedOutputs,
       );
     } catch (e) {
       debugPrint('[LOAD] Error: $e');
@@ -203,87 +117,159 @@ class WalletPersistenceService {
     }
   }
 
+  /// List all wallet IDs in storage (instance method)
+  List<String> listWallets() {
+    debugPrint('[WALLET] Scanning storage for available wallets...');
+    final walletIds = <String>[];
+    for (final key in _storage.keys) {
+      if (key.startsWith('monero_wallet_')) {
+        walletIds.add(key.substring('monero_wallet_'.length));
+      }
+    }
+    walletIds.sort();
+    debugPrint(
+        '[WALLET] Found ${walletIds.length} wallets: ${walletIds.join(', ')}');
+    return walletIds;
+  }
+
+  /// Clear wallet data from storage (instance method)
+  void clear(String walletId) {
+    final storageKey = getStorageKey(walletId);
+    debugPrint('[STORAGE] Clearing data for wallet: $walletId');
+    _storage.remove(storageKey);
+  }
+
+  /// Check if wallet data exists (instance method)
+  bool has(String walletId) {
+    final storageKey = getStorageKey(walletId);
+    return _storage.containsKey(storageKey);
+  }
+
+  /// Get raw encrypted data for a wallet (for export)
+  String? getRawData(String walletId) {
+    final storageKey = getStorageKey(walletId);
+    return _storage.get(storageKey);
+  }
+
+  /// Store raw encrypted data for a wallet (for import)
+  void setRawData(String walletId, String data) {
+    final storageKey = getStorageKey(walletId);
+    _storage.set(storageKey, data);
+  }
+
+  // --- Static convenience methods (delegate to default instance) ---
+
+  static Future<SaveWalletResult> saveWalletData({
+    required String walletId,
+    required String password,
+    required String seed,
+    required String network,
+    required String? address,
+    required String nodeUrl,
+    required List<OwnedOutput> outputs,
+    required List<WalletTransaction> transactions,
+    required int continuousScanCurrentHeight,
+    required Set<String> selectedOutputs,
+  }) =>
+      _defaultInstance.save(
+        walletId: walletId,
+        password: password,
+        seed: seed,
+        network: network,
+        address: address,
+        nodeUrl: nodeUrl,
+        outputs: outputs,
+        transactions: transactions,
+        continuousScanCurrentHeight: continuousScanCurrentHeight,
+        selectedOutputs: selectedOutputs,
+      );
+
+  static Future<LoadWalletResult> loadWalletData({
+    required String walletId,
+    required String password,
+  }) =>
+      _defaultInstance.load(walletId: walletId, password: password);
+
+  static List<String> listAvailableWallets() =>
+      _defaultInstance.listWallets();
+
+  static void clearWalletData(String walletId) =>
+      _defaultInstance.clear(walletId);
+
+  static bool hasWalletData(String walletId) =>
+      _defaultInstance.has(walletId);
+
   /// Export wallet data as an encrypted file
   static Future<ExportWalletResult> exportWallet({
     required String walletId,
   }) async {
     try {
-      final storageKey = getStorageKey(walletId);
-
-      // Validation - check if wallet has saved data
-      if (!html.window.localStorage.containsKey(storageKey)) {
+      final rawData = _defaultInstance.getRawData(walletId);
+      if (rawData == null || rawData.isEmpty) {
         return ExportWalletResult.error('No saved data found for this wallet');
-      }
-
-      // Get encrypted data from localStorage
-      final encryptedData = html.window.localStorage[storageKey];
-      if (encryptedData == null || encryptedData.isEmpty) {
-        return ExportWalletResult.error('Wallet data is empty');
       }
 
       // Generate filename with timestamp
       final now = DateTime.now();
-      final timestamp = '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}-'
+      final timestamp =
+          '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}-'
           '${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}';
       final filename = '${walletId}_$timestamp.monero-wallet';
 
       // Create blob with wallet data
-      final bytes = utf8.encode(encryptedData);
+      final bytes = utf8.encode(rawData);
       final blob = html.Blob([bytes], 'application/octet-stream');
 
       // Try to use File System Access API for "Save As" dialog (Chrome 86+, Edge 86+)
-      // Falls back to automatic download for unsupported browsers (Firefox, Safari)
       bool usedSaveAsDialog = false;
       try {
         if (js_util.hasProperty(html.window, 'showSaveFilePicker')) {
-          debugPrint('[EXPORT] Using File System Access API (Save As dialog)');
+          debugPrint(
+              '[EXPORT] Using File System Access API (Save As dialog)');
 
-          // Configure file picker options
           final options = js_util.newObject();
           js_util.setProperty(options, 'suggestedName', filename);
 
-          // Set file types filter
           final types = js_util.newObject();
           js_util.setProperty(types, 'description', 'Monero Wallet Files');
           final accept = js_util.newObject();
-          js_util.setProperty(accept, 'application/octet-stream', ['.monero-wallet']);
+          js_util.setProperty(
+              accept, 'application/octet-stream', ['.monero-wallet']);
           js_util.setProperty(types, 'accept', accept);
           js_util.setProperty(options, 'types', [types]);
 
-          // Show save file picker
           final fileHandlePromise = js_util.callMethod(
             html.window,
             'showSaveFilePicker',
             [options],
           );
-          final fileHandle = await js_util.promiseToFuture(fileHandlePromise);
+          final fileHandle =
+              await js_util.promiseToFuture(fileHandlePromise);
 
-          // Create writable stream
-          final writablePromise = js_util.callMethod(fileHandle, 'createWritable', []);
+          final writablePromise =
+              js_util.callMethod(fileHandle, 'createWritable', []);
           final writable = await js_util.promiseToFuture(writablePromise);
 
-          // Write blob to file
-          final writePromise = js_util.callMethod(writable, 'write', [blob]);
+          final writePromise =
+              js_util.callMethod(writable, 'write', [blob]);
           await js_util.promiseToFuture(writePromise);
 
-          // Close the file
-          final closePromise = js_util.callMethod(writable, 'close', []);
+          final closePromise =
+              js_util.callMethod(writable, 'close', []);
           await js_util.promiseToFuture(closePromise);
 
           usedSaveAsDialog = true;
           debugPrint('[EXPORT] File saved via Save As dialog');
         }
       } catch (e) {
-        // User cancelled the save dialog or API not supported
         if (e.toString().contains('aborted')) {
           debugPrint('[EXPORT] User cancelled save dialog');
           return ExportWalletResult.cancelled();
         }
-        debugPrint('[EXPORT] File System Access API not available or failed: $e');
-        // Continue to fallback method
+        debugPrint(
+            '[EXPORT] File System Access API not available or failed: $e');
       }
 
-      // Fallback: Use traditional download method (Firefox, Safari, or if API failed)
       if (!usedSaveAsDialog) {
         debugPrint('[EXPORT] Using fallback download method');
         final url = html.Url.createObjectUrlFromBlob(blob);
@@ -293,7 +279,8 @@ class WalletPersistenceService {
         html.Url.revokeObjectUrl(url);
       }
 
-      debugPrint('[EXPORT] Successfully exported wallet: $walletId (method: ${usedSaveAsDialog ? 'Save As dialog' : 'auto-download'})');
+      debugPrint(
+          '[EXPORT] Successfully exported wallet: $walletId (method: ${usedSaveAsDialog ? 'Save As dialog' : 'auto-download'})');
       return ExportWalletResult.success(
         filename: filename,
         usedSaveAsDialog: usedSaveAsDialog,
@@ -312,62 +299,43 @@ class WalletPersistenceService {
     required bool shouldOverwrite,
   }) async {
     try {
-      debugPrint('[IMPORT] Selected file: ${file.name} (${file.size} bytes)');
+      debugPrint(
+          '[IMPORT] Selected file: ${file.name} (${file.size} bytes)');
 
-      // Validate file size (max 10MB as sanity check)
       if (file.size > 10 * 1024 * 1024) {
         return ImportWalletResult.error('File too large (max 10MB)');
       }
 
-      // Read file content (WASM-compatible)
       final reader = html.FileReader();
       reader.readAsText(file);
       await reader.onLoad.first;
 
       final encryptedData = reader.result as String?;
       if (encryptedData == null || encryptedData.isEmpty) {
-        return ImportWalletResult.error('File is empty or could not be read');
+        return ImportWalletResult.error(
+            'File is empty or could not be read');
       }
 
-      debugPrint('[IMPORT] Read ${encryptedData.length} characters from file');
+      debugPrint(
+          '[IMPORT] Read ${encryptedData.length} characters from file');
 
-      // Verify decryption by attempting to load
-      final completer = Completer<String?>();
-      final subscription = WalletDataLoadedResponse.rustSignalStream.listen((signal) {
-        if (!completer.isCompleted) {
-          if (signal.message.success && signal.message.walletDataJson != null) {
-            completer.complete(signal.message.walletDataJson);
-          } else {
-            completer.complete(null);
-          }
-        }
-      });
-
-      LoadWalletDataRequest(
-        password: password,
-        encryptedData: encryptedData,
-      ).sendSignalToRust();
-
-      final jsonString = await completer.future.timeout(
-        const Duration(seconds: 10),
-        onTimeout: () => null,
-      );
-
-      await subscription.cancel();
-
+      // Verify decryption
+      final jsonString =
+          await _defaultInstance._crypto.decrypt(password, encryptedData);
       if (jsonString == null) {
-        return ImportWalletResult.error('Failed to decrypt file (wrong password or corrupted file)');
+        return ImportWalletResult.error(
+            'Failed to decrypt file (wrong password or corrupted file)');
       }
 
       // Verify JSON is valid
       jsonDecode(jsonString);
 
-      // Store to localStorage with new wallet ID
-      final storageKey = getStorageKey(walletId);
-      html.window.localStorage[storageKey] = encryptedData;
-      debugPrint('[IMPORT] Stored wallet data to: $storageKey');
+      // Store to storage
+      _defaultInstance.setRawData(walletId, encryptedData);
+      debugPrint('[IMPORT] Stored wallet data for: $walletId');
 
-      debugPrint('[IMPORT] Successfully ${shouldOverwrite ? 'overwritten' : 'imported'} wallet: $walletId');
+      debugPrint(
+          '[IMPORT] Successfully ${shouldOverwrite ? 'overwritten' : 'imported'} wallet: $walletId');
       return ImportWalletResult.success(
         walletId: walletId,
         wasOverwritten: shouldOverwrite,
@@ -378,58 +346,9 @@ class WalletPersistenceService {
     }
   }
 
-  /// Scan localStorage for all available wallet IDs
-  static List<String> listAvailableWallets() {
-    debugPrint('[WALLET] Scanning localStorage for available wallets...');
-    final walletIds = <String>[];
-
-    // Scan all localStorage keys - only include wallets that have saved data
-    for (var i = 0; i < html.window.localStorage.length; i++) {
-      final key = html.window.localStorage.keys.elementAt(i);
-      if (key.startsWith('monero_wallet_')) {
-        final walletId = key.substring('monero_wallet_'.length);
-        walletIds.add(walletId);
-      }
-    }
-
-    walletIds.sort();
-    debugPrint('[WALLET] Found ${walletIds.length} wallets: ${walletIds.join(', ')}');
-    return walletIds;
-  }
-
-  /// Clear/delete wallet data from localStorage
-  static void clearWalletData(String walletId) {
-    final storageKey = getStorageKey(walletId);
-    debugPrint('[STORAGE] Clearing data for wallet: $walletId');
-    html.window.localStorage.remove(storageKey);
-  }
-
-  /// Check if wallet data exists in localStorage
-  static bool hasWalletData(String walletId) {
-    final storageKey = getStorageKey(walletId);
-    return html.window.localStorage.containsKey(storageKey);
-  }
-
   /// Extract suggested wallet ID from filename
-  static String extractWalletIdFromFilename(String filename) {
-    String suggestedWalletId = filename;
-
-    // Remove .monero-wallet extension
-    if (suggestedWalletId.endsWith('.monero-wallet')) {
-      suggestedWalletId = suggestedWalletId.substring(0, suggestedWalletId.length - 14);
-    }
-
-    // Remove timestamp if present (pattern: _20260204-143025)
-    final timestampRegex = RegExp(r'_\d{8}-\d{6}$');
-    suggestedWalletId = suggestedWalletId.replaceAll(timestampRegex, '');
-
-    // Ensure valid wallet ID
-    if (suggestedWalletId.isEmpty || !RegExp(r'^[a-zA-Z0-9_-]+$').hasMatch(suggestedWalletId)) {
-      suggestedWalletId = 'imported_wallet';
-    }
-
-    return suggestedWalletId;
-  }
+  static String extractWalletIdFromFilename(String filename) =>
+      WalletSerializer.extractWalletIdFromFilename(filename);
 }
 
 /// Result type for save wallet operation
@@ -437,21 +356,13 @@ class SaveWalletResult {
   final bool success;
   final String? error;
 
-  SaveWalletResult._({
-    required this.success,
-    this.error,
-  });
+  SaveWalletResult._({required this.success, this.error});
 
-  factory SaveWalletResult.success() {
-    return SaveWalletResult._(success: true);
-  }
+  factory SaveWalletResult.success() =>
+      SaveWalletResult._(success: true);
 
-  factory SaveWalletResult.error(String error) {
-    return SaveWalletResult._(
-      success: false,
-      error: error,
-    );
-  }
+  factory SaveWalletResult.error(String error) =>
+      SaveWalletResult._(success: false, error: error);
 }
 
 /// Result type for load wallet operation
@@ -489,26 +400,21 @@ class LoadWalletResult {
     required List<WalletTransaction> transactions,
     required int continuousScanCurrentHeight,
     required Set<String> selectedOutputs,
-  }) {
-    return LoadWalletResult._(
-      success: true,
-      seed: seed,
-      network: network,
-      address: address,
-      nodeUrl: nodeUrl,
-      outputs: outputs,
-      transactions: transactions,
-      continuousScanCurrentHeight: continuousScanCurrentHeight,
-      selectedOutputs: selectedOutputs,
-    );
-  }
+  }) =>
+      LoadWalletResult._(
+        success: true,
+        seed: seed,
+        network: network,
+        address: address,
+        nodeUrl: nodeUrl,
+        outputs: outputs,
+        transactions: transactions,
+        continuousScanCurrentHeight: continuousScanCurrentHeight,
+        selectedOutputs: selectedOutputs,
+      );
 
-  factory LoadWalletResult.error(String error) {
-    return LoadWalletResult._(
-      success: false,
-      error: error,
-    );
-  }
+  factory LoadWalletResult.error(String error) =>
+      LoadWalletResult._(success: false, error: error);
 }
 
 /// Result type for export wallet operation
@@ -530,27 +436,18 @@ class ExportWalletResult {
   factory ExportWalletResult.success({
     required String filename,
     required bool usedSaveAsDialog,
-  }) {
-    return ExportWalletResult._(
-      success: true,
-      filename: filename,
-      usedSaveAsDialog: usedSaveAsDialog,
-    );
-  }
+  }) =>
+      ExportWalletResult._(
+        success: true,
+        filename: filename,
+        usedSaveAsDialog: usedSaveAsDialog,
+      );
 
-  factory ExportWalletResult.cancelled() {
-    return ExportWalletResult._(
-      success: false,
-      cancelled: true,
-    );
-  }
+  factory ExportWalletResult.cancelled() =>
+      ExportWalletResult._(success: false, cancelled: true);
 
-  factory ExportWalletResult.error(String error) {
-    return ExportWalletResult._(
-      success: false,
-      error: error,
-    );
-  }
+  factory ExportWalletResult.error(String error) =>
+      ExportWalletResult._(success: false, error: error);
 }
 
 /// Result type for import wallet operation
@@ -570,18 +467,13 @@ class ImportWalletResult {
   factory ImportWalletResult.success({
     required String walletId,
     required bool wasOverwritten,
-  }) {
-    return ImportWalletResult._(
-      success: true,
-      walletId: walletId,
-      wasOverwritten: wasOverwritten,
-    );
-  }
+  }) =>
+      ImportWalletResult._(
+        success: true,
+        walletId: walletId,
+        wasOverwritten: wasOverwritten,
+      );
 
-  factory ImportWalletResult.error(String error) {
-    return ImportWalletResult._(
-      success: false,
-      error: error,
-    );
-  }
+  factory ImportWalletResult.error(String error) =>
+      ImportWalletResult._(success: false, error: error);
 }

@@ -3,108 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:tuple/tuple.dart';
 import '../../lib/models/wallet_transaction.dart';
 import '../../lib/src/bindings/bindings.dart';
+import '../../lib/services/wallet_serializer.dart';
 import '../test_helpers.dart';
-
-/// Replicates the exact JSON serialization format used by
-/// WalletPersistenceService.saveWalletData (lines 33-60).
-/// If the service format changes and these tests break, it means
-/// existing saved wallets will fail to load.
-Map<String, dynamic> serializeWalletData({
-  required String seed,
-  required String network,
-  required String? address,
-  required String nodeUrl,
-  required List<OwnedOutput> outputs,
-  required List<WalletTransaction> transactions,
-  required int continuousScanCurrentHeight,
-  required Set<String> selectedOutputs,
-}) {
-  return {
-    'seed': seed,
-    'network': network,
-    'address': address,
-    'nodeUrl': nodeUrl,
-    'outputs': outputs.map((o) => {
-      'txHash': o.txHash,
-      'outputIndex': o.outputIndex,
-      'amount': o.amount.toString(),
-      'amountXmr': o.amountXmr,
-      'key': o.key,
-      'keyOffset': o.keyOffset,
-      'commitmentMask': o.commitmentMask,
-      'subaddressIndex': o.subaddressIndex != null
-          ? [o.subaddressIndex!.item1, o.subaddressIndex!.item2]
-          : null,
-      'paymentId': o.paymentId,
-      'receivedOutputBytes': o.receivedOutputBytes,
-      'blockHeight': o.blockHeight.toString(),
-      'spent': o.spent,
-      'keyImage': o.keyImage,
-    }).toList(),
-    'transactions': transactions.map((t) => t.toJson()).toList(),
-    'scanState': {
-      'continuousScanCurrentHeight': continuousScanCurrentHeight,
-    },
-    'selectedOutputs': selectedOutputs.toList(),
-  };
-}
-
-/// Replicates the exact deserialization used by
-/// WalletPersistenceService.loadWalletData (lines 153-198).
-({
-  String seed,
-  String network,
-  String? address,
-  String nodeUrl,
-  List<OwnedOutput> outputs,
-  List<WalletTransaction> transactions,
-  int continuousScanCurrentHeight,
-  Set<String> selectedOutputs,
-}) deserializeWalletData(Map<String, dynamic> walletData) {
-  final outputs = (walletData['outputs'] as List).map((o) {
-    final d = o as Map<String, dynamic>;
-    return OwnedOutput(
-      txHash: d['txHash'] as String,
-      outputIndex: d['outputIndex'] as int,
-      amount: Uint64(BigInt.parse(d['amount'] as String)),
-      amountXmr: d['amountXmr'] as String,
-      key: d['key'] as String,
-      keyOffset: d['keyOffset'] as String,
-      commitmentMask: d['commitmentMask'] as String,
-      subaddressIndex: d['subaddressIndex'] != null
-          ? Tuple2<int, int>(
-              d['subaddressIndex'][0] as int,
-              d['subaddressIndex'][1] as int,
-            )
-          : null,
-      paymentId: d['paymentId'] as String?,
-      receivedOutputBytes: d['receivedOutputBytes'] as String,
-      blockHeight: Uint64(BigInt.parse(d['blockHeight'] as String)),
-      spent: d['spent'] as bool,
-      keyImage: d['keyImage'] as String,
-    );
-  }).toList();
-
-  final transactions = walletData['transactions'] != null
-      ? (walletData['transactions'] as List)
-          .map((t) => WalletTransaction.fromJson(t as Map<String, dynamic>))
-          .toList()
-      : <WalletTransaction>[];
-
-  final scanState = walletData['scanState'] as Map<String, dynamic>;
-  final selectedOutputs = Set<String>.from(walletData['selectedOutputs'] as List);
-
-  return (
-    seed: walletData['seed'] as String? ?? '',
-    network: walletData['network'] as String? ?? 'stagenet',
-    address: walletData['address'] as String?,
-    nodeUrl: walletData['nodeUrl'] as String? ?? 'http://127.0.0.1:38081',
-    outputs: outputs,
-    transactions: transactions,
-    continuousScanCurrentHeight: scanState['continuousScanCurrentHeight'] as int,
-    selectedOutputs: selectedOutputs,
-  );
-}
 
 void main() {
   group('Wallet Data Format - Output Serialization Roundtrip', () {
@@ -119,7 +19,7 @@ void main() {
         paymentId: 'pay_123',
       );
 
-      final saved = serializeWalletData(
+      final saved = WalletSerializer.serialize(
         seed: 'test seed', network: 'stagenet', address: 'addr',
         nodeUrl: 'http://node:38081', outputs: [output],
         transactions: [], continuousScanCurrentHeight: 0,
@@ -128,7 +28,7 @@ void main() {
 
       // Simulate JSON encode/decode (what actually happens during persistence)
       final json = jsonEncode(saved);
-      final loaded = deserializeWalletData(jsonDecode(json));
+      final loaded = WalletSerializer.deserialize(jsonDecode(json));
 
       expect(loaded.outputs.length, 1);
       final o = loaded.outputs[0];
@@ -154,13 +54,13 @@ void main() {
         txHash: 'tx1', outputIndex: 0, amountXmr: '1.0', blockHeight: 100,
       );
 
-      final saved = serializeWalletData(
+      final saved = WalletSerializer.serialize(
         seed: 'test', network: 'stagenet', address: null,
         nodeUrl: 'http://node', outputs: [output],
         transactions: [], continuousScanCurrentHeight: 0,
         selectedOutputs: {},
       );
-      final loaded = deserializeWalletData(jsonDecode(jsonEncode(saved)));
+      final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
       expect(loaded.outputs[0].subaddressIndex, isNull);
       expect(loaded.outputs[0].paymentId, isNull);
@@ -176,13 +76,13 @@ void main() {
         blockHeight: 200, spent: false,
       );
 
-      final saved = serializeWalletData(
+      final saved = WalletSerializer.serialize(
         seed: 'test', network: 'stagenet', address: null,
         nodeUrl: 'http://node', outputs: [spentOutput, unspentOutput],
         transactions: [], continuousScanCurrentHeight: 0,
         selectedOutputs: {},
       );
-      final loaded = deserializeWalletData(jsonDecode(jsonEncode(saved)));
+      final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
       expect(loaded.outputs[0].spent, true);
       expect(loaded.outputs[1].spent, false);
@@ -200,13 +100,13 @@ void main() {
         spent: false, keyImage: 'ki',
       );
 
-      final saved = serializeWalletData(
+      final saved = WalletSerializer.serialize(
         seed: 'test', network: 'mainnet', address: null,
         nodeUrl: 'http://node', outputs: [output],
         transactions: [], continuousScanCurrentHeight: 0,
         selectedOutputs: {},
       );
-      final loaded = deserializeWalletData(jsonDecode(jsonEncode(saved)));
+      final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
       expect(loaded.outputs[0].amount.toInt(), 999999999999999);
       expect(loaded.outputs[0].blockHeight.toInt(), 100000);
@@ -218,13 +118,13 @@ void main() {
         blockHeight: 100 + i,
       ));
 
-      final saved = serializeWalletData(
+      final saved = WalletSerializer.serialize(
         seed: 'test', network: 'stagenet', address: null,
         nodeUrl: 'http://node', outputs: outputs,
         transactions: [], continuousScanCurrentHeight: 0,
         selectedOutputs: {},
       );
-      final loaded = deserializeWalletData(jsonDecode(jsonEncode(saved)));
+      final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
       expect(loaded.outputs.length, 5);
       for (var i = 0; i < 5; i++) {
@@ -245,13 +145,13 @@ void main() {
         receivedOutputs: [output], spentKeyImages: [],
       );
 
-      final saved = serializeWalletData(
+      final saved = WalletSerializer.serialize(
         seed: 'test', network: 'stagenet', address: null,
         nodeUrl: 'http://node', outputs: [output],
         transactions: [tx], continuousScanCurrentHeight: 500,
         selectedOutputs: {},
       );
-      final loaded = deserializeWalletData(jsonDecode(jsonEncode(saved)));
+      final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
       expect(loaded.transactions.length, 1);
       final loadedTx = loaded.transactions[0];
@@ -272,13 +172,13 @@ void main() {
         receivedOutputs: [], spentKeyImages: ['ki_abc'],
       );
 
-      final saved = serializeWalletData(
+      final saved = WalletSerializer.serialize(
         seed: 'test', network: 'stagenet', address: null,
         nodeUrl: 'http://node', outputs: [],
         transactions: [tx], continuousScanCurrentHeight: 600,
         selectedOutputs: {},
       );
-      final loaded = deserializeWalletData(jsonDecode(jsonEncode(saved)));
+      final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
       expect(loaded.transactions.length, 1);
       expect(loaded.transactions[0].txHash, 'spend:ki_abc');
@@ -302,13 +202,13 @@ void main() {
           receivedOutputs: [], spentKeyImages: ['ki_old']),
       ];
 
-      final saved = serializeWalletData(
+      final saved = WalletSerializer.serialize(
         seed: 'test', network: 'stagenet', address: null,
         nodeUrl: 'http://node', outputs: [out1, out2],
         transactions: transactions, continuousScanCurrentHeight: 200,
         selectedOutputs: {},
       );
-      final loaded = deserializeWalletData(jsonDecode(jsonEncode(saved)));
+      final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
       expect(loaded.transactions.length, 3);
     });
@@ -322,7 +222,7 @@ void main() {
         'selectedOutputs': [],
       };
 
-      final loaded = deserializeWalletData(data);
+      final loaded = WalletSerializer.deserialize(data);
       expect(loaded.transactions, isEmpty);
     });
   });
@@ -361,7 +261,7 @@ void main() {
       final selectedOutputs = {'tx1:0', 'tx1:1'};
       const seed = 'hemlock jubilee eden hacksaw boil superior inroads epoxy exhale orders cavernous second brunt saved richly lower upgrade hitched launching deepest mostly playful layout lower eden';
 
-      final saved = serializeWalletData(
+      final saved = WalletSerializer.serialize(
         seed: seed,
         network: 'stagenet',
         address: '569ubRY6tYfgF3Vpx...',
@@ -374,7 +274,7 @@ void main() {
 
       // Full JSON roundtrip
       final json = jsonEncode(saved);
-      final loaded = deserializeWalletData(jsonDecode(json));
+      final loaded = WalletSerializer.deserialize(jsonDecode(json));
 
       // Verify all top-level fields
       expect(loaded.seed, seed);
@@ -397,13 +297,13 @@ void main() {
     });
 
     test('handles empty wallet (no outputs, no transactions)', () {
-      final saved = serializeWalletData(
+      final saved = WalletSerializer.serialize(
         seed: 'test seed', network: 'stagenet', address: null,
         nodeUrl: 'http://127.0.0.1:38081', outputs: [],
         transactions: [], continuousScanCurrentHeight: 0,
         selectedOutputs: {},
       );
-      final loaded = deserializeWalletData(jsonDecode(jsonEncode(saved)));
+      final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
       expect(loaded.outputs, isEmpty);
       expect(loaded.transactions, isEmpty);
@@ -422,13 +322,13 @@ void main() {
         subaddressIndex: i % 3 == 0 ? Tuple2(0, i) : null,
       ));
 
-      final saved = serializeWalletData(
+      final saved = WalletSerializer.serialize(
         seed: 'test', network: 'stagenet', address: 'addr',
         nodeUrl: 'http://node', outputs: outputs,
         transactions: [], continuousScanCurrentHeight: 1100,
         selectedOutputs: {'tx_0:0', 'tx_1:0', 'tx_2:0'},
       );
-      final loaded = deserializeWalletData(jsonDecode(jsonEncode(saved)));
+      final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
       expect(loaded.outputs.length, 100);
 
@@ -442,8 +342,6 @@ void main() {
     });
 
     test('output amounts survive as exact piconero values', () {
-      // This verifies amounts are stored as strings and parsed correctly,
-      // avoiding floating point precision loss
       final output = OwnedOutput(
         txHash: 'tx1', outputIndex: 0,
         amount: Uint64(BigInt.parse('123456789012')),
@@ -455,13 +353,13 @@ void main() {
         spent: false, keyImage: 'ki',
       );
 
-      final saved = serializeWalletData(
+      final saved = WalletSerializer.serialize(
         seed: 'test', network: 'stagenet', address: null,
         nodeUrl: 'http://node', outputs: [output],
         transactions: [], continuousScanCurrentHeight: 0,
         selectedOutputs: {},
       );
-      final loaded = deserializeWalletData(jsonDecode(jsonEncode(saved)));
+      final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
       expect(loaded.outputs[0].amount.toInt(), 123456789012);
       expect(loaded.outputs[0].amountXmr, '0.123456789012');
@@ -469,8 +367,6 @@ void main() {
   });
 
   group('Wallet Data Format - Output inside Transaction vs Top-level', () {
-    // The same output appears in both the top-level `outputs` list and
-    // inside a transaction's `receivedOutputs`. Both must serialize consistently.
     test('output serialized in transaction matches top-level output', () {
       final output = TestHelpers.createMockOutput(
         txHash: 'tx1', outputIndex: 0, amountXmr: '2.5', blockHeight: 500,
@@ -481,13 +377,13 @@ void main() {
         receivedOutputs: [output], spentKeyImages: [],
       );
 
-      final saved = serializeWalletData(
+      final saved = WalletSerializer.serialize(
         seed: 'test', network: 'stagenet', address: null,
         nodeUrl: 'http://node', outputs: [output],
         transactions: [tx], continuousScanCurrentHeight: 500,
         selectedOutputs: {},
       );
-      final loaded = deserializeWalletData(jsonDecode(jsonEncode(saved)));
+      final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
       final topOutput = loaded.outputs[0];
       final txOutput = loaded.transactions[0].receivedOutputs[0];
@@ -512,25 +408,25 @@ void main() {
 
   group('Wallet Data Format - Selected Outputs', () {
     test('preserves selected outputs set through roundtrip', () {
-      final saved = serializeWalletData(
+      final saved = WalletSerializer.serialize(
         seed: 'test', network: 'stagenet', address: null,
         nodeUrl: 'http://node', outputs: [],
         transactions: [], continuousScanCurrentHeight: 0,
         selectedOutputs: {'tx1:0', 'tx1:1', 'tx2:0'},
       );
-      final loaded = deserializeWalletData(jsonDecode(jsonEncode(saved)));
+      final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
       expect(loaded.selectedOutputs, {'tx1:0', 'tx1:1', 'tx2:0'});
     });
 
     test('handles empty selected outputs', () {
-      final saved = serializeWalletData(
+      final saved = WalletSerializer.serialize(
         seed: 'test', network: 'stagenet', address: null,
         nodeUrl: 'http://node', outputs: [],
         transactions: [], continuousScanCurrentHeight: 0,
         selectedOutputs: {},
       );
-      final loaded = deserializeWalletData(jsonDecode(jsonEncode(saved)));
+      final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
       expect(loaded.selectedOutputs, isEmpty);
     });
@@ -538,25 +434,25 @@ void main() {
 
   group('Wallet Data Format - Scan State', () {
     test('preserves scan height through roundtrip', () {
-      final saved = serializeWalletData(
+      final saved = WalletSerializer.serialize(
         seed: 'test', network: 'stagenet', address: null,
         nodeUrl: 'http://node', outputs: [],
         transactions: [], continuousScanCurrentHeight: 987654,
         selectedOutputs: {},
       );
-      final loaded = deserializeWalletData(jsonDecode(jsonEncode(saved)));
+      final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
       expect(loaded.continuousScanCurrentHeight, 987654);
     });
 
     test('preserves zero scan height', () {
-      final saved = serializeWalletData(
+      final saved = WalletSerializer.serialize(
         seed: 'test', network: 'stagenet', address: null,
         nodeUrl: 'http://node', outputs: [],
         transactions: [], continuousScanCurrentHeight: 0,
         selectedOutputs: {},
       );
-      final loaded = deserializeWalletData(jsonDecode(jsonEncode(saved)));
+      final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
       expect(loaded.continuousScanCurrentHeight, 0);
     });
@@ -565,62 +461,105 @@ void main() {
   group('Wallet Data Format - Network Types', () {
     for (final network in ['mainnet', 'stagenet', 'testnet']) {
       test('preserves $network', () {
-        final saved = serializeWalletData(
+        final saved = WalletSerializer.serialize(
           seed: 'test', network: network, address: null,
           nodeUrl: 'http://node', outputs: [],
           transactions: [], continuousScanCurrentHeight: 0,
           selectedOutputs: {},
         );
-        final loaded = deserializeWalletData(jsonDecode(jsonEncode(saved)));
+        final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
         expect(loaded.network, network);
       });
     }
   });
 
-  group('Wallet ID Extraction from Filename', () {
-    // Tests the logic from WalletPersistenceService.extractWalletIdFromFilename
-    // Replicated here since WalletPersistenceService can't be imported in tests
-    // (depends on dart:html)
-    String extractWalletId(String filename) {
-      String id = filename;
-      if (id.endsWith('.monero-wallet')) {
-        id = id.substring(0, id.length - 14);
-      }
-      final timestampRegex = RegExp(r'_\d{8}-\d{6}$');
-      id = id.replaceAll(timestampRegex, '');
-      if (id.isEmpty || !RegExp(r'^[a-zA-Z0-9_-]+$').hasMatch(id)) {
-        id = 'imported_wallet';
-      }
-      return id;
-    }
+  group('Wallet Data Format - Default Values', () {
+    test('defaults seed to empty string when missing', () {
+      final data = {
+        'network': 'stagenet', 'address': null,
+        'nodeUrl': 'http://node', 'outputs': [],
+        'transactions': null,
+        'scanState': {'continuousScanCurrentHeight': 0},
+        'selectedOutputs': [],
+      };
+      final loaded = WalletSerializer.deserialize(data);
+      expect(loaded.seed, '');
+    });
 
+    test('defaults network to stagenet when missing', () {
+      final data = {
+        'seed': 'test', 'address': null,
+        'nodeUrl': 'http://node', 'outputs': [],
+        'transactions': null,
+        'scanState': {'continuousScanCurrentHeight': 0},
+        'selectedOutputs': [],
+      };
+      final loaded = WalletSerializer.deserialize(data);
+      expect(loaded.network, 'stagenet');
+    });
+
+    test('defaults nodeUrl when missing', () {
+      final data = {
+        'seed': 'test', 'network': 'stagenet', 'address': null,
+        'outputs': [],
+        'transactions': null,
+        'scanState': {'continuousScanCurrentHeight': 0},
+        'selectedOutputs': [],
+      };
+      final loaded = WalletSerializer.deserialize(data);
+      expect(loaded.nodeUrl, 'http://127.0.0.1:38081');
+    });
+  });
+
+  group('WalletSerializer.getStorageKey', () {
+    test('prefixes wallet ID correctly', () {
+      expect(WalletSerializer.getStorageKey('my-wallet'), 'monero_wallet_my-wallet');
+    });
+
+    test('handles empty wallet ID', () {
+      expect(WalletSerializer.getStorageKey(''), 'monero_wallet_');
+    });
+
+    test('handles special characters in wallet ID', () {
+      expect(WalletSerializer.getStorageKey('test_wallet-1'), 'monero_wallet_test_wallet-1');
+    });
+  });
+
+  group('WalletSerializer.extractWalletIdFromFilename', () {
     test('extracts ID from standard export filename', () {
-      expect(extractWalletId('my-wallet_20260210-143025.monero-wallet'), 'my-wallet');
+      expect(WalletSerializer.extractWalletIdFromFilename(
+          'my-wallet_20260210-143025.monero-wallet'), 'my-wallet');
     });
 
     test('handles filename without timestamp', () {
-      expect(extractWalletId('my-wallet.monero-wallet'), 'my-wallet');
+      expect(WalletSerializer.extractWalletIdFromFilename(
+          'my-wallet.monero-wallet'), 'my-wallet');
     });
 
     test('handles filename without extension', () {
-      expect(extractWalletId('my-wallet_20260210-143025'), 'my-wallet');
+      expect(WalletSerializer.extractWalletIdFromFilename(
+          'my-wallet_20260210-143025'), 'my-wallet');
     });
 
     test('handles plain wallet ID', () {
-      expect(extractWalletId('my-wallet'), 'my-wallet');
+      expect(WalletSerializer.extractWalletIdFromFilename(
+          'my-wallet'), 'my-wallet');
     });
 
     test('handles underscore in wallet ID', () {
-      expect(extractWalletId('my_wallet_20260210-143025.monero-wallet'), 'my_wallet');
+      expect(WalletSerializer.extractWalletIdFromFilename(
+          'my_wallet_20260210-143025.monero-wallet'), 'my_wallet');
     });
 
     test('returns default for empty after stripping', () {
-      expect(extractWalletId('.monero-wallet'), 'imported_wallet');
+      expect(WalletSerializer.extractWalletIdFromFilename(
+          '.monero-wallet'), 'imported_wallet');
     });
 
     test('returns default for invalid characters', () {
-      expect(extractWalletId('wallet with spaces.monero-wallet'), 'imported_wallet');
+      expect(WalletSerializer.extractWalletIdFromFilename(
+          'wallet with spaces.monero-wallet'), 'imported_wallet');
     });
   });
 }
