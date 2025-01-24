@@ -9,7 +9,7 @@ import '../widgets/password_dialog.dart';
 import '../widgets/wallet_id_dialog.dart';
 import '../widgets/save_wallet_dialog.dart';
 import '../widgets/delete_confirmation_dialog.dart';
-import '../services/wallet_persistence_service.dart';
+import '../services/wallet_persistence_browser.dart';
 import '../models/wallet_instance.dart';
 import '../models/wallet_transaction.dart';
 import '../utils/clipboard_utils.dart';
@@ -133,7 +133,7 @@ class _DebugViewState extends State<DebugView> {
   String? _importError;
 
   // Helper to get storage key for current wallet
-  String get _storageKey => WalletPersistenceService.getStorageKey(_walletId);
+  String get _storageKey => WalletPersistenceBrowser.getStorageKey(_walletId);
 
   int? _expandedPanel;
 
@@ -924,7 +924,7 @@ class _DebugViewState extends State<DebugView> {
     final isSidePanel = _extensionService.isSidePanel;
 
     // Pre-compute dynamic subtitles
-    final hasData = WalletPersistenceService.hasWalletData(_walletId);
+    final hasData = WalletPersistenceBrowser.hasWalletData(_walletId);
     final totalBytes = _calculateTotalStorageBytes();
     final fileManagementSubtitle = hasData
         ? 'Data stored: ${_formatBytes(totalBytes)}'
@@ -1249,7 +1249,7 @@ class _DebugViewState extends State<DebugView> {
     }
 
     // Use the persistence service to save wallet data
-    final saveResult = await WalletPersistenceService.saveWalletData(
+    final saveResult = await WalletPersistenceBrowser.saveWalletData(
       walletId: walletId,
       password: password,
       seed: _controller.text.trim(),
@@ -1287,7 +1287,7 @@ class _DebugViewState extends State<DebugView> {
   }
 
   void _refreshAvailableWallets() {
-    final walletIds = WalletPersistenceService.listAvailableWallets();
+    final walletIds = WalletPersistenceBrowser.listAvailableWallets();
 
     setState(() {
       _availableWalletIds = walletIds;
@@ -1337,7 +1337,7 @@ class _DebugViewState extends State<DebugView> {
 
     _refreshAvailableWallets();
 
-    if (WalletPersistenceService.hasWalletData(newWalletId)) {
+    if (WalletPersistenceBrowser.hasWalletData(newWalletId)) {
       debugPrint('[WALLET] Wallet $newWalletId has saved data, auto-loading...');
       await _loadWalletData();
     } else {
@@ -1475,7 +1475,7 @@ class _DebugViewState extends State<DebugView> {
     }
 
     // Use the persistence service to load wallet data
-    final loadResult = await WalletPersistenceService.loadWalletData(
+    final loadResult = await WalletPersistenceBrowser.loadWalletData(
       walletId: _walletId,
       password: password,
     );
@@ -1560,7 +1560,7 @@ class _DebugViewState extends State<DebugView> {
     }
 
     // Check if wallet has saved data
-    if (!WalletPersistenceService.hasWalletData(_walletId)) {
+    if (!WalletPersistenceBrowser.hasWalletData(_walletId)) {
       setState(() {
         _exportError = 'No saved data found for this wallet';
       });
@@ -1574,7 +1574,7 @@ class _DebugViewState extends State<DebugView> {
     });
 
     // Use the persistence service to export wallet
-    final exportResult = await WalletPersistenceService.exportWallet(
+    final exportResult = await WalletPersistenceBrowser.exportWallet(
       walletId: _walletId,
     );
 
@@ -1627,7 +1627,7 @@ class _DebugViewState extends State<DebugView> {
       final file = files[0];
 
       // Extract suggested wallet ID from filename
-      final suggestedWalletId = WalletPersistenceService.extractWalletIdFromFilename(file.name);
+      final suggestedWalletId = WalletPersistenceBrowser.extractWalletIdFromFilename(file.name);
 
       // Prompt for wallet ID (loop until valid non-conflicting ID or user cancels)
       String? walletId;
@@ -1697,7 +1697,7 @@ class _DebugViewState extends State<DebugView> {
       }
 
       // Use the persistence service to import wallet
-      final importResult = await WalletPersistenceService.importWallet(
+      final importResult = await WalletPersistenceBrowser.importWallet(
         file: file,
         walletId: walletId,
         password: password,
@@ -1742,7 +1742,7 @@ class _DebugViewState extends State<DebugView> {
     if (confirmed != true) return;
 
     final deletedWalletId = _walletId;
-    WalletPersistenceService.clearWalletData(deletedWalletId);
+    WalletPersistenceBrowser.clearWalletData(deletedWalletId);
     _refreshAvailableWallets();
     _startNewWallet();
     _showSnackBar('Deleted wallet: $deletedWalletId');
