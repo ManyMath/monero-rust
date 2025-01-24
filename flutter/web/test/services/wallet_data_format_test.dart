@@ -512,6 +512,76 @@ void main() {
     });
   });
 
+  group('Wallet Data Format - Deserialization Error Cases', () {
+    test('throws on missing scanState field', () {
+      final data = {
+        'seed': 'test', 'network': 'stagenet', 'address': null,
+        'nodeUrl': 'http://node', 'outputs': [],
+        'transactions': [],
+        'selectedOutputs': [],
+      };
+      expect(() => WalletSerializer.deserialize(data), throwsA(anything));
+    });
+
+    test('throws on missing selectedOutputs field', () {
+      final data = {
+        'seed': 'test', 'network': 'stagenet', 'address': null,
+        'nodeUrl': 'http://node', 'outputs': [],
+        'transactions': [],
+        'scanState': {'continuousScanCurrentHeight': 0},
+      };
+      expect(() => WalletSerializer.deserialize(data), throwsA(anything));
+    });
+
+    test('throws on missing outputs field', () {
+      final data = {
+        'seed': 'test', 'network': 'stagenet', 'address': null,
+        'nodeUrl': 'http://node',
+        'transactions': [],
+        'scanState': {'continuousScanCurrentHeight': 0},
+        'selectedOutputs': [],
+      };
+      expect(() => WalletSerializer.deserialize(data), throwsA(anything));
+    });
+
+    test('throws on malformed output amount', () {
+      final data = {
+        'seed': 'test', 'network': 'stagenet', 'address': null,
+        'nodeUrl': 'http://node',
+        'outputs': [
+          {
+            'txHash': 'tx1', 'outputIndex': 0,
+            'amount': 'not_a_number', 'amountXmr': '1.0',
+            'key': 'k', 'keyOffset': 'ko', 'commitmentMask': 'cm',
+            'subaddressIndex': null, 'paymentId': null,
+            'receivedOutputBytes': 'bytes',
+            'blockHeight': '100', 'spent': false, 'keyImage': 'ki',
+          }
+        ],
+        'transactions': [],
+        'scanState': {'continuousScanCurrentHeight': 0},
+        'selectedOutputs': [],
+      };
+      expect(() => WalletSerializer.deserialize(data), throwsA(anything));
+    });
+
+    test('throws on empty JSON object', () {
+      expect(() => WalletSerializer.deserialize({}), throwsA(anything));
+    });
+
+    test('throws on output missing required fields', () {
+      final data = {
+        'seed': 'test', 'network': 'stagenet', 'address': null,
+        'nodeUrl': 'http://node',
+        'outputs': [{'txHash': 'tx1'}],
+        'transactions': [],
+        'scanState': {'continuousScanCurrentHeight': 0},
+        'selectedOutputs': [],
+      };
+      expect(() => WalletSerializer.deserialize(data), throwsA(anything));
+    });
+  });
+
   group('WalletSerializer.getStorageKey', () {
     test('prefixes wallet ID correctly', () {
       expect(WalletSerializer.getStorageKey('my-wallet'), 'monero_wallet_my-wallet');
