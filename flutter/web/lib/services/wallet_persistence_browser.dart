@@ -187,7 +187,7 @@ class WalletPersistenceBrowser {
             'Failed to decrypt file (wrong password or corrupted file)');
       }
 
-      jsonDecode(jsonString);
+      final parsed = jsonDecode(jsonString) as Map<String, dynamic>;
 
       _defaultInstance.setRawData(walletId, encryptedData);
       debugPrint('[IMPORT] Stored wallet data for: $walletId');

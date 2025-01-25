@@ -1306,6 +1306,8 @@ class _DebugViewState extends State<DebugView> {
 
     setState(() {
       _walletId = '';
+      _openWallets.clear();
+      _activeWalletId = null;
       _resetWalletState();
       _isContinuousScanning = false;
       _isContinuousPaused = false;
@@ -1488,58 +1490,64 @@ class _DebugViewState extends State<DebugView> {
       return;
     }
 
+    // Capture loaded data before any state changes can wipe it
+    final seed = loadResult.seed!;
+    final network = loadResult.network!;
+    final address = loadResult.address;
+    final loadedOutputs = loadResult.outputs!;
+    final loadedTransactions = loadResult.transactions!;
+    final loadedHeight = loadResult.continuousScanCurrentHeight!;
+    final loadedSelectedOutputs = loadResult.selectedOutputs!;
+
     // Restore wallet state (flag prevents _onSeedChanged from wiping data)
     _isRestoringWallet = true;
     setState(() {
-      _controller.text = loadResult.seed!;
-      _network = loadResult.network!;
-      _derivedAddress = loadResult.address;
+      _controller.text = seed;
+      _network = network;
+      _derivedAddress = address;
       _nodeUrlController.text = loadResult.nodeUrl!;
-      _allOutputs = loadResult.outputs!;
-      _allTransactions = loadResult.transactions!;
-      _continuousScanCurrentHeight = loadResult.continuousScanCurrentHeight!;
+      _continuousScanCurrentHeight = loadedHeight;
       _continuousScanTargetHeight = 0;
       _isSynced = false;
       _daemonHeight = null;
       _isContinuousScanning = false;
-      _isContinuousPaused = _continuousScanCurrentHeight > 0;
+      _isContinuousPaused = loadedHeight > 0;
 
-      // Set block height field to resume scanning from last synced height
-      if (_continuousScanCurrentHeight > 0) {
-        _blockHeightController.text = _continuousScanCurrentHeight.toString();
+      if (loadedHeight > 0) {
+        _blockHeightController.text = loadedHeight.toString();
         _blockHeightUserEdited = false;
       }
-
-      // Restore selected outputs
-      _selectedOutputs = loadResult.selectedOutputs!;
 
       _isLoadingWallet = false;
       _loadError = null;
     });
     _isRestoringWallet = false;
 
-    // Open this wallet in multi-wallet mode
-    final seed = loadResult.seed!;
-    final network = loadResult.network!;
-    final address = loadResult.address ?? _derivedAddress ?? '';
-    if (seed.isNotEmpty && address.isNotEmpty) {
-      _openWallet(_walletId, seed, network, address);
-      // Update the opened wallet's outputs
-      if (_activeWallet != null) {
-        _activeWallet!.outputs = _allOutputs;
-        _activeWallet!.currentHeight = _continuousScanCurrentHeight;
-        _activeWallet!.daemonHeight = _daemonHeight ?? 0;
-      }
+    final resolvedAddress = address ?? _derivedAddress ?? '';
+    if (seed.isNotEmpty && resolvedAddress.isNotEmpty) {
+      _openWallet(_walletId, seed, network, resolvedAddress);
+    }
+
+    setState(() {
+      _allOutputs = loadedOutputs;
+      _allTransactions = loadedTransactions;
+      _selectedOutputs = loadedSelectedOutputs;
+    });
+
+    if (_activeWallet != null) {
+      _activeWallet!.outputs = _allOutputs;
+      _activeWallet!.currentHeight = loadedHeight;
+      _activeWallet!.daemonHeight = _daemonHeight ?? 0;
     }
 
     // Hydrate Rust WalletActor with restored outputs so transactions work
-    if (_allOutputs.isNotEmpty) {
+    if (loadedOutputs.isNotEmpty) {
       RestoreWalletDataRequest(
         seed: seed,
         network: network,
-        outputs: _allOutputs,
+        outputs: loadedOutputs,
         daemonHeight: Uint64(BigInt.from(_daemonHeight ?? 0)),
-        currentHeight: Uint64(BigInt.from(_continuousScanCurrentHeight)),
+        currentHeight: Uint64(BigInt.from(loadedHeight)),
       ).sendSignalToRust();
     }
 
@@ -1714,12 +1722,9 @@ class _DebugViewState extends State<DebugView> {
       });
 
       if (importResult.success) {
-        // Refresh wallet list
-        _refreshAvailableWallets();
-
         // Switch to imported wallet
         await _switchWallet(walletId);
-
+        
         final msg = shouldOverwrite
             ? 'Wallet "$walletId" overwritten successfully'
             : 'Wallet "$walletId" imported successfully';
