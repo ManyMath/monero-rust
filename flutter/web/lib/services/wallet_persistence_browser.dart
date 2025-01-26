@@ -13,6 +13,8 @@ export 'wallet_persistence_service.dart';
 
 class WalletPersistenceBrowser {
   static WalletPersistenceService? _default;
+  static WalletPersistenceService get defaultPersistence =>
+      _defaultInstance;
   static WalletPersistenceService get _defaultInstance =>
       _default ??= WalletPersistenceService(
         storage: LocalStorageBackend(),

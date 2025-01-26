@@ -31,6 +31,7 @@ import '../widgets/close_wallet_dialog.dart';
 import '../widgets/create_transaction_panel.dart';
 import '../widgets/overwrite_wallet_dialog.dart';
 import '../widgets/security_warning_dialog.dart';
+import '../services/wallet_lifecycle_manager.dart';
 
 class DebugView extends StatefulWidget {
   const DebugView({super.key});
@@ -48,19 +49,18 @@ class _DebugViewState extends State<DebugView> {
   final _blockHeightFocusNode = FocusNode();
   bool _blockHeightUserEdited = false;
 
-  // Current wallet ID (multi-wallet support)
-  String _walletId = '';
-  List<String> _availableWalletIds = [];
+  // Lifecycle manager: single source of truth for wallet state
+  late final WalletLifecycleManager _lifecycle;
 
-  // Multi-wallet instances (wallets currently open/scanning)
-  Map<String, WalletInstance> _openWallets = {};
-  String? _activeWalletId; // Currently displayed wallet
-
-  WalletInstance? get _activeWallet =>
-      _activeWalletId != null ? _openWallets[_activeWalletId] : null;
-
-  List<WalletInstance> get _activeWallets =>
-      _openWallets.values.where((w) => !w.isClosed).toList();
+  // Delegating getters/setters for wallet state
+  String get _walletId => _lifecycle.walletId;
+  set _walletId(String v) => _lifecycle.walletId = v;
+  List<String> get _availableWalletIds => _lifecycle.availableWalletIds;
+  Map<String, WalletInstance> get _openWallets => _lifecycle.openWallets;
+  String? get _activeWalletId => _lifecycle.activeWalletId;
+  set _activeWalletId(String? v) => _lifecycle.activeWalletId = v;
+  WalletInstance? get _activeWallet => _lifecycle.activeWallet;
+  List<WalletInstance> get _activeWallets => _lifecycle.activeWallets;
 
   int get _lowestSyncedHeight {
     final heights = _activeWallets
@@ -84,11 +84,13 @@ class _DebugViewState extends State<DebugView> {
 
   BlockScanResponse? _scanResult;
   String? _scanError;
-  List<OwnedOutput> _allOutputs = [];
+  List<OwnedOutput> get _allOutputs => _lifecycle.allOutputs;
+  set _allOutputs(List<OwnedOutput> v) => _lifecycle.allOutputs = v;
   int? _daemonHeight;
 
   // Transaction tracking state
-  List<WalletTransaction> _allTransactions = [];
+  List<WalletTransaction> get _allTransactions => _lifecycle.allTransactions;
+  set _allTransactions(List<WalletTransaction> v) => _lifecycle.allTransactions = v;
   String _txSortBy = 'confirms'; // 'confirms' or 'amount'
   bool _txSortAscending = false;
   Set<String> _expandedTransactions = {}; // Track which transaction cards are expanded
@@ -99,7 +101,8 @@ class _DebugViewState extends State<DebugView> {
   // Continuous scan state
   bool _isContinuousScanning = false;
   bool _isContinuousPaused = false;
-  int _continuousScanCurrentHeight = 0;
+  int get _continuousScanCurrentHeight => _lifecycle.continuousScanCurrentHeight;
+  set _continuousScanCurrentHeight(int v) => _lifecycle.continuousScanCurrentHeight = v;
   int _continuousScanTargetHeight = 0;
   bool _isSynced = false;
 
@@ -116,7 +119,8 @@ class _DebugViewState extends State<DebugView> {
   bool _showSpentOutputs = false;
   String _sortBy = 'confirms'; // 'confirms' or 'value'
   bool _sortAscending = false; // false = descending (highest first)
-  Set<String> _selectedOutputs = {}; // "txHash:outputIndex" keys for coin control
+  Set<String> get _selectedOutputs => _lifecycle.selectedOutputs;
+  set _selectedOutputs(Set<String> v) => _lifecycle.selectedOutputs = v;
 
   bool _isScanningMempool = false;
 
@@ -152,6 +156,10 @@ class _DebugViewState extends State<DebugView> {
   @override
   void initState() {
     super.initState();
+
+    _lifecycle = WalletLifecycleManager(
+      persistence: WalletPersistenceBrowser.defaultPersistence,
+    );
 
     _controller.addListener(_onSeedChanged);
     _blockHeightController.addListener(_onBlockHeightChanged);
@@ -1287,14 +1295,8 @@ class _DebugViewState extends State<DebugView> {
   }
 
   void _refreshAvailableWallets() {
-    final walletIds = WalletPersistenceBrowser.listAvailableWallets();
-
     setState(() {
-      _availableWalletIds = walletIds;
-      // If current wallet isn't in the list and there are wallets, select the first one
-      if (walletIds.isNotEmpty && !walletIds.contains(_walletId)) {
-        _walletId = walletIds.first;
-      }
+      _lifecycle.refreshAvailableWallets();
     });
   }
 
@@ -1305,9 +1307,7 @@ class _DebugViewState extends State<DebugView> {
     _stopPollingTimers();
 
     setState(() {
-      _walletId = '';
-      _openWallets.clear();
-      _activeWalletId = null;
+      _lifecycle.startNewWallet();
       _resetWalletState();
       _isContinuousScanning = false;
       _isContinuousPaused = false;
@@ -1321,52 +1321,39 @@ class _DebugViewState extends State<DebugView> {
   }
 
   Future<void> _switchWallet(String newWalletId) async {
-    if (newWalletId == _walletId) {
-      debugPrint('[WALLET] Already on wallet: $newWalletId');
-      return;
-    }
-
     debugPrint('[WALLET] Switching from $_walletId to $newWalletId');
 
-    if (_openWallets.containsKey(newWalletId) && !_openWallets[newWalletId]!.isClosed) {
-      _switchToWallet(newWalletId);
-      return;
-    }
+    final result = _lifecycle.switchWallet(newWalletId);
 
-    setState(() {
-      _walletId = newWalletId;
-    });
+    switch (result) {
+      case SwitchResult.alreadyCurrent:
 
-    _refreshAvailableWallets();
-
-    if (WalletPersistenceBrowser.hasWalletData(newWalletId)) {
-      debugPrint('[WALLET] Wallet $newWalletId has saved data, auto-loading...');
-      await _loadWalletData();
-    } else {
-      setState(() {
-        _resetWalletState();
-      });
+        return;
+      case SwitchResult.switchedToOpen:
+        final wallet = _lifecycle.activeWallet!;
+        _isRestoringWallet = true;
+        setState(() {
+          _controller.text = wallet.seed;
+          _network = wallet.network;
+          _derivedAddress = wallet.address;
+          _daemonHeight = wallet.daemonHeight;
+        });
+        _isRestoringWallet = false;
+        return;
+      case SwitchResult.needsLoad:
+        await _loadWalletData();
+        return;
+      case SwitchResult.reset:
+        setState(() {
+          _resetWalletState();
+        });
+        return;
     }
   }
 
   void _openWallet(String walletId, String seed, String network, String address) {
     setState(() {
-      final walletInstance = WalletInstance(
-        walletId: walletId,
-        seed: seed,
-        network: network,
-        address: address,
-        outputs: [],
-        currentHeight: 0,
-        daemonHeight: 0,
-        isScanning: false,
-        isClosed: false,
-      );
-
-      _openWallets[walletId] = walletInstance;
-      _activeWalletId = walletId;
-
-      _allOutputs = walletInstance.outputs;
+      _lifecycle.openWallet(walletId, seed, network, address);
       _derivedAddress = address;
     });
 
@@ -1432,19 +1419,15 @@ class _DebugViewState extends State<DebugView> {
   }
 
   void _switchToWallet(String walletId) {
-    final wallet = _openWallets[walletId];
-    if (wallet == null || wallet.isClosed) return;
+    final wallet = _lifecycle.switchToWallet(walletId);
+    if (wallet == null) return;
 
     _isRestoringWallet = true;
     setState(() {
-      _activeWalletId = walletId;
-      _walletId = walletId;
       _controller.text = wallet.seed;
       _network = wallet.network;
       _derivedAddress = wallet.address;
-      _allOutputs = wallet.outputs;
       _daemonHeight = wallet.daemonHeight;
-      _continuousScanCurrentHeight = wallet.currentHeight;
     });
     _isRestoringWallet = false;
 
@@ -1529,17 +1512,15 @@ class _DebugViewState extends State<DebugView> {
     }
 
     setState(() {
-      _allOutputs = loadedOutputs;
-      _allTransactions = loadedTransactions;
-      _selectedOutputs = loadedSelectedOutputs;
+      _lifecycle.restoreLoadedData(
+        outputs: loadedOutputs,
+        transactions: loadedTransactions,
+        selectedOutputs: loadedSelectedOutputs,
+        scanHeight: loadedHeight,
+        daemonHeight: _daemonHeight ?? 0,
+      );
     });
-
-    if (_activeWallet != null) {
-      _activeWallet!.outputs = _allOutputs;
-      _activeWallet!.currentHeight = loadedHeight;
-      _activeWallet!.daemonHeight = _daemonHeight ?? 0;
-    }
-
+    
     // Hydrate Rust WalletActor with restored outputs so transactions work
     if (loadedOutputs.isNotEmpty) {
       RestoreWalletDataRequest(
