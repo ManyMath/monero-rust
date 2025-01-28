@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tuple/tuple.dart';
+import '../../lib/src/bindings/bindings.dart';
 import '../../lib/models/wallet_transaction.dart';
 import '../../lib/services/wallet_lifecycle_manager.dart';
 import '../../lib/services/wallet_persistence_service.dart';
@@ -872,6 +873,252 @@ void main() {
       final reimportResult = mgr.switchWallet('alpha');
       expect(reimportResult, SwitchResult.needsLoad,
           reason: 'Alpha is no longer in openWallets after startNewWallet');
+    });
+  });
+
+  group('lowestSyncedHeight', () {
+    test('returns lowest height among active wallets', () {
+      final mgr = createManager();
+      mgr.openWallet('w1', 'seed1', 'stagenet', 'addr1');
+      mgr.openWallets['w1']!.currentHeight = 500;
+      mgr.openWallet('w2', 'seed2', 'stagenet', 'addr2');
+      mgr.openWallets['w2']!.currentHeight = 300;
+      mgr.openWallet('w3', 'seed3', 'stagenet', 'addr3');
+      mgr.openWallets['w3']!.currentHeight = 700;
+
+      expect(mgr.lowestSyncedHeight, 300);
+    });
+
+    test('ignores wallets with currentHeight=0', () {
+      final mgr = createManager();
+      mgr.openWallet('w1', 'seed1', 'stagenet', 'addr1');
+      mgr.openWallets['w1']!.currentHeight = 0;
+      mgr.openWallet('w2', 'seed2', 'stagenet', 'addr2');
+      mgr.openWallets['w2']!.currentHeight = 500;
+
+      expect(mgr.lowestSyncedHeight, 500);
+    });
+
+    test('ignores closed wallets', () {
+      final mgr = createManager();
+      mgr.openWallet('w1', 'seed1', 'stagenet', 'addr1');
+      mgr.openWallets['w1']!.currentHeight = 100;
+      mgr.openWallets['w1']!.isClosed = true;
+      mgr.openWallet('w2', 'seed2', 'stagenet', 'addr2');
+      mgr.openWallets['w2']!.currentHeight = 500;
+
+      expect(mgr.lowestSyncedHeight, 500);
+    });
+
+    test('returns 0 when no active wallets', () {
+      final mgr = createManager();
+      expect(mgr.lowestSyncedHeight, 0);
+    });
+
+    test('returns 0 when all heights are 0', () {
+      final mgr = createManager();
+      mgr.openWallet('w1', 'seed1', 'stagenet', 'addr1');
+
+      expect(mgr.lowestSyncedHeight, 0);
+    });
+  });
+
+  group('closeWallet', () {
+    test('closes active wallet and switches to next', () {
+      final mgr = createManager();
+      mgr.openWallet('w1', 'seed1', 'stagenet', 'addr1');
+      mgr.openWallet('w2', 'seed2', 'stagenet', 'addr2');
+      mgr.activeWalletId = 'w1';
+      mgr.walletId = 'w1';
+
+      final result = mgr.closeWallet('w1');
+
+      expect(result.found, true);
+      expect(result.switchedTo, isNotNull);
+      expect(result.switchedTo!.walletId, 'w2');
+      expect(mgr.activeWalletId, 'w2');
+      expect(mgr.walletId, 'w2');
+      expect(mgr.openWallets['w1']!.isClosed, true);
+      expect(mgr.openWallets['w1']!.isScanning, false);
+    });
+
+    test('closes non-active wallet without switching', () {
+      final mgr = createManager();
+      mgr.openWallet('w1', 'seed1', 'stagenet', 'addr1');
+      mgr.openWallet('w2', 'seed2', 'stagenet', 'addr2');
+      mgr.activeWalletId = 'w1';
+      mgr.walletId = 'w1';
+
+      final result = mgr.closeWallet('w2');
+
+      expect(result.found, true);
+      expect(result.switchedTo, isNull);
+      expect(mgr.activeWalletId, 'w1');
+      expect(mgr.openWallets['w2']!.isClosed, true);
+    });
+
+    test('closes last wallet and clears state', () {
+      final mgr = createManager();
+      mgr.openWallet('w1', 'seed1', 'stagenet', 'addr1');
+      mgr.allOutputs = [
+        TestHelpers.createMockOutput(
+          txHash: 'tx1', outputIndex: 0, amountXmr: '10.0', blockHeight: 100,
+        ),
+      ];
+
+      final result = mgr.closeWallet('w1');
+
+      expect(result.found, true);
+      expect(result.switchedTo, isNull);
+      expect(mgr.activeWalletId, isNull);
+      expect(mgr.allOutputs, isEmpty);
+    });
+
+    test('returns notFound for unknown wallet', () {
+      final mgr = createManager();
+
+      final result = mgr.closeWallet('nope');
+
+      expect(result.found, false);
+    });
+
+    test('marks wallet as not scanning', () {
+      final mgr = createManager();
+      mgr.openWallet('w1', 'seed1', 'stagenet', 'addr1');
+      mgr.openWallets['w1']!.isScanning = true;
+
+      mgr.closeWallet('w1');
+
+      expect(mgr.openWallets['w1']!.isScanning, false);
+    });
+  });
+
+  group('distributeMultiWalletScanResults', () {
+    test('distributes outputs to matching wallets by address', () {
+      final mgr = createManager();
+      mgr.openWallet('w1', 'seed1', 'stagenet', 'addr_w1');
+      mgr.openWallet('w2', 'seed2', 'stagenet', 'addr_w2');
+
+      final output1 = TestHelpers.createMockOutput(
+        txHash: 'tx1', outputIndex: 0, amountXmr: '10.0', blockHeight: 100,
+      );
+      final output2 = TestHelpers.createMockOutput(
+        txHash: 'tx2', outputIndex: 0, amountXmr: '5.0', blockHeight: 100,
+      );
+
+      mgr.distributeMultiWalletScanResults(
+        walletResults: [
+          WalletScanResult(address: 'addr_w1', outputs: [output1]),
+          WalletScanResult(address: 'addr_w2', outputs: [output2]),
+        ],
+        blockHeight: 200,
+        daemonHeight: 1000,
+        spentKeyImages: [],
+      );
+
+      expect(mgr.openWallets['w1']!.outputs.length, 1);
+      expect(mgr.openWallets['w1']!.outputs[0].txHash, 'tx1');
+      expect(mgr.openWallets['w2']!.outputs.length, 1);
+      expect(mgr.openWallets['w2']!.outputs[0].txHash, 'tx2');
+    });
+
+    test('updates wallet heights', () {
+      final mgr = createManager();
+      mgr.openWallet('w1', 'seed1', 'stagenet', 'addr_w1');
+
+      mgr.distributeMultiWalletScanResults(
+        walletResults: [
+          WalletScanResult(address: 'addr_w1', outputs: []),
+        ],
+        blockHeight: 500,
+        daemonHeight: 1000,
+        spentKeyImages: [],
+      );
+
+      expect(mgr.openWallets['w1']!.currentHeight, 500);
+      expect(mgr.openWallets['w1']!.daemonHeight, 1000);
+    });
+
+    test('does not decrease currentHeight', () {
+      final mgr = createManager();
+      mgr.openWallet('w1', 'seed1', 'stagenet', 'addr_w1');
+      mgr.openWallets['w1']!.currentHeight = 800;
+
+      mgr.distributeMultiWalletScanResults(
+        walletResults: [
+          WalletScanResult(address: 'addr_w1', outputs: []),
+        ],
+        blockHeight: 500,
+        daemonHeight: 1000,
+        spentKeyImages: [],
+      );
+
+      expect(mgr.openWallets['w1']!.currentHeight, 800,
+          reason: 'Should not decrease height');
+    });
+
+    test('marks spent outputs across all wallets', () {
+      final mgr = createManager();
+      mgr.openWallet('w1', 'seed1', 'stagenet', 'addr_w1');
+      mgr.openWallets['w1']!.outputs = [
+        TestHelpers.createMockOutput(
+          txHash: 'tx1', outputIndex: 0, amountXmr: '10.0',
+          blockHeight: 100, keyImage: 'ki_spent',
+        ),
+      ];
+      mgr.selectedOutputs = {'tx1:0'};
+
+      mgr.distributeMultiWalletScanResults(
+        walletResults: [],
+        blockHeight: 200,
+        daemonHeight: 1000,
+        spentKeyImages: ['ki_spent'],
+      );
+
+      expect(mgr.openWallets['w1']!.outputs[0].spent, true);
+      expect(mgr.selectedOutputs, isEmpty);
+    });
+
+    test('refreshes allOutputs from active wallet', () {
+      final mgr = createManager();
+      mgr.openWallet('w1', 'seed1', 'stagenet', 'addr_w1');
+      // activeWalletId is now 'w1'
+
+      final output = TestHelpers.createMockOutput(
+        txHash: 'tx1', outputIndex: 0, amountXmr: '10.0', blockHeight: 100,
+      );
+
+      mgr.distributeMultiWalletScanResults(
+        walletResults: [
+          WalletScanResult(address: 'addr_w1', outputs: [output]),
+        ],
+        blockHeight: 200,
+        daemonHeight: 1000,
+        spentKeyImages: [],
+      );
+
+      expect(mgr.allOutputs.length, 1);
+      expect(mgr.allOutputs[0].txHash, 'tx1');
+    });
+
+    test('ignores results for unknown addresses', () {
+      final mgr = createManager();
+      mgr.openWallet('w1', 'seed1', 'stagenet', 'addr_w1');
+
+      final output = TestHelpers.createMockOutput(
+        txHash: 'tx1', outputIndex: 0, amountXmr: '10.0', blockHeight: 100,
+      );
+
+      mgr.distributeMultiWalletScanResults(
+        walletResults: [
+          WalletScanResult(address: 'unknown_addr', outputs: [output]),
+        ],
+        blockHeight: 200,
+        daemonHeight: 1000,
+        spentKeyImages: [],
+      );
+
+      expect(mgr.openWallets['w1']!.outputs, isEmpty);
     });
   });
 }

@@ -56,4 +56,89 @@ class OutputUtils {
     }
     return total;
   }
+
+  /// Merge scanned outputs into existing list in-place.
+  /// Adds new outputs; updates unconfirmed (blockHeight=0) with confirmed version.
+  static void mergeScannedOutputs(
+    List<OwnedOutput> existing,
+    List<OwnedOutput> incoming,
+  ) {
+    for (var output in incoming) {
+      final idx = existing.indexWhere((o) =>
+        o.txHash == output.txHash && o.outputIndex == output.outputIndex
+      );
+      if (idx == -1) {
+        existing.add(output);
+      } else if (existing[idx].blockHeight.toInt() == 0) {
+        existing[idx] = output;
+      }
+    }
+  }
+
+  /// Add outputs not already present (by txHash+outputIndex) in-place.
+  static void addIfAbsent(
+    List<OwnedOutput> existing,
+    List<OwnedOutput> incoming,
+  ) {
+    for (var output in incoming) {
+      final exists = existing.any((o) =>
+        o.txHash == output.txHash && o.outputIndex == output.outputIndex
+      );
+      if (!exists) {
+        existing.add(output);
+      }
+    }
+  }
+
+  /// Convert a ChangeOutput to an unconfirmed OwnedOutput.
+  static OwnedOutput changeOutputToOwned(ChangeOutput change) {
+    return OwnedOutput(
+      txHash: change.txHash,
+      outputIndex: change.outputIndex,
+      amount: change.amount,
+      amountXmr: change.amountXmr,
+      key: change.key,
+      keyOffset: change.keyOffset,
+      commitmentMask: change.commitmentMask,
+      subaddressIndex: change.subaddressIndex,
+      paymentId: null,
+      receivedOutputBytes: change.receivedOutputBytes,
+      blockHeight: Uint64(BigInt.zero),
+      spent: false,
+      keyImage: change.keyImage,
+    );
+  }
+
+  /// Mark outputs as spent by matching key images; removes from selectedOutputs.
+  static void markSpentByKeyImages(
+    List<OwnedOutput> outputs,
+    List<String> keyImages,
+    Set<String> selectedOutputs,
+  ) {
+    final keyImageSet = keyImages.toSet();
+    for (int i = 0; i < outputs.length; i++) {
+      if (keyImageSet.contains(outputs[i].keyImage) &&
+          !outputs[i].spent) {
+        final outputKey = '${outputs[i].txHash}:${outputs[i].outputIndex}';
+        selectedOutputs.remove(outputKey);
+        outputs[i] = markAsSpent(outputs[i]);
+      }
+    }
+  }
+
+  /// Mark outputs as spent by "txHash:outputIndex" keys; removes from selectedOutputs.
+  static void markSpentByOutputKeys(
+    List<OwnedOutput> outputs,
+    List<String> outputKeys,
+    Set<String> selectedOutputs,
+  ) {
+    final keySet = outputKeys.toSet();
+    for (int i = 0; i < outputs.length; i++) {
+      final key = '${outputs[i].txHash}:${outputs[i].outputIndex}';
+      if (keySet.contains(key)) {
+        selectedOutputs.remove(key);
+        outputs[i] = markAsSpent(outputs[i]);
+      }
+    }
+  }
 }

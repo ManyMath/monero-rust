@@ -58,17 +58,9 @@ class _DebugViewState extends State<DebugView> {
   List<String> get _availableWalletIds => _lifecycle.availableWalletIds;
   Map<String, WalletInstance> get _openWallets => _lifecycle.openWallets;
   String? get _activeWalletId => _lifecycle.activeWalletId;
-  set _activeWalletId(String? v) => _lifecycle.activeWalletId = v;
-  WalletInstance? get _activeWallet => _lifecycle.activeWallet;
   List<WalletInstance> get _activeWallets => _lifecycle.activeWallets;
 
-  int get _lowestSyncedHeight {
-    final heights = _activeWallets
-        .where((w) => w.currentHeight > 0)
-        .map((w) => w.currentHeight)
-        .toList();
-    return heights.isEmpty ? 0 : heights.reduce((a, b) => a < b ? a : b);
-  }
+  int get _lowestSyncedHeight => _lifecycle.lowestSyncedHeight;
 
   String _network = 'stagenet';
   final String _seedType = '25 word';
@@ -206,18 +198,7 @@ class _DebugViewState extends State<DebugView> {
           _scanResult = signal.message;
           _scanError = null;
           _daemonHeight = signal.message.daemonHeight.toInt();
-          // Add new outputs or update unconfirmed ones that are now confirmed
-          for (var output in signal.message.outputs) {
-            final existingIndex = _allOutputs.indexWhere((o) =>
-              o.txHash == output.txHash && o.outputIndex == output.outputIndex
-            );
-            if (existingIndex == -1) {
-              _allOutputs.add(output);
-            } else if (_allOutputs[existingIndex].blockHeight.toInt() == 0) {
-              // Update unconfirmed output with confirmed block height
-              _allOutputs[existingIndex] = output;
-            }
-          }
+          OutputUtils.mergeScannedOutputs(_allOutputs, signal.message.outputs);
 
           // Track transactions: group outputs by txHash and track spent key images
           _allTransactions = TransactionUtils.updateTransactionsFromScan(_allTransactions, signal.message, _allOutputs);
@@ -249,29 +230,9 @@ class _DebugViewState extends State<DebugView> {
           _broadcastResult = null;
           _broadcastError = null;
 
-          // Add change outputs to the outputs list as locked (0 block height = unconfirmed)
-          for (var changeOutput in signal.message.changeOutputs) {
-            final exists = _allOutputs.any((o) =>
-              o.txHash == changeOutput.txHash && o.outputIndex == changeOutput.outputIndex
-            );
-            if (!exists) {
-              _allOutputs.add(OwnedOutput(
-                txHash: changeOutput.txHash,
-                outputIndex: changeOutput.outputIndex,
-                amount: changeOutput.amount,
-                amountXmr: changeOutput.amountXmr,
-                key: changeOutput.key,
-                keyOffset: changeOutput.keyOffset,
-                commitmentMask: changeOutput.commitmentMask,
-                subaddressIndex: changeOutput.subaddressIndex,
-                paymentId: null,
-                receivedOutputBytes: changeOutput.receivedOutputBytes,
-                blockHeight: Uint64(BigInt.zero), // Unconfirmed - will be updated when mined
-                spent: false,
-                keyImage: changeOutput.keyImage,
-              ));
-            }
-          }
+          // Add change outputs as unconfirmed (blockHeight=0)
+          final changeOwned = signal.message.changeOutputs.map(OutputUtils.changeOutputToOwned).toList();
+          OutputUtils.addIfAbsent(_allOutputs, changeOwned);
         } else {
           _txResult = null;
           _txError = signal.message.error ?? 'Unknown error during transaction creation';
@@ -287,18 +248,7 @@ class _DebugViewState extends State<DebugView> {
           _broadcastError = null;
           // Mark spent outputs immediately after broadcast
           if (_txResult != null) {
-            for (var outputKey in _txResult!.spentOutputHashes) {
-              _selectedOutputs.remove(outputKey);
-              // Find and mark the output as spent
-              for (int i = 0; i < _allOutputs.length; i++) {
-                final output = _allOutputs[i];
-                final key = '${output.txHash}:${output.outputIndex}';
-                if (key == outputKey) {
-                  _allOutputs[i] = OutputUtils.markAsSpent(output);
-                  break;
-                }
-              }
-            }
+            OutputUtils.markSpentByOutputKeys(_allOutputs, _txResult!.spentOutputHashes, _selectedOutputs);
           }
         } else {
           _broadcastResult = null;
@@ -340,17 +290,7 @@ class _DebugViewState extends State<DebugView> {
 
     _spentStatusUpdatedSubscription = SpentStatusUpdatedResponse.rustSignalStream.listen((signal) {
       setState(() {
-        for (var keyImage in signal.message.spentKeyImages) {
-          for (var output in _allOutputs) {
-            if (output.keyImage == keyImage) {
-              final index = _allOutputs.indexOf(output);
-              // Remove from selected outputs since it's now spent
-              final outputKey = '${output.txHash}:${output.outputIndex}';
-              _selectedOutputs.remove(outputKey);
-              _allOutputs[index] = OutputUtils.markAsSpent(output);
-            }
-          }
-        }
+        OutputUtils.markSpentByKeyImages(_allOutputs, signal.message.spentKeyImages, _selectedOutputs);
       });
     });
 
@@ -358,41 +298,8 @@ class _DebugViewState extends State<DebugView> {
       setState(() {
         _isScanningMempool = false;
         if (signal.message.success) {
-          // Add new unconfirmed outputs (with block_height 0), avoiding duplicates
-          for (var output in signal.message.outputs) {
-            final exists = _allOutputs.any((o) =>
-              o.txHash == output.txHash && o.outputIndex == output.outputIndex
-            );
-            if (!exists) {
-              // Outputs from mempool have block_height 0 (unconfirmed)
-              _allOutputs.add(OwnedOutput(
-                txHash: output.txHash,
-                outputIndex: output.outputIndex,
-                amount: output.amount,
-                amountXmr: output.amountXmr,
-                key: output.key,
-                keyOffset: output.keyOffset,
-                commitmentMask: output.commitmentMask,
-                subaddressIndex: output.subaddressIndex,
-                paymentId: output.paymentId,
-                receivedOutputBytes: output.receivedOutputBytes,
-                blockHeight: Uint64(BigInt.zero),
-                spent: output.spent,
-                keyImage: output.keyImage,
-              ));
-            }
-          }
-          // Update spent status based on spent_key_images
-          for (var keyImage in signal.message.spentKeyImages) {
-            for (int i = 0; i < _allOutputs.length; i++) {
-              final output = _allOutputs[i];
-              if (output.keyImage == keyImage && !output.spent) {
-                final outputKey = '${output.txHash}:${output.outputIndex}';
-                _selectedOutputs.remove(outputKey);
-                _allOutputs[i] = OutputUtils.markAsSpent(output);
-              }
-            }
-          }
+          OutputUtils.addIfAbsent(_allOutputs, signal.message.outputs);
+          OutputUtils.markSpentByKeyImages(_allOutputs, signal.message.spentKeyImages, _selectedOutputs);
         }
       });
     });
@@ -408,55 +315,15 @@ class _DebugViewState extends State<DebugView> {
       }
 
       setState(() {
-        // Update daemon height
         _daemonHeight = response.daemonHeight.toInt();
-
-        // Distribute outputs to corresponding wallets
-        for (var walletResult in response.walletResults) {
-          final walletInstance = _openWallets.values.cast<WalletInstance?>().firstWhere(
-            (w) => w != null && w.address == walletResult.address,
-            orElse: () => null,
-          );
-
-          if (walletInstance != null) {
-            // Add new outputs (avoid duplicates)
-            final existingOutputKeys = walletInstance.outputs
-                .map((o) => '${o.txHash}:${o.outputIndex}')
-                .toSet();
-
-            final newOutputs = walletResult.outputs.where((o) {
-              final key = '${o.txHash}:${o.outputIndex}';
-              return !existingOutputKeys.contains(key);
-            }).toList();
-
-            if (newOutputs.isNotEmpty) {
-              walletInstance.outputs = [...walletInstance.outputs, ...newOutputs];
-            }
-
-            // Update heights
-            if (response.blockHeight.toInt() > walletInstance.currentHeight) {
-              walletInstance.currentHeight = response.blockHeight.toInt();
-              _updateBlockHeightFromWallets();
-            }
-            walletInstance.daemonHeight = response.daemonHeight.toInt();
-          }
-        }
-
-        // Mark spent outputs
-        for (var walletInstance in _openWallets.values) {
-          for (int i = 0; i < walletInstance.outputs.length; i++) {
-            if (response.spentKeyImages.contains(walletInstance.outputs[i].keyImage)) {
-              walletInstance.outputs[i] = OutputUtils.markAsSpent(walletInstance.outputs[i]);
-            }
-          }
-        }
-
-        // If viewing active wallet, update its display
-        if (_activeWalletId != null && _activeWallet != null) {
-          _allOutputs = _activeWallet!.outputs;
-          // Transactions will be updated on next scan response
-        }
+        _lifecycle.distributeMultiWalletScanResults(
+          walletResults: response.walletResults,
+          blockHeight: response.blockHeight.toInt(),
+          daemonHeight: response.daemonHeight.toInt(),
+          spentKeyImages: response.spentKeyImages,
+        );
       });
+      _updateBlockHeightFromWallets();
     });
 
     // Load available wallets from localStorage
@@ -541,6 +408,7 @@ class _DebugViewState extends State<DebugView> {
     _syncProgressSubscription?.cancel();
     _spentStatusUpdatedSubscription?.cancel();
     _mempoolScanSubscription?.cancel();
+    _multiWalletScanSubscription?.cancel();
 
     _stopPollingTimers();
     _debounceTimer?.cancel();
@@ -1374,11 +1242,9 @@ class _DebugViewState extends State<DebugView> {
   }
 
   Future<void> _closeWallet(String walletId) async {
-    final wallet = _openWallets[walletId];
-    if (wallet == null) return;
+    if (_openWallets[walletId] == null) return;
 
     final shouldSave = await CloseWalletDialog.show(context, walletId);
-
     if (shouldSave == null) return;
 
     if (shouldSave) {
@@ -1390,21 +1256,21 @@ class _DebugViewState extends State<DebugView> {
       }
     }
 
-    setState(() {
-      wallet.isClosed = true;
-      wallet.isScanning = false;
+    final result = _lifecycle.closeWallet(walletId);
+    if (!result.found) return;
 
-      if (_activeWalletId == walletId) {
-        final remainingWallets = _activeWallets;
-        if (remainingWallets.isNotEmpty) {
-          _activeWalletId = remainingWallets.first.walletId;
-          _switchToWallet(_activeWalletId!);
-        } else {
-          _activeWalletId = null;
-          _allOutputs = [];
-        }
-      }
-    });
+    if (result.switchedTo != null) {
+      _isRestoringWallet = true;
+      setState(() {
+        _controller.text = result.switchedTo!.seed;
+        _network = result.switchedTo!.network;
+        _derivedAddress = result.switchedTo!.address;
+        _daemonHeight = result.switchedTo!.daemonHeight;
+      });
+      _isRestoringWallet = false;
+    } else {
+      setState(() {});
+    }
 
     debugPrint('[MULTI-WALLET] Closed wallet: $walletId (${_activeWallets.length} remaining open)');
 

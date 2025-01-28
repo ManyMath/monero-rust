@@ -1,6 +1,7 @@
 import '../src/bindings/bindings.dart';
 import '../models/wallet_instance.dart';
 import '../models/wallet_transaction.dart';
+import '../utils/output_utils.dart';
 import 'wallet_persistence_service.dart';
 
 enum SwitchResult {
@@ -8,6 +9,18 @@ enum SwitchResult {
   switchedToOpen,
   needsLoad,
   reset,
+}
+
+class CloseWalletResult {
+  final bool found;
+  final WalletInstance? switchedTo;
+
+  const CloseWalletResult._({required this.found, this.switchedTo});
+
+  static CloseWalletResult notFound() =>
+      const CloseWalletResult._(found: false);
+  static CloseWalletResult closed({WalletInstance? switchedTo}) =>
+      CloseWalletResult._(found: true, switchedTo: switchedTo);
 }
 
 class WalletLifecycleManager {
@@ -129,5 +142,68 @@ class WalletLifecycleManager {
     allTransactions = [];
     selectedOutputs = {};
     continuousScanCurrentHeight = 0;
+  }
+
+  int get lowestSyncedHeight {
+    final heights = activeWallets
+        .where((w) => w.currentHeight > 0)
+        .map((w) => w.currentHeight)
+        .toList();
+    return heights.isEmpty ? 0 : heights.reduce((a, b) => a < b ? a : b);
+  }
+
+  CloseWalletResult closeWallet(String walletId) {
+    final wallet = openWallets[walletId];
+    if (wallet == null) return CloseWalletResult.notFound();
+
+    wallet.isClosed = true;
+    wallet.isScanning = false;
+
+    if (activeWalletId == walletId) {
+      final remaining = activeWallets;
+      if (remaining.isNotEmpty) {
+        final next = switchToWallet(remaining.first.walletId);
+        return CloseWalletResult.closed(switchedTo: next);
+      } else {
+        activeWalletId = null;
+        allOutputs = [];
+        return CloseWalletResult.closed();
+      }
+    }
+
+    return CloseWalletResult.closed();
+  }
+
+  void distributeMultiWalletScanResults({
+    required List<WalletScanResult> walletResults,
+    required int blockHeight,
+    required int daemonHeight,
+    required List<String> spentKeyImages,
+  }) {
+    for (var walletResult in walletResults) {
+      final walletInstance = openWallets.values.cast<WalletInstance?>().firstWhere(
+        (w) => w != null && w.address == walletResult.address,
+        orElse: () => null,
+      );
+
+      if (walletInstance != null) {
+        OutputUtils.addIfAbsent(
+            walletInstance.outputs, walletResult.outputs.toList());
+
+        if (blockHeight > walletInstance.currentHeight) {
+          walletInstance.currentHeight = blockHeight;
+        }
+        walletInstance.daemonHeight = daemonHeight;
+      }
+    }
+
+    for (var walletInstance in openWallets.values) {
+      OutputUtils.markSpentByKeyImages(
+          walletInstance.outputs, spentKeyImages, selectedOutputs);
+    }
+
+    if (activeWalletId != null && activeWallet != null) {
+      allOutputs = activeWallet!.outputs;
+    }
   }
 }
