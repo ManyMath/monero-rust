@@ -34,6 +34,7 @@ async fn test_store_outputs_message() {
             block_height: 1000,
             spent: false,
             key_image: "test_key_image".to_string(),
+            is_coinbase: false,
         },
     ];
 
@@ -124,6 +125,7 @@ async fn test_multiple_output_batches() {
             block_height: 1000,
             spent: false,
             key_image: "key_image_1".to_string(),
+            is_coinbase: false,
         },
     ];
 
@@ -149,6 +151,7 @@ async fn test_multiple_output_batches() {
             block_height: 1050,
             spent: false,
             key_image: "key_image_2".to_string(),
+            is_coinbase: false,
         },
     ];
 

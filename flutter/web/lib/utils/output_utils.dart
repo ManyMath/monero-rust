@@ -106,6 +106,7 @@ class OutputUtils {
       blockHeight: Uint64(BigInt.zero),
       spent: false,
       keyImage: change.keyImage,
+      isCoinbase: false, // Change outputs are never coinbase
     );
   }
 

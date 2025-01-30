@@ -44,7 +44,9 @@ class BalanceUtils {
         final outputHeight = output.blockHeight.toInt();
         final confirmations =
             outputHeight > 0 ? currentHeight - outputHeight : 0;
-        if (confirmations >= 10) {
+        // Use 60 blocks for coinbase outputs, 10 for regular outputs
+        final requiredConfirmations = output.isCoinbase ? 60 : 10;
+        if (confirmations >= requiredConfirmations) {
           unlockedBalance += amount;
           spendableCount++;
           final outputKey = '${output.txHash}:${output.outputIndex}';

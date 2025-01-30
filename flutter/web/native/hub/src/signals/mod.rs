@@ -148,6 +148,7 @@ pub struct OwnedOutput {
     pub block_height: u64,
     pub spent: bool,
     pub key_image: String, // Hex-encoded key image for spent detection
+    pub is_coinbase: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, RustSignal)]

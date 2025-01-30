@@ -14,6 +14,7 @@ pub struct StoredOutput {
     pub block_height: u64,
     pub spent: bool,
     pub key_image: String, // Hex-encoded key image for spent detection
+    pub is_coinbase: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

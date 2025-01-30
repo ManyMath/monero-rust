@@ -49,6 +49,7 @@ pub struct OwnedOutputInfo {
     pub block_height: u64,
     pub spent: bool,
     pub key_image: String,
+    pub is_coinbase: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -368,6 +369,7 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
 
     for tx in all_transactions.iter() {
         let tx_hash = hex::encode(tx.hash());
+        let is_coinbase = matches!(tx.prefix.inputs.get(0), Some(Input::Gen(_)));
 
         // Extract spent key images from transaction inputs
         for input in &tx.prefix.inputs {
@@ -421,6 +423,7 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
                 block_height,
                 spent: false,
                 key_image,
+                is_coinbase,
             });
         }
     }
@@ -529,6 +532,8 @@ pub async fn scan_block_multi_wallet<R: RpcConnection + Send + Sync + Clone + 's
 
             for tx in txs_clone.iter() {
                 let tx_hash = hex::encode(tx.hash());
+                let is_coinbase = matches!(tx.prefix.inputs.get(0), Some(Input::Gen(_)));
+
                 let scan_result = scanner.scan_transaction(tx);
                 let owned_outputs = scan_result.ignore_timelock();
 
@@ -573,6 +578,7 @@ pub async fn scan_block_multi_wallet<R: RpcConnection + Send + Sync + Clone + 's
                         block_height,
                         spent: false,
                         key_image,
+                        is_coinbase,
                     });
                 }
             }
@@ -696,6 +702,8 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
 
         for tx in all_transactions.iter() {
             let tx_hash = hex::encode(tx.hash());
+            let is_coinbase = matches!(tx.prefix.inputs.get(0), Some(Input::Gen(_)));
+
             let scan_result = scanner.scan_transaction(tx);
             let owned_outputs = scan_result.ignore_timelock();
 
@@ -740,6 +748,7 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
                     block_height,
                     spent: false,
                     key_image,
+                    is_coinbase,
                 });
             }
         }
@@ -826,6 +835,7 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
 
     for tx in mempool_txs.iter() {
         let tx_hash = hex::encode(tx.hash());
+        let is_coinbase = matches!(tx.prefix.inputs.get(0), Some(Input::Gen(_)));
 
         // Also extract spent key images from transaction inputs
         for input in &tx.prefix.inputs {
@@ -881,6 +891,7 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
                 block_height: 0, // Unconfirmed - in mempool
                 spent: false,
                 key_image,
+                is_coinbase,
             });
         }
     }
@@ -1276,6 +1287,7 @@ mod tests {
             block_height: 100,
             spent: false,
             key_image: "keyimage".to_string(),
+            is_coinbase: false,
         };
 
         let json = serde_json::to_string(&output).unwrap();

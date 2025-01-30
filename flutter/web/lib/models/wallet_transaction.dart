@@ -85,6 +85,7 @@ class WalletTransaction {
           blockHeight: Uint64(BigInt.parse(outputData['blockHeight'] as String)),
           spent: outputData['spent'] as bool,
           keyImage: outputData['keyImage'] as String,
+          isCoinbase: (outputData['isCoinbase'] as bool?) ?? false,
         );
       }).toList(),
       spentKeyImages: (json['spentKeyImages'] as List).cast<String>(),

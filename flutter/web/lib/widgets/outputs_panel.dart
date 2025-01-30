@@ -121,7 +121,8 @@ class OutputsPanel extends StatelessWidget {
             final confirmations = outputHeight > 0
                 ? currentHeight - outputHeight
                 : 0;
-            final isSpendable = confirmations >= 10 && !output.spent;
+            final requiredConfirmations = output.isCoinbase ? 60 : 10;
+            final isSpendable = confirmations >= requiredConfirmations && !output.spent;
             final statusColor = output.spent
                 ? Colors.grey
                 : isSpendable
@@ -131,7 +132,7 @@ class OutputsPanel extends StatelessWidget {
                 ? 'SPENT'
                 : isSpendable
                     ? 'SPENDABLE'
-                    : 'LOCKED ($confirmations/10)';
+                    : 'LOCKED ($confirmations/$requiredConfirmations)';
 
             final outputKey = '${output.txHash}:${output.outputIndex}';
             final isSelected = selectedOutputs.contains(outputKey);

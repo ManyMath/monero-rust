@@ -82,6 +82,7 @@ class WalletSerializer {
         blockHeight: Uint64(BigInt.parse(d['blockHeight'] as String)),
         spent: d['spent'] as bool,
         keyImage: d['keyImage'] as String,
+        isCoinbase: (d['isCoinbase'] as bool?) ?? false,
       );
     }).toList();
 

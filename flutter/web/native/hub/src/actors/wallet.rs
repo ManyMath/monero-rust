@@ -209,6 +209,7 @@ impl WalletActor {
                             block_height: o.block_height,
                             spent: o.spent,
                             key_image: o.key_image.clone(),
+                            is_coinbase: o.is_coinbase,
                         })
                         .collect();
 
@@ -228,6 +229,7 @@ impl WalletActor {
                             block_height: o.block_height,
                             spent: o.spent,
                             key_image: o.key_image.clone(),
+                            is_coinbase: o.is_coinbase,
                         })
                         .collect();
 
@@ -356,6 +358,7 @@ impl WalletActor {
                                 block_height: 0, // Unconfirmed - in mempool
                                 spent: o.spent,
                                 key_image: o.key_image.clone(),
+                                is_coinbase: o.is_coinbase,
                             })
                             .collect();
 
@@ -430,6 +433,7 @@ impl WalletActor {
                                         block_height: o.block_height,
                                         spent: o.spent,
                                         key_image: o.key_image.clone(),
+                                        is_coinbase: o.is_coinbase,
                                     })
                                     .collect();
 
@@ -528,6 +532,7 @@ impl WalletActor {
                                                     block_height: o.block_height,
                                                     spent: o.spent,
                                                     key_image: o.key_image.clone(),
+                                                    is_coinbase: o.is_coinbase,
                                                 })
                                                 .collect();
 
@@ -630,6 +635,7 @@ impl WalletActor {
                 block_height: o.block_height,
                 spent: o.spent,
                 key_image: o.key_image.clone(),
+                is_coinbase: o.is_coinbase,
             }).collect();
             let _ = self_addr.notify(RestoreOutputs {
                 seed: msg.seed,
@@ -756,6 +762,7 @@ impl Handler<GetWalletHeight> for WalletActor {
 impl WalletActor {
     fn recalculate_balances(&mut self) {
         const CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE: u64 = 10;
+        const CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW: u64 = 60;
 
         let mut confirmed = 0u64;
         let mut unconfirmed = 0u64;
@@ -771,7 +778,14 @@ impl WalletActor {
                 0
             };
 
-            if confirmations >= CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE {
+            // Use 60 blocks for coinbase outputs, 10 for regular outputs
+            let required_confirmations = if output.is_coinbase {
+                CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW
+            } else {
+                CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE
+            };
+
+            if confirmations >= required_confirmations {
                 confirmed += output.amount;
             } else {
                 unconfirmed += output.amount;
@@ -914,6 +928,7 @@ impl Notifiable<ContinueScan> for WalletActor {
                             block_height: o.block_height,
                             spent: o.spent,
                             key_image: o.key_image.clone(),
+                            is_coinbase: o.is_coinbase,
                         })
                         .collect();
 
@@ -933,6 +948,7 @@ impl Notifiable<ContinueScan> for WalletActor {
                             block_height: o.block_height,
                             spent: o.spent,
                             key_image: o.key_image.clone(),
+                            is_coinbase: o.is_coinbase,
                         })
                         .collect();
 
