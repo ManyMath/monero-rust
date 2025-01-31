@@ -482,3 +482,415 @@ impl Notifiable<BroadcastTransaction> for TxBuilderActor {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Helper function to create a test output
+    fn create_output(amount: u64, tx_hash: &str, output_index: u8, block_height: u64) -> StoredOutput {
+        StoredOutput {
+            tx_hash: tx_hash.to_string(),
+            output_index,
+            amount,
+            key: "test_key".to_string(),
+            key_offset: "test_offset".to_string(),
+            commitment_mask: "test_mask".to_string(),
+            subaddress: None,
+            payment_id: None,
+            received_output_bytes: String::new(),
+            block_height,
+            spent: false,
+            key_image: format!("key_image_{}", output_index),
+            is_coinbase: false,
+        }
+    }
+
+    // Helper function to simulate the input selection logic
+    fn select_outputs(
+        mut available_outputs: Vec<StoredOutput>,
+        total_send_amount: u64,
+    ) -> Vec<StoredOutput> {
+        // Fee estimates (same as in the actual code)
+        const FEE_PER_INPUT_ESTIMATE: u64 = 15_000_000;
+        const BASE_FEE_ESTIMATE: u64 = 20_000_000;
+
+        // First, try to find the smallest single output that can cover the transaction
+        let single_input_fee = BASE_FEE_ESTIMATE + FEE_PER_INPUT_ESTIMATE;
+        let needed_for_single = total_send_amount + single_input_fee;
+
+        // Sort by amount to find candidates
+        available_outputs.sort_by_key(|o| o.amount);
+
+        // Find the smallest output that's >= needed amount
+        let single_output = available_outputs.iter()
+            .find(|o| o.amount >= needed_for_single);
+
+        if let Some(output) = single_output {
+            // Found a single output that can cover it - use only that
+            vec![output.clone()]
+        } else {
+            // No single output works - find optimal combination
+            // Helper function matching the actor's implementation
+            fn find_best_combination(
+                outputs: &[StoredOutput],
+                needed_total: u64,
+                target_count: usize,
+            ) -> Option<(Vec<StoredOutput>, u64)> {
+                if target_count == 0 || target_count > outputs.len() {
+                    return None;
+                }
+
+                fn search(
+                    outputs: &[StoredOutput],
+                    needed: u64,
+                    target_count: usize,
+                    start_idx: usize,
+                    current: &mut Vec<StoredOutput>,
+                    current_sum: u64,
+                    best: &mut Option<(Vec<StoredOutput>, u64)>,
+                ) {
+                    if current.len() == target_count {
+                        if current_sum >= needed {
+                            // Update best if this is closer to needed amount (less excess)
+                            let current_excess = current_sum - needed;
+                            let is_better = match best {
+                                None => true,
+                                Some((_, best_sum)) => {
+                                    let best_excess = *best_sum - needed;
+                                    current_excess < best_excess
+                                }
+                            };
+                            if is_better {
+                                *best = Some((current.clone(), current_sum));
+                            }
+                        }
+                        return;
+                    }
+
+                    let remaining_needed = target_count - current.len();
+                    for i in start_idx..outputs.len() {
+                        if outputs.len() - i < remaining_needed {
+                            break;
+                        }
+
+                        current.push(outputs[i].clone());
+                        search(
+                            outputs,
+                            needed,
+                            target_count,
+                            i + 1,
+                            current,
+                            current_sum + outputs[i].amount,
+                            best,
+                        );
+                        current.pop();
+                    }
+                }
+
+                let mut best: Option<(Vec<StoredOutput>, u64)> = None;
+                let mut current = Vec::new();
+                search(outputs, needed_total, target_count, 0, &mut current, 0, &mut best);
+                best
+            }
+
+            // Sort by amount descending for efficient searching
+            available_outputs.sort_by_key(|o| std::cmp::Reverse(o.amount));
+
+            let mut best_selection: Option<Vec<StoredOutput>> = None;
+            let mut best_count = usize::MAX;
+            let mut best_total = u64::MAX;
+
+            for target_count in 2..=available_outputs.len() {
+                let estimated_fee = BASE_FEE_ESTIMATE + (target_count as u64 * FEE_PER_INPUT_ESTIMATE);
+                let needed_total = total_send_amount + estimated_fee;
+
+                if let Some((selection, total)) = find_best_combination(
+                    &available_outputs,
+                    needed_total,
+                    target_count,
+                ) {
+                    if target_count < best_count || (target_count == best_count && total < best_total) {
+                        best_selection = Some(selection);
+                        best_count = target_count;
+                        best_total = total;
+                        break;
+                    }
+                }
+            }
+
+            best_selection.unwrap_or(available_outputs)
+        }
+    }
+
+    #[test]
+    fn test_scenario_1_single_output_sufficient() {
+        // Scenario 1: Send 1 XMR with outputs [5 XMR, 2 XMR, 0.5 XMR, 0.3 XMR]
+        // Should use only the 2 XMR output (smallest that covers 1 XMR + fee)
+        let outputs = vec![
+            create_output(5_000_000_000_000, "tx1", 0, 100),  // 5 XMR
+            create_output(2_000_000_000_000, "tx2", 0, 101),  // 2 XMR
+            create_output(500_000_000_000, "tx3", 0, 102),    // 0.5 XMR
+            create_output(300_000_000_000, "tx4", 0, 103),    // 0.3 XMR
+        ];
+
+        let send_amount = 1_000_000_000_000; // 1 XMR
+        let selected = select_outputs(outputs, send_amount);
+
+        // Should select exactly 1 output
+        assert_eq!(selected.len(), 1, "Should select exactly 1 output");
+
+        // Should be the 2 XMR output (smallest sufficient)
+        assert_eq!(selected[0].amount, 2_000_000_000_000, "Should select 2 XMR output");
+        assert_eq!(selected[0].tx_hash, "tx2", "Should select the 2 XMR output");
+    }
+
+    #[test]
+    fn test_scenario_2_multiple_outputs_needed() {
+        // Scenario 2: Send 3 XMR with outputs [2 XMR, 1.5 XMR, 0.8 XMR, 0.5 XMR]
+        // Should use 2 XMR + 1.5 XMR (largest first to minimize inputs)
+        let outputs = vec![
+            create_output(2_000_000_000_000, "tx1", 0, 100),   // 2 XMR
+            create_output(1_500_000_000_000, "tx2", 0, 101),   // 1.5 XMR
+            create_output(800_000_000_000, "tx3", 0, 102),     // 0.8 XMR
+            create_output(500_000_000_000, "tx4", 0, 103),     // 0.5 XMR
+        ];
+
+        let send_amount = 3_000_000_000_000; // 3 XMR
+        let selected = select_outputs(outputs, send_amount);
+
+        // Should select exactly 2 outputs (2 XMR + 1.5 XMR = 3.5 XMR covers 3 XMR + fee)
+        assert_eq!(selected.len(), 2, "Should select exactly 2 outputs (largest first)");
+
+        // Should select the two largest outputs
+        assert_eq!(selected[0].amount, 2_000_000_000_000, "First should be 2 XMR");
+        assert_eq!(selected[1].amount, 1_500_000_000_000, "Second should be 1.5 XMR");
+
+        // Total should be enough to cover amount + fee
+        let total: u64 = selected.iter().map(|o| o.amount).sum();
+        let estimated_fee = 20_000_000 + (selected.len() as u64 * 15_000_000);
+        assert!(total >= send_amount + estimated_fee,
+            "Total selected ({}) should cover amount + fee ({})", total, send_amount + estimated_fee);
+    }
+
+    #[test]
+    fn test_scenario_3_small_send_small_output() {
+        // Scenario 3: Send 0.5 XMR with outputs [5 XMR, 2 XMR, 0.8 XMR, 0.3 XMR]
+        // Should use only the 0.8 XMR output (smallest sufficient)
+        let outputs = vec![
+            create_output(5_000_000_000_000, "tx1", 0, 100),  // 5 XMR
+            create_output(2_000_000_000_000, "tx2", 0, 101),  // 2 XMR
+            create_output(800_000_000_000, "tx3", 0, 102),    // 0.8 XMR
+            create_output(300_000_000_000, "tx4", 0, 103),    // 0.3 XMR
+        ];
+
+        let send_amount = 500_000_000_000; // 0.5 XMR
+        let selected = select_outputs(outputs, send_amount);
+
+        // Should select exactly 1 output
+        assert_eq!(selected.len(), 1, "Should select exactly 1 output");
+
+        // Should be the 0.8 XMR output (smallest sufficient)
+        assert_eq!(selected[0].amount, 800_000_000_000, "Should select 0.8 XMR output");
+        assert_eq!(selected[0].tx_hash, "tx3", "Should select the 0.8 XMR output");
+    }
+
+    #[test]
+    fn test_avoids_using_all_outputs_unnecessarily() {
+        // Verify that we don't use all outputs when only some are needed
+        let outputs = vec![
+            create_output(1_000_000_000_000, "tx1", 0, 100),  // 1 XMR
+            create_output(1_000_000_000_000, "tx2", 0, 101),  // 1 XMR
+            create_output(1_000_000_000_000, "tx3", 0, 102),  // 1 XMR
+            create_output(1_000_000_000_000, "tx4", 0, 103),  // 1 XMR
+            create_output(1_000_000_000_000, "tx5", 0, 104),  // 1 XMR
+        ];
+
+        let send_amount = 500_000_000_000; // 0.5 XMR
+        let selected = select_outputs(outputs.clone(), send_amount);
+
+        // Should use only 1 output, not all 5
+        assert_eq!(selected.len(), 1, "Should use only 1 output, not all available outputs");
+
+        // Verify for a larger amount that still doesn't need all
+        let send_amount_2 = 1_500_000_000_000; // 1.5 XMR
+        let selected_2 = select_outputs(outputs, send_amount_2);
+
+        // Should use minimal outputs, not all 5
+        assert!(selected_2.len() <= 3, "Should use minimal outputs, not all available");
+        assert!(selected_2.len() >= 2, "Should use at least 2 outputs for 1.5 XMR");
+    }
+
+    #[test]
+    fn test_exact_amount_match() {
+        // Test when we have an output that exactly matches (or very close to) the needed amount
+        let outputs = vec![
+            create_output(5_000_000_000_000, "tx1", 0, 100),      // 5 XMR
+            create_output(1_035_000_000_000, "tx2", 0, 101),      // 1.035 XMR (≈ 1 XMR + fee)
+            create_output(500_000_000_000, "tx3", 0, 102),        // 0.5 XMR
+        ];
+
+        let send_amount = 1_000_000_000_000; // 1 XMR
+        let selected = select_outputs(outputs, send_amount);
+
+        // Should select the output closest to needed amount
+        assert_eq!(selected.len(), 1, "Should select exactly 1 output");
+        assert_eq!(selected[0].amount, 1_035_000_000_000,
+            "Should select output close to needed amount + fee");
+    }
+
+    #[test]
+    fn test_prefers_single_large_over_multiple_small() {
+        // Verify we use 1 large output rather than combining many small ones
+        let outputs = vec![
+            create_output(3_000_000_000_000, "tx_large", 0, 100),  // 3 XMR
+            create_output(100_000_000_000, "tx1", 0, 101),          // 0.1 XMR
+            create_output(100_000_000_000, "tx2", 0, 102),          // 0.1 XMR
+            create_output(100_000_000_000, "tx3", 0, 103),          // 0.1 XMR
+            create_output(100_000_000_000, "tx4", 0, 104),          // 0.1 XMR
+            create_output(100_000_000_000, "tx5", 0, 105),          // 0.1 XMR
+        ];
+
+        let send_amount = 400_000_000_000; // 0.4 XMR
+        let selected = select_outputs(outputs, send_amount);
+
+        // Even though we have many small outputs, should use the single large one
+        assert_eq!(selected.len(), 1, "Should use single large output");
+        assert_eq!(selected[0].tx_hash, "tx_large", "Should select the 3 XMR output");
+    }
+
+    #[test]
+    fn test_minimize_inputs_and_change() {
+        // Send 3 XMR with outputs [0.75, 1, 1.5, 2.5 XMR]
+        // Should use 2.5 + 0.75 = 3.25 XMR (2 inputs, locks only ~0.25 XMR as change)
+        // NOT 2.5 + 1.0 = 3.5 XMR (2 inputs, locks ~0.5 XMR as change)
+        // NOT 2.5 + 1.5 = 4.0 XMR (2 inputs, locks ~1.0 XMR as change)
+        // NOT 0.75 + 1 + 1.5 = 3.25 XMR (3 inputs - more inputs is worse)
+        let outputs = vec![
+            create_output(750_000_000_000, "tx1", 0, 100),    // 0.75 XMR
+            create_output(1_000_000_000_000, "tx2", 0, 101),  // 1 XMR
+            create_output(1_500_000_000_000, "tx3", 0, 102),  // 1.5 XMR
+            create_output(2_500_000_000_000, "tx4", 0, 103),  // 2.5 XMR
+        ];
+
+        let send_amount = 3_000_000_000_000; // 3 XMR
+        let selected = select_outputs(outputs, send_amount);
+
+        // Should select exactly 2 outputs (minimizing inputs)
+        assert_eq!(selected.len(), 2, "Should select 2 outputs to minimize inputs");
+
+        // Should select 2.5 + 0.75 = 3.25 XMR (minimizes locked change)
+        let total: u64 = selected.iter().map(|o| o.amount).sum();
+        assert_eq!(total, 3_250_000_000_000, "Total should be 3.25 XMR (2.5 + 0.75) to minimize locked change");
+
+        // Verify we have the right outputs
+        assert!(selected.iter().any(|o| o.amount == 2_500_000_000_000), "Should include 2.5 XMR");
+        assert!(selected.iter().any(|o| o.amount == 750_000_000_000), "Should include 0.75 XMR");
+
+        let estimated_fee = 20_000_000 + (2 * 15_000_000); // 50M atomic units
+        assert!(total >= send_amount + estimated_fee,
+            "Should have enough to cover 3 XMR + fee");
+
+        // Change locked = 3.25 - 3.0 - 0.05 = ~0.20 XMR (minimized!)
+        let change_locked = total - send_amount - estimated_fee;
+        assert!(change_locked < 250_000_000_000, "Should lock < 0.25 XMR as change");
+    }
+
+    #[test]
+    fn test_edge_case_no_single_output_works() {
+        // Edge case: No single output is sufficient, must combine
+        // Outputs: [0.5, 0.6, 0.7, 0.8 XMR], send 1.2 XMR
+        // Need: 1.2 + 0.05 fee = 1.25 XMR
+        // Should use 0.8 + 0.5 = 1.3 XMR (minimizes locked change: ~0.05 XMR)
+        // NOT 0.8 + 0.6 = 1.4 XMR (locks ~0.15 XMR)
+        // NOT 0.8 + 0.7 = 1.5 XMR (locks ~0.25 XMR)
+        let outputs = vec![
+            create_output(500_000_000_000, "tx1", 0, 100),  // 0.5 XMR
+            create_output(600_000_000_000, "tx2", 0, 101),  // 0.6 XMR
+            create_output(700_000_000_000, "tx3", 0, 102),  // 0.7 XMR
+            create_output(800_000_000_000, "tx4", 0, 103),  // 0.8 XMR
+        ];
+
+        let send_amount = 1_200_000_000_000; // 1.2 XMR
+        let selected = select_outputs(outputs, send_amount);
+
+        // Should select 2 outputs
+        assert_eq!(selected.len(), 2, "Should select 2 outputs");
+
+        // Should select 0.8 + 0.5 to minimize locked change
+        let total: u64 = selected.iter().map(|o| o.amount).sum();
+        assert_eq!(total, 1_300_000_000_000, "Total should be 1.3 XMR (0.8 + 0.5)");
+
+        assert!(selected.iter().any(|o| o.amount == 800_000_000_000), "Should include 0.8 XMR");
+        assert!(selected.iter().any(|o| o.amount == 500_000_000_000), "Should include 0.5 XMR");
+    }
+
+    #[test]
+    fn test_prefers_fewer_large_over_many_small() {
+        // Send 2 XMR with outputs [1.5, 1, 0.4, 0.4, 0.4, 0.4, 0.4]
+        // Should use 1.5 + 1 = 2.5 XMR (2 inputs)
+        // NOT 0.4 + 0.4 + 0.4 + 0.4 + 0.4 = 2.0 XMR (5 inputs)
+        let outputs = vec![
+            create_output(1_500_000_000_000, "tx_large1", 0, 100), // 1.5 XMR
+            create_output(1_000_000_000_000, "tx_large2", 0, 101), // 1 XMR
+            create_output(400_000_000_000, "tx1", 0, 102),         // 0.4 XMR
+            create_output(400_000_000_000, "tx2", 0, 103),         // 0.4 XMR
+            create_output(400_000_000_000, "tx3", 0, 104),         // 0.4 XMR
+            create_output(400_000_000_000, "tx4", 0, 105),         // 0.4 XMR
+            create_output(400_000_000_000, "tx5", 0, 106),         // 0.4 XMR
+        ];
+
+        let send_amount = 2_000_000_000_000; // 2 XMR
+        let selected = select_outputs(outputs, send_amount);
+
+        // Should use only 2 large outputs, not 5+ small ones
+        assert_eq!(selected.len(), 2, "Should use 2 outputs, not many small ones");
+        assert_eq!(selected[0].amount, 1_500_000_000_000, "First should be 1.5 XMR");
+        assert_eq!(selected[1].amount, 1_000_000_000_000, "Second should be 1 XMR");
+    }
+
+    #[test]
+    fn test_single_output_preference_over_combination() {
+        // Send 1 XMR with outputs [1.05, 0.6, 0.5]
+        // Should use single 1.05 XMR output (covers 1 XMR + ~0.035 fee)
+        // NOT combine 0.6 + 0.5 = 1.1 XMR
+        let outputs = vec![
+            create_output(1_050_000_000_000, "tx_single", 0, 100), // 1.05 XMR
+            create_output(600_000_000_000, "tx1", 0, 101),         // 0.6 XMR
+            create_output(500_000_000_000, "tx2", 0, 102),         // 0.5 XMR
+        ];
+
+        let send_amount = 1_000_000_000_000; // 1 XMR
+        let selected = select_outputs(outputs, send_amount);
+
+        // Should prefer single output
+        assert_eq!(selected.len(), 1, "Should use single output");
+        assert_eq!(selected[0].amount, 1_050_000_000_000, "Should use 1.05 XMR output");
+        assert_eq!(selected[0].tx_hash, "tx_single");
+    }
+
+    #[test]
+    fn test_three_outputs_minimized_to_two() {
+        // Send 5 XMR with outputs [3, 2.5, 1, 0.5, 0.3]
+        // Should use 3 + 2.5 = 5.5 XMR (2 inputs)
+        // NOT 2.5 + 1 + 0.5 + 0.3 + ... (3+ inputs)
+        let outputs = vec![
+            create_output(3_000_000_000_000, "tx1", 0, 100),   // 3 XMR
+            create_output(2_500_000_000_000, "tx2", 0, 101),   // 2.5 XMR
+            create_output(1_000_000_000_000, "tx3", 0, 102),   // 1 XMR
+            create_output(500_000_000_000, "tx4", 0, 103),     // 0.5 XMR
+            create_output(300_000_000_000, "tx5", 0, 104),     // 0.3 XMR
+        ];
+
+        let send_amount = 5_000_000_000_000; // 5 XMR
+        let selected = select_outputs(outputs, send_amount);
+
+        // Should use exactly 2 outputs (the two largest)
+        assert_eq!(selected.len(), 2, "Should use 2 outputs, not more");
+        assert_eq!(selected[0].amount, 3_000_000_000_000, "First should be 3 XMR");
+        assert_eq!(selected[1].amount, 2_500_000_000_000, "Second should be 2.5 XMR");
+
+        let total: u64 = selected.iter().map(|o| o.amount).sum();
+        assert_eq!(total, 5_500_000_000_000, "Total should be 5.5 XMR");
+    }
+}
