@@ -205,6 +205,45 @@ pub fn derive_address(mnemonic: &str, network_str: &str) -> Result<String, Strin
     Ok(address.to_string())
 }
 
+pub fn derive_subaddress(
+    mnemonic: &str,
+    network_str: &str,
+    account: u32,
+    address_index: u32,
+) -> Result<String, String> {
+    use monero_serai::wallet::address::AddressSpec;
+
+    let network = parse_network(network_str)?;
+
+    let seed = Seed::from_string(Zeroizing::new(mnemonic.to_string()))
+        .map_err(|e| format!("Failed to parse seed: {:?}", e))?;
+
+    let spend: [u8; 32] = *seed.entropy();
+    let spend_scalar = Scalar::from_bytes_mod_order(spend);
+    let spend_point: EdwardsPoint = &spend_scalar * &ED25519_BASEPOINT_TABLE;
+
+    let view: [u8; 32] = Keccak256::digest(&spend).into();
+    let view_scalar = Scalar::from_bytes_mod_order(view);
+
+    let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
+
+    if account == 0 && address_index == 0 {
+        let address = view_pair.address(network, AddressSpec::Standard);
+        return Ok(address.to_string());
+    }
+
+    let subaddress_index = SubaddressIndex::new(account, address_index)
+        .ok_or_else(|| {
+            format!(
+                "Invalid subaddress index: ({}, {}). Note: (0, 0) should use derive_address() instead.",
+                account, address_index
+            )
+        })?;
+
+    let address = view_pair.address(network, AddressSpec::Subaddress(subaddress_index));
+    Ok(address.to_string())
+}
+
 pub fn derive_keys(mnemonic: &str, network_str: &str) -> Result<DerivedKeys, String> {
     let network = parse_network(network_str)?;
 
