@@ -133,6 +133,7 @@ pub struct StartContinuousScan {
     pub start_height: u64,
     pub seed: String,
     pub network: String,
+    pub account_lookahead: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -149,6 +150,7 @@ pub struct UpdateScanState {
     pub node_url: String,
     pub seed: String,
     pub network: String,
+    pub account_lookahead: u32,
 }
 
 #[derive(Debug, Clone)]

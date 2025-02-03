@@ -109,6 +109,21 @@ pub struct AddressDerivedResponse {
 }
 
 #[derive(Deserialize, DartSignal)]
+pub struct DeriveSubaddressRequest {
+    pub seed: String,
+    pub network: String,
+    pub account: u32,
+    pub address_index: u32,
+}
+
+#[derive(Serialize, RustSignal)]
+pub struct SubaddressDerivedResponse {
+    pub address: String,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Deserialize, DartSignal)]
 pub struct DeriveKeysRequest {
     pub seed: String,
     pub network: String,
@@ -196,6 +211,7 @@ pub struct StartContinuousScanRequest {
     pub start_height: u64,
     pub seed: String,
     pub network: String,
+    pub account_lookahead: u32,
 }
 
 #[derive(Deserialize, DartSignal)]
@@ -211,6 +227,7 @@ pub struct MempoolScanRequest {
     pub node_url: String,
     pub seed: String,
     pub network: String,
+    pub account_lookahead: u32,
 }
 
 #[derive(Serialize, RustSignal)]
@@ -273,6 +290,7 @@ pub struct WalletDataLoadedResponse {
 pub struct WalletConfig {
     pub seed: String,
     pub network: String,
+    pub account_lookahead: u32,
 }
 
 #[derive(Deserialize, DartSignal)]
