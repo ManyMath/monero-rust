@@ -306,6 +306,16 @@ pub async fn scan_block_for_outputs_with_url(
     mnemonic: &str,
     network_str: &str,
 ) -> Result<BlockScanResult, String> {
+    scan_block_for_outputs_with_url_and_lookahead(node_url, block_height, mnemonic, network_str, DEFAULT_LOOKAHEAD).await
+}
+
+pub async fn scan_block_for_outputs_with_url_and_lookahead(
+    node_url: &str,
+    block_height: u64,
+    mnemonic: &str,
+    network_str: &str,
+    lookahead: Lookahead,
+) -> Result<BlockScanResult, String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         use monero_serai::rpc::HttpRpc;
@@ -316,7 +326,7 @@ pub async fn scan_block_for_outputs_with_url(
             block_height,
             mnemonic,
             network_str,
-            DEFAULT_LOOKAHEAD,
+            lookahead,
         )
         .await
     }
@@ -331,7 +341,7 @@ pub async fn scan_block_for_outputs_with_url(
             block_height,
             mnemonic,
             network_str,
-            DEFAULT_LOOKAHEAD,
+            lookahead,
         )
         .await
     }
@@ -827,6 +837,19 @@ pub async fn scan_mempool_for_outputs(
     network_str: &str,
 ) -> Result<MempoolScanResult, String> {
     scan_mempool_for_outputs_with_lookahead(node_url, mnemonic, network_str, DEFAULT_LOOKAHEAD).await
+}
+
+pub async fn scan_mempool_for_outputs_with_account_lookahead(
+    node_url: &str,
+    mnemonic: &str,
+    network_str: &str,
+    account_lookahead: u32,
+) -> Result<MempoolScanResult, String> {
+    let lookahead = Lookahead {
+        account: account_lookahead,
+        subaddress: DEFAULT_LOOKAHEAD.subaddress,
+    };
+    scan_mempool_for_outputs_with_lookahead(node_url, mnemonic, network_str, lookahead).await
 }
 
 pub async fn scan_mempool_for_outputs_with_lookahead(

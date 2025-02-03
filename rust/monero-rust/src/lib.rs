@@ -14,8 +14,8 @@ pub use tx_builder::native;
 pub use scanner::{
     BlockScanResult, DerivedKeys, Lookahead, MempoolScanResult, OwnedOutputInfo,
     DEFAULT_LOOKAHEAD, derive_address, derive_keys, derive_subaddress, generate_seed,
-    get_daemon_height, scan_block_for_outputs_with_url, scan_mempool_for_outputs,
-    scan_mempool_for_outputs_with_lookahead,
+    get_daemon_height, scan_block_for_outputs_with_url, scan_block_for_outputs_with_url_and_lookahead,
+    scan_mempool_for_outputs, scan_mempool_for_outputs_with_lookahead, scan_mempool_for_outputs_with_account_lookahead,
     // Multi-wallet scanning exports
     MultiWalletScanResult, WalletScanConfig, WalletScanData,
     scan_block_multi_wallet_with_url,
