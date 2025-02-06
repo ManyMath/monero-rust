@@ -35,6 +35,9 @@ class WalletPersistenceBrowser {
     required List<WalletTransaction> transactions,
     required int continuousScanCurrentHeight,
     required Set<String> selectedOutputs,
+    List<int>? accounts,
+    Map<int, List<OwnedOutput>>? outputsByAccount,
+    int? activeAccount,
   }) =>
       _defaultInstance.save(
         walletId: walletId,
@@ -47,6 +50,9 @@ class WalletPersistenceBrowser {
         transactions: transactions,
         continuousScanCurrentHeight: continuousScanCurrentHeight,
         selectedOutputs: selectedOutputs,
+        accounts: accounts,
+        outputsByAccount: outputsByAccount,
+        activeAccount: activeAccount,
       );
 
   static Future<LoadWalletResult> loadWalletData({
@@ -88,9 +94,6 @@ class WalletPersistenceBrowser {
       bool usedSaveAsDialog = false;
       try {
         if (js_util.hasProperty(html.window, 'showSaveFilePicker')) {
-          debugPrint(
-              '[EXPORT] Using File System Access API (Save As dialog)');
-
           final options = js_util.newObject();
           js_util.setProperty(options, 'suggestedName', filename);
 
@@ -123,19 +126,14 @@ class WalletPersistenceBrowser {
           await js_util.promiseToFuture(closePromise);
 
           usedSaveAsDialog = true;
-          debugPrint('[EXPORT] File saved via Save As dialog');
         }
       } catch (e) {
         if (e.toString().contains('aborted')) {
-          debugPrint('[EXPORT] User cancelled save dialog');
           return ExportWalletResult.cancelled();
         }
-        debugPrint(
-            '[EXPORT] File System Access API not available or failed: $e');
       }
 
       if (!usedSaveAsDialog) {
-        debugPrint('[EXPORT] Using fallback download method');
         final url = html.Url.createObjectUrlFromBlob(blob);
         final anchor = html.AnchorElement(href: url)
           ..setAttribute('download', filename)
@@ -143,14 +141,11 @@ class WalletPersistenceBrowser {
         html.Url.revokeObjectUrl(url);
       }
 
-      debugPrint(
-          '[EXPORT] Successfully exported wallet: $walletId (method: ${usedSaveAsDialog ? 'Save As dialog' : 'auto-download'})');
       return ExportWalletResult.success(
         filename: filename,
         usedSaveAsDialog: usedSaveAsDialog,
       );
     } catch (e) {
-      debugPrint('[EXPORT] Export failed: $e');
       return ExportWalletResult.error('Export failed: $e');
     }
   }
@@ -162,9 +157,6 @@ class WalletPersistenceBrowser {
     required bool shouldOverwrite,
   }) async {
     try {
-      debugPrint(
-          '[IMPORT] Selected file: ${file.name} (${file.size} bytes)');
-
       if (file.size > 10 * 1024 * 1024) {
         return ImportWalletResult.error('File too large (max 10MB)');
       }
@@ -179,9 +171,6 @@ class WalletPersistenceBrowser {
             'File is empty or could not be read');
       }
 
-      debugPrint(
-          '[IMPORT] Read ${encryptedData.length} characters from file');
-
       final jsonString =
           await _defaultInstance.decryptRaw(password, encryptedData);
       if (jsonString == null) {
@@ -192,16 +181,12 @@ class WalletPersistenceBrowser {
       final parsed = jsonDecode(jsonString) as Map<String, dynamic>;
 
       _defaultInstance.setRawData(walletId, encryptedData);
-      debugPrint('[IMPORT] Stored wallet data for: $walletId');
 
-      debugPrint(
-          '[IMPORT] Successfully ${shouldOverwrite ? 'overwritten' : 'imported'} wallet: $walletId');
       return ImportWalletResult.success(
         walletId: walletId,
         wasOverwritten: shouldOverwrite,
       );
     } catch (e) {
-      debugPrint('[IMPORT] Import failed: $e');
       return ImportWalletResult.error('Import failed: $e');
     }
   }

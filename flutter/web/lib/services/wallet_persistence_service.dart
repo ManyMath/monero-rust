@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import '../src/bindings/bindings.dart';
+import '../models/wallet_instance.dart';
 import '../models/wallet_transaction.dart';
 import 'wallet_storage_service.dart';
 import 'crypto_backend.dart';
@@ -30,6 +31,9 @@ class WalletPersistenceService {
     required List<WalletTransaction> transactions,
     required int continuousScanCurrentHeight,
     required Set<String> selectedOutputs,
+    List<int>? accounts,
+    Map<int, List<OwnedOutput>>? outputsByAccount,
+    int? activeAccount,
   }) async {
     try {
       final storageKey = getStorageKey(walletId);
@@ -42,11 +46,12 @@ class WalletPersistenceService {
         transactions: transactions,
         continuousScanCurrentHeight: continuousScanCurrentHeight,
         selectedOutputs: selectedOutputs,
+        accounts: accounts,
+        outputsByAccount: outputsByAccount,
+        activeAccount: activeAccount,
       );
 
       final jsonString = jsonEncode(walletData);
-      debugPrint(
-          '[SAVE] Serialized ${outputs.length} outputs, ${transactions.length} transactions');
 
       final encryptedData = await _crypto.encrypt(password, jsonString);
       if (encryptedData == null) {
@@ -54,10 +59,8 @@ class WalletPersistenceService {
       }
 
       _storage.set(storageKey, encryptedData);
-      debugPrint('[SAVE] Stored to key: $storageKey');
       return SaveWalletResult.success();
     } catch (e) {
-      debugPrint('[SAVE] Error: $e');
       return SaveWalletResult.error('Save failed: $e');
     }
   }
@@ -68,14 +71,12 @@ class WalletPersistenceService {
   }) async {
     try {
       final storageKey = getStorageKey(walletId);
-      debugPrint('[LOAD] Looking for wallet data at key: $storageKey');
 
       final encryptedData = _storage.get(storageKey);
       if (encryptedData == null) {
         return LoadWalletResult.error(
             'No stored wallet data found for wallet: $walletId');
       }
-      debugPrint('[LOAD] Found encrypted data (${encryptedData.length} chars)');
 
       final jsonString = await _crypto.decrypt(password, encryptedData);
       if (jsonString == null) {
@@ -95,15 +96,16 @@ class WalletPersistenceService {
         transactions: parsed.transactions,
         continuousScanCurrentHeight: parsed.continuousScanCurrentHeight,
         selectedOutputs: parsed.selectedOutputs,
+        accounts: parsed.accounts,
+        outputsByAccount: parsed.outputsByAccount,
+        activeAccount: parsed.activeAccount,
       );
     } catch (e) {
-      debugPrint('[LOAD] Error: $e');
       return LoadWalletResult.error('Failed to parse wallet data: $e');
     }
   }
 
   List<String> listWallets() {
-    debugPrint('[WALLET] Scanning storage for available wallets...');
     final walletIds = <String>[];
     for (final key in _storage.keys) {
       if (key.startsWith('monero_wallet_')) {
@@ -111,14 +113,11 @@ class WalletPersistenceService {
       }
     }
     walletIds.sort();
-    debugPrint(
-        '[WALLET] Found ${walletIds.length} wallets: ${walletIds.join(', ')}');
     return walletIds;
   }
 
   void clear(String walletId) {
     final storageKey = getStorageKey(walletId);
-    debugPrint('[STORAGE] Clearing data for wallet: $walletId');
     _storage.remove(storageKey);
   }
 
@@ -139,6 +138,71 @@ class WalletPersistenceService {
 
   Future<String?> decryptRaw(String password, String ciphertext) =>
       _crypto.decrypt(password, ciphertext);
+
+  /// Save a WalletInstance directly (convenience method)
+  /// This uses WalletInstance.toJson() to serialize the wallet state
+  Future<SaveWalletResult> saveWalletInstance({
+    required WalletInstance wallet,
+    required String password,
+    required String nodeUrl,
+    required List<WalletTransaction> transactions,
+    required Set<String> selectedOutputs,
+  }) async {
+    return save(
+      walletId: wallet.walletId,
+      password: password,
+      seed: wallet.seed,
+      network: wallet.network,
+      address: wallet.address,
+      nodeUrl: nodeUrl,
+      outputs: wallet.outputs,
+      transactions: transactions,
+      continuousScanCurrentHeight: wallet.currentHeight,
+      selectedOutputs: selectedOutputs,
+      accounts: wallet.accounts,
+      outputsByAccount: wallet.outputsByAccount,
+      activeAccount: wallet.activeAccount,
+    );
+  }
+
+  /// Load wallet data and create a WalletInstance (convenience method)
+  /// This uses WalletInstance.fromJson() to deserialize the wallet state
+  Future<LoadWalletInstanceResult> loadWalletInstance({
+    required String walletId,
+    required String password,
+  }) async {
+    final result = await load(walletId: walletId, password: password);
+
+    if (!result.success) {
+      return LoadWalletInstanceResult.error(result.error ?? 'Unknown error');
+    }
+
+    try {
+      final wallet = WalletInstance(
+        walletId: walletId,
+        seed: result.seed!,
+        network: result.network!,
+        address: result.address ?? '',
+        outputs: result.outputs!,
+        currentHeight: result.continuousScanCurrentHeight!,
+        daemonHeight: 0,
+        isScanning: false,
+        isClosed: false,
+        activeAccount: result.activeAccount ?? 0,
+        accounts: result.accounts ?? [0],
+        outputsByAccount: result.outputsByAccount ?? {0: result.outputs!},
+      );
+
+      return LoadWalletInstanceResult.success(
+        wallet: wallet,
+        nodeUrl: result.nodeUrl!,
+        transactions: result.transactions!,
+        selectedOutputs: result.selectedOutputs!,
+      );
+    } catch (e) {
+      return LoadWalletInstanceResult.error('Failed to create wallet instance: $e');
+    }
+  }
 }
 
 class SaveWalletResult {
@@ -165,6 +229,9 @@ class LoadWalletResult {
   final List<WalletTransaction>? transactions;
   final int? continuousScanCurrentHeight;
   final Set<String>? selectedOutputs;
+  final List<int>? accounts;
+  final Map<int, List<OwnedOutput>>? outputsByAccount;
+  final int? activeAccount;
 
   LoadWalletResult._({
     required this.success,
@@ -177,6 +244,9 @@ class LoadWalletResult {
     this.transactions,
     this.continuousScanCurrentHeight,
     this.selectedOutputs,
+    this.accounts,
+    this.outputsByAccount,
+    this.activeAccount,
   });
 
   factory LoadWalletResult.success({
@@ -188,6 +258,9 @@ class LoadWalletResult {
     required List<WalletTransaction> transactions,
     required int continuousScanCurrentHeight,
     required Set<String> selectedOutputs,
+    required List<int> accounts,
+    required Map<int, List<OwnedOutput>> outputsByAccount,
+    required int activeAccount,
   }) =>
       LoadWalletResult._(
         success: true,
@@ -199,6 +272,9 @@ class LoadWalletResult {
         transactions: transactions,
         continuousScanCurrentHeight: continuousScanCurrentHeight,
         selectedOutputs: selectedOutputs,
+        accounts: accounts,
+        outputsByAccount: outputsByAccount,
+        activeAccount: activeAccount,
       );
 
   factory LoadWalletResult.error(String error) =>
@@ -262,4 +338,39 @@ class ImportWalletResult {
 
   factory ImportWalletResult.error(String error) =>
       ImportWalletResult._(success: false, error: error);
+}
+
+class LoadWalletInstanceResult {
+  final bool success;
+  final String? error;
+  final WalletInstance? wallet;
+  final String? nodeUrl;
+  final List<WalletTransaction>? transactions;
+  final Set<String>? selectedOutputs;
+
+  LoadWalletInstanceResult._({
+    required this.success,
+    this.error,
+    this.wallet,
+    this.nodeUrl,
+    this.transactions,
+    this.selectedOutputs,
+  });
+
+  factory LoadWalletInstanceResult.success({
+    required WalletInstance wallet,
+    required String nodeUrl,
+    required List<WalletTransaction> transactions,
+    required Set<String> selectedOutputs,
+  }) =>
+      LoadWalletInstanceResult._(
+        success: true,
+        wallet: wallet,
+        nodeUrl: nodeUrl,
+        transactions: transactions,
+        selectedOutputs: selectedOutputs,
+      );
+
+  factory LoadWalletInstanceResult.error(String error) =>
+      LoadWalletInstanceResult._(success: false, error: error);
 }

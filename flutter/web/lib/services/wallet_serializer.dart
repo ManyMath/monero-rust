@@ -16,6 +16,9 @@ class WalletSerializer {
     required List<WalletTransaction> transactions,
     required int continuousScanCurrentHeight,
     required Set<String> selectedOutputs,
+    List<int>? accounts,
+    Map<int, List<OwnedOutput>>? outputsByAccount,
+    int? activeAccount,
   }) {
     return {
       'seed': seed,
@@ -39,6 +42,7 @@ class WalletSerializer {
                 'blockHeight': o.blockHeight.toString(),
                 'spent': o.spent,
                 'keyImage': o.keyImage,
+                'isCoinbase': o.isCoinbase,
               })
           .toList(),
       'transactions': transactions.map((t) => t.toJson()).toList(),
@@ -46,6 +50,32 @@ class WalletSerializer {
         'continuousScanCurrentHeight': continuousScanCurrentHeight,
       },
       'selectedOutputs': selectedOutputs.toList(),
+      if (accounts != null) 'accounts': accounts,
+      if (activeAccount != null) 'activeAccount': activeAccount,
+      if (outputsByAccount != null)
+        'outputsByAccount': outputsByAccount.map((accountIndex, outputs) {
+          return MapEntry(
+            accountIndex.toString(),
+            outputs.map((o) => {
+              'txHash': o.txHash,
+              'outputIndex': o.outputIndex,
+              'amount': o.amount.toString(),
+              'amountXmr': o.amountXmr,
+              'key': o.key,
+              'keyOffset': o.keyOffset,
+              'commitmentMask': o.commitmentMask,
+              'subaddressIndex': o.subaddressIndex != null
+                  ? [o.subaddressIndex!.item1, o.subaddressIndex!.item2]
+                  : null,
+              'paymentId': o.paymentId,
+              'receivedOutputBytes': o.receivedOutputBytes,
+              'blockHeight': o.blockHeight.toString(),
+              'spent': o.spent,
+              'keyImage': o.keyImage,
+              'isCoinbase': o.isCoinbase,
+            }).toList(),
+          );
+        }),
     };
   }
 
@@ -60,6 +90,9 @@ class WalletSerializer {
     List<WalletTransaction> transactions,
     int continuousScanCurrentHeight,
     Set<String> selectedOutputs,
+    List<int> accounts,
+    Map<int, List<OwnedOutput>> outputsByAccount,
+    int activeAccount,
   }) deserialize(Map<String, dynamic> walletData) {
     final outputs = (walletData['outputs'] as List).map((o) {
       final d = o as Map<String, dynamic>;
@@ -96,6 +129,49 @@ class WalletSerializer {
     final selectedOutputs =
         Set<String>.from(walletData['selectedOutputs'] as List);
 
+    // Parse account-related fields with defaults for backward compatibility
+    final accounts = walletData['accounts'] != null
+        ? (walletData['accounts'] as List).map((e) => e as int).toList()
+        : [0];
+
+    final activeAccount = (walletData['activeAccount'] as int?) ?? 0;
+
+    final Map<int, List<OwnedOutput>> outputsByAccount = {};
+    if (walletData['outputsByAccount'] != null) {
+      final outputsByAccountJson = walletData['outputsByAccount'] as Map<String, dynamic>;
+      outputsByAccountJson.forEach((key, value) {
+        final accountIndex = int.parse(key);
+        final accountOutputs = (value as List).map((o) {
+          final d = o as Map<String, dynamic>;
+          return OwnedOutput(
+            txHash: d['txHash'] as String,
+            outputIndex: d['outputIndex'] as int,
+            amount: Uint64(BigInt.parse(d['amount'] as String)),
+            amountXmr: d['amountXmr'] as String,
+            key: d['key'] as String,
+            keyOffset: d['keyOffset'] as String,
+            commitmentMask: d['commitmentMask'] as String,
+            subaddressIndex: d['subaddressIndex'] != null
+                ? Tuple2<int, int>(
+                    d['subaddressIndex'][0] as int,
+                    d['subaddressIndex'][1] as int,
+                  )
+                : null,
+            paymentId: d['paymentId'] as String?,
+            receivedOutputBytes: d['receivedOutputBytes'] as String,
+            blockHeight: Uint64(BigInt.parse(d['blockHeight'] as String)),
+            spent: d['spent'] as bool,
+            keyImage: d['keyImage'] as String,
+            isCoinbase: (d['isCoinbase'] as bool?) ?? false,
+          );
+        }).toList();
+        outputsByAccount[accountIndex] = accountOutputs;
+      });
+    } else {
+      // Backward compatibility: if no outputsByAccount, use legacy outputs field
+      outputsByAccount[0] = outputs;
+    }
+
     return (
       seed: walletData['seed'] as String? ?? '',
       network: walletData['network'] as String? ?? 'stagenet',
@@ -106,6 +182,9 @@ class WalletSerializer {
       continuousScanCurrentHeight:
           scanState['continuousScanCurrentHeight'] as int,
       selectedOutputs: selectedOutputs,
+      accounts: accounts,
+      outputsByAccount: outputsByAccount,
+      activeAccount: activeAccount,
     );
   }
 
