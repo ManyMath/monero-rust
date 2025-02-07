@@ -22,6 +22,7 @@ import '../services/wallet_polling_service.dart';
 import '../widgets/common_widgets.dart';
 import '../widgets/payment_proof_dialog.dart';
 import '../widgets/keys_display_panel.dart';
+import '../widgets/accounts_panel.dart';
 import '../widgets/scanning_panel.dart';
 import '../widgets/transactions_panel.dart';
 import '../widgets/outputs_panel.dart';
@@ -74,15 +75,69 @@ class _DebugViewState extends State<DebugView> {
   String? _publicSpendKey;
   String? _publicViewKey;
 
+  // Account management state
+  // Get active account from the wallet
+  int get _activeAccount {
+    final activeWallet = _lifecycle.activeWallet;
+    return activeWallet?.activeAccount ?? 0;
+  }
+  Map<String, String> _subaddresses = {}; // "account,index" -> address
+  final Set<String> _pendingSubaddresses = {}; // Track pending derivations
+
+  // Get accounts from the active wallet
+  List<int> get _accounts {
+    final activeWallet = _lifecycle.activeWallet;
+    return activeWallet?.accounts ?? [0];
+  }
+
   BlockScanResponse? _scanResult;
   String? _scanError;
-  List<OwnedOutput> get _allOutputs => _lifecycle.allOutputs;
-  set _allOutputs(List<OwnedOutput> v) => _lifecycle.allOutputs = v;
+
+  // All outputs across all accounts
+  List<OwnedOutput> get _allOutputsAllAccounts => _lifecycle.allOutputs;
+  set _allOutputsAllAccounts(List<OwnedOutput> v) => _lifecycle.allOutputs = v;
+
+  // Filtered outputs for active account only
+  List<OwnedOutput> get _allOutputs {
+    return _allOutputsAllAccounts.where((output) {
+      if (output.subaddressIndex == null) {
+        // Outputs without subaddress index belong to account 0, address 0
+        return _activeAccount == 0;
+      }
+      return output.subaddressIndex!.item1 == _activeAccount;
+    }).toList();
+  }
+
   int? _daemonHeight;
 
   // Transaction tracking state
-  List<WalletTransaction> get _allTransactions => _lifecycle.allTransactions;
-  set _allTransactions(List<WalletTransaction> v) => _lifecycle.allTransactions = v;
+  List<WalletTransaction> get _allTransactionsAllAccounts => _lifecycle.allTransactions;
+  set _allTransactionsAllAccounts(List<WalletTransaction> v) => _lifecycle.allTransactions = v;
+
+  // Filtered transactions for active account only
+  List<WalletTransaction> get _allTransactions {
+    return _allTransactionsAllAccounts.where((tx) {
+      // A transaction is relevant to this account if it has any received outputs for this account
+      final hasReceivedOutputs = tx.receivedOutputs.any((output) {
+        if (output.subaddressIndex == null) {
+          return _activeAccount == 0;
+        }
+        return output.subaddressIndex!.item1 == _activeAccount;
+      });
+
+      // OR if it spent outputs from this account
+      final hasSpentOutputs = tx.spentKeyImages.any((keyImage) {
+        final spentOutput = _allOutputsAllAccounts.where((o) => o.keyImage == keyImage).firstOrNull;
+        if (spentOutput == null) return false;
+        if (spentOutput.subaddressIndex == null) {
+          return _activeAccount == 0;
+        }
+        return spentOutput.subaddressIndex!.item1 == _activeAccount;
+      });
+
+      return hasReceivedOutputs || hasSpentOutputs;
+    }).toList();
+  }
   String _txSortBy = 'confirms'; // 'confirms' or 'amount'
   bool _txSortAscending = false;
   Set<String> _expandedTransactions = {}; // Track which transaction cards are expanded
@@ -135,6 +190,7 @@ class _DebugViewState extends State<DebugView> {
 
   // Stream subscriptions
   StreamSubscription? _keysDerivedSubscription;
+  StreamSubscription? _subaddressDerivedSubscription;
   StreamSubscription? _seedGeneratedSubscription;
   StreamSubscription? _blockScanSubscription;
   StreamSubscription? _daemonHeightSubscription;
@@ -176,6 +232,19 @@ class _DebugViewState extends State<DebugView> {
       });
     });
 
+    _subaddressDerivedSubscription = SubaddressDerivedResponse.rustSignalStream.listen((signal) {
+      if (signal.message.success && signal.message.address.isNotEmpty) {
+        setState(() {
+          // Match the response to the first pending request
+          if (_pendingSubaddresses.isNotEmpty) {
+            final key = _pendingSubaddresses.first;
+            _subaddresses[key] = signal.message.address;
+            _pendingSubaddresses.remove(key);
+          }
+        });
+      }
+    });
+
     _seedGeneratedSubscription = SeedGeneratedResponse.rustSignalStream.listen((signal) {
       if (signal.message.success) {
         setState(() {
@@ -198,10 +267,10 @@ class _DebugViewState extends State<DebugView> {
           _scanResult = signal.message;
           _scanError = null;
           _daemonHeight = signal.message.daemonHeight.toInt();
-          OutputUtils.mergeScannedOutputs(_allOutputs, signal.message.outputs);
+          OutputUtils.mergeScannedOutputs(_allOutputsAllAccounts, signal.message.outputs);
 
           // Track transactions: group outputs by txHash and track spent key images
-          _allTransactions = TransactionUtils.updateTransactionsFromScan(_allTransactions, signal.message, _allOutputs);
+          _allTransactionsAllAccounts = TransactionUtils.updateTransactionsFromScan(_allTransactionsAllAccounts, signal.message, _allOutputsAllAccounts);
         } else {
           _scanResult = null;
           _scanError = signal.message.error ?? 'Unknown error during scan';
@@ -232,7 +301,7 @@ class _DebugViewState extends State<DebugView> {
 
           // Add change outputs as unconfirmed (blockHeight=0)
           final changeOwned = signal.message.changeOutputs.map(OutputUtils.changeOutputToOwned).toList();
-          OutputUtils.addIfAbsent(_allOutputs, changeOwned);
+          OutputUtils.addIfAbsent(_allOutputsAllAccounts, changeOwned);
         } else {
           _txResult = null;
           _txError = signal.message.error ?? 'Unknown error during transaction creation';
@@ -248,7 +317,7 @@ class _DebugViewState extends State<DebugView> {
           _broadcastError = null;
           // Mark spent outputs immediately after broadcast
           if (_txResult != null) {
-            OutputUtils.markSpentByOutputKeys(_allOutputs, _txResult!.spentOutputHashes, _selectedOutputs);
+            OutputUtils.markSpentByOutputKeys(_allOutputsAllAccounts, _txResult!.spentOutputHashes, _selectedOutputs);
           }
         } else {
           _broadcastResult = null;
@@ -290,7 +359,7 @@ class _DebugViewState extends State<DebugView> {
 
     _spentStatusUpdatedSubscription = SpentStatusUpdatedResponse.rustSignalStream.listen((signal) {
       setState(() {
-        OutputUtils.markSpentByKeyImages(_allOutputs, signal.message.spentKeyImages, _selectedOutputs);
+        OutputUtils.markSpentByKeyImages(_allOutputsAllAccounts, signal.message.spentKeyImages, _selectedOutputs);
       });
     });
 
@@ -298,8 +367,8 @@ class _DebugViewState extends State<DebugView> {
       setState(() {
         _isScanningMempool = false;
         if (signal.message.success) {
-          OutputUtils.addIfAbsent(_allOutputs, signal.message.outputs);
-          OutputUtils.markSpentByKeyImages(_allOutputs, signal.message.spentKeyImages, _selectedOutputs);
+          OutputUtils.addIfAbsent(_allOutputsAllAccounts, signal.message.outputs);
+          OutputUtils.markSpentByKeyImages(_allOutputsAllAccounts, signal.message.spentKeyImages, _selectedOutputs);
         }
       });
     });
@@ -350,10 +419,7 @@ class _DebugViewState extends State<DebugView> {
   }
 
   void _onBlockRefreshTimer() {
-    debugPrint('[Dart] Block refresh timer fired');
-
     if (_isContinuousPaused || !_isContinuousScanning) {
-      debugPrint('[Dart] Scan is paused or not scanning, skipping block refresh');
       return;
     }
 
@@ -373,26 +439,31 @@ class _DebugViewState extends State<DebugView> {
       ).sendSignalToRust();
     } else {
       final wallet = walletsToScan.first;
+      // Get the highest account index for this wallet
+      final highestAccount = _accounts.isEmpty ? 0 : _accounts.reduce((a, b) => a > b ? a : b);
       StartContinuousScanRequest(
         nodeUrl: nodeUrl,
         startHeight: Uint64(BigInt.from(_continuousScanCurrentHeight)),
         seed: wallet.seed,
         network: wallet.network,
+        accountLookahead: highestAccount,
       ).sendSignalToRust();
     }
   }
 
   void _onMempoolPollTimer() {
-    debugPrint('[Dart] Mempool poll timer fired');
     final seed = _controller.text.trim();
     if (seed.isEmpty) return;
 
     final nodeUrl = _normalizeNodeUrl(_nodeUrlController.text);
+    // Get the highest account index for mempool scanning
+    final highestAccount = _accounts.isEmpty ? 0 : _accounts.reduce((a, b) => a > b ? a : b);
 
     MempoolScanRequest(
       nodeUrl: nodeUrl,
       seed: seed,
       network: _network,
+      accountLookahead: highestAccount,
     ).sendSignalToRust();
   }
 
@@ -400,6 +471,7 @@ class _DebugViewState extends State<DebugView> {
   void dispose() {
     // Cancel stream subscriptions
     _keysDerivedSubscription?.cancel();
+    _subaddressDerivedSubscription?.cancel();
     _seedGeneratedSubscription?.cancel();
     _blockScanSubscription?.cancel();
     _daemonHeightSubscription?.cancel();
@@ -438,8 +510,8 @@ class _DebugViewState extends State<DebugView> {
       _continuousScanCurrentHeight = 0;
       _continuousScanTargetHeight = 0;
       _isSynced = false;
-      _allOutputs = [];
-      _allTransactions = [];
+      _allOutputsAllAccounts = [];
+      _allTransactionsAllAccounts = [];
       _expandedTransactions = {};
       _selectedOutputs = {};
       _daemonHeight = null;
@@ -508,6 +580,103 @@ class _DebugViewState extends State<DebugView> {
       seed: result.normalizedInput!,
       network: _network,
     ).sendSignalToRust();
+
+    // Also derive subaddresses for the active account
+    _deriveSubaddresses();
+  }
+
+  void _deriveSubaddresses() {
+    if (_controller.text.trim().isEmpty) return;
+
+    final result = KeyParser.parse(_controller.text);
+    if (!result.isValid) return;
+
+    // Derive first 5 unused subaddresses for the active account
+    final used = _getUsedSubaddresses(_activeAccount);
+    int index = 0;
+    int derived = 0;
+
+    while (derived < 5) {
+      if (!used.contains(index)) {
+        final key = '$_activeAccount,$index';
+        // Only derive if we don't already have it and it's not pending
+        if (!_subaddresses.containsKey(key) && !_pendingSubaddresses.contains(key)) {
+          _pendingSubaddresses.add(key);
+          DeriveSubaddressRequest(
+            seed: result.normalizedInput!,
+            network: _network,
+            account: _activeAccount,
+            addressIndex: index,
+          ).sendSignalToRust();
+        }
+        derived++;
+      }
+      index++;
+    }
+  }
+
+  Set<int> _getUsedSubaddresses(int account) {
+    final used = <int>{};
+    for (var output in _allOutputs) {
+      if (output.subaddressIndex != null) {
+        final subIdx = output.subaddressIndex!;
+        final outputAccount = subIdx.item1;
+        final addressIndex = subIdx.item2;
+        if (outputAccount == account) {
+          used.add(addressIndex);
+        }
+      }
+    }
+    return used;
+  }
+
+  void _createAccount() {
+    final newAccountIndex = _accounts.isEmpty ? 0 : _accounts.last + 1;
+
+    // Get the active wallet and create a new account in it
+    var activeWallet = _lifecycle.activeWallet;
+
+    // If no wallet exists but we have a seed and address, create one first
+    if (activeWallet == null && _controller.text.trim().isNotEmpty && _derivedAddress != null) {
+      _openWallet(_walletId, _controller.text.trim(), _network, _derivedAddress!);
+      activeWallet = _lifecycle.activeWallet;
+    }
+
+    // Now check again if we have a wallet
+    final wallet = activeWallet;
+    if (wallet != null) {
+      final updatedWallet = wallet
+          .createAccount(newAccountIndex)
+          .switchAccount(newAccountIndex);
+      setState(() {
+        _lifecycle.openWallets[wallet.walletId] = updatedWallet;
+      });
+
+      _deriveSubaddresses();
+
+      if (_isContinuousScanning && _controller.text.trim().isNotEmpty) {
+        _startContinuousScan();
+      }
+    }
+  }
+
+  void _selectAccount(int accountIndex) {
+    final activeWallet = _lifecycle.activeWallet;
+    if (activeWallet != null) {
+      final updatedWallet = activeWallet.switchAccount(accountIndex);
+      setState(() {
+        _lifecycle.openWallets[activeWallet.walletId] = updatedWallet;
+        // Clear subaddresses cache for other accounts when switching
+        final keysToRemove = _subaddresses.keys.where((key) =>
+          !key.startsWith('$accountIndex,')).toList();
+        for (var key in keysToRemove) {
+          _subaddresses.remove(key);
+        }
+      });
+
+      // Derive subaddresses for the newly selected account
+      _deriveSubaddresses();
+    }
   }
 
   void _scanBlock() {
@@ -566,12 +735,14 @@ class _DebugViewState extends State<DebugView> {
     });
 
     final result = walletsToScan.isEmpty ? KeyParser.parse(_controller.text) : null;
+    final highestAccount = _accounts.isEmpty ? 0 : _accounts.reduce((a, b) => a > b ? a : b);
     WalletScanService.startContinuousScan(
       nodeUrl: validation.nodeUrl!,
       startHeight: validation.startHeight!,
       walletsToScan: walletsToScan,
       seed: result?.normalizedInput,
       network: walletsToScan.isEmpty ? _network : null,
+      accountLookahead: highestAccount,
     );
   }
 
@@ -750,8 +921,8 @@ class _DebugViewState extends State<DebugView> {
     _secretViewKey = null;
     _publicSpendKey = null;
     _publicViewKey = null;
-    _allOutputs = [];
-    _allTransactions = [];
+    _allOutputsAllAccounts = [];
+    _allTransactionsAllAccounts = [];
     _expandedTransactions = {};
     _selectedOutputs = {};
     _continuousScanCurrentHeight = 0;
@@ -905,6 +1076,21 @@ class _DebugViewState extends State<DebugView> {
                     ),
                     _buildPanel(
                       index: 3,
+                      title: 'Accounts',
+                      body: AccountsPanel(
+                        seed: _controller.text.trim().isEmpty ? null : _controller.text,
+                        network: _network,
+                        activeAccount: _activeAccount,
+                        accounts: _accounts,
+                        allOutputs: _allOutputs,
+                        onAccountSelected: _selectAccount,
+                        onCreateAccount: _createAccount,
+                        onCopyToClipboard: _copyToClipboard,
+                        subaddresses: _subaddresses,
+                      ),
+                    ),
+                    _buildPanel(
+                      index: 4,
                       title: 'Scanning',
                       body: ScanningPanel(
                         nodeUrlController: _nodeUrlController,
@@ -929,12 +1115,12 @@ class _DebugViewState extends State<DebugView> {
                       ),
                     ),
                     _buildPanel(
-                      index: 4,
+                      index: 5,
                       title: 'Transactions',
                       subtitle: transactionsSubtitle,
                       body: TransactionsPanel(
                         allTransactions: _sortedTransactions(),
-                        allOutputs: _allOutputs,
+                        allOutputs: _allOutputsAllAccounts,
                         currentHeight: _currentHeight,
                         txSortBy: _txSortBy,
                         txSortAscending: _txSortAscending,
@@ -961,7 +1147,7 @@ class _DebugViewState extends State<DebugView> {
                       ),
                     ),
                     _buildPanel(
-                      index: 5,
+                      index: 6,
                       title: 'Coins',
                       subtitle: coinsSubtitle,
                       body: OutputsPanel(
@@ -1000,7 +1186,7 @@ class _DebugViewState extends State<DebugView> {
                       ),
                     ),
                     _buildPanel(
-                      index: 6,
+                      index: 7,
                       title: 'Create Transaction',
                       body: CreateTransactionPanel(
                         destinationControllers: _destinationControllers,
@@ -1063,7 +1249,7 @@ class _DebugViewState extends State<DebugView> {
   List<WalletTransaction> _sortedTransactions() {
     return TransactionUtils.sortTransactions(
       _allTransactions,
-      _allOutputs,
+      _allOutputsAllAccounts,
       _txSortBy,
       _txSortAscending,
       _currentHeight,
@@ -1169,9 +1355,6 @@ class _DebugViewState extends State<DebugView> {
   }
 
   void _startNewWallet() {
-    debugPrint('[WALLET] Starting new wallet (clearing state)');
-
-    // Stop any ongoing scans
     _stopPollingTimers();
 
     setState(() {
@@ -1189,8 +1372,6 @@ class _DebugViewState extends State<DebugView> {
   }
 
   Future<void> _switchWallet(String newWalletId) async {
-    debugPrint('[WALLET] Switching from $_walletId to $newWalletId');
-
     final result = _lifecycle.switchWallet(newWalletId);
 
     switch (result) {
@@ -1224,8 +1405,6 @@ class _DebugViewState extends State<DebugView> {
       _lifecycle.openWallet(walletId, seed, network, address);
       _derivedAddress = address;
     });
-
-    debugPrint('[MULTI-WALLET] Opened wallet: $walletId (${_openWallets.length} total open)');
 
     _updateBlockHeightFromWallets();
   }
@@ -1272,8 +1451,6 @@ class _DebugViewState extends State<DebugView> {
       setState(() {});
     }
 
-    debugPrint('[MULTI-WALLET] Closed wallet: $walletId (${_activeWallets.length} remaining open)');
-
     _updateBlockHeightFromWallets();
 
     if (_isContinuousScanning && _activeWallets.isNotEmpty) {
@@ -1296,8 +1473,6 @@ class _DebugViewState extends State<DebugView> {
       _daemonHeight = wallet.daemonHeight;
     });
     _isRestoringWallet = false;
-
-    debugPrint('[MULTI-WALLET] Switched to wallet: $walletId');
   }
 
 
