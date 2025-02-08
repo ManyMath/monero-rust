@@ -113,9 +113,9 @@ class WalletScanService {
     required List<WalletInstance> walletsToScan,
     String? seed,
     String? network,
+    int accountLookahead = 0,
   }) {
     if (walletsToScan.length > 1) {
-      debugPrint('[MULTI-WALLET] Starting multi-wallet scan for ${walletsToScan.length} wallets');
       final walletConfigs = walletsToScan.map((w) => w.toWalletConfig()).toList();
 
       StartMultiWalletScanRequest(
@@ -130,6 +130,7 @@ class WalletScanService {
         startHeight: Uint64(BigInt.from(startHeight)),
         seed: wallet.seed,
         network: wallet.network,
+        accountLookahead: accountLookahead,
       ).sendSignalToRust();
     } else if (seed != null && network != null) {
       StartContinuousScanRequest(
@@ -137,6 +138,7 @@ class WalletScanService {
         startHeight: Uint64(BigInt.from(startHeight)),
         seed: seed,
         network: network,
+        accountLookahead: accountLookahead,
       ).sendSignalToRust();
     }
   }
@@ -187,6 +189,7 @@ class WalletScanService {
       nodeUrl: nodeUrl,
       seed: seed,
       network: network,
+      accountLookahead: 0,
     ).sendSignalToRust();
   }
 }

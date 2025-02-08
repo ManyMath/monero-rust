@@ -53,9 +53,6 @@ class WalletPollingService {
     required VoidCallback onMempoolPoll,
     VoidCallback? onCountdownUpdate,
   }) {
-    debugPrint('[WalletPollingService] Starting polling timers (block: ${_blockRefreshInterval.inSeconds}s, mempool: ${_mempoolPollInterval.inSeconds}s with ${_mempoolPollOffset.inSeconds}s offset)');
-
-    // Store callbacks
     _onBlockRefresh = onBlockRefresh;
     _onMempoolPoll = onMempoolPoll;
     _onCountdownUpdate = onCountdownUpdate;
@@ -99,10 +96,6 @@ class WalletPollingService {
 
   /// Stop all polling timers and cleanup resources.
   void stopPolling() {
-    if (_blockRefreshTimer != null || _mempoolPollTimer != null || _mempoolDelayTimer != null) {
-      debugPrint('[WalletPollingService] Stopping polling timers');
-    }
-
     _countdownTimer?.cancel();
     _countdownTimer = null;
 
