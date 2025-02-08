@@ -19,6 +19,7 @@ pub struct WalletActor {
     scan_node_url: String,
     scan_seed: String,
     scan_network: String,
+    scan_account_lookahead: u32,
     self_addr: Option<Address<Self>>,
 }
 
@@ -32,6 +33,7 @@ impl WalletActor {
         _owned_tasks.spawn(Self::listen_to_test(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_generate_seed(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_derive_address(self_addr.clone()));
+        _owned_tasks.spawn(Self::listen_to_derive_subaddress(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_derive_keys(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_scan_block(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_query_daemon_height(self_addr.clone()));
@@ -62,6 +64,7 @@ impl WalletActor {
             scan_node_url: String::new(),
             scan_seed: String::new(),
             scan_network: String::new(),
+            scan_account_lookahead: 0,
             self_addr: Some(self_addr),
         }
     }
@@ -132,6 +135,36 @@ impl WalletActor {
                 }
                 Err(e) => {
                     AddressDerivedResponse {
+                        address: String::new(),
+                        success: false,
+                        error: Some(e),
+                    }
+                    .send_signal_to_dart();
+                }
+            }
+        }
+    }
+
+    async fn listen_to_derive_subaddress(mut self_addr: Address<Self>) {
+        let receiver = DeriveSubaddressRequest::get_dart_signal_receiver();
+        while let Some(signal_pack) = receiver.recv().await {
+            let request = signal_pack.message;
+            match monero_rust::derive_subaddress(
+                &request.seed,
+                &request.network,
+                request.account,
+                request.address_index,
+            ) {
+                Ok(address) => {
+                    SubaddressDerivedResponse {
+                        address,
+                        success: true,
+                        error: None,
+                    }
+                    .send_signal_to_dart();
+                }
+                Err(e) => {
+                    SubaddressDerivedResponse {
                         address: String::new(),
                         success: false,
                         error: Some(e),
@@ -315,6 +348,7 @@ impl WalletActor {
                     start_height: request.start_height,
                     seed: request.seed,
                     network: request.network,
+                    account_lookahead: request.account_lookahead,
                 })
                 .await;
         }
@@ -333,10 +367,11 @@ impl WalletActor {
             let request = signal_pack.message;
 
             wasm_bindgen_futures::spawn_local(async move {
-                match monero_rust::scan_mempool_for_outputs(
+                match monero_rust::scan_mempool_for_outputs_with_account_lookahead(
                     &request.node_url,
                     &request.seed,
                     &request.network,
+                    request.account_lookahead,
                 )
                 .await
                 {
@@ -399,7 +434,10 @@ impl WalletActor {
                     .map(|w| monero_rust::WalletScanConfig {
                         mnemonic: w.seed.clone(),
                         network: w.network.clone(),
-                        lookahead: monero_rust::DEFAULT_LOOKAHEAD,
+                        lookahead: monero_rust::Lookahead {
+                            account: w.account_lookahead,
+                            subaddress: 20,
+                        },
                     })
                     .collect();
 
@@ -497,7 +535,10 @@ impl WalletActor {
                                 .map(|w| monero_rust::WalletScanConfig {
                                     mnemonic: w.seed.clone(),
                                     network: w.network.clone(),
-                                    lookahead: monero_rust::DEFAULT_LOOKAHEAD,
+                                    lookahead: monero_rust::Lookahead {
+                                        account: w.account_lookahead,
+                                        subaddress: 20,
+                                    },
                                 })
                                 .collect();
 
@@ -806,6 +847,7 @@ impl Notifiable<UpdateScanState> for WalletActor {
         self.scan_node_url = msg.node_url;
         self.scan_seed = msg.seed;
         self.scan_network = msg.network;
+        self.scan_account_lookahead = msg.account_lookahead;
     }
 }
 
@@ -816,6 +858,7 @@ impl Notifiable<StartContinuousScan> for WalletActor {
         let start_height = msg.start_height;
         let seed = msg.seed.clone();
         let network = msg.network.clone();
+        let account_lookahead = msg.account_lookahead;
         let mut self_addr = ctx.address();
 
         wasm_bindgen_futures::spawn_local(async move {
@@ -830,6 +873,7 @@ impl Notifiable<StartContinuousScan> for WalletActor {
                             node_url: node_url.clone(),
                             seed: seed.clone(),
                             network: network.clone(),
+                            account_lookahead,
                         })
                         .await;
 
@@ -902,6 +946,7 @@ impl Notifiable<ContinueScan> for WalletActor {
         let block_height = self.scan_current_height;
         let seed = self.scan_seed.clone();
         let network = self.scan_network.clone();
+        let account_lookahead = self.scan_account_lookahead;
         let target_height = self.scan_target_height;
         let mut self_addr = ctx.address();
 
@@ -909,7 +954,11 @@ impl Notifiable<ContinueScan> for WalletActor {
         self.scan_current_height += 1;
 
         wasm_bindgen_futures::spawn_local(async move {
-            match monero_rust::scan_block_for_outputs_with_url(&node_url, block_height, &seed, &network).await {
+            let lookahead = monero_rust::Lookahead {
+                account: account_lookahead,
+                subaddress: monero_rust::DEFAULT_LOOKAHEAD.subaddress,
+            };
+            match monero_rust::scan_block_for_outputs_with_url_and_lookahead(&node_url, block_height, &seed, &network, lookahead).await {
                 Ok(result) => {
                     let outputs = result
                         .outputs
@@ -993,10 +1042,6 @@ impl Notifiable<ContinueScan> for WalletActor {
                     if block_height + 1 < target_height {
                         let _ = self_addr.notify(ContinueScan).await;
                     } else {
-                        // Scanning complete.  Dart handles starting polling timers
-                        #[cfg(target_arch = "wasm32")]
-                        web_sys::console::log_1(&"[ContinueScan] Scan complete!".into());
-
                         let _ = self_addr.notify(StopScan).await;
                     }
                 }
@@ -1037,28 +1082,16 @@ impl Notifiable<ContinueScan> for WalletActor {
 #[async_trait]
 impl Notifiable<UpdateSpentStatus> for WalletActor {
     async fn notify(&mut self, msg: UpdateSpentStatus, _ctx: &Context<Self>) {
-        #[cfg(target_arch = "wasm32")]
-        web_sys::console::log_1(&format!("[UpdateSpentStatus] Received {} key images to mark as spent", msg.key_images.len()).into());
-        #[cfg(target_arch = "wasm32")]
-        web_sys::console::log_1(&format!("[UpdateSpentStatus] Current outputs in wallet: {}", self.state.outputs.len()).into());
-
         let mut updated_count = 0;
         for output in &mut self.state.outputs {
             if !output.spent && msg.key_images.contains(&output.key_image) {
-                #[cfg(target_arch = "wasm32")]
-                web_sys::console::log_1(&format!("[UpdateSpentStatus] Marking output as spent: {}...", &output.key_image[..16.min(output.key_image.len())]).into());
                 output.spent = true;
                 updated_count += 1;
             }
         }
 
-        #[cfg(target_arch = "wasm32")]
-        web_sys::console::log_1(&format!("[UpdateSpentStatus] Updated {} outputs as spent", updated_count).into());
-
         if updated_count > 0 {
             self.recalculate_balances();
-            #[cfg(target_arch = "wasm32")]
-            web_sys::console::log_1(&format!("[UpdateSpentStatus] Recalculated balance: confirmed={}, unconfirmed={}", self.state.confirmed_balance, self.state.unconfirmed_balance).into());
 
             BalanceResponse {
                 confirmed: self.state.confirmed_balance,
