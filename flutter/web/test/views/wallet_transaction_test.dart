@@ -137,6 +137,7 @@ void main() {
           receivedOutputBytes: 'b',
           blockHeight: Uint64(BigInt.from(1000)),
           spent: false, keyImage: 'ki1',
+          isCoinbase: false,
         );
         // 0.000000000001 XMR — 1 piconero
         final output2 = OwnedOutput(
@@ -148,6 +149,7 @@ void main() {
           receivedOutputBytes: 'b2',
           blockHeight: Uint64(BigInt.from(1000)),
           spent: false, keyImage: 'ki2',
+          isCoinbase: false,
         );
 
         final transaction = WalletTransaction(
@@ -172,6 +174,7 @@ void main() {
           amountXmr: 'invalid_amount',
           key: 'mock_key',
           keyOffset: 'mock_offset',
+          isCoinbase: false,
           commitmentMask: 'mock_mask',
           subaddressIndex: null,
           paymentId: null,

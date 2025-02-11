@@ -11,6 +11,7 @@ class TestHelpers {
     String? keyImage,
     Tuple2<int, int>? subaddressIndex,
     String? paymentId,
+    bool isCoinbase = false,
   }) {
     final amount = (double.parse(amountXmr) * 1e12).toInt();
 
@@ -28,6 +29,7 @@ class TestHelpers {
       blockHeight: Uint64(BigInt.from(blockHeight)),
       spent: spent,
       keyImage: keyImage ?? 'keyimage_$txHash$outputIndex',
+      isCoinbase: isCoinbase,
     );
   }
 
