@@ -1,5 +1,6 @@
 import 'package:tuple/tuple.dart';
 import '../src/bindings/bindings.dart';
+import './wallet_transaction.dart';
 
 class WalletInstance {
   final String walletId;
@@ -8,6 +9,7 @@ class WalletInstance {
   final String address;
 
   List<OwnedOutput> outputs;
+  List<WalletTransaction> transactions;
   int currentHeight;
   int daemonHeight;
   bool isScanning;
@@ -24,6 +26,7 @@ class WalletInstance {
     required this.network,
     required this.address,
     this.outputs = const [],
+    this.transactions = const [],
     this.currentHeight = 0,
     this.daemonHeight = 0,
     this.isScanning = false,
@@ -84,6 +87,7 @@ class WalletInstance {
     String? network,
     String? address,
     List<OwnedOutput>? outputs,
+    List<WalletTransaction>? transactions,
     int? currentHeight,
     int? daemonHeight,
     bool? isScanning,
@@ -98,6 +102,7 @@ class WalletInstance {
       network: network ?? this.network,
       address: address ?? this.address,
       outputs: outputs ?? this.outputs,
+      transactions: transactions ?? this.transactions,
       currentHeight: currentHeight ?? this.currentHeight,
       daemonHeight: daemonHeight ?? this.daemonHeight,
       isScanning: isScanning ?? this.isScanning,
@@ -187,6 +192,7 @@ class WalletInstance {
       'keyImage': o.keyImage,
       'isCoinbase': o.isCoinbase,
     }).toList(),
+    'transactions': transactions.map((t) => t.toJson()).toList(),
     'currentHeight': currentHeight,
     'daemonHeight': daemonHeight,
     'isScanning': isScanning,
@@ -248,6 +254,9 @@ class WalletInstance {
           isCoinbase: (outputData['isCoinbase'] as bool?) ?? false,
         );
       }).toList(),
+      transactions: (json['transactions'] as List? ?? [])
+          .map((t) => WalletTransaction.fromJson(t as Map<String, dynamic>))
+          .toList(),
       currentHeight: json['currentHeight'] as int,
       daemonHeight: json['daemonHeight'] as int,
       isScanning: json['isScanning'] as bool,

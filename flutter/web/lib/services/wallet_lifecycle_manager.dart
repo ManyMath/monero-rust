@@ -2,6 +2,7 @@ import '../src/bindings/bindings.dart';
 import '../models/wallet_instance.dart';
 import '../models/wallet_transaction.dart';
 import '../utils/output_utils.dart';
+import '../utils/transaction_utils.dart';
 import 'wallet_persistence_service.dart';
 
 enum SwitchResult {
@@ -86,6 +87,7 @@ class WalletLifecycleManager {
     activeWalletId = id;
     walletId = id;
     allOutputs = wallet.outputs;
+    allTransactions = wallet.transactions;
     continuousScanCurrentHeight = wallet.currentHeight;
     return wallet;
   }
@@ -98,6 +100,7 @@ class WalletLifecycleManager {
       network: network,
       address: address,
       outputs: [],
+      transactions: [],
       currentHeight: 0,
       daemonHeight: 0,
       isScanning: false,
@@ -108,6 +111,7 @@ class WalletLifecycleManager {
     activeWalletId = id;
     walletId = id;
     allOutputs = instance.outputs;
+    allTransactions = instance.transactions;
     return instance;
   }
 
@@ -125,6 +129,7 @@ class WalletLifecycleManager {
 
     if (activeWallet != null) {
       activeWallet!.outputs = outputs;
+      activeWallet!.transactions = transactions;
       activeWallet!.currentHeight = scanHeight;
       activeWallet!.daemonHeight = daemonHeight;
     }
@@ -179,7 +184,12 @@ class WalletLifecycleManager {
     required int blockHeight,
     required int daemonHeight,
     required List<String> spentKeyImages,
+    int blockTimestamp = 0,
   }) {
+    // Track which wallets have been updated with new outputs
+    final updatedWalletAddresses = <String>{};
+
+    // Update outputs and transactions per wallet
     for (var walletResult in walletResults) {
       final walletInstance = openWallets.values.cast<WalletInstance?>().firstWhere(
         (w) => w != null && w.address == walletResult.address,
@@ -194,6 +204,54 @@ class WalletLifecycleManager {
           walletInstance.currentHeight = blockHeight;
         }
         walletInstance.daemonHeight = daemonHeight;
+
+        updatedWalletAddresses.add(walletResult.address);
+
+        // Update transactions for this specific wallet
+        final walletScanResponse = BlockScanResponse(
+          success: true,
+          error: null,
+          blockHeight: Uint64(BigInt.from(blockHeight)),
+          blockHash: '',
+          blockTimestamp: Uint64(BigInt.from(blockTimestamp)),
+          txCount: 0,
+          outputs: walletResult.outputs,
+          daemonHeight: Uint64(BigInt.from(daemonHeight)),
+          spentKeyImages: spentKeyImages,
+        );
+
+        walletInstance.transactions = TransactionUtils.updateTransactionsFromScan(
+          walletInstance.transactions,
+          walletScanResponse,
+          walletInstance.outputs,
+        );
+      }
+    }
+
+    // Update all wallets with spent key images (even those without new outputs)
+    if (spentKeyImages.isNotEmpty) {
+      for (var walletInstance in openWallets.values) {
+        // Skip wallets that were already updated above
+        if (!updatedWalletAddresses.contains(walletInstance.address)) {
+          // Update transactions for spent key images
+          final walletScanResponse = BlockScanResponse(
+            success: true,
+            error: null,
+            blockHeight: Uint64(BigInt.from(blockHeight)),
+            blockHash: '',
+            blockTimestamp: Uint64(BigInt.from(blockTimestamp)),
+            txCount: 0,
+            outputs: [],
+            daemonHeight: Uint64(BigInt.from(daemonHeight)),
+            spentKeyImages: spentKeyImages,
+          );
+
+          walletInstance.transactions = TransactionUtils.updateTransactionsFromScan(
+            walletInstance.transactions,
+            walletScanResponse,
+            walletInstance.outputs,
+          );
+        }
       }
     }
 
@@ -204,6 +262,7 @@ class WalletLifecycleManager {
 
     if (activeWalletId != null && activeWallet != null) {
       allOutputs = activeWallet!.outputs;
+      allTransactions = activeWallet!.transactions;
     }
   }
 }

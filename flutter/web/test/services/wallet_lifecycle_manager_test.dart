@@ -1120,5 +1120,82 @@ void main() {
 
       expect(mgr.openWallets['w1']!.outputs, isEmpty);
     });
+
+    test('tracks transactions from multi-wallet scan results', () {
+      final mgr = createManager();
+      mgr.openWallet('w1', 'seed1', 'stagenet', 'addr_w1');
+      mgr.openWallet('w2', 'seed2', 'stagenet', 'addr_w2');
+
+      final output1 = TestHelpers.createMockOutput(
+        txHash: 'tx_multi_1', outputIndex: 0, amountXmr: '10.0', blockHeight: 100,
+      );
+      final output2 = TestHelpers.createMockOutput(
+        txHash: 'tx_multi_2', outputIndex: 0, amountXmr: '5.0', blockHeight: 100,
+      );
+
+      mgr.distributeMultiWalletScanResults(
+        walletResults: [
+          WalletScanResult(address: 'addr_w1', outputs: [output1]),
+          WalletScanResult(address: 'addr_w2', outputs: [output2]),
+        ],
+        blockHeight: 100,
+        daemonHeight: 1000,
+        spentKeyImages: [],
+        blockTimestamp: 1234567890,
+      );
+
+      // Verify transactions were created per wallet
+      expect(mgr.openWallets['w1']!.transactions.length, 1);
+      expect(mgr.openWallets['w2']!.transactions.length, 1);
+      expect(mgr.openWallets['w1']!.transactions[0].txHash, 'tx_multi_1');
+      expect(mgr.openWallets['w2']!.transactions[0].txHash, 'tx_multi_2');
+
+      // Verify active wallet transactions (w2 is active after last openWallet)
+      expect(mgr.allTransactions.length, 1);
+      expect(mgr.allTransactions[0].txHash, 'tx_multi_2');
+
+      // Verify transaction details for w2
+      final tx2 = mgr.openWallets['w2']!.transactions[0];
+      expect(tx2.blockHeight, 100);
+      expect(tx2.blockTimestamp, 1234567890);
+      expect(tx2.receivedOutputs.length, 1);
+      expect(tx2.receivedOutputs[0].txHash, 'tx_multi_2');
+    });
+
+    test('tracks spent key images as transactions in multi-wallet scan', () {
+      final mgr = createManager();
+      mgr.openWallet('w1', 'seed1', 'stagenet', 'addr_w1');
+
+      // First add an output with a key image
+      final output1 = TestHelpers.createMockOutput(
+        txHash: 'tx_received', outputIndex: 0, amountXmr: '10.0',
+        blockHeight: 100, keyImage: 'ki_spend_1',
+      );
+
+      mgr.distributeMultiWalletScanResults(
+        walletResults: [
+          WalletScanResult(address: 'addr_w1', outputs: [output1]),
+        ],
+        blockHeight: 100,
+        daemonHeight: 1000,
+        spentKeyImages: [],
+      );
+
+      expect(mgr.openWallets['w1']!.transactions.length, 1);
+
+      // Now scan a block that spends this output
+      mgr.distributeMultiWalletScanResults(
+        walletResults: [],
+        blockHeight: 150,
+        daemonHeight: 1000,
+        spentKeyImages: ['ki_spend_1'],
+      );
+
+      // Should create a synthetic spend transaction in w1
+      expect(mgr.openWallets['w1']!.transactions.length, 2);
+      final spendTx = mgr.openWallets['w1']!.transactions.firstWhere((t) => t.txHash.startsWith('spend:'));
+      expect(spendTx.spentKeyImages, contains('ki_spend_1'));
+      expect(spendTx.blockHeight, 150);
+    });
   });
 }

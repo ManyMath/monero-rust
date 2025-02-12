@@ -390,6 +390,7 @@ class _DebugViewState extends State<DebugView> {
           blockHeight: response.blockHeight.toInt(),
           daemonHeight: response.daemonHeight.toInt(),
           spentKeyImages: response.spentKeyImages,
+          blockTimestamp: response.blockTimestamp.toInt(),
         );
       });
       _updateBlockHeightFromWallets();
