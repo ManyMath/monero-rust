@@ -7,12 +7,21 @@ use tokio::task::JoinSet;
 use tokio_with_wasm::alias as tokio;
 use wasm_bindgen_futures;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScanType {
+    None,
+    SingleWallet,
+    MultiWallet,
+}
+
 pub struct WalletActor {
     state: WalletState,
     rpc_actor: Option<Address<super::rpc::RpcActor>>,
     _owned_tasks: JoinSet<()>,
-    // Continuous scan state
+    // Shared scan state
     is_scanning: bool,
+    active_scan_type: ScanType,
+    // Single-wallet scan state
     scan_start_height: u64,
     scan_current_height: u64,
     scan_target_height: u64,
@@ -20,6 +29,11 @@ pub struct WalletActor {
     scan_seed: String,
     scan_network: String,
     scan_account_lookahead: u32,
+    // Multi-wallet scan state
+    multi_wallet_scan_current_height: u64,
+    multi_wallet_scan_target_height: u64,
+    multi_wallet_scan_node_url: String,
+    multi_wallet_scan_wallets: Vec<WalletConfig>,
     self_addr: Option<Address<Self>>,
 }
 
@@ -58,6 +72,7 @@ impl WalletActor {
             rpc_actor: None,
             _owned_tasks,
             is_scanning: false,
+            active_scan_type: ScanType::None,
             scan_start_height: 0,
             scan_current_height: 0,
             scan_target_height: 0,
@@ -65,6 +80,10 @@ impl WalletActor {
             scan_seed: String::new(),
             scan_network: String::new(),
             scan_account_lookahead: 0,
+            multi_wallet_scan_current_height: 0,
+            multi_wallet_scan_target_height: 0,
+            multi_wallet_scan_node_url: String::new(),
+            multi_wallet_scan_wallets: Vec::new(),
             self_addr: Some(self_addr),
         }
     }
@@ -515,130 +534,37 @@ impl WalletActor {
         let receiver = StartMultiWalletScanRequest::get_dart_signal_receiver();
         while let Some(signal_pack) = receiver.recv().await {
             let request = signal_pack.message;
+            let node_url = request.node_url.clone();
+            let start_height = request.start_height;
+            let wallets = request.wallets.clone();
+            let mut self_addr_clone = self_addr.clone();
 
-            // Spawn a background task for continuous multi-wallet scanning
+            // Spawn task to get daemon height and start scanning
             wasm_bindgen_futures::spawn_local(async move {
-                let node_url = request.node_url.clone();
-                let mut current_height = request.start_height;
-
-                // Query daemon height
                 match monero_rust::get_daemon_height(&node_url).await {
-                    Ok(initial_daemon_height) => {
-                        let mut target_height = initial_daemon_height;
+                    Ok(daemon_height) => {
+                        // Initialize multi-wallet scanning state
+                        let _ = self_addr_clone
+                            .notify(UpdateMultiWalletScanState {
+                                is_scanning: true,
+                                current_height: start_height,
+                                target_height: daemon_height,
+                                node_url: node_url.clone(),
+                                wallets,
+                            })
+                            .await;
 
-                        // Scan blocks continuously, updating target as we go
-                        loop {
-                            // Convert wallet configs
-                            let wallet_configs: Vec<monero_rust::WalletScanConfig> = request
-                                .wallets
-                                .iter()
-                                .map(|w| monero_rust::WalletScanConfig {
-                                    mnemonic: w.seed.clone(),
-                                    network: w.network.clone(),
-                                    lookahead: monero_rust::Lookahead {
-                                        account: w.account_lookahead,
-                                        subaddress: 20,
-                                    },
-                                })
-                                .collect();
-
-                            // Scan current block for all wallets
-                            match monero_rust::scan_block_multi_wallet_with_url(
-                                &node_url,
-                                current_height,
-                                wallet_configs,
-                            )
-                            .await
-                            {
-                                Ok(result) => {
-                                    // Send progress update with results
-                                    let wallet_results: Vec<WalletScanResult> = result
-                                        .wallet_results
-                                        .into_iter()
-                                        .map(|(address, wallet_data)| {
-                                            let outputs = wallet_data
-                                                .outputs
-                                                .iter()
-                                                .map(|o| OwnedOutput {
-                                                    tx_hash: o.tx_hash.clone(),
-                                                    output_index: o.output_index,
-                                                    amount: o.amount,
-                                                    amount_xmr: o.amount_xmr.clone(),
-                                                    key: o.key.clone(),
-                                                    key_offset: o.key_offset.clone(),
-                                                    commitment_mask: o.commitment_mask.clone(),
-                                                    subaddress_index: o.subaddress_index,
-                                                    payment_id: o.payment_id.clone(),
-                                                    received_output_bytes: o.received_output_bytes.clone(),
-                                                    block_height: o.block_height,
-                                                    spent: o.spent,
-                                                    key_image: o.key_image.clone(),
-                                                    is_coinbase: o.is_coinbase,
-                                                })
-                                                .collect();
-
-                                            WalletScanResult { address, outputs }
-                                        })
-                                        .collect();
-
-                                    MultiWalletScanResponse {
-                                        success: true,
-                                        error: None,
-                                        block_height: result.block_height,
-                                        block_hash: result.block_hash,
-                                        block_timestamp: result.block_timestamp,
-                                        tx_count: result.tx_count as u32,
-                                        daemon_height: result.daemon_height,
-                                        spent_key_images: result.spent_key_images.clone(),
-                                        wallet_results,
-                                    }
-                                    .send_signal_to_dart();
-
-                                    // Update target height from scan result (fresher data)
-                                    target_height = result.daemon_height;
-
-                                    // Send sync progress
-                                    SyncProgressResponse {
-                                        current_height,
-                                        daemon_height: result.daemon_height,
-                                        is_synced: current_height >= target_height - 1,
-                                        is_scanning: true,
-                                    }
-                                    .send_signal_to_dart();
-
-                                    current_height += 1;
-
-                                    // If caught up, send synced message and exit (polling will restart)
-                                    if current_height >= target_height {
-                                        SyncProgressResponse {
-                                            current_height,
-                                            daemon_height: target_height,
-                                            is_synced: true,
-                                            is_scanning: false,
-                                        }
-                                        .send_signal_to_dart();
-                                        break;
-                                    }
-                                }
-                                Err(e) => {
-                                    MultiWalletScanResponse {
-                                        success: false,
-                                        error: Some(e),
-                                        block_height: current_height,
-                                        block_hash: String::new(),
-                                        block_timestamp: 0,
-                                        tx_count: 0,
-                                        daemon_height: 0,
-                                        spent_key_images: Vec::new(),
-                                        wallet_results: Vec::new(),
-                                    }
-                                    .send_signal_to_dart();
-
-                                    // Stop scanning on error
-                                    break;
-                                }
-                            }
+                        // Send initial progress
+                        SyncProgressResponse {
+                            current_height: start_height,
+                            daemon_height,
+                            is_synced: start_height >= daemon_height,
+                            is_scanning: true,
                         }
+                        .send_signal_to_dart();
+
+                        // Start scanning
+                        let _ = self_addr_clone.notify(ContinueMultiWalletScan).await;
                     }
                     Err(e) => {
                         MultiWalletScanResponse {
@@ -841,13 +767,40 @@ impl WalletActor {
 #[async_trait]
 impl Notifiable<UpdateScanState> for WalletActor {
     async fn notify(&mut self, msg: UpdateScanState, _ctx: &Context<Self>) {
+        // Check for concurrent scan
+        if self.is_scanning && self.active_scan_type == ScanType::MultiWallet {
+            #[cfg(target_arch = "wasm32")]
+            web_sys::console::warn_1(&"Cannot start single-wallet scan: multi-wallet scan already running".into());
+            return;
+        }
+
         self.is_scanning = msg.is_scanning;
+        self.active_scan_type = if msg.is_scanning { ScanType::SingleWallet } else { ScanType::None };
         self.scan_current_height = msg.current_height;
         self.scan_target_height = msg.target_height;
         self.scan_node_url = msg.node_url;
         self.scan_seed = msg.seed;
         self.scan_network = msg.network;
         self.scan_account_lookahead = msg.account_lookahead;
+    }
+}
+
+#[async_trait]
+impl Notifiable<UpdateMultiWalletScanState> for WalletActor {
+    async fn notify(&mut self, msg: UpdateMultiWalletScanState, _ctx: &Context<Self>) {
+        // Check for concurrent scan
+        if self.is_scanning && self.active_scan_type == ScanType::SingleWallet {
+            #[cfg(target_arch = "wasm32")]
+            web_sys::console::warn_1(&"Cannot start multi-wallet scan: single-wallet scan already running".into());
+            return;
+        }
+
+        self.is_scanning = msg.is_scanning;
+        self.active_scan_type = if msg.is_scanning { ScanType::MultiWallet } else { ScanType::None };
+        self.multi_wallet_scan_current_height = msg.current_height;
+        self.multi_wallet_scan_target_height = msg.target_height;
+        self.multi_wallet_scan_node_url = msg.node_url;
+        self.multi_wallet_scan_wallets = msg.wallets;
     }
 }
 
@@ -915,10 +868,20 @@ impl Notifiable<StartContinuousScan> for WalletActor {
 impl Notifiable<StopScan> for WalletActor {
     async fn notify(&mut self, _msg: StopScan, _ctx: &Context<Self>) {
         self.is_scanning = false;
+
+        // Use correct state fields based on which scan was active
+        let (current_height, target_height) = match self.active_scan_type {
+            ScanType::SingleWallet => (self.scan_current_height, self.scan_target_height),
+            ScanType::MultiWallet => (self.multi_wallet_scan_current_height, self.multi_wallet_scan_target_height),
+            ScanType::None => (0, 0),
+        };
+
+        self.active_scan_type = ScanType::None;
+
         SyncProgressResponse {
-            current_height: self.scan_current_height,
-            daemon_height: self.scan_target_height,
-            is_synced: self.scan_current_height >= self.scan_target_height,
+            current_height,
+            daemon_height: target_height,
+            is_synced: current_height >= target_height,
             is_scanning: false,
         }
         .send_signal_to_dart();
@@ -1072,6 +1035,132 @@ impl Notifiable<ContinueScan> for WalletActor {
                     .send_signal_to_dart();
 
                     // Notify actor to stop scanning
+                    let _ = self_addr.notify(StopScan).await;
+                }
+            }
+        });
+    }
+}
+
+#[async_trait]
+impl Notifiable<ContinueMultiWalletScan> for WalletActor {
+    async fn notify(&mut self, _msg: ContinueMultiWalletScan, ctx: &Context<Self>) {
+        // Check if we should stop scanning
+        if !self.is_scanning || self.multi_wallet_scan_current_height >= self.multi_wallet_scan_target_height {
+            if self.multi_wallet_scan_current_height >= self.multi_wallet_scan_target_height {
+                self.is_scanning = false;
+                SyncProgressResponse {
+                    current_height: self.multi_wallet_scan_current_height,
+                    daemon_height: self.multi_wallet_scan_target_height,
+                    is_synced: true,
+                    is_scanning: false,
+                }
+                .send_signal_to_dart();
+            }
+            return;
+        }
+
+        let node_url = self.multi_wallet_scan_node_url.clone();
+        let block_height = self.multi_wallet_scan_current_height;
+        let wallets = self.multi_wallet_scan_wallets.clone();
+        let target_height = self.multi_wallet_scan_target_height;
+        let mut self_addr = ctx.address();
+
+        // Increment current height
+        self.multi_wallet_scan_current_height += 1;
+
+        wasm_bindgen_futures::spawn_local(async move {
+            // Convert wallet configs
+            let wallet_configs: Vec<monero_rust::WalletScanConfig> = wallets
+                .iter()
+                .map(|w| monero_rust::WalletScanConfig {
+                    mnemonic: w.seed.clone(),
+                    network: w.network.clone(),
+                    lookahead: monero_rust::Lookahead {
+                        account: w.account_lookahead,
+                        subaddress: 20,
+                    },
+                })
+                .collect();
+
+            match monero_rust::scan_block_multi_wallet_with_url(
+                &node_url,
+                block_height,
+                wallet_configs,
+            )
+            .await
+            {
+                Ok(result) => {
+                    // Send progress update with results
+                    let wallet_results: Vec<WalletScanResult> = result
+                        .wallet_results
+                        .into_iter()
+                        .map(|(address, wallet_data)| {
+                            let outputs = wallet_data
+                                .outputs
+                                .iter()
+                                .map(|o| OwnedOutput {
+                                    tx_hash: o.tx_hash.clone(),
+                                    output_index: o.output_index,
+                                    amount: o.amount,
+                                    amount_xmr: o.amount_xmr.clone(),
+                                    key: o.key.clone(),
+                                    key_offset: o.key_offset.clone(),
+                                    commitment_mask: o.commitment_mask.clone(),
+                                    subaddress_index: o.subaddress_index,
+                                    payment_id: o.payment_id.clone(),
+                                    received_output_bytes: o.received_output_bytes.clone(),
+                                    block_height: o.block_height,
+                                    spent: o.spent,
+                                    key_image: o.key_image.clone(),
+                                    is_coinbase: o.is_coinbase,
+                                })
+                                .collect();
+
+                            WalletScanResult { address, outputs }
+                        })
+                        .collect();
+
+                    MultiWalletScanResponse {
+                        success: true,
+                        error: None,
+                        block_height: result.block_height,
+                        block_hash: result.block_hash,
+                        block_timestamp: result.block_timestamp,
+                        tx_count: result.tx_count as u32,
+                        daemon_height: result.daemon_height,
+                        spent_key_images: result.spent_key_images.clone(),
+                        wallet_results,
+                    }
+                    .send_signal_to_dart();
+
+                    // Send sync progress
+                    SyncProgressResponse {
+                        current_height: block_height,
+                        daemon_height: result.daemon_height,
+                        is_synced: block_height >= result.daemon_height - 1,
+                        is_scanning: true,
+                    }
+                    .send_signal_to_dart();
+
+                    // Continue scanning next block
+                    let _ = self_addr.notify(ContinueMultiWalletScan).await;
+                }
+                Err(e) => {
+                    MultiWalletScanResponse {
+                        success: false,
+                        error: Some(e),
+                        block_height,
+                        block_hash: String::new(),
+                        block_timestamp: 0,
+                        tx_count: 0,
+                        daemon_height: 0,
+                        spent_key_images: Vec::new(),
+                        wallet_results: Vec::new(),
+                    }
+                    .send_signal_to_dart();
+
+                    // Stop scanning on error
                     let _ = self_addr.notify(StopScan).await;
                 }
             }

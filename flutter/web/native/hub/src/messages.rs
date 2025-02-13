@@ -143,6 +143,9 @@ pub struct StopScan;
 pub struct ContinueScan;
 
 #[derive(Debug, Clone)]
+pub struct ContinueMultiWalletScan;
+
+#[derive(Debug, Clone)]
 pub struct UpdateScanState {
     pub is_scanning: bool,
     pub current_height: u64,
@@ -151,6 +154,15 @@ pub struct UpdateScanState {
     pub seed: String,
     pub network: String,
     pub account_lookahead: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct UpdateMultiWalletScanState {
+    pub is_scanning: bool,
+    pub current_height: u64,
+    pub target_height: u64,
+    pub node_url: String,
+    pub wallets: Vec<crate::signals::WalletConfig>,
 }
 
 #[derive(Debug, Clone)]
