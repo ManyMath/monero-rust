@@ -1727,6 +1727,15 @@ class _DebugViewState extends State<DebugView> {
         return;
       }
 
+      // Stop any active scans before importing to prevent race condition
+      if (_isContinuousScanning) {
+        WalletScanService.pauseContinuousScan();
+        setState(() {
+          _isContinuousScanning = false;
+          _isContinuousPaused = false;
+        });
+      }
+
       // Use the persistence service to import wallet
       final importResult = await WalletPersistenceBrowser.importWallet(
         file: file,
