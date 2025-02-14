@@ -38,7 +38,14 @@ class WalletInstance {
         outputsByAccount = outputsByAccount ?? {0: const []};
   // Get outputs for the active account
   List<OwnedOutput> get activeAccountOutputs {
-    return outputsByAccount[activeAccount] ?? [];
+    // Filter from outputs list by account index to support dynamically scanned outputs
+    return outputs.where((output) {
+      if (output.subaddressIndex == null) {
+        // Outputs without subaddress belong to account 0
+        return activeAccount == 0;
+      }
+      return output.subaddressIndex!.item1 == activeAccount;
+    }).toList();
   }
 
   double get confirmedBalance {
