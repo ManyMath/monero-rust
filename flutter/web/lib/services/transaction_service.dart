@@ -1,17 +1,9 @@
 import '../src/bindings/bindings.dart';
 import '../utils/key_parser.dart';
+import '../utils/network_utils.dart';
 
 /// Service for handling transaction creation and broadcasting operations
 class TransactionService {
-  /// Normalize node URL by adding http:// prefix if missing
-  static String normalizeNodeUrl(String url) {
-    final trimmed = url.trim();
-    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-      return trimmed;
-    }
-    return 'http://$trimmed';
-  }
-
   /// Validate transaction creation parameters
   static TransactionCreateValidation validateTransactionCreation({
     required String seed,
@@ -101,7 +93,7 @@ class TransactionService {
     return TransactionCreateValidation.success(
       normalizedSeed: result.normalizedInput!,
       recipients: validatedRecipients,
-      nodeUrl: normalizeNodeUrl(nodeUrl),
+      nodeUrl: NetworkUtils.normalizeNodeUrl(nodeUrl),
       selectedOutputs: selectedOutputs?.toList(),
     );
   }
@@ -139,7 +131,7 @@ class TransactionService {
     return TransactionBroadcastValidation.success(
       txBlob: txResult.txBlob!,
       spentOutputHashes: txResult.spentOutputHashes,
-      nodeUrl: normalizeNodeUrl(nodeUrl),
+      nodeUrl: NetworkUtils.normalizeNodeUrl(nodeUrl),
     );
   }
 

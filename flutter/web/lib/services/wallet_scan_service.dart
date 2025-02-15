@@ -1,19 +1,11 @@
 import 'package:flutter/foundation.dart';
 import '../src/bindings/bindings.dart';
 import '../utils/key_parser.dart';
+import '../utils/network_utils.dart';
 import '../models/wallet_instance.dart';
 
 /// Service for handling blockchain scanning operations
 class WalletScanService {
-  /// Normalize node URL by adding http:// prefix if missing
-  static String normalizeNodeUrl(String url) {
-    final trimmed = url.trim();
-    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-      return trimmed;
-    }
-    return 'http://$trimmed';
-  }
-
   /// Scan a single block for a wallet
   static ScanBlockValidation validateScanBlock({
     required String seed,
@@ -45,7 +37,7 @@ class WalletScanService {
     return ScanBlockValidation.success(
       normalizedSeed: result.normalizedInput!,
       blockHeight: parsedHeight,
-      nodeUrl: normalizeNodeUrl(nodeUrl),
+      nodeUrl: NetworkUtils.normalizeNodeUrl(nodeUrl),
     );
   }
 
@@ -102,7 +94,7 @@ class WalletScanService {
 
     return ContinuousScanValidation.success(
       startHeight: parsedHeight,
-      nodeUrl: normalizeNodeUrl(nodeUrl),
+      nodeUrl: NetworkUtils.normalizeNodeUrl(nodeUrl),
     );
   }
 
@@ -151,7 +143,7 @@ class WalletScanService {
   /// Query daemon height
   static void queryDaemonHeight(String nodeUrl) {
     QueryDaemonHeightRequest(
-      nodeUrl: normalizeNodeUrl(nodeUrl),
+      nodeUrl: NetworkUtils.normalizeNodeUrl(nodeUrl),
     ).sendSignalToRust();
   }
 
@@ -175,7 +167,7 @@ class WalletScanService {
 
     return MempoolScanValidation.success(
       normalizedSeed: result.normalizedInput!,
-      nodeUrl: normalizeNodeUrl(nodeUrl),
+      nodeUrl: NetworkUtils.normalizeNodeUrl(nodeUrl),
     );
   }
 
