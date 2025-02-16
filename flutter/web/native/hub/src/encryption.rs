@@ -1,6 +1,6 @@
 use argon2::{
     password_hash::{PasswordHasher, SaltString},
-    Argon2, ParamsBuilder, Version,
+    Argon2, Version,
 };
 use chacha20poly1305::{
     aead::{Aead, KeyInit, OsRng},

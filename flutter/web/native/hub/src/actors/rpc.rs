@@ -1,4 +1,4 @@
-use crate::messages::*;
+use crate::messages::{FetchBlock, QueryHeight};
 use async_trait::async_trait;
 use messages::prelude::{Actor, Address, Context, Notifiable};
 use std::time::Duration;

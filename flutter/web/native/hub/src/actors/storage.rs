@@ -1,5 +1,8 @@
 use crate::encryption;
-use crate::signals::*;
+use crate::signals::{
+    LoadWalletDataRequest, SaveWalletDataRequest, WalletDataLoadedResponse,
+    WalletDataSavedResponse,
+};
 use async_trait::async_trait;
 use messages::prelude::{Actor, Address, Context, Notifiable};
 use rinf::{DartSignal, RustSignal};
