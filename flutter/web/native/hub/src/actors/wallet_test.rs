@@ -11,7 +11,6 @@ async fn test_wallet_actor_can_be_created() {
     let _wallet = WalletActor::new(addr);
 
     // If we get here without panicking, the actor was created successfully
-    assert!(true);
 }
 
 #[tokio::test]
@@ -52,7 +51,6 @@ async fn test_store_outputs_message() {
     wallet.notify(msg, &test_ctx).await;
 
     // If no panic, the message was processed successfully
-    assert!(true);
 }
 
 #[tokio::test]
@@ -74,7 +72,6 @@ async fn test_update_scan_state_message() {
     wallet.notify(msg, &test_ctx).await;
 
     // Message processed without panic
-    assert!(true);
 }
 
 #[tokio::test]
@@ -100,7 +97,6 @@ async fn test_stop_scan_message() {
     wallet.notify(StopScan, &test_ctx).await;
 
     // Both messages processed successfully
-    assert!(true);
 }
 
 #[tokio::test]
@@ -163,7 +159,6 @@ async fn test_multiple_output_batches() {
     }, &test_ctx).await;
 
     // Both batches processed successfully
-    assert!(true);
 }
 
 #[tokio::test]
@@ -207,5 +202,4 @@ async fn test_scan_state_transitions() {
     wallet.notify(StopScan, &test_ctx).await;
 
     // All state transitions processed successfully
-    assert!(true);
 }
