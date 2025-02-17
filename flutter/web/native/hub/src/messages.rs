@@ -30,33 +30,11 @@ pub struct WalletState {
 }
 
 #[derive(Debug, Clone)]
-pub struct ScanBlock {
-    pub height: u64,
-}
-
-#[derive(Debug, Clone)]
-pub struct BlockScanned {
-    pub height: u64,
-    pub new_outputs: usize,
-}
-
-#[derive(Debug, Clone)]
 pub struct QueryHeight;
-
-#[derive(Debug, Clone)]
-pub struct HeightResponse {
-    pub height: u64,
-}
 
 #[derive(Debug, Clone)]
 pub struct FetchBlock {
     pub height: u64,
-}
-
-#[derive(Debug, Clone)]
-pub struct BlockData {
-    pub height: u64,
-    pub data: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -79,19 +57,10 @@ pub struct WalletData {
 }
 
 #[derive(Debug, Clone)]
-pub struct TransactionBuilt {
-    pub tx_id: String,
-    pub fee: u64,
-}
-
-#[derive(Debug, Clone)]
 pub struct UpdateBalance {
     pub confirmed: u64,
     pub unconfirmed: u64,
 }
-
-#[derive(Debug, Clone)]
-pub struct GetWalletState;
 
 #[derive(Debug, Clone)]
 pub struct StoreOutputs {
@@ -113,11 +82,6 @@ pub struct GetWalletHeight;
 pub struct WalletHeight {
     pub current_height: u64,
     pub daemon_height: u64,
-}
-
-#[derive(Debug, Clone)]
-pub struct BroadcastSuccess {
-    pub spent_outputs: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
