@@ -3,7 +3,6 @@
 pub mod native {
     use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
     use monero_serai::{
-        Protocol,
         rpc::{Rpc, RpcConnection},
         transaction::Transaction,
         wallet::{
@@ -172,7 +171,7 @@ pub mod native {
         let spend_scalar = Scalar::from_bytes_mod_order(spend_bytes);
         let spend_point = &spend_scalar * &ED25519_BASEPOINT_TABLE;
 
-        let view: [u8; 32] = Keccak256::digest(&spend_bytes).into();
+        let view: [u8; 32] = Keccak256::digest(spend_bytes).into();
         let view_scalar = Scalar::from_bytes_mod_order(view);
 
         ViewPair::new(spend_point, Zeroizing::new(view_scalar))

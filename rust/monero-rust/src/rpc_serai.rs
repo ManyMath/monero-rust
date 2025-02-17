@@ -13,6 +13,7 @@ use web_sys::{Request, RequestInit, RequestMode, RequestCredentials, Response};
 
 #[derive(Clone, Debug)]
 pub struct WasmRpcConnection {
+    #[allow(dead_code)] // Used in WASM target's RpcConnection::post impl
     url: String,
 }
 
