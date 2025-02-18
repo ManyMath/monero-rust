@@ -66,6 +66,7 @@ async fn test_update_scan_state_message() {
         node_url: "http://localhost:38081".to_string(),
         seed: "test seed".to_string(),
         network: "stagenet".to_string(),
+        account_lookahead: 50,
     };
 
     let test_ctx = Context::new();
@@ -88,6 +89,7 @@ async fn test_stop_scan_message() {
         node_url: "http://localhost:38081".to_string(),
         seed: "test seed".to_string(),
         network: "stagenet".to_string(),
+        account_lookahead: 50,
     };
 
     let test_ctx = Context::new();
@@ -176,6 +178,7 @@ async fn test_scan_state_transitions() {
         node_url: "http://localhost:38081".to_string(),
         seed: "test seed".to_string(),
         network: "stagenet".to_string(),
+        account_lookahead: 50,
     }, &test_ctx).await;
 
     // Update progress
@@ -186,6 +189,7 @@ async fn test_scan_state_transitions() {
         node_url: "http://localhost:38081".to_string(),
         seed: "test seed".to_string(),
         network: "stagenet".to_string(),
+        account_lookahead: 50,
     }, &test_ctx).await;
 
     // Complete scan
@@ -196,6 +200,7 @@ async fn test_scan_state_transitions() {
         node_url: "http://localhost:38081".to_string(),
         seed: "test seed".to_string(),
         network: "stagenet".to_string(),
+        account_lookahead: 50,
     }, &test_ctx).await;
 
     // Stop scan
