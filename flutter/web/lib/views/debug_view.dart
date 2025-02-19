@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:monero_extension/utils/network_utils.dart';
 import '../src/bindings/bindings.dart';
 import '../utils/key_parser.dart';
 import '../services/extension_service.dart';
@@ -97,8 +98,13 @@ class _DebugViewState extends State<DebugView> {
   List<OwnedOutput> get _allOutputsAllAccounts => _lifecycle.allOutputs;
   set _allOutputsAllAccounts(List<OwnedOutput> v) => _lifecycle.allOutputs = v;
 
-  // Filtered outputs for active account only
+  // Filtered outputs for active account only (or all accounts if _activeAccount == -1)
   List<OwnedOutput> get _allOutputs {
+    // If "All" is selected, return all outputs
+    if (_activeAccount == -1) {
+      return _allOutputsAllAccounts;
+    }
+
     return _allOutputsAllAccounts.where((output) {
       if (output.subaddressIndex == null) {
         // Outputs without subaddress index belong to account 0, address 0
@@ -114,8 +120,13 @@ class _DebugViewState extends State<DebugView> {
   List<WalletTransaction> get _allTransactionsAllAccounts => _lifecycle.allTransactions;
   set _allTransactionsAllAccounts(List<WalletTransaction> v) => _lifecycle.allTransactions = v;
 
-  // Filtered transactions for active account only
+  // Filtered transactions for active account only (or all accounts if _activeAccount == -1)
   List<WalletTransaction> get _allTransactions {
+    // If "All" is selected, return all transactions
+    if (_activeAccount == -1) {
+      return _allTransactionsAllAccounts;
+    }
+
     return _allTransactionsAllAccounts.where((tx) {
       // A transaction is relevant to this account if it has any received outputs for this account
       final hasReceivedOutputs = tx.receivedOutputs.any((output) {
@@ -416,7 +427,7 @@ class _DebugViewState extends State<DebugView> {
 
   /// Normalizes a node URL by trimming whitespace and adding http:// if no scheme is present.
   String _normalizeNodeUrl(String url) {
-    return WalletScanService.normalizeNodeUrl(url);
+    return NetworkUtils.normalizeNodeUrl(url);
   }
 
   void _onBlockRefreshTimer() {
@@ -668,15 +679,20 @@ class _DebugViewState extends State<DebugView> {
       setState(() {
         _lifecycle.openWallets[activeWallet.walletId] = updatedWallet;
         // Clear subaddresses cache for other accounts when switching
-        final keysToRemove = _subaddresses.keys.where((key) =>
-          !key.startsWith('$accountIndex,')).toList();
-        for (var key in keysToRemove) {
-          _subaddresses.remove(key);
+        // (unless switching to "All" which doesn't need subaddresses)
+        if (accountIndex >= 0) {
+          final keysToRemove = _subaddresses.keys.where((key) =>
+            !key.startsWith('$accountIndex,')).toList();
+          for (var key in keysToRemove) {
+            _subaddresses.remove(key);
+          }
         }
       });
 
-      // Derive subaddresses for the newly selected account
-      _deriveSubaddresses();
+      // Derive subaddresses for the newly selected account (skip for "All")
+      if (accountIndex >= 0) {
+        _deriveSubaddresses();
+      }
     }
   }
 

@@ -36,8 +36,13 @@ class WalletInstance {
     Map<int, List<OwnedOutput>>? outputsByAccount,
   })  : accounts = accounts ?? [0],
         outputsByAccount = outputsByAccount ?? {0: const []};
-  // Get outputs for the active account
+  // Get outputs for the active account (or all outputs if activeAccount == -1)
   List<OwnedOutput> get activeAccountOutputs {
+    // If "All" is selected, return all outputs
+    if (activeAccount == -1) {
+      return outputs;
+    }
+
     // Filter from outputs list by account index to support dynamically scanned outputs
     return outputs.where((output) {
       if (output.subaddressIndex == null) {
@@ -138,9 +143,10 @@ class WalletInstance {
     );
   }
 
-  /// Switch to a different account
+  /// Switch to a different account (or -1 for "All" accounts)
   WalletInstance switchAccount(int accountIndex) {
-    if (!accounts.contains(accountIndex)) {
+    // Allow -1 for "All" accounts view
+    if (accountIndex != -1 && !accounts.contains(accountIndex)) {
       throw ArgumentError('Account $accountIndex does not exist');
     }
 

@@ -69,7 +69,8 @@ class AccountsPanel extends StatelessWidget {
       );
     }
 
-    final unusedIndices = _getUnusedSubaddresses(activeAccount);
+    // Only show subaddresses if a specific account is selected (not "All")
+    final unusedIndices = activeAccount >= 0 ? _getUnusedSubaddresses(activeAccount) : <int>[];
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -89,12 +90,21 @@ class AccountsPanel extends StatelessWidget {
                 child: DropdownButton<int>(
                   value: activeAccount,
                   isExpanded: true,
-                  items: accounts
-                      .map((account) => DropdownMenuItem(
-                            value: account,
-                            child: Text(account.toString()),
-                          ))
-                      .toList(),
+                  items: [
+                    // Add "All" option if there are multiple accounts
+                    if (accounts.length > 1)
+                      const DropdownMenuItem(
+                        value: -1,
+                        child: Text('All'),
+                      ),
+                    // Add individual account options
+                    ...accounts
+                        .map((account) => DropdownMenuItem(
+                              value: account,
+                              child: Text(account.toString()),
+                            ))
+                        .toList(),
+                  ],
                   onChanged: accounts.length <= 1
                       ? null // Disable if only one account
                       : (value) {
@@ -118,18 +128,19 @@ class AccountsPanel extends StatelessWidget {
         ),
         const Divider(height: 1),
 
-        // Subaddresses section
-        Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Unused Subaddresses (first 5):',
-                style: TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
-              ),
-              const SizedBox(height: 8),
-              ...unusedIndices.map((addressIndex) {
+        // Subaddresses section (only show for specific accounts, not "All")
+        if (activeAccount >= 0)
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Unused Subaddresses (first 5):',
+                  style: TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
+                ),
+                const SizedBox(height: 8),
+                ...unusedIndices.map((addressIndex) {
                 final key = '$activeAccount,$addressIndex';
                 final address = subaddresses[key];
 
@@ -194,10 +205,10 @@ class AccountsPanel extends StatelessWidget {
                     ],
                   ),
                 );
-              }).toList(),
-            ],
+                }).toList(),
+              ],
+            ),
           ),
-        ),
       ],
     );
   }
