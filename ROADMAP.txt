@@ -1,0 +1,854 @@
+================================================================================
+  MONERO-RUST WASM: Web-First Monero Wallet Library - Implementation Roadmap
+================================================================================
+
+Project Goal: Build a new Monero wallet library in Rust designed for WebAssembly
+from the ground up, with native platform support as a secondary consideration.
+This is a greenfield implementation prioritizing WASM constraints and modern
+async patterns.
+
+Core Principles:
+  - WASM-first architecture (native support in other crates)
+  - Pure Rust, no_std compatible where possible
+  - Async-first design (no blocking operations, no threads)
+  - Environment-agnostic (storage, time, networking abstracted)
+  - Leverages monero-serai for cryptographic primitives
+  - Exposes clean, minimal API for Flutter/Dart integration
+
+================================================================================
+IMMEDIATE PRIORITY: POLYSEED INTEGRATION
+================================================================================
+
+**REASON**: Required for testing restoration of stagenet wallets and live
+transaction building in monero_extension Flutter wallet. Polyseed provides
+shorter 16-word seed phrases and better wallet recovery properties.
+
+Task P.1 - Polyseed Library Integration
+----------------------------------------
+[ ] Add polyseed-rs or equivalent dependency to Cargo.toml
+[ ] Implement polyseed seed phrase generation (16 words)
+[ ] Implement polyseed restoration and key derivation
+[ ] Add polyseed format auto-detection in wallet restoration
+[ ] Support both classic 25-word and polyseed 16-word formats
+
+Task P.2 - Testing with Real Stagenet Wallets
+----------------------------------------------
+[ ] Create test stagenet wallets with polyseed format
+[ ] Test restoration from polyseed mnemonic
+[ ] Verify key derivation matches official implementation
+[ ] Test address generation from polyseed wallets
+[ ] Document polyseed vs classic seed differences
+
+Task P.3 - Flutter UI Integration
+----------------------------------
+[ ] Update monero_extension UI to support polyseed creation
+[ ] Add polyseed restore flow in Flutter wallet
+[ ] Display appropriate seed format (16 vs 25 words) in UI
+[ ] Test end-to-end: create polyseed wallet → restore → scan → send tx
+
+**SUCCESS CRITERIA FOR THIS PHASE:**
+- Can create wallet with polyseed in monero_extension Flutter app
+- Can restore polyseed wallet and scan stagenet blockchain
+- Can build and submit transactions from polyseed-restored wallet
+- All operations work in browser (Flutter web) with live stagenet node
+
+================================================================================
+PHASE 1: PROJECT FOUNDATION & ARCHITECTURE
+================================================================================
+
+Task 1.1 - Project Setup and Dependencies
+------------------------------------------
+[x] Initialize new Cargo workspace with wasm32-unknown-unknown as primary target
+[x] Set up core crate structure:
+    - monero-wasm: Pure wallet logic (no_std compatible)
+[x] Configure Cargo.toml with essential dependencies:
+    - monero-serai (cryptography, transactions, RPC types)
+    - monero-serai mirror/fork at rust/monero-serai-mirror/
+    - serde, serde_json, bincode (serialization)
+    - wasm-bindgen, js-sys, web-sys (WASM interop)
+    - getrandom with js feature (WASM-compatible RNG)
+    - futures, wasm-bindgen-futures (async support)
+    - gloo-timers (WASM-friendly timers)
+    - instant (cross-platform timing)
+[x] Set up basic build scripts:
+    - Rinf framework for Flutter integration (replaces wasm-pack directly)
+    - cargo build for native testing
+[x] Configure testing framework:
+    - wasm-bindgen-test for browser tests (working in tests/)
+    - Standard cargo test for native unit tests (working with tokio)
+
+Task 1.2 - Define Core Architecture and Abstractions
+-----------------------------------------------------
+[x] Design trait-based abstractions for platform-specific operations:
+    (Implemented in rust/monero-wasm/src/abstractions.rs)
+
+    WalletStorage trait:
+      - save(key: &str, data: &[u8]) -> Result<()>
+      - load(key: &str) -> Result<Vec<u8>>
+      - delete(key: &str) -> Result<()>
+      - list_keys() -> Result<Vec<String>>
+      - exists(key: &str) -> Result<bool>
+
+    TimeProvider trait:
+      - now() -> u64  // Unix timestamp in seconds
+      - now_ms() -> u64  // Milliseconds for high-res timing
+
+    RpcClient trait (async):
+      - call<T: DeserializeOwned>(&self, method: &str, params: Value) -> Result<T>
+      - get_height() -> Result<u64>
+      - get_blocks(...) -> Result<BlockResponse>
+      - get_outs(...) -> Result<OutsResponse>
+      - submit_transaction(...) -> Result<TxSubmitResponse>
+      - get_fee_estimate() -> Result<u64>
+
+[x] Implement WASM versions of abstractions:
+    (Implemented in rust/monero-wasm/src/wasm_impl.rs)
+    - BrowserStorage: Uses localStorage with XSS protection
+    - JsTimeProvider: Uses js_sys::Date::now()
+    - WasmRpcClient: Uses browser Fetch API with CORS support
+    - CallbackRpcClient: Delegates to Dart/JS callbacks
+    - MemoryStorage: For testing (uses Rc<RefCell>)
+
+[x] Implement native versions (behind #[cfg(not(target_arch = "wasm32"))]):
+    (Implemented in rust/monero-wasm/src/native_impl.rs)
+    - SystemTimeProvider: std::time::SystemTime
+    - MemoryStorage: For testing (uses Arc<Mutex>)
+    Note: FileStorage and NativeRpcClient planned for Phase 7
+
+Task 1.3 - Define Public API Surface
+-------------------------------------
+[ ] Design minimal, clean API for wallet operations:
+    Note: Basic utilities exist in rust/monero-wasm/src/lib.rs but need
+    integration into monero_extension Flutter wallet
+
+    Core types (MISSING - not yet implemented):
+      - WalletConfig: Construction parameters (network, refresh height, etc.)
+      - WalletState: Main wallet object (holds keys, balance, txs)
+      - Balance: Confirmed and unconfirmed amounts
+      - Transaction: Tx history entry
+      - TxConstruction: Builder for creating transactions
+
+    Existing utilities:
+      - WalletInfo: Basic wallet information holder
+      - generate_demo_address(): Random address generation
+      - validate_address(): Basic address validation
+      - calculate_fee(): Fee calculation with priority levels
+      - format_atomic_to_xmr(): Unit conversion
+
+    Core methods (NOT yet implemented):
+      - create_wallet(seed_phrase, config) -> WalletState
+      - restore_wallet(seed_phrase, config) -> WalletState
+      - load_wallet(encrypted_data, password) -> WalletState
+      - save_wallet(&self, password) -> Vec<u8>
+      - get_balance(&self) -> Balance
+      - refresh(&mut self) -> RefreshResult
+      - create_transaction(&self, destinations, priority) -> TxConstruction
+      - sign_and_submit(&mut self, tx_construction) -> Result<TxHash>
+      - get_transactions(&self) -> Vec<Transaction>
+      - get_address(&self, account, subaddress) -> Address
+
+[x] Define error types using thiserror (WASM-compatible)
+    (AbError in rust/monero-wasm/src/abstractions.rs)
+[ ] Plan serialization strategy for WalletState (bincode + encryption)
+    Note: Output serialization exists via monero-serai, but WalletState
+    type itself not yet implemented
+
+================================================================================
+PHASE 2: CRYPTOGRAPHIC CORE (Pure Rust, WASM-Safe)
+================================================================================
+
+Task 2.1 - Key Management
+--------------------------
+[x] Implement seed phrase generation and restoration:
+    (Implemented via monero-serai in rust/monero-serai-mirror/src/wallet/seed/)
+    - Generate 25-word Monero mnemonic (ClassicSeed::new)
+    - Derive master keys from seed
+    - 13 language support (English, Spanish, French, German, etc.)
+    - Note: Polyseed support moved to IMMEDIATE PRIORITY section
+[x] Implement key derivation:
+    (Implemented in rust/monero-serai-mirror/src/wallet/mod.rs)
+    - Account keys from master spend/view keys (ViewPair)
+    - Subaddress generation (account, index) via subaddress_derivation
+    - Key image calculation (Scanner functionality)
+[x] Ensure all cryptographic operations use getrandom with js feature
+    (Configured in Cargo.toml with js feature flag)
+[x] Test key generation determinism across platforms
+    (7+ test vectors across multiple languages in tests/)
+
+Task 2.2 - Address Management
+------------------------------
+[x] Implement address encoding/decoding:
+    (Implemented in rust/monero-serai-mirror/src/wallet/address.rs)
+    - Standard Monero addresses (network byte + keys + checksum)
+    - Subaddresses (via SubaddressIndex)
+    - Integrated addresses (with payment ID)
+    - Featured addresses (combination types)
+[x] Address validation (checksum, network byte verification)
+    (Address::from_str with full validation)
+[x] Test address compatibility with official Monero wallets
+    (Tests with real stagenet addresses, verified on xmrtests.llcoins.net)
+
+Task 2.3 - Wallet Encryption and Serialization
+-----------------------------------------------
+[ ] Design encrypted wallet format:
+    **NOT IMPLEMENTED** - Encryption missing
+    - Use ChaCha20-Poly1305 or AES-GCM for encryption
+    - Argon2id for key derivation from password (tune for WASM performance)
+    - Include version byte for future format changes
+[x] Implement WalletState serialization:
+    (Partial - output serialization exists via monero-serai)
+    - ReceivedOutput, SpendableOutput serialization implemented
+    - Eventuality (pending tx tracking) serialization implemented
+    - Full WalletState type not yet implemented
+    - Located in rust/monero-serai-mirror/src/wallet/scan.rs
+[ ] Implement save() -> Vec<u8> and load(encrypted_bytes, password)
+    **NOT IMPLEMENTED** - Requires wallet encryption
+[ ] Test round-trip serialization and cross-platform compatibility
+    Note: BrowserStorage stores data in base64 (plaintext), not encrypted
+
+================================================================================
+PHASE 3: BLOCKCHAIN SCANNING (Async, Non-Blocking)
+================================================================================
+
+Task 3.1 - RPC Client Implementation
+-------------------------------------
+[x] Implement WasmRpcClient using one of:
+    (Implemented BOTH in rust/monero-wasm/src/wasm_impl.rs)
+    Option B: Custom fetch wrapper via web_sys::fetch (WasmRpcClient)
+    Option C: Callback-based delegation to Dart/JS (CallbackRpcClient)
+[x] Implement essential RPC methods:
+    - get_height: Get current blockchain height
+    - get_blocks: Fetch block headers and transactions (with count limit)
+    - get_outs: Get outputs for ring signature construction
+    - submit_transaction: Broadcast signed transaction
+    - get_fee_estimate: Get current fee estimates
+[x] Handle errors gracefully (network errors, parsing errors, daemon errors)
+    (Comprehensive error handling with HTTP status codes, AbError types)
+[x] Test against Monero stagenet or local testnet node
+    (Tests with real stagenet data, mock RPC for deterministic testing)
+
+Task 3.2 - Output Scanning Engine
+----------------------------------
+[ ] Implement async block scanning:
+    **PROOF-OF-CONCEPT ONLY** - Not integrated into monero_extension wallet
+    - Tests demonstrate scanning via monero-serai Scanner
+    - Located in rust/monero-wasm/tests/honked_bagpipe_scan_test.rs
+    - Real stagenet transaction parsed and scanned successfully
+    - View tags working (Protocol v16+)
+    - Amount decryption working
+    - Key image calculation working
+    **MISSING**: Wallet-level scanning engine with:
+    - Chunk fetching loop
+    - Height tracking/persistence
+    - Progress reporting
+[ ] Implement refresh() method:
+    **NOT IMPLEMENTED** - Wallet orchestration layer missing
+    - No WalletState to track scanned height
+    - No balance update logic
+[ ] Optimize scanning:
+    [x] View tags working (demonstrated in tests for Protocol v16+)
+    [ ] Wallet-level batching not implemented
+    [ ] Multi-pass scanning not implemented
+
+Task 3.3 - Balance Calculation and UTXO Management
+---------------------------------------------------
+[ ] Implement UTXO tracking:
+    **NOT IMPLEMENTED** - No wallet-level UTXO management
+    - Store received outputs with amount, key image, spent status
+    - Mark outputs as spent when detected in blockchain
+    Note: SpendableOutput type exists but no wallet container for them
+[ ] Implement balance calculation:
+    **NOT IMPLEMENTED** - No balance tracking logic
+    - Confirmed balance: Sum of spendable outputs (10+ confirmations)
+    - Unconfirmed balance: Pending outputs (< 10 confirmations)
+    - Locked balance: Outputs with unlock time not yet reached
+[ ] Implement output selection for spending (for Phase 4)
+    **NOT IMPLEMENTED** - No coin selection algorithm
+[ ] Test balance accuracy against known test wallet states
+    **NOT TESTED** - No balance implementation to test
+
+Task 3.4 - Transaction History
+-------------------------------
+[ ] Detect and store sent transactions:
+    **NOT IMPLEMENTED** - No transaction history tracking
+    - Scan for key images matching wallet's outputs (= spent by us)
+    - Derive destination addresses if possible (from tx extra)
+    - Calculate fee and net amount
+[ ] Detect and store received transactions:
+    **NOT IMPLEMENTED** - No transaction history storage
+    - Track incoming outputs per transaction
+[ ] Implement getTx(txid), getTxs() methods
+    **NOT IMPLEMENTED** - No transaction query methods
+[ ] Store tx confirmation status and timestamp (block height -> estimate time)
+    **NOT IMPLEMENTED** - No confirmation tracking
+
+================================================================================
+PHASE 4: TRANSACTION CONSTRUCTION (CPU-Intensive, Async)
+================================================================================
+
+Task 4.1 - Transaction Builder
+-------------------------------
+[ ] Implement TxConstruction builder:
+    **TESTED BUT NOT INTEGRATED** into monero_extension wallet
+    - SignableTransactionBuilder used in tests (via monero-serai)
+    - Tests located in rust/monero-wasm/tests/honked_bagpipe_tx.rs
+    - Tests located in rust/monero-wasm/tests/transaction_building_test.rs
+    - Successfully builds transaction structure
+    - Fee calculation working (multiple priority levels)
+    **MISSING**: Integration into wallet API, no WalletState integration
+[ ] Implement input selection:
+    **NOT IMPLEMENTED** at wallet level
+    - Tests manually create SpendableOutput for testing
+    - No automatic UTXO selection algorithm
+    - Dynamic fee calculation exists (calculate_fee in lib.rs)
+[ ] Implement decoy selection:
+    **DELEGATED TO MONERO-SERAI** but requires live RPC
+    - monero-serai handles decoy selection during signing
+    - Requires get_outs RPC call (not mocked in current tests)
+    - Tests stop before actual signing due to RPC requirement
+
+Task 4.2 - Ring Signature and RCT Proof Generation
+---------------------------------------------------
+[ ] Use monero-serai to construct RingCT transaction:
+    **INFRASTRUCTURE EXISTS** but not tested end-to-end
+    - monero-serai provides CLSAG signatures
+    - monero-serai provides Bulletproofs+ for amounts
+    - Transaction structure building working in tests
+    **MISSING**: Actual signing requires live RPC for decoy selection
+    - Tests parse existing RingCT transactions successfully
+    - Tests demonstrate transaction structure understanding
+[ ] Ensure all crypto operations are async-friendly:
+    **NOT VERIFIED** in WASM environment yet
+    - Need to measure performance in browser
+[ ] Test transaction validity:
+    **NOT TESTED** - Cannot test without completing signing
+    - Need live stagenet testing with polyseed wallets
+    - Need to verify tx appears in explorer
+
+Task 4.3 - Transaction Signing and Submission
+----------------------------------------------
+[ ] Implement sign_and_submit():
+    **INFRASTRUCTURE READY** but not integrated into wallet
+    - submit_transaction RPC method exists and tested
+    - Transaction serialization understood
+    **MISSING**:
+    - Actual signing workflow (blocked by decoy selection)
+    - Wallet state updates (no WalletState implementation)
+    - Integration into monero_extension wallet
+[ ] Handle submission errors:
+    **ERROR HANDLING EXISTS** at RPC level
+    - TxSubmitResponse structure defined
+    - Network error handling in RpcClient
+    **MISSING**: Wallet-level error recovery
+[ ] Return transaction hash to caller
+    **INFRASTRUCTURE EXISTS** - TxSubmitResponse has tx_hash field
+
+Task 4.4 - Fee Estimation
+--------------------------
+[x] Implement estimateFee(destinations, priority):
+    (Implemented in rust/monero-wasm/src/lib.rs)
+    - calculate_fee(amount, priority) function working
+    - Simple algorithm based on amount
+    - RPC-based get_fee_estimate also implemented
+[x] Expose fee priority levels (low, medium, high)
+    (Priority 0=low, 1=medium, 2=high in calculate_fee)
+    Note: Could be enhanced with more sophisticated size estimation
+
+================================================================================
+PHASE 5: ASYNC EVENT LOOP & SYNCING (WASM-Friendly)
+================================================================================
+
+Task 5.1 - Async Refresh Loop
+------------------------------
+[ ] Implement async syncing:
+    - startSyncing() initiates periodic refresh
+    - On WASM: Use gloo_timers::Interval to call refresh() every N seconds
+    - On native: Optional tokio task for background sync
+[ ] Make refresh interruptible:
+    - Use cancellation token or flag to stop syncing
+    - stopSyncing() method to halt periodic refresh
+[ ] Ensure non-blocking:
+    - Each refresh iteration yields control (await sleep between chunks)
+    - Document that UI may call refresh() manually instead of relying on auto-sync
+
+Task 5.2 - Event System (Optional)
+-----------------------------------
+[ ] Design lightweight event/callback system:
+    - Events: OnBalanceChanged, OnTransactionReceived, OnSyncProgress
+    - Allow registering callbacks (via wasm-bindgen closures for WASM)
+[ ] Trigger events during refresh:
+    - After balance changes, invoke OnBalanceChanged
+    - When new tx detected, invoke OnTransactionReceived
+    - Periodically emit sync progress (scanned height)
+[ ] For WASM: Events fire during explicit refresh() calls (no background thread)
+[ ] For native: Can fire from background sync task
+
+Task 5.3 - Auto-Save
+--------------------
+[ ] Implement periodic auto-save:
+    - After each successful refresh, optionally serialize and save wallet
+    - On WASM: Invoke JS callback with encrypted wallet bytes
+    - On native: Write to file
+[ ] Make auto-save configurable (enable/disable, interval)
+[ ] Ensure save is atomic (write to temp, then rename on native; on WASM just return bytes)
+
+================================================================================
+PHASE 6: WASM BINDINGS & FLUTTER INTEGRATION
+================================================================================
+
+Task 6.1 - WASM-Bindgen FFI Layer
+----------------------------------
+[x] Create wasm-bindgen wrapper types for main API:
+    **IMPLEMENTED via Rinf framework** (different approach than originally planned)
+    - Uses Rinf's signal-based communication (request/response pattern)
+    - Located in dart/monero_extension/native/hub/src/signals/
+    - 31 generated Dart files with typed signal handlers
+    - Binary serialization with bincode (more efficient than JSON)
+    - Signal types: GenerateSeedRequest, DeriveAddressRequest, etc.
+[x] Expose async methods as JS Promises:
+    **IMPLEMENTED via Rinf**
+    - All signals are async by default
+    - Rust functions called via signal stream listening
+    - Located in dart/monero_extension/native/monero-wasm/src/lib.rs
+[x] Handle errors gracefully:
+    **IMPLEMENTED**
+    - Response signals include Option<String> error fields
+    - AbError types with thiserror for Rust-side errors
+    - Proper error propagation through signal responses
+
+Task 6.2 - Storage Integration with Dart
+-----------------------------------------
+[x] Define JS callback interface for storage:
+    **IMPLEMENTED** via BrowserStorage and signal-based communication
+    - BrowserStorage uses browser localStorage (rust/monero-wasm/src/wasm_impl.rs)
+    - Base64 encoding for binary data
+    - XSS protection with key validation
+    - Can return serialized data to Dart via signals for persistence
+[x] Document storage requirements for Flutter app
+    **DOCUMENTED** in README and code comments
+    - Security features documented (XSS prevention, DoS limits)
+[x] Test storage round-trip in browser
+    **TESTED** - BrowserStorage working with localStorage
+
+Task 6.3 - RPC Integration with Dart (if using callback approach)
+------------------------------------------------------------------
+[x] If delegating networking to Dart:
+    **BOTH APPROACHES IMPLEMENTED**
+    - CallbackRpcClient: Delegates to Dart/JS callbacks (rust/monero-wasm/src/wasm_impl.rs)
+    - WasmRpcClient: Direct Fetch API usage with CORS support
+    - Dart can choose which approach to use
+[x] Otherwise (using reqwest-wasm):
+    **IMPLEMENTED** via web_sys::fetch
+    - WasmRpcClient uses browser Fetch API
+    - CORS mode: 'cors' with 'same-origin' credentials
+    - Comprehensive HTTP error handling
+[x] Test direct RPC from WASM
+    **TESTED** with mock RPC infrastructure and real stagenet data
+
+Task 6.4 - Build and Package for Flutter Web
+---------------------------------------------
+[x] Create wasm-pack build script:
+    **IMPLEMENTED via Rinf CLI** (different tooling than originally planned)
+    - `rinf wasm` builds WASM module
+    - `rinf gen` generates Dart bindings
+    - Output: dart/monero_extension/web/pkg/hub_bg.wasm (2.2 MB)
+    - Output: dart/monero_extension/web/pkg/hub.js (27 KB glue code)
+[x] Integrate WASM module into Flutter web project:
+    **FULLY INTEGRATED**
+    - Rinf handles WASM loading automatically
+    - initializeRust() in main.dart
+    - Signal stream listeners for communication
+    - Working in browser with proper CORS headers
+[x] Test in browser:
+    **PARTIALLY TESTED**
+    - Seed generation working in browser ✓
+    - Address derivation working in browser ✓
+    - Basic UI test demonstrates functionality ✓
+    **NEEDS**: Full wallet lifecycle (create, refresh, send tx)
+
+================================================================================
+PHASE 7: NATIVE PLATFORM SUPPORT (Optional, Conditional Compilation)
+================================================================================
+
+Task 7.1 - Implement Native Abstractions
+-----------------------------------------
+[ ] Implement FileStorage for native:
+    - Save wallet to app documents directory
+    - Use appropriate permissions and encryption at rest
+[ ] Implement SystemTimeProvider for native
+[ ] Implement NativeRpcClient (using reqwest or hyper)
+
+Task 7.2 - Native FFI Bindings (C-FFI or Dart FFI)
+---------------------------------------------------
+[ ] If supporting Flutter mobile/desktop via Dart FFI:
+    - Use cbindgen to generate C headers
+    - Expose C-compatible functions wrapping Rust API
+    - Handle async via callback-based FFI or blocking wrappers (use tokio runtime)
+[ ] Build as dynamic library (.so, .dylib, .dll)
+[ ] Test integration with Flutter iOS, Android, macOS, Linux, Windows
+
+Task 7.3 - Unified Build System
+--------------------------------
+[ ] Create build scripts for all platforms:
+    - build-web.sh: Builds WASM
+    - build-ios.sh: Builds static lib for iOS
+    - build-android.sh: Builds .so for Android
+    - etc.
+[ ] Set up CI/CD for automated builds (GitHub Actions)
+
+================================================================================
+PHASE 8: ADVANCED FEATURES & OPTIMIZATIONS
+================================================================================
+
+Task 8.1 - Subaddresses and Multiple Accounts
+----------------------------------------------
+[ ] Implement full subaddress support:
+    - Create subaddresses for account/index
+    - Scan for outputs to any subaddress
+    - Label subaddresses (store labels in wallet state)
+[ ] Implement multiple accounts:
+    - Separate balance per account
+    - Allow creating transactions from specific account
+
+Task 8.2 - Key Image Import/Export
+-----------------------------------
+[ ] Implement exportKeyImages():
+    - Return CSV or JSON of all key images
+    - On WASM: Return as string/blob for download
+[ ] Implement importKeyImages(data):
+    - Parse imported key images
+    - Mark corresponding outputs as spent
+    - Update balance
+
+Task 8.3 - Transaction Proofs
+------------------------------
+[ ] Implement OutProof generation:
+    - Generate proof that a transaction was sent to an address
+    - Return proof string
+[ ] Implement InProof generation and verification:
+    - Prove reception of funds
+[ ] Use monero-serai's proof capabilities if available
+
+Task 8.4 - Performance Optimizations for WASM
+----------------------------------------------
+[ ] Profile CPU-intensive operations:
+    - Transaction construction (Bulletproofs)
+    - Block scanning (key derivation)
+[ ] Optimize hot paths:
+    - Use wasm-opt for size/speed optimization
+    - Consider WebAssembly SIMD if browser supports
+    - Batch operations (scan multiple blocks before yielding)
+[ ] Memory optimization:
+    - Minimize allocations in scanning loop
+    - Use memory pooling if beneficial
+    - Test memory usage in browser (avoid leaks)
+
+Task 8.5 - WebWorker Support (Advanced)
+----------------------------------------
+[ ] Investigate running wallet in Web Worker:
+    - Allows true background operation without blocking UI
+    - Requires message-passing for all interactions
+[ ] If feasible:
+    - Create worker entry point
+    - Define message protocol (JSON-based commands)
+    - Update Dart integration to communicate with worker
+[ ] Test performance improvement and UI responsiveness
+
+================================================================================
+PHASE 9: TESTING, DOCUMENTATION & POLISH
+================================================================================
+
+Task 9.1 - Comprehensive Testing
+---------------------------------
+[ ] Unit tests for all core components:
+    - Key derivation
+    - Address encoding/decoding
+    - Transaction construction
+    - Serialization/deserialization
+[ ] Integration tests:
+    - Full wallet lifecycle (create, save, load, restore)
+    - Send and receive transactions on testnet
+    - Multi-platform: Run tests on wasm32 and native
+[ ] Property-based testing (proptest):
+    - Fuzz key derivation, address encoding, etc.
+[ ] Browser testing:
+    - Use wasm-bindgen-test in headless Chrome/Firefox
+    - Test real RPC interaction with testnet node
+[ ] Performance benchmarks:
+    - Measure scanning speed (blocks/second)
+    - Measure transaction construction time
+    - Compare WASM vs native performance
+
+Task 9.2 - Documentation
+-------------------------
+[ ] API documentation:
+    - Document all public types and methods with rustdoc
+    - Include usage examples
+[ ] Integration guide:
+    - Step-by-step guide for integrating into Flutter
+    - Example code for common operations
+    - Storage and networking setup instructions
+[ ] Architecture documentation:
+    - Explain abstraction layers
+    - Document WASM vs native differences
+    - Security considerations (key storage, memory safety)
+[ ] WASM deployment guide:
+    - CORS setup for remote nodes
+    - Performance tuning tips
+    - Browser compatibility notes
+
+Task 9.3 - Example Application
+-------------------------------
+[ ] Create minimal Flutter web example app:
+    - Create wallet UI
+    - Display balance and transactions
+    - Send transaction form
+    - Demonstrates best practices for integration
+[ ] Publish example to GitHub
+
+Task 9.4 - Security Audit & Hardening
+--------------------------------------
+[ ] Review cryptographic implementations:
+    - Ensure proper use of RNG
+    - Verify key derivation matches Monero spec
+    - Check for timing side-channels in key operations
+[ ] Review serialization security:
+    - Ensure encrypted wallet format is secure
+    - No secret data leakage in error messages or logs
+[ ] Memory safety:
+    - Zeroize sensitive data on drop (use zeroize crate)
+    - Test for memory leaks in long-running wallet
+[ ] Consider external security audit if deploying to production
+
+Task 9.5 - Release & Packaging
+-------------------------------
+[ ] Prepare for crates.io release:
+    - Clean up dependencies
+    - Write comprehensive README
+    - Choose appropriate license (MIT/Apache-2.0)
+[ ] Publish crates:
+    - monero-wasm
+    - monero-wasm-bindings
+[ ] Create releases with pre-built WASM modules
+[ ] Set up GitHub releases and changelog
+
+================================================================================
+FUTURE ENHANCEMENTS (Post-MVP)
+================================================================================
+
+- Hardware wallet integration (Ledger/Trezor via WebUSB/WebHID)
+- Multisig support
+- View-only wallet mode
+- Light wallet server support (OpenMonero API for faster sync)
+- Tor/I2P support for network anonymity
+- QR code integration for addresses/transactions
+- Wallet migration from official Monero wallet files
+- Advanced coin selection strategies
+- RingCT type selection (CLSAG vs MLSAG based on hardfork)
+
+Note: Polyseed support moved to IMMEDIATE PRIORITY section at top of roadmap
+Note: Multiple language support for mnemonic seeds already implemented (13 languages)
+
+================================================================================
+DEPENDENCIES & TOOLS
+================================================================================
+
+Core Rust Crates:
+- monero-serai: Cryptography, transaction construction, RPC types
+- serde, serde_json, bincode: Serialization
+- wasm-bindgen, js-sys, web-sys: WASM interop
+- getrandom (js feature): WASM-safe RNG
+- futures, wasm-bindgen-futures: Async support
+- gloo-timers: WASM timers
+- instant: Cross-platform timing
+- thiserror: Error handling
+- chacha20poly1305 or aes-gcm: Encryption
+- argon2: Key derivation
+- zeroize: Secure memory cleanup
+- reqwest (wasm feature) or custom: HTTP client
+- hex, base58-monero: Encoding
+
+Build Tools:
+- wasm-pack: Build and package WASM
+- wasm-bindgen-cli: Generate JS bindings
+- wasm-opt (from binaryen): Optimize WASM
+- cbindgen: Generate C headers for native FFI
+
+Testing:
+- wasm-bindgen-test: Browser testing
+- proptest: Property-based testing
+- criterion: Benchmarking (native)
+
+Development:
+- Monero daemon (monerod) or access to remote node
+- Monero stagenet/testnet for testing
+- Flutter web project for integration testing
+
+================================================================================
+MILESTONES & TIMELINE ESTIMATES
+================================================================================
+
+Milestone 1 - Foundation (2-3 weeks):
+  - Complete Phase 1 & 2
+  - Deliverable: Core wallet structure, key management, encryption working
+
+Milestone 2 - Scanning (3-4 weeks):
+  - Complete Phase 3
+  - Deliverable: Can restore wallet, scan blockchain, calculate balance
+
+Milestone 3 - Transactions (3-4 weeks):
+  - Complete Phase 4
+  - Deliverable: Can construct, sign, and submit transactions
+
+Milestone 4 - WASM Integration (2 weeks):
+  - Complete Phase 5 & 6
+  - Deliverable: Working WASM module integrated with Flutter web
+
+Milestone 5 - Native Support (2-3 weeks):
+  - Complete Phase 7
+  - Deliverable: Cross-platform support (mobile/desktop)
+
+Milestone 6 - Polish (2-3 weeks):
+  - Complete Phase 8 & 9
+  - Deliverable: Production-ready library with docs and examples
+
+Total Estimated Timeline: 14-19 weeks (3.5 - 4.5 months)
+
+================================================================================
+SUCCESS CRITERIA
+================================================================================
+
+The project will be considered successful when:
+
+1. A user can create or restore a Monero wallet in a browser (Flutter web)
+2. The wallet can connect to a remote Monero node and scan the blockchain
+3. Balance is accurately calculated and displayed
+4. User can send transactions that are accepted by the network
+5. The wallet can be encrypted, saved, and loaded across sessions
+6. The browser UI remains responsive during all operations
+7. The same codebase compiles for native platforms (iOS, Android, desktop)
+8. Comprehensive tests pass on all platforms
+9. Documentation is sufficient for third-party integration
+10. No critical security vulnerabilities are present
+
+================================================================================
+NOTES & CONSIDERATIONS
+================================================================================
+
+- This is a from-scratch implementation, not a port of existing code
+- WASM constraints are embraced as design principles, not worked around
+- Async/await is used throughout; no blocking operations
+- All platform-specific code is isolated behind traits
+- The library is designed to be embedded, not standalone
+- Security is paramount: no shortcuts on cryptography or key handling
+- Performance in WASM is secondary to correctness and security
+- The API should be minimal and easy to use from Dart/Flutter
+- All design decisions prioritize web compatibility first
+
+================================================================================
+IMPLEMENTATION NOTES & ACTUAL STATE
+================================================================================
+
+Key Architectural Decisions Made:
+----------------------------------
+
+1. **Rinf Framework for Flutter Integration**
+   - Original plan: Direct wasm-bindgen with manual JS/Dart glue
+   - Actual: Rinf framework with signal-based communication
+   - Benefits: Automatic binding generation, typed request/response, cleaner API
+   - Location: dart/monero_extension/
+
+2. **monero-serai as Core Dependency**
+   - Forked/mirrored at rust/monero-serai-mirror/
+   - Provides all cryptographic primitives
+   - Handles transaction construction, scanning, RingCT
+   - Comprehensive and well-tested
+
+3. **Test-Driven Development with Real Data**
+   - Extensive test suite with real stagenet data
+   - "honked bagpipe" test wallet with known outputs
+   - Mock RPC infrastructure for deterministic testing
+   - Tests demonstrate capabilities without full wallet integration
+
+Current Implementation Status Summary:
+--------------------------------------
+
+**Phase 1 (Foundation):** 85% Complete
+  - Infrastructure: 100% (workspace, deps, abstractions, testing)
+  - Public API: 40% (utilities exist, core types missing)
+
+**Phase 2 (Cryptography):** 90% Complete
+  - Key management: 100% (13 languages, all key types)
+  - Address management: 100% (all address types, validation)
+  - Serialization: 100% (outputs, eventuality)
+  - Encryption: 0% (not implemented)
+
+**Phase 3 (Scanning):** 25% Complete
+  - RPC client: 100% (dual implementations)
+  - Scanning proof-of-concept: 80% (works in tests, not integrated)
+  - UTXO management: 0% (not implemented)
+  - Transaction history: 0% (not implemented)
+
+**Phase 4 (Transactions):** 30% Complete
+  - Transaction builder: 60% (works in tests, not integrated)
+  - RingCT/signing: 40% (structure exists, requires live RPC)
+  - Submission: 60% (infrastructure ready, not integrated)
+  - Fee estimation: 100% (multiple methods working)
+
+**Phase 5 (Async Loop):** 0% Complete
+  - Not started
+
+**Phase 6 (WASM/Flutter):** 95% Complete
+  - Rinf integration: 100% (fully working)
+  - Storage: 100% (BrowserStorage working)
+  - RPC: 100% (dual implementations)
+  - Build system: 100% (rinf wasm/gen working)
+  - End-to-end testing: 40% (basic functions work, wallet lifecycle pending)
+
+**Phase 7-9:** Not started
+
+Critical Path to Working Wallet:
+---------------------------------
+
+**IMMEDIATE (After Polyseed):**
+1. Implement WalletState type to hold keys, outputs, balance, height
+2. Integrate scanning engine with WalletState (refresh() method)
+3. Implement UTXO tracking and balance calculation
+4. Connect transaction builder to WalletState (use actual UTXOs)
+5. Test complete workflow: restore → scan → send on stagenet
+
+**Required for Production:**
+1. Wallet encryption (ChaCha20-Poly1305 or AES-GCM)
+2. Transaction history tracking
+3. Comprehensive error handling and recovery
+4. Performance optimization in WASM
+5. Security audit
+
+Test Infrastructure Available:
+-------------------------------
+- Mock RPC with real stagenet data (tests/mock_rpc.rs)
+- Test wallet: "honked bagpipe" with 10 XMR on stagenet
+- Block 1384526 with known outputs
+- Transaction parsing working (pruned format)
+- View tag validation working
+- Key derivation test vectors (7+ tests, multiple languages)
+
+Security Features Implemented:
+-------------------------------
+- Zeroize for sensitive data cleanup
+- XSS protection in BrowserStorage (key validation)
+- DoS protection (max block count limits)
+- CORS handling with proper credential policy
+- Input validation throughout
+- No unsafe code in production paths
+
+Known Limitations:
+------------------
+- Transaction signing requires live RPC for decoy selection
+- No wallet encryption yet (storing plaintext in base64)
+- No background syncing (must call refresh() manually)
+- No transaction history or confirmation tracking
+- Tests demonstrate capabilities but not integrated into Flutter wallet
+- Performance in WASM not yet measured
+
+END OF ROADMAP
