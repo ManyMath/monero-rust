@@ -37,22 +37,16 @@ class TransactionsPanel extends StatelessWidget {
 
     // Add accounts from received outputs
     for (var output in tx.receivedOutputs) {
-      if (output.subaddressIndex != null) {
-        accounts.add(output.subaddressIndex!.item1);
-      } else {
-        accounts.add(0); // Default to account 0
-      }
+      final account = output.subaddressIndex?.item1 ?? 0;
+      accounts.add(account);
     }
 
     // Add accounts from spent outputs
     for (var keyImage in tx.spentKeyImages) {
       final spentOutput = allOutputs.where((o) => o.keyImage == keyImage).firstOrNull;
       if (spentOutput != null) {
-        if (spentOutput.subaddressIndex != null) {
-          accounts.add(spentOutput.subaddressIndex!.item1);
-        } else {
-          accounts.add(0);
-        }
+        final account = spentOutput.subaddressIndex?.item1 ?? 0;
+        accounts.add(account);
       }
     }
 
