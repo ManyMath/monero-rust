@@ -60,7 +60,7 @@ hex-literal = "0.4"
 
 tokio = { version = "1", features = ["full"] }
 # monero-rpc = "0.3"
-polyseed = { git = "https://github.com/kayabaNerve/monero-wallet-util", rev = "f772e352c6a2fef6444d36f31da593b94dbc3b12" }
+polyseed = { git = "https://github.com/kayabaNerve/monero-wallet-util", rev = "3aa28da1eb636550f2cc54798521f43e8920b15b" }
 
 frost = { package = "modular-frost-mirror", version = "0.7", features = ["tests"] }
 
