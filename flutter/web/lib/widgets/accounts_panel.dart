@@ -60,6 +60,28 @@ class AccountsPanel extends StatelessWidget {
     return unused;
   }
 
+  /// Get the first 3 unused subaddress indices for each account (for "All" view)
+  Map<int, List<int>> _getUnusedSubaddressesPerAccount() {
+    final result = <int, List<int>>{};
+
+    for (var account in accounts) {
+      final used = _getUsedSubaddresses(account);
+      final unused = <int>[];
+
+      int index = 0;
+      while (unused.length < 3) {
+        if (!used.contains(index)) {
+          unused.add(index);
+        }
+        index++;
+      }
+
+      result[account] = unused;
+    }
+
+    return result;
+  }
+
   @override
   Widget build(BuildContext context) {
     if (seed == null || seed!.isEmpty) {
@@ -69,8 +91,9 @@ class AccountsPanel extends StatelessWidget {
       );
     }
 
-    // Only show subaddresses if a specific account is selected (not "All")
+    // Get subaddresses based on whether specific account or "All" is selected
     final unusedIndices = activeAccount >= 0 ? _getUnusedSubaddresses(activeAccount) : <int>[];
+    final unusedPerAccount = activeAccount == -1 ? _getUnusedSubaddressesPerAccount() : <int, List<int>>{};
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -205,6 +228,108 @@ class AccountsPanel extends StatelessWidget {
                     ],
                   ),
                 );
+                }).toList(),
+              ],
+            ),
+          )
+        else if (activeAccount == -1)
+          // "All" accounts view - show first 3 unused subaddresses per account
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Unused Subaddresses (first 3 per account):',
+                  style: TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
+                ),
+                const SizedBox(height: 8),
+                ...unusedPerAccount.entries.map((entry) {
+                  final account = entry.key;
+                  final indices = entry.value;
+
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8.0, bottom: 4.0),
+                        child: Text(
+                          'Account $account:',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 12,
+                            color: Colors.black87,
+                          ),
+                        ),
+                      ),
+                      ...indices.map((addressIndex) {
+                        final key = '$account,$addressIndex';
+                        final address = subaddresses[key];
+
+                        if (address == null || address.isEmpty) {
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 6.0, left: 8.0),
+                            child: Row(
+                              children: [
+                                SizedBox(
+                                  width: 50,
+                                  child: Text(
+                                    'Idx $addressIndex:',
+                                    style: const TextStyle(fontSize: 11),
+                                  ),
+                                ),
+                                const Expanded(
+                                  child: Text(
+                                    'Loading...',
+                                    style: TextStyle(
+                                      fontFamily: 'monospace',
+                                      fontSize: 10,
+                                      color: Colors.grey,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }
+
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 6.0, left: 8.0),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              SizedBox(
+                                width: 50,
+                                child: Text(
+                                  'Idx $addressIndex:',
+                                  style: const TextStyle(fontSize: 11),
+                                ),
+                              ),
+                              Expanded(
+                                child: SelectableText(
+                                  address,
+                                  style: const TextStyle(
+                                    fontFamily: 'monospace',
+                                    fontSize: 10,
+                                  ),
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.copy_outlined, size: 12),
+                                onPressed: () => onCopyToClipboard(
+                                  address,
+                                  'Subaddress $account/$addressIndex',
+                                ),
+                                tooltip: 'Copy subaddress',
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                              ),
+                            ],
+                          ),
+                        );
+                      }).toList(),
+                    ],
+                  );
                 }).toList(),
               ],
             ),

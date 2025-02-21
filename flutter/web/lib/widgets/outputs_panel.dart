@@ -13,6 +13,7 @@ class OutputsPanel extends StatelessWidget {
   final String sortBy;
   final bool sortAscending;
   final Set<String> selectedOutputs;
+  final int activeAccount; // -1 means "All"
   final VoidCallback onToggleShowSpent;
   final VoidCallback onSelectAllSpendable;
   final VoidCallback onClearSelection;
@@ -27,6 +28,7 @@ class OutputsPanel extends StatelessWidget {
     required this.sortBy,
     required this.sortAscending,
     required this.selectedOutputs,
+    required this.activeAccount,
     required this.onToggleShowSpent,
     required this.onSelectAllSpendable,
     required this.onClearSelection,
@@ -191,6 +193,17 @@ class OutputsPanel extends StatelessWidget {
                       ],
                     ),
                     const SizedBox(height: 8),
+                    // Show account when "All" is selected
+                    if (activeAccount == -1 && output.subaddressIndex != null)
+                      CommonWidgets.buildOutputDetailRow(
+                        label: 'Account',
+                        value: '${output.subaddressIndex!.item1}',
+                      ),
+                    if (activeAccount == -1 && output.subaddressIndex == null)
+                      CommonWidgets.buildOutputDetailRow(
+                        label: 'Account',
+                        value: '0',
+                      ),
                     CommonWidgets.buildOutputDetailRow(label: 'TX Hash', value: output.txHash, mono: true),
                     CommonWidgets.buildOutputDetailRow(label: 'Output Index', value: '${output.outputIndex}'),
                     CommonWidgets.buildOutputDetailRow(label: 'Block Height', value: '$outputHeight'),

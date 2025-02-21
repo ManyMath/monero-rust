@@ -15,6 +15,7 @@ class CreateTransactionPanel extends StatelessWidget {
   final TransactionBroadcastResponse? broadcastResult;
   final String? txError;
   final String? broadcastError;
+  final String? multiAccountWarning;
   final VoidCallback onAddRecipient;
   final Function(int) onRemoveRecipient;
   final VoidCallback onCreateTransaction;
@@ -32,6 +33,7 @@ class CreateTransactionPanel extends StatelessWidget {
     required this.broadcastResult,
     required this.txError,
     required this.broadcastError,
+    this.multiAccountWarning,
     required this.onAddRecipient,
     required this.onRemoveRecipient,
     required this.onCreateTransaction,
@@ -78,6 +80,33 @@ class CreateTransactionPanel extends StatelessWidget {
               label: const Text('Add Recipient'),
             ),
           const SizedBox(height: 16),
+          if (multiAccountWarning != null) ...[
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.orange.shade50,
+                border: Border.all(color: Colors.orange.shade300),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.warning_amber, color: Colors.orange.shade700, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      multiAccountWarning!,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.orange.shade900,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
           ElevatedButton.icon(
             onPressed: isCreatingTx ? null : onCreateTransaction,
             icon: isCreatingTx

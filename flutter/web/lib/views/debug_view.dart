@@ -603,33 +603,60 @@ class _DebugViewState extends State<DebugView> {
     final result = KeyParser.parse(_controller.text);
     if (!result.isValid) return;
 
-    // Derive first 5 unused subaddresses for the active account
-    final used = _getUsedSubaddresses(_activeAccount);
-    int index = 0;
-    int derived = 0;
+    if (_activeAccount == -1) {
+      // "All" accounts view - derive first 3 unused subaddresses per account
+      for (var account in _accounts) {
+        final used = _getUsedSubaddresses(account);
+        int index = 0;
+        int derived = 0;
 
-    while (derived < 5) {
-      if (!used.contains(index)) {
-        final key = '$_activeAccount,$index';
-        // Only derive if we don't already have it and it's not pending
-        if (!_subaddresses.containsKey(key) && !_pendingSubaddresses.contains(key)) {
-          _pendingSubaddresses.add(key);
-          DeriveSubaddressRequest(
-            seed: result.normalizedInput!,
-            network: _network,
-            account: _activeAccount,
-            addressIndex: index,
-          ).sendSignalToRust();
+        while (derived < 3) {
+          if (!used.contains(index)) {
+            final key = '$account,$index';
+            // Only derive if we don't already have it and it's not pending
+            if (!_subaddresses.containsKey(key) && !_pendingSubaddresses.contains(key)) {
+              _pendingSubaddresses.add(key);
+              DeriveSubaddressRequest(
+                seed: result.normalizedInput!,
+                network: _network,
+                account: account,
+                addressIndex: index,
+              ).sendSignalToRust();
+            }
+            derived++;
+          }
+          index++;
         }
-        derived++;
       }
-      index++;
+    } else {
+      // Derive the first 5 unused subaddresses for the active account
+      final used = _getUsedSubaddresses(_activeAccount);
+      int index = 0;
+      int derived = 0;
+
+      while (derived < 5) {
+        if (!used.contains(index)) {
+          final key = '$_activeAccount,$index';
+          // Only derive if we don't already have it and it's not pending
+          if (!_subaddresses.containsKey(key) && !_pendingSubaddresses.contains(key)) {
+            _pendingSubaddresses.add(key);
+            DeriveSubaddressRequest(
+              seed: result.normalizedInput!,
+              network: _network,
+              account: _activeAccount,
+              addressIndex: index,
+            ).sendSignalToRust();
+          }
+          derived++;
+        }
+        index++;
+      }
     }
   }
 
   Set<int> _getUsedSubaddresses(int account) {
     final used = <int>{};
-    for (var output in _allOutputs) {
+    for (var output in _allOutputsAllAccounts) {
       if (output.subaddressIndex != null) {
         final subIdx = output.subaddressIndex!;
         final outputAccount = subIdx.item1;
@@ -821,8 +848,52 @@ class _DebugViewState extends State<DebugView> {
     return Colors.green;
   }
 
+  String? _checkMultiAccountOutputs() {
+    if (_selectedOutputs.isEmpty) {
+      return null;
+    }
+
+    final selectedAccounts = <int>{};
+
+    for (final outputKey in _selectedOutputs) {
+      final output = _allOutputsAllAccounts.where((o) => '${o.txHash}:${o.outputIndex}' == outputKey).firstOrNull;
+      if (output != null) {
+        final account = output.subaddressIndex?.item1 ?? 0;
+        selectedAccounts.add(account);
+      }
+    }
+
+    if (selectedAccounts.length > 1 && _activeAccount != -1) {
+      return 'Cannot create transaction with outputs from multiple accounts (${selectedAccounts.join(', ')}). Switch to "All" accounts view to allow multi-account transactions.';
+    }
+
+    return null;
+  }
+
+  String? _getMultiAccountWarning() {
+    if (_selectedOutputs.isEmpty || _activeAccount != -1) {
+      return null;
+    }
+
+    final selectedAccounts = <int>{};
+
+    for (final outputKey in _selectedOutputs) {
+      final output = _allOutputsAllAccounts.where((o) => '${o.txHash}:${o.outputIndex}' == outputKey).firstOrNull;
+      if (output != null) {
+        final account = output.subaddressIndex?.item1 ?? 0;
+        selectedAccounts.add(account);
+      }
+    }
+
+    if (selectedAccounts.length > 1) {
+      final accountsList = selectedAccounts.toList()..sort();
+      return 'WARNING: Creating transaction with outputs from multiple accounts (${accountsList.join(', ')}). This may reduce privacy.';
+    }
+
+    return null;
+  }
+
   void _createTransaction() {
-    // Build recipient inputs from UI controllers
     final recipientInputs = List.generate(
       _destinationControllers.length,
       (i) => RecipientInput(
@@ -831,7 +902,14 @@ class _DebugViewState extends State<DebugView> {
       ),
     );
 
-    // Validate transaction creation parameters
+    final multiAccountCheck = _checkMultiAccountOutputs();
+    if (multiAccountCheck != null) {
+      setState(() {
+        _txError = multiAccountCheck;
+      });
+      return;
+    }
+
     final validation = TransactionService.validateTransactionCreation(
       seed: _controller.text,
       availableOutputs: _allOutputs,
@@ -1142,6 +1220,7 @@ class _DebugViewState extends State<DebugView> {
                         txSortBy: _txSortBy,
                         txSortAscending: _txSortAscending,
                         expandedTransactions: _expandedTransactions,
+                        activeAccount: _activeAccount,
                         onSortChanged: (sortKey) {
                           setState(() {
                             if (_txSortBy == sortKey) {
@@ -1174,6 +1253,7 @@ class _DebugViewState extends State<DebugView> {
                         sortBy: _sortBy,
                         sortAscending: _sortAscending,
                         selectedOutputs: _selectedOutputs,
+                        activeAccount: _activeAccount,
                         onToggleShowSpent: () {
                           setState(() {
                             _showSpentOutputs = !_showSpentOutputs;
@@ -1214,6 +1294,7 @@ class _DebugViewState extends State<DebugView> {
                         broadcastResult: _broadcastResult,
                         txError: _txError,
                         broadcastError: _broadcastError,
+                        multiAccountWarning: _getMultiAccountWarning(),
                         onAddRecipient: _addRecipient,
                         onRemoveRecipient: _removeRecipient,
                         onCreateTransaction: _createTransaction,
