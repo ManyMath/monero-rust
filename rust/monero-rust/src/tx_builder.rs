@@ -505,6 +505,152 @@ pub mod native {
         })
     }
 
+    pub async fn sweep_all(
+        node_url: &str,
+        seed_phrase: &str,
+        network_str: &str,
+        stored_outputs: Vec<StoredOutputData>,
+        destination_address: &str,
+    ) -> Result<TransactionResult, String> {
+        if stored_outputs.is_empty() {
+            return Err("No outputs provided".to_string());
+        }
+
+        let network = parse_network(network_str)?;
+
+        let seed = Seed::from_string(Zeroizing::new(seed_phrase.to_string()))
+            .map_err(|e| format!("Invalid seed: {:?}", e))?;
+
+        let spend_key = spend_key_from_seed(&seed);
+        let view_pair = view_pair_from_seed(&seed);
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let rpc = HttpRpc::new(node_url.to_string())
+            .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
+
+        #[cfg(target_arch = "wasm32")]
+        let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
+
+        let protocol = rpc
+            .get_protocol()
+            .await
+            .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
+
+        let fee = rpc
+            .get_fee()
+            .await
+            .map_err(|e| format!("Failed to get fee: {:?}", e))?;
+
+        // Parse destination address
+        let dest_addr = MoneroAddress::from_str(network, destination_address)
+            .map_err(|e| format!("Invalid destination address '{}': {:?}", destination_address, e))?;
+
+        // Convert stored outputs to spendable outputs
+        let mut spendable_outputs = Vec::new();
+        use std::io::Cursor;
+
+        for stored in &stored_outputs {
+            let output_bytes = hex::decode(&stored.received_output_bytes)
+                .map_err(|e| format!("Invalid received_output_bytes: {:?}", e))?;
+
+            let mut cursor = Cursor::new(output_bytes);
+            let received_output = ReceivedOutput::read(&mut cursor)
+                .map_err(|e| format!("Failed to deserialize ReceivedOutput: {:?}", e))?;
+
+            let spendable = create_spendable_output(&rpc, received_output).await?;
+            spendable_outputs.push(spendable);
+        }
+
+        // Calculate total input amount
+        let total_in: u64 = spendable_outputs.iter()
+            .map(|o| o.commitment().amount)
+            .sum();
+
+        // Estimate transaction size for fee calculation
+        // Sweep always creates 2 outputs (no change)
+        let num_outputs = 2;
+        // Worst-case extra: assume payment ID and additional keys
+        let extra = extra_weight(num_outputs, true, &[]);
+        let estimated_tx_size = Transaction::fee_weight(
+            protocol,
+            spendable_outputs.len(),
+            num_outputs,
+            extra,
+        );
+
+        let fee_amount = fee.calculate(estimated_tx_size);
+
+        // Calculate sweep amount (total - fee)
+        let sweep_amount = total_in.checked_sub(fee_amount)
+            .ok_or_else(|| format!(
+                "Insufficient funds: have {} atomic units, need {} for fee",
+                total_in, fee_amount
+            ))?;
+
+        // Split sweep amount into 2 outputs for Monero privacy
+        // Main output gets most of the amount, second output gets 1 atomic unit
+        let dummy_amount = 1u64;
+        let main_amount = sweep_amount.checked_sub(dummy_amount)
+            .ok_or_else(|| format!(
+                "Sweep amount too small: {} atomic units (need at least 2)",
+                sweep_amount
+            ))?;
+
+        // Build transaction with NO change address (None)
+        let mut builder = SignableTransactionBuilder::new(protocol, fee, None);
+
+        // Generate and set r_seed so we can access the eventuality (and tx_key)
+        let mut rng = rand::rngs::OsRng;
+        let mut r_seed = Zeroizing::new([0u8; 32]);
+        rng.fill_bytes(r_seed.as_mut());
+        builder.set_r_seed(r_seed);
+
+        // Add all inputs
+        for output in spendable_outputs {
+            builder.add_input(output);
+        }
+
+        // Add 2 payments to satisfy Monero's privacy requirement
+        builder.add_payment(dest_addr, main_amount);
+        builder.add_payment(dest_addr, dummy_amount);
+
+        let signable = builder
+            .build()
+            .map_err(|e| format!("Failed to build sweep transaction: {:?}", e))?;
+
+        let actual_fee = signable.fee();
+
+        // Get the eventuality to extract the private tx_key before signing
+        let eventuality = signable.eventuality()
+            .ok_or_else(|| "Failed to get eventuality (r_seed not set)".to_string())?;
+        let tx_key = hex::encode(eventuality.tx_key().to_bytes());
+        let tx_key_additional: Vec<String> = eventuality.tx_key_additional()
+            .iter()
+            .map(|k| hex::encode(k.to_bytes()))
+            .collect();
+
+        let tx = signable
+            .sign(&mut rng, &rpc, &Zeroizing::new(spend_key))
+            .await
+            .map_err(|e| format!("Failed to sign sweep transaction: {:?}", e))?;
+
+        let tx_id = hex::encode(tx.hash());
+        let tx_blob = hex::encode(tx.serialize());
+
+        // Sweep transactions don't produce change outputs (by design)
+        // All outputs go to the destination address
+        let change_outputs = Vec::new();
+
+        Ok(TransactionResult {
+            tx_id,
+            fee: actual_fee,
+            tx_blob,
+            tx_key,
+            tx_key_additional,
+            change_outputs,
+        })
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn broadcast_transaction(
         node_url: &str,
