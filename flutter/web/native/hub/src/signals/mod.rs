@@ -55,6 +55,15 @@ pub struct CreateTransactionRequest {
     pub selected_outputs: Option<Vec<String>>, // "txHash:outputIndex" keys for coin control
 }
 
+#[derive(Deserialize, DartSignal)]
+pub struct SweepAllRequest {
+    pub node_url: String,
+    pub seed: String,
+    pub network: String,
+    pub destination_address: String,
+    pub selected_outputs: Option<Vec<String>>, // "txHash:outputIndex" keys to sweep (for account filtering)
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, SignalPiece)]
 pub struct ChangeOutput {
     pub tx_hash: String,
