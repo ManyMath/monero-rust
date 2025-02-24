@@ -18,6 +18,7 @@ impl TxBuilderActor {
     pub fn new(self_addr: Address<Self>) -> Self {
         let mut _owned_tasks = JoinSet::new();
         _owned_tasks.spawn(Self::listen_to_tx_requests(self_addr.clone()));
+        _owned_tasks.spawn(Self::listen_to_sweep_requests(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_broadcast_requests(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_proof_requests(self_addr));
 
@@ -52,6 +53,22 @@ impl TxBuilderActor {
                     seed: request.seed,
                     network: request.network,
                     recipients,
+                    selected_outputs: request.selected_outputs,
+                })
+                .await;
+        }
+    }
+
+    async fn listen_to_sweep_requests(mut self_addr: Address<Self>) {
+        let receiver = SweepAllRequest::get_dart_signal_receiver();
+        while let Some(signal_pack) = receiver.recv().await {
+            let request = signal_pack.message;
+            let _ = self_addr
+                .notify(SweepAll {
+                    node_url: request.node_url,
+                    seed: request.seed,
+                    network: request.network,
+                    destination_address: request.destination_address,
                     selected_outputs: request.selected_outputs,
                 })
                 .await;
@@ -285,6 +302,180 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                     TransactionCreatedResponse {
                         success: false,
                         error: Some("Failed to get wallet data or height".to_string()),
+                        tx_id: String::new(),
+                        fee: 0,
+                        tx_blob: None,
+                        tx_key: None,
+                        tx_key_additional: Vec::new(),
+                        spent_output_hashes: Vec::new(),
+                        change_outputs: Vec::new(),
+                    }
+                    .send_signal_to_dart();
+                }
+            }
+        } else {
+            TransactionCreatedResponse {
+                success: false,
+                error: Some("Wallet actor not initialized".to_string()),
+                tx_id: String::new(),
+                fee: 0,
+                tx_blob: None,
+                tx_key: None,
+                tx_key_additional: Vec::new(),
+                spent_output_hashes: Vec::new(),
+                change_outputs: Vec::new(),
+            }
+            .send_signal_to_dart();
+        }
+    }
+}
+
+#[async_trait]
+impl Notifiable<SweepAll> for TxBuilderActor {
+    async fn notify(&mut self, msg: SweepAll, _ctx: &Context<Self>) {
+        if let Some(wallet_addr) = &mut self.wallet_actor {
+            // Get wallet data and height
+            let wallet_data_result = wallet_addr.send(GetWalletData).await;
+            let wallet_height_result = wallet_addr.send(GetWalletHeight).await;
+
+            match (wallet_data_result, wallet_height_result) {
+                (Ok(wallet_data), Ok(wallet_height)) => {
+                    const CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE: u64 = 10;
+
+                    // Filter to spendable outputs
+                    let mut spendable_outputs: Vec<_> = wallet_data
+                        .outputs
+                        .iter()
+                        .filter(|o| {
+                            if o.spent {
+                                return false;
+                            }
+                            let confirmations = if wallet_height.daemon_height > o.block_height {
+                                wallet_height.daemon_height - o.block_height
+                            } else {
+                                0
+                            };
+                            confirmations >= CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE
+                        })
+                        .cloned()
+                        .collect();
+
+                    // Apply manual output selection if provided (for account filtering)
+                    if let Some(ref selected) = msg.selected_outputs {
+                        spendable_outputs.retain(|o| {
+                            let output_key = format!("{}:{}", o.tx_hash, o.output_index);
+                            selected.contains(&output_key)
+                        });
+                    }
+
+                    if spendable_outputs.is_empty() {
+                        TransactionCreatedResponse {
+                            success: false,
+                            error: Some("No spendable outputs available for sweep".to_string()),
+                            tx_id: String::new(),
+                            fee: 0,
+                            tx_blob: None,
+                            tx_key: None,
+                            tx_key_additional: Vec::new(),
+                            spent_output_hashes: Vec::new(),
+                            change_outputs: Vec::new(),
+                        }
+                        .send_signal_to_dart();
+                        return;
+                    }
+
+                    // Collect spent output hashes
+                    let spent_output_hashes: Vec<String> = spendable_outputs
+                        .iter()
+                        .map(|o| format!("{}:{}", o.tx_hash, o.output_index))
+                        .collect();
+
+                    // Convert StoredOutput to StoredOutputData
+                    let stored_outputs: Vec<monero_rust::tx_builder::native::StoredOutputData> =
+                        spendable_outputs
+                            .into_iter()
+                            .map(|o| monero_rust::tx_builder::native::StoredOutputData {
+                                tx_hash: o.tx_hash.clone(),
+                                output_index: o.output_index,
+                                amount: o.amount,
+                                key: o.key.clone(),
+                                key_offset: o.key_offset.clone(),
+                                commitment_mask: o.commitment_mask.clone(),
+                                subaddress: o.subaddress,
+                                payment_id: o.payment_id.clone(),
+                                received_output_bytes: o.received_output_bytes.clone(),
+                            })
+                            .collect();
+
+                    // Spawn sweep operation in local task to avoid Send requirements
+                    let node_url = msg.node_url.clone();
+                    let seed = msg.seed.clone();
+                    let network = msg.network.clone();
+                    let destination = msg.destination_address.clone();
+
+                    wasm_bindgen_futures::spawn_local(async move {
+                        match monero_rust::tx_builder::native::sweep_all(
+                            &node_url,
+                            &seed,
+                            &network,
+                            stored_outputs,
+                            &destination,
+                        )
+                        .await
+                        {
+                            Ok(result) => {
+                                // Convert change outputs (should be empty for sweep_all)
+                                let change_outputs: Vec<crate::signals::ChangeOutput> = result
+                                    .change_outputs
+                                    .into_iter()
+                                    .map(|c| crate::signals::ChangeOutput {
+                                        tx_hash: c.tx_hash,
+                                        output_index: c.output_index.into(),
+                                        amount: c.amount,
+                                        amount_xmr: c.amount_xmr,
+                                        key: c.key,
+                                        key_offset: c.key_offset,
+                                        commitment_mask: c.commitment_mask,
+                                        subaddress_index: c.subaddress_index,
+                                        received_output_bytes: c.received_output_bytes,
+                                        key_image: c.key_image,
+                                    })
+                                    .collect();
+
+                                TransactionCreatedResponse {
+                                    success: true,
+                                    error: None,
+                                    tx_id: result.tx_id,
+                                    fee: result.fee,
+                                    tx_blob: Some(result.tx_blob),
+                                    tx_key: Some(result.tx_key),
+                                    tx_key_additional: result.tx_key_additional,
+                                    spent_output_hashes,
+                                    change_outputs,
+                                }
+                                .send_signal_to_dart();
+                            }
+                            Err(e) => {
+                                TransactionCreatedResponse {
+                                    success: false,
+                                    error: Some(e),
+                                    tx_id: String::new(),
+                                    fee: 0,
+                                    tx_blob: None,
+                                    tx_key: None,
+                                    tx_key_additional: Vec::new(),
+                                    spent_output_hashes: Vec::new(),
+                                    change_outputs: Vec::new(),
+                                }
+                                .send_signal_to_dart();
+                            }
+                        }
+                    });
+                }
+                (Err(e), _) | (_, Err(e)) => {
+                    TransactionCreatedResponse {
+                        success: false,
+                        error: Some(format!("Failed to get wallet data: {:?}", e)),
                         tx_id: String::new(),
                         fee: 0,
                         tx_blob: None,
