@@ -942,6 +942,124 @@ class _DebugViewState extends State<DebugView> {
     );
   }
 
+  void _showSweepDialog() {
+    final sweepAddressController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Sweep All Funds'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (_activeAccount == -1)
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  margin: const EdgeInsets.only(bottom: 16),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.shade50,
+                    border: Border.all(color: Colors.orange.shade300),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.warning_amber, color: Colors.orange.shade700, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'WARNING: Sweeping from "All" accounts view will sweep funds from ALL accounts. This may reduce privacy.',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.orange.shade900,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              Text(
+                'This will send all spendable funds ${_activeAccount == -1 ? "from ALL accounts" : "from account $_activeAccount"} to a single address.',
+                style: const TextStyle(fontSize: 13),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: sweepAddressController,
+                decoration: const InputDecoration(
+                  labelText: 'Destination Address',
+                  hintText: 'Enter Monero address',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Fee will be deducted from the total amount.',
+                style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _executeSweep(sweepAddressController.text);
+              },
+              child: const Text('Sweep All'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _executeSweep(String destinationAddress) {
+    // Get outputs to sweep based on active account
+    final outputsToSweep = _allOutputs;
+    final outputKeys = outputsToSweep
+        .map((o) => '${o.txHash}:${o.outputIndex}')
+        .toSet();
+
+    // Validate sweep parameters
+    final validation = TransactionService.validateSweepAll(
+      seed: _controller.text,
+      availableOutputs: outputsToSweep,
+      destinationAddress: destinationAddress,
+      nodeUrl: _nodeUrlController.text,
+      selectedOutputs: outputKeys,
+      currentHeight: _currentHeight,
+    );
+
+    if (!validation.isValid) {
+      setState(() {
+        _txError = validation.error;
+      });
+      return;
+    }
+
+    setState(() {
+      _isCreatingTx = true;
+      _txResult = null;
+      _txError = null;
+      _broadcastResult = null;
+      _broadcastError = null;
+    });
+
+    // Execute sweep
+    TransactionService.sweepAll(
+      seed: validation.normalizedSeed!,
+      network: _network,
+      destinationAddress: validation.destinationAddress!,
+      nodeUrl: validation.nodeUrl!,
+      selectedOutputs: validation.selectedOutputs,
+    );
+  }
+
   void _addRecipient() {
     if (_destinationControllers.length >= 15) return;
     setState(() {
@@ -1306,6 +1424,7 @@ class _DebugViewState extends State<DebugView> {
                           network: _network,
                         ),
                         onAmountChanged: () => setState(() {}),
+                        onSweepAll: _showSweepDialog,
                       ),
                     ),
                   ],

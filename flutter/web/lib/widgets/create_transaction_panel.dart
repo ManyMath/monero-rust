@@ -22,6 +22,7 @@ class CreateTransactionPanel extends StatelessWidget {
   final VoidCallback onBroadcastTransaction;
   final VoidCallback? onProvePayment;
   final VoidCallback onAmountChanged;
+  final VoidCallback? onSweepAll;
 
   const CreateTransactionPanel({
     super.key,
@@ -40,6 +41,7 @@ class CreateTransactionPanel extends StatelessWidget {
     required this.onBroadcastTransaction,
     this.onProvePayment,
     required this.onAmountChanged,
+    this.onSweepAll,
   });
 
   @override
@@ -78,6 +80,24 @@ class CreateTransactionPanel extends StatelessWidget {
               onPressed: onAddRecipient,
               icon: const Icon(Icons.add),
               label: const Text('Add Recipient'),
+            ),
+          const SizedBox(height: 16),
+          if (onSweepAll != null)
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: isCreatingTx ? null : onSweepAll,
+                    icon: const Icon(Icons.cleaning_services),
+                    label: const Text('Sweep All'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.orange,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(child: Container()),
+              ],
             ),
           const SizedBox(height: 16),
           if (multiAccountWarning != null) ...[
