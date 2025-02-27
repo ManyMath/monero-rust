@@ -220,6 +220,34 @@ class TransactionService {
     ).sendSignalToRust();
   }
 
+  /// Calculate maximum spendable amount (total - estimated fee)
+  static double calculateMaxSpendable({
+    required List<OwnedOutput> availableOutputs,
+    Set<String>? selectedOutputs,
+    int currentHeight = 0,
+  }) {
+    final outputKeys = selectedOutputs ??
+        availableOutputs.map((o) => '${o.txHash}:${o.outputIndex}').toSet();
+
+    final totalAtomic = _getSelectedOutputsTotal(
+      availableOutputs,
+      outputKeys,
+      currentHeight,
+    );
+
+    if (totalAtomic == 0) return 0.0;
+
+    const feePerInputEstimate = 15000000;
+    const baseFeeEstimate = 20000000;
+    final numInputs = outputKeys.length;
+    final estimatedFee = baseFeeEstimate + (numInputs * feePerInputEstimate);
+
+    final maxSpendable = totalAtomic - estimatedFee;
+    if (maxSpendable <= 0) return 0.0;
+
+    return maxSpendable / 1e12;
+  }
+
   /// Calculate total of selected outputs
   static int _getSelectedOutputsTotal(
     List<OwnedOutput> allOutputs,
@@ -230,13 +258,11 @@ class TransactionService {
     for (final output in allOutputs) {
       final outputKey = '${output.txHash}:${output.outputIndex}';
       if (selectedOutputs.contains(outputKey)) {
-        // Check if output is spendable (not spent and has enough confirmations)
         if (!output.spent) {
           final blockHeightInt = output.blockHeight.toInt();
           final confirms = currentHeight > 0 && blockHeightInt > 0
               ? currentHeight - blockHeightInt + 1
               : 0;
-          // Only count outputs with at least 10 confirmations (or unconfirmed)
           if (confirms >= 10 || confirms == 0) {
             total += output.amount.toInt();
           }
