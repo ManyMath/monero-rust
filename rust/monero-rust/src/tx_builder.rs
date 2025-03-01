@@ -637,9 +637,42 @@ pub mod native {
         let tx_id = hex::encode(tx.hash());
         let tx_blob = hex::encode(tx.serialize());
 
-        // Sweep transactions don't produce change outputs (by design)
-        // All outputs go to the destination address
-        let change_outputs = Vec::new();
+        let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+        let scan_result = scanner.scan_transaction(&tx);
+        let our_outputs = scan_result.ignore_timelock();
+
+        use monero_serai::ringct::generate_key_image;
+
+        let change_outputs: Vec<ChangeOutputInfo> = our_outputs
+            .into_iter()
+            .map(|output| {
+                let amount = output.data.commitment.amount;
+                let amount_xmr = format!("{:.12}", amount as f64 / 1_000_000_000_000.0);
+                let key = hex::encode(output.data.key.compress().to_bytes());
+                let key_offset_scalar = output.data.key_offset;
+                let key_offset = hex::encode(key_offset_scalar.to_bytes());
+                let commitment_mask = hex::encode(output.data.commitment.mask.to_bytes());
+                let subaddress_index = output.metadata.subaddress.map(|idx| (idx.account(), idx.address()));
+                let received_output_bytes = hex::encode(output.serialize());
+
+                let one_time_key_scalar = Zeroizing::new(spend_key + key_offset_scalar);
+                let key_image_point = generate_key_image(&one_time_key_scalar);
+                let key_image = hex::encode(key_image_point.compress().to_bytes());
+
+                ChangeOutputInfo {
+                    tx_hash: tx_id.clone(),
+                    output_index: output.absolute.o,
+                    amount,
+                    amount_xmr,
+                    key,
+                    key_offset,
+                    commitment_mask,
+                    subaddress_index,
+                    received_output_bytes,
+                    key_image,
+                }
+            })
+            .collect();
 
         Ok(TransactionResult {
             tx_id,
