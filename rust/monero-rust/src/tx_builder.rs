@@ -147,6 +147,50 @@ pub mod native {
         else { 5 }
     }
 
+    fn scan_transaction_outputs(
+        tx: &Transaction,
+        tx_id: &str,
+        view_pair: ViewPair,
+        spend_key: Scalar,
+    ) -> Vec<ChangeOutputInfo> {
+        let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+        let scan_result = scanner.scan_transaction(tx);
+        let our_outputs = scan_result.ignore_timelock();
+
+        use monero_serai::ringct::generate_key_image;
+
+        our_outputs
+            .into_iter()
+            .map(|output| {
+                let amount = output.data.commitment.amount;
+                let amount_xmr = format!("{:.12}", amount as f64 / 1_000_000_000_000.0);
+                let key = hex::encode(output.data.key.compress().to_bytes());
+                let key_offset_scalar = output.data.key_offset;
+                let key_offset = hex::encode(key_offset_scalar.to_bytes());
+                let commitment_mask = hex::encode(output.data.commitment.mask.to_bytes());
+                let subaddress_index = output.metadata.subaddress.map(|idx| (idx.account(), idx.address()));
+                let received_output_bytes = hex::encode(output.serialize());
+
+                let one_time_key_scalar = Zeroizing::new(spend_key + key_offset_scalar);
+                let key_image_point = generate_key_image(&one_time_key_scalar);
+                let key_image = hex::encode(key_image_point.compress().to_bytes());
+
+                ChangeOutputInfo {
+                    tx_hash: tx_id.to_string(),
+                    output_index: output.absolute.o,
+                    amount,
+                    amount_xmr,
+                    key,
+                    key_offset,
+                    commitment_mask,
+                    subaddress_index,
+                    received_output_bytes,
+                    key_image,
+                }
+            })
+            .collect()
+    }
+
     fn parse_network(network_str: &str) -> Result<Network, String> {
         match network_str.to_lowercase().as_str() {
             "mainnet" => Ok(Network::Mainnet),
@@ -456,44 +500,7 @@ pub mod native {
         let tx_id = hex::encode(tx.hash());
         let tx_blob = hex::encode(tx.serialize());
 
-        // Scan the transaction we just created to find change outputs (sends to self)
-        let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
-        let scan_result = scanner.scan_transaction(&tx);
-        let our_outputs = scan_result.ignore_timelock();
-
-        use monero_serai::ringct::generate_key_image;
-
-        let change_outputs: Vec<ChangeOutputInfo> = our_outputs
-            .into_iter()
-            .map(|output| {
-                let amount = output.data.commitment.amount;
-                let amount_xmr = format!("{:.12}", amount as f64 / 1_000_000_000_000.0);
-                let key = hex::encode(output.data.key.compress().to_bytes());
-                let key_offset_scalar = output.data.key_offset;
-                let key_offset = hex::encode(key_offset_scalar.to_bytes());
-                let commitment_mask = hex::encode(output.data.commitment.mask.to_bytes());
-                let subaddress_index = output.metadata.subaddress.map(|idx| (idx.account(), idx.address()));
-                let received_output_bytes = hex::encode(output.serialize());
-
-                // Calculate key image
-                let one_time_key_scalar = Zeroizing::new(spend_key + key_offset_scalar);
-                let key_image_point = generate_key_image(&one_time_key_scalar);
-                let key_image = hex::encode(key_image_point.compress().to_bytes());
-
-                ChangeOutputInfo {
-                    tx_hash: tx_id.clone(),
-                    output_index: output.absolute.o,
-                    amount,
-                    amount_xmr,
-                    key,
-                    key_offset,
-                    commitment_mask,
-                    subaddress_index,
-                    received_output_bytes,
-                    key_image,
-                }
-            })
-            .collect();
+        let change_outputs = scan_transaction_outputs(&tx, &tx_id, view_pair, spend_key);
 
         Ok(TransactionResult {
             tx_id,
@@ -637,42 +644,7 @@ pub mod native {
         let tx_id = hex::encode(tx.hash());
         let tx_blob = hex::encode(tx.serialize());
 
-        let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
-        let scan_result = scanner.scan_transaction(&tx);
-        let our_outputs = scan_result.ignore_timelock();
-
-        use monero_serai::ringct::generate_key_image;
-
-        let change_outputs: Vec<ChangeOutputInfo> = our_outputs
-            .into_iter()
-            .map(|output| {
-                let amount = output.data.commitment.amount;
-                let amount_xmr = format!("{:.12}", amount as f64 / 1_000_000_000_000.0);
-                let key = hex::encode(output.data.key.compress().to_bytes());
-                let key_offset_scalar = output.data.key_offset;
-                let key_offset = hex::encode(key_offset_scalar.to_bytes());
-                let commitment_mask = hex::encode(output.data.commitment.mask.to_bytes());
-                let subaddress_index = output.metadata.subaddress.map(|idx| (idx.account(), idx.address()));
-                let received_output_bytes = hex::encode(output.serialize());
-
-                let one_time_key_scalar = Zeroizing::new(spend_key + key_offset_scalar);
-                let key_image_point = generate_key_image(&one_time_key_scalar);
-                let key_image = hex::encode(key_image_point.compress().to_bytes());
-
-                ChangeOutputInfo {
-                    tx_hash: tx_id.clone(),
-                    output_index: output.absolute.o,
-                    amount,
-                    amount_xmr,
-                    key,
-                    key_offset,
-                    commitment_mask,
-                    subaddress_index,
-                    received_output_bytes,
-                    key_image,
-                }
-            })
-            .collect();
+        let change_outputs = scan_transaction_outputs(&tx, &tx_id, view_pair, spend_key);
 
         Ok(TransactionResult {
             tx_id,
