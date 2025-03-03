@@ -4,7 +4,7 @@ import '../src/bindings/bindings.dart';
 /// Widget that displays account management interface.
 ///
 /// Shows account selection dropdown, create account button, and unused subaddresses.
-class AccountsPanel extends StatelessWidget {
+class AccountsPanel extends StatefulWidget {
   final String? seed;
   final String network;
   final int activeAccount;
@@ -14,6 +14,7 @@ class AccountsPanel extends StatelessWidget {
   final VoidCallback onCreateAccount;
   final Function(String text, String label) onCopyToClipboard;
   final Map<String, String> subaddresses; // (account, index) -> address
+  final Function(String txHash)? onNavigateToTransaction;
 
   const AccountsPanel({
     super.key,
@@ -26,18 +27,32 @@ class AccountsPanel extends StatelessWidget {
     required this.onCreateAccount,
     required this.onCopyToClipboard,
     required this.subaddresses,
+    this.onNavigateToTransaction,
   });
 
-  /// Get used subaddress indices for an account
-  Set<int> _getUsedSubaddresses(int account) {
-    final used = <int>{};
-    for (var output in allOutputs) {
+  @override
+  State<AccountsPanel> createState() => _AccountsPanelState();
+}
+
+class _AccountsPanelState extends State<AccountsPanel> {
+  bool _showUsedSubaddresses = false;
+
+  /// Get used subaddress indices for an account with transaction info
+  Map<int, _SubaddressInfo> _getUsedSubaddressesWithTxInfo(int account) {
+    final used = <int, _SubaddressInfo>{};
+    for (var output in widget.allOutputs) {
       if (output.subaddressIndex != null) {
         final subIdx = output.subaddressIndex!;
         final outputAccount = subIdx.item1;
         final addressIndex = subIdx.item2;
         if (outputAccount == account) {
-          used.add(addressIndex);
+          // Store the first output found for this subaddress
+          if (!used.containsKey(addressIndex)) {
+            used[addressIndex] = _SubaddressInfo(
+              txHash: output.txHash,
+              blockHeight: output.blockHeight.toInt(),
+            );
+          }
         }
       }
     }
@@ -46,7 +61,7 @@ class AccountsPanel extends StatelessWidget {
 
   /// Get the first 5 unused subaddress indices for an account
   List<int> _getUnusedSubaddresses(int account) {
-    final used = _getUsedSubaddresses(account);
+    final used = _getUsedSubaddressesWithTxInfo(account).keys.toSet();
     final unused = <int>[];
 
     int index = 0;
@@ -64,8 +79,8 @@ class AccountsPanel extends StatelessWidget {
   Map<int, List<int>> _getUnusedSubaddressesPerAccount() {
     final result = <int, List<int>>{};
 
-    for (var account in accounts) {
-      final used = _getUsedSubaddresses(account);
+    for (var account in widget.accounts) {
+      final used = _getUsedSubaddressesWithTxInfo(account).keys.toSet();
       final unused = <int>[];
 
       int index = 0;
@@ -84,7 +99,7 @@ class AccountsPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (seed == null || seed!.isEmpty) {
+    if (widget.seed == null || widget.seed!.isEmpty) {
       return const Padding(
         padding: EdgeInsets.all(16.0),
         child: Text('Enter a seed phrase to manage accounts'),
@@ -92,8 +107,9 @@ class AccountsPanel extends StatelessWidget {
     }
 
     // Get subaddresses based on whether specific account or "All" is selected
-    final unusedIndices = activeAccount >= 0 ? _getUnusedSubaddresses(activeAccount) : <int>[];
-    final unusedPerAccount = activeAccount == -1 ? _getUnusedSubaddressesPerAccount() : <int, List<int>>{};
+    final unusedIndices = widget.activeAccount >= 0 ? _getUnusedSubaddresses(widget.activeAccount) : <int>[];
+    final unusedPerAccount = widget.activeAccount == -1 ? _getUnusedSubaddressesPerAccount() : <int, List<int>>{};
+    final usedSubaddresses = widget.activeAccount >= 0 ? _getUsedSubaddressesWithTxInfo(widget.activeAccount) : <int, _SubaddressInfo>{};
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -111,35 +127,35 @@ class AccountsPanel extends StatelessWidget {
               SizedBox(
                 width: 100,
                 child: DropdownButton<int>(
-                  value: activeAccount,
+                  value: widget.activeAccount,
                   isExpanded: true,
                   items: [
                     // Add "All" option if there are multiple accounts
-                    if (accounts.length > 1)
+                    if (widget.accounts.length > 1)
                       const DropdownMenuItem(
                         value: -1,
                         child: Text('All'),
                       ),
                     // Add individual account options
-                    ...accounts
+                    ...widget.accounts
                         .map((account) => DropdownMenuItem(
                               value: account,
                               child: Text(account.toString()),
                             ))
                         .toList(),
                   ],
-                  onChanged: accounts.length <= 1
+                  onChanged: widget.accounts.length <= 1
                       ? null // Disable if only one account
                       : (value) {
                           if (value != null) {
-                            onAccountSelected(value);
+                            widget.onAccountSelected(value);
                           }
                         },
                 ),
               ),
               const SizedBox(width: 16),
               ElevatedButton.icon(
-                onPressed: onCreateAccount,
+                onPressed: widget.onCreateAccount,
                 icon: const Icon(Icons.add, size: 16),
                 label: const Text('Create new account'),
                 style: ElevatedButton.styleFrom(
@@ -152,20 +168,128 @@ class AccountsPanel extends StatelessWidget {
         const Divider(height: 1),
 
         // Subaddresses section (only show for specific accounts, not "All")
-        if (activeAccount >= 0)
+        if (widget.activeAccount >= 0)
           Padding(
             padding: const EdgeInsets.all(16.0),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // Toggle for showing used subaddresses
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Subaddresses:',
+                      style: TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
+                    ),
+                    if (usedSubaddresses.isNotEmpty)
+                      Row(
+                        children: [
+                          Text(
+                            'Show used (${usedSubaddresses.length})',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          Switch(
+                            value: _showUsedSubaddresses,
+                            onChanged: (value) {
+                              setState(() {
+                                _showUsedSubaddresses = value;
+                              });
+                            },
+                            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                        ],
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+
+                // Show used subaddresses if toggled on
+                if (_showUsedSubaddresses && usedSubaddresses.isNotEmpty) ...[
+                  const Text(
+                    'Used Subaddresses:',
+                    style: TextStyle(fontWeight: FontWeight.w400, fontSize: 12, color: Colors.grey),
+                  ),
+                  const SizedBox(height: 8),
+                  ...usedSubaddresses.entries.map((entry) {
+                    final addressIndex = entry.key;
+                    final info = entry.value;
+                    final key = '${widget.activeAccount},$addressIndex';
+                    final address = widget.subaddresses[key];
+
+                    if (address == null || address.isEmpty) {
+                      return const SizedBox.shrink();
+                    }
+
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 8.0),
+                      child: InkWell(
+                        onTap: widget.onNavigateToTransaction != null
+                            ? () => widget.onNavigateToTransaction!(info.txHash)
+                            : null,
+                        borderRadius: BorderRadius.circular(4),
+                        child: Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade50,
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: Colors.grey.shade300),
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              SizedBox(
+                                width: 60,
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Index $addressIndex',
+                                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
+                                    ),
+                                    Text(
+                                      'Height: ${info.blockHeight}',
+                                      style: TextStyle(fontSize: 10, color: Colors.blue.shade700),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Expanded(
+                                child: SelectableText(
+                                  address,
+                                  style: const TextStyle(
+                                    fontFamily: 'monospace',
+                                    fontSize: 10,
+                                  ),
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.copy_outlined, size: 14),
+                                onPressed: () => widget.onCopyToClipboard(
+                                  address,
+                                  'Used Subaddress ${widget.activeAccount}/$addressIndex',
+                                ),
+                                tooltip: 'Copy subaddress',
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                  const SizedBox(height: 12),
+                ],
+
                 const Text(
                   'Unused Subaddresses (first 5):',
-                  style: TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
+                  style: TextStyle(fontWeight: FontWeight.w400, fontSize: 12),
                 ),
                 const SizedBox(height: 8),
                 ...unusedIndices.map((addressIndex) {
-                final key = '$activeAccount,$addressIndex';
-                final address = subaddresses[key];
+                final key = '${widget.activeAccount},$addressIndex';
+                final address = widget.subaddresses[key];
 
                 if (address == null || address.isEmpty) {
                   return Padding(
@@ -217,9 +341,9 @@ class AccountsPanel extends StatelessWidget {
                       ),
                       IconButton(
                         icon: const Icon(Icons.copy_outlined, size: 14),
-                        onPressed: () => onCopyToClipboard(
+                        onPressed: () => widget.onCopyToClipboard(
                           address,
-                          'Subaddress $activeAccount/$addressIndex',
+                          'Subaddress ${widget.activeAccount}/$addressIndex',
                         ),
                         tooltip: 'Copy subaddress',
                         padding: EdgeInsets.zero,
@@ -232,7 +356,7 @@ class AccountsPanel extends StatelessWidget {
               ],
             ),
           )
-        else if (activeAccount == -1)
+        else if (widget.activeAccount == -1)
           // "All" accounts view - show first 3 unused subaddresses per account
           Padding(
             padding: const EdgeInsets.all(16.0),
@@ -264,7 +388,7 @@ class AccountsPanel extends StatelessWidget {
                       ),
                       ...indices.map((addressIndex) {
                         final key = '$account,$addressIndex';
-                        final address = subaddresses[key];
+                        final address = widget.subaddresses[key];
 
                         if (address == null || address.isEmpty) {
                           return Padding(
@@ -316,7 +440,7 @@ class AccountsPanel extends StatelessWidget {
                               ),
                               IconButton(
                                 icon: const Icon(Icons.copy_outlined, size: 12),
-                                onPressed: () => onCopyToClipboard(
+                                onPressed: () => widget.onCopyToClipboard(
                                   address,
                                   'Subaddress $account/$addressIndex',
                                 ),
@@ -337,4 +461,15 @@ class AccountsPanel extends StatelessWidget {
       ],
     );
   }
+}
+
+/// Helper class to store subaddress transaction information
+class _SubaddressInfo {
+  final String txHash;
+  final int blockHeight;
+
+  _SubaddressInfo({
+    required this.txHash,
+    required this.blockHeight,
+  });
 }

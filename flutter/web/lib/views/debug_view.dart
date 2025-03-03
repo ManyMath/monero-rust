@@ -1095,6 +1095,24 @@ class _DebugViewState extends State<DebugView> {
     await ClipboardUtils.copyToClipboard(context, text, label);
   }
 
+  void _navigateToTransaction(String txHash) {
+    setState(() {
+      // Expand the Transactions panel (index 5)
+      _expandedPanel = 5;
+      // Expand the specific transaction
+      _expandedTransactions.add(txHash);
+    });
+    // Scroll to the panel (will be visible after setState)
+    Future.delayed(const Duration(milliseconds: 100), () {
+      // This gives time for the panel to expand before scrolling
+      Scrollable.ensureVisible(
+        context,
+        alignment: 0.5,
+        duration: const Duration(milliseconds: 300),
+      );
+    });
+  }
+
   void _toggleViewMode() {
     _extensionService.isSidePanel
         ? _extensionService.openFullPage()
@@ -1285,6 +1303,7 @@ class _DebugViewState extends State<DebugView> {
                         onCreateAccount: _createAccount,
                         onCopyToClipboard: _copyToClipboard,
                         subaddresses: _subaddresses,
+                        onNavigateToTransaction: _navigateToTransaction,
                       ),
                     ),
                     _buildPanel(
