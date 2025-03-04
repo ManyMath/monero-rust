@@ -1,6 +1,7 @@
 import '../src/bindings/bindings.dart';
 import '../utils/key_parser.dart';
 import '../utils/network_utils.dart';
+import '../utils/output_lock_utils.dart';
 
 /// Service for handling transaction creation and broadcasting operations
 class TransactionService {
@@ -258,14 +259,11 @@ class TransactionService {
     for (final output in allOutputs) {
       final outputKey = '${output.txHash}:${output.outputIndex}';
       if (selectedOutputs.contains(outputKey)) {
-        if (!output.spent) {
-          final blockHeightInt = output.blockHeight.toInt();
-          final confirms = currentHeight > 0 && blockHeightInt > 0
-              ? currentHeight - blockHeightInt + 1
-              : 0;
-          if (confirms >= 10 || confirms == 0) {
-            total += output.amount.toInt();
-          }
+        if (OutputLockUtils.isOutputSpendable(
+          output: output,
+          currentHeight: currentHeight,
+        )) {
+          total += output.amount.toInt();
         }
       }
     }

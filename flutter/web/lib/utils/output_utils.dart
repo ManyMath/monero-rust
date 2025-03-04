@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../src/bindings/bindings.dart';
+import 'output_lock_utils.dart';
 
 class OutputUtils {
   /// Select all spendable outputs (confirmed and unspent)
@@ -9,10 +10,10 @@ class OutputUtils {
   ) {
     final selected = <String>{};
     for (var output in allOutputs) {
-      if (output.spent) continue;
-      final outputHeight = output.blockHeight.toInt();
-      final confirmations = outputHeight > 0 ? currentHeight - outputHeight : 0;
-      if (confirmations >= 10) {
+      if (OutputLockUtils.isOutputSpendable(
+        output: output,
+        currentHeight: currentHeight,
+      )) {
         final outputKey = '${output.txHash}:${output.outputIndex}';
         selected.add(outputKey);
       }
@@ -28,13 +29,14 @@ class OutputUtils {
   ) {
     int total = 0;
     for (var output in allOutputs) {
-      if (output.spent) continue;
-      final outputHeight = output.blockHeight.toInt();
-      final confirmations = outputHeight > 0 ? currentHeight - outputHeight : 0;
-      if (confirmations < 10) continue;
       final outputKey = '${output.txHash}:${output.outputIndex}';
       if (selectedOutputs.contains(outputKey)) {
-        total += output.amount.toInt();
+        if (OutputLockUtils.isOutputSpendable(
+          output: output,
+          currentHeight: currentHeight,
+        )) {
+          total += output.amount.toInt();
+        }
       }
     }
     return total;
