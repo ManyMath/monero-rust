@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:monero_extension/utils/network_utils.dart';
 import '../src/bindings/bindings.dart';
 import '../utils/key_parser.dart';
@@ -20,7 +19,6 @@ import '../utils/transaction_utils.dart';
 import '../services/wallet_scan_service.dart';
 import '../services/transaction_service.dart';
 import '../services/wallet_polling_service.dart';
-import '../widgets/common_widgets.dart';
 import '../widgets/payment_proof_dialog.dart';
 import '../widgets/keys_display_panel.dart';
 import '../widgets/accounts_panel.dart';
@@ -34,6 +32,26 @@ import '../widgets/create_transaction_panel.dart';
 import '../widgets/overwrite_wallet_dialog.dart';
 import '../widgets/security_warning_dialog.dart';
 import '../services/wallet_lifecycle_manager.dart';
+
+enum DebugPanel {
+  fileManagement('File Management'),
+  seedPhrase('Seed Phrase'),
+  keys('Keys'),
+  accounts('Accounts'),
+  scanning('Scanning'),
+  transactions('Transactions'),
+  coins('Coins'),
+  createTransaction('Create Transaction');
+
+  final String title;
+  const DebugPanel(this.title);
+
+  static DebugPanel? fromIndex(int? index) {
+    if (index == null) return null;
+    if (index < 0 || index >= DebugPanel.values.length) return null;
+    return DebugPanel.values[index];
+  }
+}
 
 class DebugView extends StatefulWidget {
   const DebugView({super.key});
@@ -194,10 +212,7 @@ class _DebugViewState extends State<DebugView> {
   String? _exportError;
   String? _importError;
 
-  // Helper to get storage key for current wallet
-  String get _storageKey => WalletPersistenceBrowser.getStorageKey(_walletId);
-
-  int? _expandedPanel;
+  DebugPanel? _expandedPanel;
 
   // Stream subscriptions
   StreamSubscription? _keysDerivedSubscription;
@@ -1097,8 +1112,8 @@ class _DebugViewState extends State<DebugView> {
 
   void _navigateToTransaction(String txHash) {
     setState(() {
-      // Expand the Transactions panel (index 5)
-      _expandedPanel = 5;
+      // Expand the Transactions panel
+      _expandedPanel = DebugPanel.transactions;
       // Expand the specific transaction
       _expandedTransactions.add(txHash);
     });
@@ -1153,8 +1168,7 @@ class _DebugViewState extends State<DebugView> {
   }
 
   ExpansionPanel _buildPanel({
-    required int index,
-    required String title,
+    required DebugPanel panel,
     String? subtitle,
     required Widget body,
   }) {
@@ -1163,12 +1177,12 @@ class _DebugViewState extends State<DebugView> {
         return GestureDetector(
           onTap: () {
             setState(() {
-              _expandedPanel = (_expandedPanel == index) ? null : index;
+              _expandedPanel = (_expandedPanel == panel) ? null : panel;
             });
           },
           child: ListTile(
             title: Text(
-              title,
+              panel.title,
               style: const TextStyle(fontWeight: FontWeight.bold),
             ),
             subtitle: subtitle != null
@@ -1178,7 +1192,7 @@ class _DebugViewState extends State<DebugView> {
         );
       },
       body: body,
-      isExpanded: _expandedPanel == index,
+      isExpanded: _expandedPanel == panel,
     );
   }
 
@@ -1224,7 +1238,8 @@ class _DebugViewState extends State<DebugView> {
               ExpansionPanelList(
                   expansionCallback: (int index, bool isExpanded) {
                     setState(() {
-                      _expandedPanel = (_expandedPanel == index) ? null : index;
+                      final panel = DebugPanel.fromIndex(index);
+                      _expandedPanel = (_expandedPanel == panel) ? null : panel;
                     });
                   },
                   expandIconColor: Theme.of(context).colorScheme.primary,
@@ -1232,8 +1247,7 @@ class _DebugViewState extends State<DebugView> {
                   expandedHeaderPadding: EdgeInsets.zero,
                   children: [
                     _buildPanel(
-                      index: 1,
-                      title: 'File Management',
+                      panel: DebugPanel.fileManagement,
                       subtitle: fileManagementSubtitle,
                       body: FileManagementPanel(
                         walletId: _walletId,
@@ -1260,8 +1274,7 @@ class _DebugViewState extends State<DebugView> {
                       ),
                     ),
                     _buildPanel(
-                      index: 0,
-                      title: 'Seed Phrase',
+                      panel: DebugPanel.seedPhrase,
                       body: SeedPhrasePanel(
                         controller: _controller,
                         seedType: _seedType,
@@ -1278,8 +1291,7 @@ class _DebugViewState extends State<DebugView> {
                       ),
                     ),
                     _buildPanel(
-                      index: 2,
-                      title: 'Keys',
+                      panel: DebugPanel.keys,
                       body: KeysDisplayPanel(
                         address: _derivedAddress,
                         secretSpendKey: _secretSpendKey,
@@ -1291,8 +1303,7 @@ class _DebugViewState extends State<DebugView> {
                       ),
                     ),
                     _buildPanel(
-                      index: 3,
-                      title: 'Accounts',
+                      panel: DebugPanel.accounts,
                       body: AccountsPanel(
                         seed: _controller.text.trim().isEmpty ? null : _controller.text,
                         network: _network,
@@ -1307,8 +1318,7 @@ class _DebugViewState extends State<DebugView> {
                       ),
                     ),
                     _buildPanel(
-                      index: 4,
-                      title: 'Scanning',
+                      panel: DebugPanel.scanning,
                       body: ScanningPanel(
                         nodeUrlController: _nodeUrlController,
                         blockHeightController: _blockHeightController,
@@ -1332,8 +1342,7 @@ class _DebugViewState extends State<DebugView> {
                       ),
                     ),
                     _buildPanel(
-                      index: 5,
-                      title: 'Transactions',
+                      panel: DebugPanel.transactions,
                       subtitle: transactionsSubtitle,
                       body: TransactionsPanel(
                         allTransactions: _sortedTransactions(),
@@ -1365,8 +1374,7 @@ class _DebugViewState extends State<DebugView> {
                       ),
                     ),
                     _buildPanel(
-                      index: 6,
-                      title: 'Coins',
+                      panel: DebugPanel.coins,
                       subtitle: coinsSubtitle,
                       body: OutputsPanel(
                         allOutputs: _allOutputs,
@@ -1405,8 +1413,7 @@ class _DebugViewState extends State<DebugView> {
                       ),
                     ),
                     _buildPanel(
-                      index: 7,
-                      title: 'Create Transaction',
+                      panel: DebugPanel.createTransaction,
                       body: CreateTransactionPanel(
                         destinationControllers: _destinationControllers,
                         amountControllers: _amountControllers,
