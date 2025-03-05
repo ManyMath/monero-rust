@@ -1570,7 +1570,11 @@ class _DebugViewState extends State<DebugView> {
       }
     }
 
-    // Use the persistence service to save wallet data
+    final activeWallet = _lifecycle.activeWallet;
+    final accounts = activeWallet?.accounts;
+    final outputsByAccount = activeWallet?.outputsByAccount;
+    final activeAccount = activeWallet?.activeAccount;
+
     final saveResult = await WalletPersistenceBrowser.saveWalletData(
       walletId: walletId,
       password: password,
@@ -1582,6 +1586,9 @@ class _DebugViewState extends State<DebugView> {
       transactions: _allTransactions,
       continuousScanCurrentHeight: _continuousScanCurrentHeight,
       selectedOutputs: _selectedOutputs,
+      accounts: accounts,
+      outputsByAccount: outputsByAccount,
+      activeAccount: activeAccount,
     );
 
     final success = saveResult.success;
@@ -1660,9 +1667,23 @@ class _DebugViewState extends State<DebugView> {
     }
   }
 
-  void _openWallet(String walletId, String seed, String network, String address) {
+  void _openWallet(String walletId, String seed, String network, String address, {
+    List<int>? accounts,
+    Map<int, List<OwnedOutput>>? outputsByAccount,
+    int? activeAccount,
+  }) {
     setState(() {
-      _lifecycle.openWallet(walletId, seed, network, address);
+      final wallet = _lifecycle.openWallet(walletId, seed, network, address);
+
+      if (accounts != null && accounts.isNotEmpty) {
+        final updatedWallet = wallet.copyWith(
+          accounts: accounts,
+          outputsByAccount: outputsByAccount ?? {},
+          activeAccount: activeAccount ?? 0,
+        );
+        _lifecycle.openWallets[walletId] = updatedWallet;
+      }
+
       _derivedAddress = address;
     });
 
@@ -1782,6 +1803,9 @@ class _DebugViewState extends State<DebugView> {
     final loadedTransactions = loadResult.transactions!;
     final loadedHeight = loadResult.continuousScanCurrentHeight!;
     final loadedSelectedOutputs = loadResult.selectedOutputs!;
+    final loadedAccounts = loadResult.accounts ?? [0];
+    final loadedOutputsByAccount = loadResult.outputsByAccount ?? {0: loadedOutputs};
+    final loadedActiveAccount = loadResult.activeAccount ?? 0;
 
     // Restore wallet state (flag prevents _onSeedChanged from wiping data)
     _isRestoringWallet = true;
@@ -1809,7 +1833,15 @@ class _DebugViewState extends State<DebugView> {
 
     final resolvedAddress = address ?? _derivedAddress ?? '';
     if (seed.isNotEmpty && resolvedAddress.isNotEmpty) {
-      _openWallet(_walletId, seed, network, resolvedAddress);
+      _openWallet(
+        _walletId,
+        seed,
+        network,
+        resolvedAddress,
+        accounts: loadedAccounts,
+        outputsByAccount: loadedOutputsByAccount,
+        activeAccount: loadedActiveAccount,
+      );
     }
 
     setState(() {
