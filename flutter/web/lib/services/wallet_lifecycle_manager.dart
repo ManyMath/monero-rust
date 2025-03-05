@@ -1,3 +1,4 @@
+import 'package:tuple/tuple.dart';
 import '../src/bindings/bindings.dart';
 import '../models/wallet_instance.dart';
 import '../models/wallet_transaction.dart';
@@ -200,10 +201,37 @@ class WalletLifecycleManager {
         OutputUtils.addIfAbsent(
             walletInstance.outputs, walletResult.outputs.toList());
 
-        if (blockHeight > walletInstance.currentHeight) {
-          walletInstance.currentHeight = blockHeight;
+        int highestAccountIndex = 0;
+        for (var output in walletResult.outputs) {
+          if (output.subaddressIndex != null) {
+            final accountIndex = output.subaddressIndex!.item1;
+            if (accountIndex > highestAccountIndex) {
+              highestAccountIndex = accountIndex;
+            }
+          }
         }
-        walletInstance.daemonHeight = daemonHeight;
+
+        var updatedWallet = walletInstance;
+        bool accountsUpdated = false;
+        for (int i = 0; i <= highestAccountIndex; i++) {
+          if (!updatedWallet.accounts.contains(i)) {
+            updatedWallet = updatedWallet.createAccount(i);
+            accountsUpdated = true;
+          }
+        }
+
+        WalletInstance activeWalletInstance = walletInstance;
+        if (accountsUpdated) {
+          openWallets[updatedWallet.walletId] = updatedWallet;
+          updatedWallet.currentHeight = blockHeight > updatedWallet.currentHeight ? blockHeight : updatedWallet.currentHeight;
+          updatedWallet.daemonHeight = daemonHeight;
+          activeWalletInstance = updatedWallet;
+        } else {
+          if (blockHeight > walletInstance.currentHeight) {
+            walletInstance.currentHeight = blockHeight;
+          }
+          walletInstance.daemonHeight = daemonHeight;
+        }
 
         updatedWalletAddresses.add(walletResult.address);
 
@@ -220,10 +248,10 @@ class WalletLifecycleManager {
           spentKeyImages: spentKeyImages,
         );
 
-        walletInstance.transactions = TransactionUtils.updateTransactionsFromScan(
-          walletInstance.transactions,
+        activeWalletInstance.transactions = TransactionUtils.updateTransactionsFromScan(
+          activeWalletInstance.transactions,
           walletScanResponse,
-          walletInstance.outputs,
+          activeWalletInstance.outputs,
         );
       }
     }
