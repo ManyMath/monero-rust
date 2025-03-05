@@ -297,6 +297,8 @@ class _DebugViewState extends State<DebugView> {
 
           // Track transactions: group outputs by txHash and track spent key images
           _allTransactionsAllAccounts = TransactionUtils.updateTransactionsFromScan(_allTransactionsAllAccounts, signal.message, _allOutputsAllAccounts);
+
+          _ensureAccountsExistForOutputs(signal.message.outputs);
         } else {
           _scanResult = null;
           _scanError = signal.message.error ?? 'Unknown error during scan';
@@ -395,6 +397,8 @@ class _DebugViewState extends State<DebugView> {
         if (signal.message.success) {
           OutputUtils.addIfAbsent(_allOutputsAllAccounts, signal.message.outputs);
           OutputUtils.markSpentByKeyImages(_allOutputsAllAccounts, signal.message.spentKeyImages, _selectedOutputs);
+
+          _ensureAccountsExistForOutputs(signal.message.outputs);
         }
       });
     });
@@ -682,6 +686,34 @@ class _DebugViewState extends State<DebugView> {
       }
     }
     return used;
+  }
+
+  void _ensureAccountsExistForOutputs(List<OwnedOutput> outputs) {
+    if (_lifecycle.activeWallet == null) return;
+
+    int highestAccountIndex = 0;
+    for (var output in outputs) {
+      if (output.subaddressIndex != null) {
+        final accountIndex = output.subaddressIndex!.item1;
+        if (accountIndex > highestAccountIndex) {
+          highestAccountIndex = accountIndex;
+        }
+      }
+    }
+
+    var wallet = _lifecycle.activeWallet!;
+    bool updated = false;
+
+    for (int i = 0; i <= highestAccountIndex; i++) {
+      if (!wallet.accounts.contains(i)) {
+        wallet = wallet.createAccount(i);
+        updated = true;
+      }
+    }
+
+    if (updated) {
+      _lifecycle.openWallets[wallet.walletId] = wallet;
+    }
   }
 
   void _createAccount() {
