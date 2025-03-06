@@ -375,12 +375,15 @@ class _DebugViewState extends State<DebugView> {
         }
       });
 
-      // Stop polling timers when scanning starts
+      // Stop polling timers when continuous scanning starts
       if (_isContinuousScanning && !wasScanning) {
         _stopPollingTimers();
       }
-      // Start polling timers when sync completes (or scan finishes while synced)
-      if (_isSynced && !_isContinuousScanning && (wasScanning || !wasSynced)) {
+      // Start polling timers when:
+      // - Sync completes
+      // - Continuous scan finishes or is paused
+      // - We're synced and not actively scanning
+      if (!_isContinuousScanning && (wasScanning || (_isSynced && !wasSynced))) {
         _startPollingTimers();
       }
     });
@@ -815,6 +818,9 @@ class _DebugViewState extends State<DebugView> {
       return;
     }
 
+    // Stop polling timers before starting continuous scan
+    _stopPollingTimers();
+
     setState(() {
       _scanError = null;
       _isContinuousPaused = false;
@@ -843,6 +849,8 @@ class _DebugViewState extends State<DebugView> {
       _isContinuousScanning = false;
     });
     WalletScanService.pauseContinuousScan();
+    // Start polling timers when scan is paused
+    _startPollingTimers();
   }
 
   void _scanMempool() {

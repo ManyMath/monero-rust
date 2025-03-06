@@ -134,6 +134,51 @@ class ScanningPanel extends StatelessWidget {
               ),
             ],
           ),
+          // Show polling countdown even when not scanning or synced
+          if (!isContinuousScanning && !isSynced && (pollingService.blockRefreshCountdown > 0 || pollingService.mempoolCountdown > 0)) ...[
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.grey.shade300),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  if (pollingService.blockRefreshCountdown > 0)
+                    Row(
+                      children: [
+                        Icon(Icons.timer, size: 16, color: Colors.grey.shade700),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Next block poll: ${pollingService.blockRefreshCountdown}s',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey.shade700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  if (pollingService.mempoolCountdown > 0)
+                    Row(
+                      children: [
+                        Icon(Icons.memory, size: 16, color: Colors.grey.shade700),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Next mempool poll: ${pollingService.mempoolCountdown}s',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey.shade700,
+                          ),
+                        ),
+                      ],
+                    ),
+                ],
+              ),
+            ),
+          ],
           if (isContinuousScanning || isSynced) ...[
             const SizedBox(height: 16),
             Container(
@@ -205,15 +250,29 @@ class ScanningPanel extends StatelessWidget {
                       color: isSynced ? Colors.green.shade900 : Colors.blue.shade900,
                     ),
                   ),
-                  // Polling countdown when synced
-                  if (isSynced && (pollingService.blockRefreshCountdown > 0 || pollingService.mempoolCountdown > 0)) ...[
+                  // Polling countdown timer display
+                  if ((pollingService.blockRefreshCountdown > 0 || pollingService.mempoolCountdown > 0)) ...[
                     const SizedBox(height: 12),
-                    Text(
-                      'Next poll: ${pollingService.mempoolCountdown > 0 && (pollingService.blockRefreshCountdown == 0 || pollingService.mempoolCountdown < pollingService.blockRefreshCountdown) ? pollingService.mempoolCountdown : pollingService.blockRefreshCountdown}s',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: Colors.green.shade700,
-                      ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        if (pollingService.blockRefreshCountdown > 0)
+                          Text(
+                            'Next block poll: ${pollingService.blockRefreshCountdown}s',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: isSynced ? Colors.green.shade700 : Colors.blue.shade700,
+                            ),
+                          ),
+                        if (pollingService.mempoolCountdown > 0)
+                          Text(
+                            'Next mempool poll: ${pollingService.mempoolCountdown}s',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: isSynced ? Colors.green.shade700 : Colors.blue.shade700,
+                            ),
+                          ),
+                      ],
                     ),
                   ],
                 ],
