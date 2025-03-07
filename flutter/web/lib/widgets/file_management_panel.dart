@@ -72,11 +72,12 @@ class FileManagementPanel extends StatelessWidget {
             const SizedBox(height: 12),
           ],
 
-          if (activeWallets.length > 1) ...[
+          if (activeWallets.isNotEmpty) ...[
             LoadedWalletsDisplay(
               activeWallets: activeWallets,
               activeWalletId: activeWalletId,
               onCloseWallet: onCloseWallet,
+              onWalletChanged: onWalletChanged,
             ),
             const SizedBox(height: 12),
           ],
