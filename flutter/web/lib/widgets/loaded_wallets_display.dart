@@ -5,12 +5,14 @@ class LoadedWalletsDisplay extends StatelessWidget {
   final List<WalletInstance> activeWallets;
   final String? activeWalletId;
   final Function(String) onCloseWallet;
+  final Function(String) onWalletChanged;
 
   const LoadedWalletsDisplay({
     super.key,
     required this.activeWallets,
     required this.activeWalletId,
     required this.onCloseWallet,
+    required this.onWalletChanged,
   });
 
   @override
@@ -44,6 +46,16 @@ class LoadedWalletsDisplay extends StatelessWidget {
               padding: const EdgeInsets.only(bottom: 8),
               child: Row(
                 children: [
+                  Radio<String>(
+                    value: wallet.walletId,
+                    groupValue: activeWalletId,
+                    onChanged: (value) {
+                      if (value != null) {
+                        onWalletChanged(value);
+                      }
+                    },
+                    visualDensity: VisualDensity.compact,
+                  ),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -74,21 +86,6 @@ class LoadedWalletsDisplay extends StatelessWidget {
                       ],
                     ),
                   ),
-                  if (wallet.walletId == activeWalletId)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: Colors.blue.shade100,
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        'viewing',
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: Colors.blue.shade700,
-                        ),
-                      ),
-                    ),
                   const SizedBox(width: 8),
                   IconButton(
                     icon: const Icon(Icons.close, size: 18),
