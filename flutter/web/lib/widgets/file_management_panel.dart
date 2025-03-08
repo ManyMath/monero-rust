@@ -65,7 +65,10 @@ class FileManagementPanel extends StatelessWidget {
               walletId: walletId,
               lastSaveTime: lastSaveTime,
               isLoadingWallet: isLoadingWallet,
+              isSaving: isSaving,
               onWalletChanged: onWalletChanged,
+              onNew: onNew,
+              onSave: onSave,
               onLoad: onLoad,
               onDelete: onDelete,
             ),
@@ -82,30 +85,6 @@ class FileManagementPanel extends StatelessWidget {
             const SizedBox(height: 12),
           ],
 
-          Row(
-            children: [
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: isSaving ? null : onSave,
-                  icon: isSaving
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.save),
-                  label: Text(isSaving ? 'Saving...' : 'Save Wallet Data'),
-                ),
-              ),
-              const SizedBox(width: 8),
-              OutlinedButton.icon(
-                onPressed: onNew,
-                icon: const Icon(Icons.add),
-                label: const Text('New'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
           Row(
             children: [
               Expanded(

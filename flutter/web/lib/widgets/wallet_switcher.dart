@@ -5,7 +5,10 @@ class WalletSwitcher extends StatelessWidget {
   final String walletId;
   final String? lastSaveTime;
   final bool isLoadingWallet;
+  final bool isSaving;
   final ValueChanged<String> onWalletChanged;
+  final VoidCallback onNew;
+  final VoidCallback onSave;
   final VoidCallback onLoad;
   final VoidCallback onDelete;
 
@@ -15,7 +18,10 @@ class WalletSwitcher extends StatelessWidget {
     required this.walletId,
     required this.lastSaveTime,
     required this.isLoadingWallet,
+    required this.isSaving,
     required this.onWalletChanged,
+    required this.onNew,
+    required this.onSave,
     required this.onLoad,
     required this.onDelete,
   });
@@ -78,6 +84,28 @@ class WalletSwitcher extends StatelessWidget {
           const SizedBox(height: 12),
           Row(
             children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: onNew,
+                  icon: const Icon(Icons.add),
+                  label: const Text('New'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: isSaving ? null : onSave,
+                  icon: isSaving
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.save),
+                  label: Text(isSaving ? 'Saving...' : 'Save'),
+                ),
+              ),
+              const SizedBox(width: 8),
               Expanded(
                 child: ElevatedButton.icon(
                   onPressed: isLoadingWallet ? null : onLoad,
