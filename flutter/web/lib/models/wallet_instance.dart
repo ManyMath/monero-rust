@@ -19,6 +19,7 @@ class WalletInstance {
   int activeAccount;
   List<int> accounts; // List of account indices
   Map<int, List<OwnedOutput>> outputsByAccount; // Account -> Outputs mapping
+  Set<int> scanningAccounts; // Which accounts are being scanned
 
   WalletInstance({
     required this.walletId,
@@ -34,8 +35,10 @@ class WalletInstance {
     this.activeAccount = 0,
     List<int>? accounts,
     Map<int, List<OwnedOutput>>? outputsByAccount,
+    Set<int>? scanningAccounts,
   })  : accounts = accounts ?? [0],
-        outputsByAccount = outputsByAccount ?? {0: const []};
+        outputsByAccount = outputsByAccount ?? {0: const []},
+        scanningAccounts = scanningAccounts ?? Set.from(accounts ?? [0]); // By default, scan all accounts
   // Get outputs for the active account (or all outputs if activeAccount == -1)
   List<OwnedOutput> get activeAccountOutputs {
     // If "All" is selected, return all outputs
@@ -107,6 +110,7 @@ class WalletInstance {
     int? activeAccount,
     List<int>? accounts,
     Map<int, List<OwnedOutput>>? outputsByAccount,
+    Set<int>? scanningAccounts,
   }) {
     return WalletInstance(
       walletId: walletId ?? this.walletId,
@@ -122,6 +126,7 @@ class WalletInstance {
       activeAccount: activeAccount ?? this.activeAccount,
       accounts: accounts ?? this.accounts,
       outputsByAccount: outputsByAccount ?? this.outputsByAccount,
+      scanningAccounts: scanningAccounts ?? this.scanningAccounts,
     );
   }
 
@@ -137,9 +142,13 @@ class WalletInstance {
     final newOutputsByAccount = Map<int, List<OwnedOutput>>.from(outputsByAccount);
     newOutputsByAccount[accountIndex] = [];
 
+    // Enable scanning for the new account by default
+    final newScanningAccounts = Set<int>.from(scanningAccounts)..add(accountIndex);
+
     return copyWith(
       accounts: newAccounts,
       outputsByAccount: newOutputsByAccount,
+      scanningAccounts: newScanningAccounts,
     );
   }
 
@@ -151,6 +160,22 @@ class WalletInstance {
     }
 
     return copyWith(activeAccount: accountIndex);
+  }
+
+  /// Toggle scanning for a specific account
+  WalletInstance toggleAccountScanning(int accountIndex, bool shouldScan) {
+    if (!accounts.contains(accountIndex)) {
+      throw ArgumentError('Account $accountIndex does not exist');
+    }
+
+    final newScanningAccounts = Set<int>.from(scanningAccounts);
+    if (shouldScan) {
+      newScanningAccounts.add(accountIndex);
+    } else {
+      newScanningAccounts.remove(accountIndex);
+    }
+
+    return copyWith(scanningAccounts: newScanningAccounts);
   }
 
   /// Add an output to a specific account
@@ -212,6 +237,7 @@ class WalletInstance {
     'isClosed': isClosed,
     'activeAccount': activeAccount,
     'accounts': accounts,
+    'scanningAccounts': scanningAccounts.toList(),
     'outputsByAccount': outputsByAccount.map((accountIndex, accountOutputs) {
       return MapEntry(
         accountIndex.toString(),
@@ -276,6 +302,9 @@ class WalletInstance {
       isClosed: json['isClosed'] as bool,
       activeAccount: json['activeAccount'] as int,
       accounts: (json['accounts'] as List).cast<int>(),
+      scanningAccounts: json['scanningAccounts'] != null
+          ? Set<int>.from((json['scanningAccounts'] as List).cast<int>())
+          : null, // Will use default from constructor
       outputsByAccount: (json['outputsByAccount'] as Map<String, dynamic>).map(
         (key, value) {
           final accountIndex = int.parse(key);
