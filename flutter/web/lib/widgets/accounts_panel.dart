@@ -3,7 +3,7 @@ import '../src/bindings/bindings.dart';
 
 /// Widget that displays account management interface.
 ///
-/// Shows account selection dropdown, create account button, and unused subaddresses.
+/// Shows account expansion panels with scan controls and unused subaddresses.
 class AccountsPanel extends StatefulWidget {
   final String? seed;
   final String network;
@@ -15,6 +15,8 @@ class AccountsPanel extends StatefulWidget {
   final Function(String text, String label) onCopyToClipboard;
   final Map<String, String> subaddresses; // (account, index) -> address
   final Function(String txHash)? onNavigateToTransaction;
+  final Set<int> scanningAccounts; // Which accounts are being scanned
+  final Function(int accountIndex, bool shouldScan) onScanToggle; // Toggle scan for account
 
   const AccountsPanel({
     super.key,
@@ -28,6 +30,8 @@ class AccountsPanel extends StatefulWidget {
     required this.onCopyToClipboard,
     required this.subaddresses,
     this.onNavigateToTransaction,
+    required this.scanningAccounts,
+    required this.onScanToggle,
   });
 
   @override
@@ -36,6 +40,16 @@ class AccountsPanel extends StatefulWidget {
 
 class _AccountsPanelState extends State<AccountsPanel> {
   bool _showUsedSubaddresses = false;
+  Set<int> _expandedAccounts = {};
+
+  @override
+  void initState() {
+    super.initState();
+    // Expand account 0 by default
+    if (widget.accounts.isNotEmpty) {
+      _expandedAccounts.add(0);
+    }
+  }
 
   /// Get used subaddress indices for an account with transaction info
   Map<int, _SubaddressInfo> _getUsedSubaddressesWithTxInfo(int account) {
@@ -75,27 +89,6 @@ class _AccountsPanelState extends State<AccountsPanel> {
     return unused;
   }
 
-  /// Get the first 3 unused subaddress indices for each account (for "All" view)
-  Map<int, List<int>> _getUnusedSubaddressesPerAccount() {
-    final result = <int, List<int>>{};
-
-    for (var account in widget.accounts) {
-      final used = _getUsedSubaddressesWithTxInfo(account).keys.toSet();
-      final unused = <int>[];
-
-      int index = 0;
-      while (unused.length < 3) {
-        if (!used.contains(index)) {
-          unused.add(index);
-        }
-        index++;
-      }
-
-      result[account] = unused;
-    }
-
-    return result;
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -106,54 +99,19 @@ class _AccountsPanelState extends State<AccountsPanel> {
       );
     }
 
-    // Get subaddresses based on whether specific account or "All" is selected
-    final unusedIndices = widget.activeAccount >= 0 ? _getUnusedSubaddresses(widget.activeAccount) : <int>[];
-    final unusedPerAccount = widget.activeAccount == -1 ? _getUnusedSubaddressesPerAccount() : <int, List<int>>{};
-    final usedSubaddresses = widget.activeAccount >= 0 ? _getUsedSubaddressesWithTxInfo(widget.activeAccount) : <int, _SubaddressInfo>{};
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Account selection section
+        // Header section with create account button
         Padding(
           padding: const EdgeInsets.all(16.0),
           child: Row(
             children: [
               const Text(
-                'Account:',
-                style: TextStyle(fontWeight: FontWeight.w500),
+                'Accounts',
+                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
               ),
-              const SizedBox(width: 8),
-              SizedBox(
-                width: 100,
-                child: DropdownButton<int>(
-                  value: widget.activeAccount,
-                  isExpanded: true,
-                  items: [
-                    // Add "All" option if there are multiple accounts
-                    if (widget.accounts.length > 1)
-                      const DropdownMenuItem(
-                        value: -1,
-                        child: Text('All'),
-                      ),
-                    // Add individual account options
-                    ...widget.accounts
-                        .map((account) => DropdownMenuItem(
-                              value: account,
-                              child: Text(account.toString()),
-                            ))
-                        .toList(),
-                  ],
-                  onChanged: widget.accounts.length <= 1
-                      ? null // Disable if only one account
-                      : (value) {
-                          if (value != null) {
-                            widget.onAccountSelected(value);
-                          }
-                        },
-                ),
-              ),
-              const SizedBox(width: 16),
+              const Spacer(),
               ElevatedButton.icon(
                 onPressed: widget.onCreateAccount,
                 icon: const Icon(Icons.add, size: 16),
@@ -167,298 +125,235 @@ class _AccountsPanelState extends State<AccountsPanel> {
         ),
         const Divider(height: 1),
 
-        // Subaddresses section (only show for specific accounts, not "All")
-        if (widget.activeAccount >= 0)
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Toggle for showing used subaddresses
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text(
-                      'Subaddresses:',
-                      style: TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
+        // Account expansion panels
+        Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: ExpansionPanelList(
+            elevation: 1,
+            expandedHeaderPadding: EdgeInsets.zero,
+            expansionCallback: (int index, bool isExpanded) {
+              setState(() {
+                final account = widget.accounts[index];
+                if (isExpanded) {
+                  _expandedAccounts.remove(account);
+                } else {
+                  _expandedAccounts.add(account);
+                  widget.onAccountSelected(account);
+                }
+              });
+            },
+            children: widget.accounts.map<ExpansionPanel>((int account) {
+              final isExpanded = _expandedAccounts.contains(account);
+              final unusedIndices = isExpanded ? _getUnusedSubaddresses(account) : <int>[];
+              final usedSubaddresses = isExpanded ? _getUsedSubaddressesWithTxInfo(account) : <int, _SubaddressInfo>{};
+              final isScanning = widget.scanningAccounts.contains(account);
+
+              return ExpansionPanel(
+                headerBuilder: (BuildContext context, bool isExpanded) {
+                  return ListTile(
+                    title: Text(
+                      'Account $account',
+                      style: const TextStyle(fontWeight: FontWeight.w500),
                     ),
-                    if (usedSubaddresses.isNotEmpty)
-                      Row(
-                        children: [
-                          Text(
-                            'Show used (${usedSubaddresses.length})',
-                            style: const TextStyle(fontSize: 12),
-                          ),
-                          Switch(
-                            value: _showUsedSubaddresses,
-                            onChanged: (value) {
-                              setState(() {
-                                _showUsedSubaddresses = value;
-                              });
-                            },
-                            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          ),
-                        ],
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-
-                // Show used subaddresses if toggled on
-                if (_showUsedSubaddresses && usedSubaddresses.isNotEmpty) ...[
-                  const Text(
-                    'Used Subaddresses:',
-                    style: TextStyle(fontWeight: FontWeight.w400, fontSize: 12, color: Colors.grey),
-                  ),
-                  const SizedBox(height: 8),
-                  ...usedSubaddresses.entries.map((entry) {
-                    final addressIndex = entry.key;
-                    final info = entry.value;
-                    final key = '${widget.activeAccount},$addressIndex';
-                    final address = widget.subaddresses[key];
-
-                    if (address == null || address.isEmpty) {
-                      return const SizedBox.shrink();
-                    }
-
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 8.0),
-                      child: InkWell(
-                        onTap: widget.onNavigateToTransaction != null
-                            ? () => widget.onNavigateToTransaction!(info.txHash)
-                            : null,
-                        borderRadius: BorderRadius.circular(4),
-                        child: Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: Colors.grey.shade50,
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(color: Colors.grey.shade300),
-                          ),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              SizedBox(
-                                width: 60,
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      'Index $addressIndex',
-                                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
-                                    ),
-                                    Text(
-                                      'Height: ${info.blockHeight}',
-                                      style: TextStyle(fontSize: 10, color: Colors.blue.shade700),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              Expanded(
-                                child: SelectableText(
-                                  address,
-                                  style: const TextStyle(
-                                    fontFamily: 'monospace',
-                                    fontSize: 10,
-                                  ),
-                                ),
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.copy_outlined, size: 14),
-                                onPressed: () => widget.onCopyToClipboard(
-                                  address,
-                                  'Used Subaddress ${widget.activeAccount}/$addressIndex',
-                                ),
-                                tooltip: 'Copy subaddress',
-                                padding: EdgeInsets.zero,
-                                constraints: const BoxConstraints(),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    );
-                  }).toList(),
-                  const SizedBox(height: 12),
-                ],
-
-                const Text(
-                  'Unused Subaddresses (first 5):',
-                  style: TextStyle(fontWeight: FontWeight.w400, fontSize: 12),
-                ),
-                const SizedBox(height: 8),
-                ...unusedIndices.map((addressIndex) {
-                final key = '${widget.activeAccount},$addressIndex';
-                final address = widget.subaddresses[key];
-
-                if (address == null || address.isEmpty) {
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 8.0),
-                    child: Row(
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        SizedBox(
-                          width: 60,
-                          child: Text(
-                            'Index $addressIndex:',
-                            style: const TextStyle(fontSize: 12),
-                          ),
-                        ),
-                        const Expanded(
-                          child: Text(
-                            'Loading...',
-                            style: TextStyle(
-                              fontFamily: 'monospace',
-                              fontSize: 11,
-                              color: Colors.grey,
-                            ),
-                          ),
+                        const Text('Scan'),
+                        Checkbox(
+                          value: isScanning,
+                          onChanged: (value) {
+                            widget.onScanToggle(account, value ?? false);
+                          },
                         ),
                       ],
                     ),
                   );
-                }
+                },
+                body: _buildAccountBody(account, unusedIndices, usedSubaddresses),
+                isExpanded: isExpanded,
+              );
+            }).toList(),
+          ),
+        ),
 
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 8.0),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      SizedBox(
-                        width: 60,
-                        child: Text(
-                          'Index $addressIndex:',
-                          style: const TextStyle(fontSize: 12),
-                        ),
-                      ),
-                      Expanded(
-                        child: SelectableText(
-                          address,
-                          style: const TextStyle(
-                            fontFamily: 'monospace',
-                            fontSize: 11,
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.copy_outlined, size: 14),
-                        onPressed: () => widget.onCopyToClipboard(
-                          address,
-                          'Subaddress ${widget.activeAccount}/$addressIndex',
-                        ),
-                        tooltip: 'Copy subaddress',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                      ),
-                    ],
-                  ),
-                );
-                }).toList(),
-              ],
-            ),
-          )
-        else if (widget.activeAccount == -1)
-          // "All" accounts view - show first 3 unused subaddresses per account
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Unused Subaddresses (first 3 per account):',
-                  style: TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
+      ],
+    );
+  }
+
+  Widget _buildAccountBody(int account, List<int> unusedIndices, Map<int, _SubaddressInfo> usedSubaddresses) {
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Toggle for showing used subaddresses
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Subaddresses:',
+                style: TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
+              ),
+              if (usedSubaddresses.isNotEmpty)
+                Row(
+                  children: [
+                    Text(
+                      'Show used (${usedSubaddresses.length})',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                    Switch(
+                      value: _showUsedSubaddresses,
+                      onChanged: (value) {
+                        setState(() {
+                          _showUsedSubaddresses = value;
+                        });
+                      },
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 8),
-                ...unusedPerAccount.entries.map((entry) {
-                  final account = entry.key;
-                  final indices = entry.value;
+            ],
+          ),
+          const SizedBox(height: 8),
 
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8.0, bottom: 4.0),
-                        child: Text(
-                          'Account $account:',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w600,
-                            fontSize: 12,
-                            color: Colors.black87,
-                          ),
-                        ),
+          // Show used subaddresses if toggled on
+          if (_showUsedSubaddresses && usedSubaddresses.isNotEmpty) ...[
+            const Text(
+              'Used Subaddresses:',
+              style: TextStyle(fontWeight: FontWeight.w400, fontSize: 12, color: Colors.grey),
+            ),
+            const SizedBox(height: 8),
+            for (var entry in usedSubaddresses.entries)
+              if (widget.subaddresses['$account,${entry.key}'] != null && widget.subaddresses['$account,${entry.key}']!.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8.0),
+                  child: InkWell(
+                    onTap: widget.onNavigateToTransaction != null
+                        ? () => widget.onNavigateToTransaction!(entry.value.txHash)
+                          : null,
+                    borderRadius: BorderRadius.circular(4),
+                    child: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade50,
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(color: Colors.grey.shade300),
                       ),
-                      ...indices.map((addressIndex) {
-                        final key = '$account,$addressIndex';
-                        final address = widget.subaddresses[key];
-
-                        if (address == null || address.isEmpty) {
-                          return Padding(
-                            padding: const EdgeInsets.only(bottom: 6.0, left: 8.0),
-                            child: Row(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SizedBox(
+                            width: 60,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                SizedBox(
-                                  width: 50,
-                                  child: Text(
-                                    'Idx $addressIndex:',
-                                    style: const TextStyle(fontSize: 11),
-                                  ),
+                                Text(
+                                  'Index ${entry.key}',
+                                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
                                 ),
-                                const Expanded(
-                                  child: Text(
-                                    'Loading...',
-                                    style: TextStyle(
-                                      fontFamily: 'monospace',
-                                      fontSize: 10,
-                                      color: Colors.grey,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          );
-                        }
-
-                        return Padding(
-                          padding: const EdgeInsets.only(bottom: 6.0, left: 8.0),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              SizedBox(
-                                width: 50,
-                                child: Text(
-                                  'Idx $addressIndex:',
-                                  style: const TextStyle(fontSize: 11),
-                                ),
-                              ),
-                              Expanded(
-                                child: SelectableText(
-                                  address,
-                                  style: const TextStyle(
-                                    fontFamily: 'monospace',
-                                    fontSize: 10,
-                                  ),
-                                ),
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.copy_outlined, size: 12),
-                                onPressed: () => widget.onCopyToClipboard(
-                                  address,
-                                  'Subaddress $account/$addressIndex',
-                                ),
-                                tooltip: 'Copy subaddress',
-                                padding: EdgeInsets.zero,
-                                constraints: const BoxConstraints(),
+                                Text(
+                                  'Height: ${entry.value.blockHeight}',
+                                  style: TextStyle(fontSize: 10, color: Colors.blue.shade700),
                               ),
                             ],
                           ),
-                        );
-                      }).toList(),
-                    ],
-                  );
-                }).toList(),
-              ],
-            ),
+                          ),
+                          Expanded(
+                            child: SelectableText(
+                              widget.subaddresses['$account,${entry.key}']!,
+                              style: const TextStyle(
+                                fontFamily: 'monospace',
+                                fontSize: 10,
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.copy_outlined, size: 14),
+                            onPressed: () => widget.onCopyToClipboard(
+                              widget.subaddresses['$account,${entry.key}']!,
+                              'Used Subaddress $account/${entry.key}',
+                            ),
+                            tooltip: 'Copy subaddress',
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+            const SizedBox(height: 12),
+          ],
+
+          const Text(
+            'Unused Subaddresses (first 5):',
+            style: TextStyle(fontWeight: FontWeight.w400, fontSize: 12),
           ),
-      ],
+          const SizedBox(height: 8),
+          for (var addressIndex in unusedIndices) ...[
+            if (widget.subaddresses['$account,$addressIndex'] == null || widget.subaddresses['$account,$addressIndex']!.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8.0),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 60,
+                      child: Text(
+                        'Index $addressIndex:',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ),
+                    const Expanded(
+                      child: Text(
+                        'Loading...',
+                        style: TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 11,
+                          color: Colors.grey,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else
+              Padding(
+              padding: const EdgeInsets.only(bottom: 8.0),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(
+                      width: 60,
+                      child: Text(
+                        'Index $addressIndex:',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ),
+                    Expanded(
+                      child: SelectableText(
+                        widget.subaddresses['$account,$addressIndex']!,
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 11,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.copy_outlined, size: 14),
+                      onPressed: () => widget.onCopyToClipboard(
+                        widget.subaddresses['$account,$addressIndex']!,
+                        'Subaddress $account/$addressIndex',
+                      ),
+                      tooltip: 'Copy subaddress',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ],
+      ),
     );
   }
 }
