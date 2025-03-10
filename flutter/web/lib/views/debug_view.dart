@@ -773,6 +773,16 @@ class _DebugViewState extends State<DebugView> {
     }
   }
 
+  void _toggleAccountScanning(int accountIndex, bool shouldScan) {
+    final activeWallet = _lifecycle.activeWallet;
+    if (activeWallet != null) {
+      final updatedWallet = activeWallet.toggleAccountScanning(accountIndex, shouldScan);
+      setState(() {
+        _lifecycle.openWallets[activeWallet.walletId] = updatedWallet;
+      });
+    }
+  }
+
   void _scanBlock() {
     final validation = WalletScanService.validateScanBlock(
       seed: _controller.text,
@@ -1355,6 +1365,8 @@ class _DebugViewState extends State<DebugView> {
                         onCopyToClipboard: _copyToClipboard,
                         subaddresses: _subaddresses,
                         onNavigateToTransaction: _navigateToTransaction,
+                        scanningAccounts: _lifecycle.activeWallet?.scanningAccounts ?? {0},
+                        onScanToggle: _toggleAccountScanning,
                       ),
                     ),
                     _buildPanel(

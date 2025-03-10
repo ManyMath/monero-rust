@@ -18,7 +18,7 @@ wildcard_imports = "deny"
 
 [dependencies]
 rinf = "7.3.0"
-serde = { version = "1.0.214", features = ["derive"] }
+serde = { version = "1.0.219", features = ["derive"] }
 tokio = { version = "1.41.0", features = ["rt", "macros", "time"] }
 async-trait = "0.1.87"
 messages = "0.3.1"
