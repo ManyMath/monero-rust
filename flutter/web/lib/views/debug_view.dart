@@ -21,7 +21,7 @@ import '../services/transaction_service.dart';
 import '../services/wallet_polling_service.dart';
 import '../widgets/payment_proof_dialog.dart';
 import '../widgets/keys_display_panel.dart';
-import '../widgets/accounts_panel.dart';
+import '../widgets/receive_panel.dart';
 import '../widgets/scanning_panel.dart';
 import '../widgets/transactions_panel.dart';
 import '../widgets/outputs_panel.dart';
@@ -37,7 +37,7 @@ enum DebugPanel {
   fileManagement('File Management'),
   seedPhrase('Seed Phrase'),
   keys('Keys'),
-  accounts('Accounts'),
+  receive('Receive'),
   scanning('Scanning'),
   transactions('Transactions'),
   coins('Coins'),
@@ -1353,8 +1353,8 @@ class _DebugViewState extends State<DebugView> {
                       ),
                     ),
                     _buildPanel(
-                      panel: DebugPanel.accounts,
-                      body: AccountsPanel(
+                      panel: DebugPanel.receive,
+                      body: ReceivePanel(
                         seed: _controller.text.trim().isEmpty ? null : _controller.text,
                         network: _network,
                         activeAccount: _activeAccount,

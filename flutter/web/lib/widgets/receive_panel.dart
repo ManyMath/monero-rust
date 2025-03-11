@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import '../src/bindings/bindings.dart';
 
-/// Widget that displays account management interface.
+/// Widget that displays receive addresses interface.
 ///
 /// Shows account expansion panels with scan controls and unused subaddresses.
-class AccountsPanel extends StatefulWidget {
+/// Note: The scan checkboxes are for UI feedback only. Due to Rust API limitations,
+/// scanning always processes ALL accounts from 0 to the highest account number.
+class ReceivePanel extends StatefulWidget {
   final String? seed;
   final String network;
   final int activeAccount;
@@ -18,7 +20,7 @@ class AccountsPanel extends StatefulWidget {
   final Set<int> scanningAccounts; // Which accounts are being scanned
   final Function(int accountIndex, bool shouldScan) onScanToggle; // Toggle scan for account
 
-  const AccountsPanel({
+  const ReceivePanel({
     super.key,
     required this.seed,
     required this.network,
@@ -35,19 +37,52 @@ class AccountsPanel extends StatefulWidget {
   });
 
   @override
-  State<AccountsPanel> createState() => _AccountsPanelState();
+  State<ReceivePanel> createState() => _ReceivePanelState();
 }
 
-class _AccountsPanelState extends State<AccountsPanel> {
+class _ReceivePanelState extends State<ReceivePanel> {
   bool _showUsedSubaddresses = false;
-  Set<int> _expandedAccounts = {};
+  int? _expandedIndex;
 
   @override
   void initState() {
     super.initState();
-    // Expand account 0 by default
+    // Expand first account by default
     if (widget.accounts.isNotEmpty) {
-      _expandedAccounts.add(0);
+      _expandedIndex = 0;
+      // Trigger initial subaddress derivation for Account 0
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        widget.onAccountSelected(widget.accounts[0]);
+      });
+    }
+  }
+
+  @override
+  void didUpdateWidget(ReceivePanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    // Only update if accounts have changed
+    if (oldWidget.accounts != widget.accounts) {
+      setState(() {
+        // Check if a new account was added (list grew)
+        if (widget.accounts.length > oldWidget.accounts.length && widget.accounts.isNotEmpty) {
+          // Expand the newly created account (the last one)
+          final newAccountIndex = widget.accounts.length - 1;
+          _expandedIndex = newAccountIndex;
+          // Trigger derivation for the newly created account
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            widget.onAccountSelected(widget.accounts[newAccountIndex]);
+          });
+        }
+        // Clean up expanded index if it's out of bounds
+        else if (_expandedIndex != null && _expandedIndex! >= widget.accounts.length) {
+          _expandedIndex = null;
+        }
+        // If no account is expanded but we have accounts, expand the first one
+        else if (_expandedIndex == null && widget.accounts.isNotEmpty) {
+          _expandedIndex = 0;
+        }
+      });
     }
   }
 
@@ -95,24 +130,49 @@ class _AccountsPanelState extends State<AccountsPanel> {
     if (widget.seed == null || widget.seed!.isEmpty) {
       return const Padding(
         padding: EdgeInsets.all(16.0),
-        child: Text('Enter a seed phrase to manage accounts'),
+        child: Text('Enter a seed phrase to receive funds'),
       );
     }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Header section with create account button
-        Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Row(
-            children: [
-              const Text(
-                'Accounts',
-                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
-              ),
-              const Spacer(),
-              ElevatedButton.icon(
+    // If only one account, show its contents directly
+    if (widget.accounts.length == 1) {
+      final account = widget.accounts[0];
+      final unusedIndices = _getUnusedSubaddresses(account);
+      final usedSubaddresses = _getUsedSubaddressesWithTxInfo(account);
+      final isScanning = widget.scanningAccounts.contains(account);
+
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Scan checkbox for single account
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Row(
+              children: [
+                Text(
+                  'Account $account',
+                  style: const TextStyle(fontWeight: FontWeight.w500),
+                ),
+                const Spacer(),
+                const Text('Scan'),
+                Checkbox(
+                  value: isScanning,
+                  onChanged: (value) {
+                    widget.onScanToggle(account, value ?? false);
+                  },
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          // Account contents
+          _buildAccountBody(account, unusedIndices, usedSubaddresses),
+          const Divider(height: 1),
+          // Create new account button
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Center(
+              child: ElevatedButton.icon(
                 onPressed: widget.onCreateAccount,
                 icon: const Icon(Icons.add, size: 16),
                 label: const Text('Create new account'),
@@ -120,37 +180,46 @@ class _AccountsPanelState extends State<AccountsPanel> {
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 ),
               ),
-            ],
+            ),
           ),
-        ),
-        const Divider(height: 1),
+        ],
+      );
+    }
 
-        // Account expansion panels
+    // Multiple accounts - use expansion tiles
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Account expansion tiles
         Padding(
           padding: const EdgeInsets.all(16.0),
-          child: ExpansionPanelList(
+          child: Card(
             elevation: 1,
-            expandedHeaderPadding: EdgeInsets.zero,
-            expansionCallback: (int index, bool isExpanded) {
-              setState(() {
-                final account = widget.accounts[index];
-                if (isExpanded) {
-                  _expandedAccounts.remove(account);
-                } else {
-                  _expandedAccounts.add(account);
-                  widget.onAccountSelected(account);
-                }
-              });
-            },
-            children: widget.accounts.map<ExpansionPanel>((int account) {
-              final isExpanded = _expandedAccounts.contains(account);
-              final unusedIndices = isExpanded ? _getUnusedSubaddresses(account) : <int>[];
-              final usedSubaddresses = isExpanded ? _getUsedSubaddressesWithTxInfo(account) : <int, _SubaddressInfo>{};
-              final isScanning = widget.scanningAccounts.contains(account);
+            color: Colors.white,
+            child: Column(
+              children: widget.accounts.asMap().entries.map<Widget>((entry) {
+                final index = entry.key;
+                final account = entry.value;
+                final isExpanded = _expandedIndex == index;
+                final unusedIndices = _getUnusedSubaddresses(account);
+                final usedSubaddresses = _getUsedSubaddressesWithTxInfo(account);
+                final isScanning = widget.scanningAccounts.contains(account);
 
-              return ExpansionPanel(
-                headerBuilder: (BuildContext context, bool isExpanded) {
-                  return ListTile(
+                return Theme(
+                  data: Theme.of(context).copyWith(
+                    splashColor: Theme.of(context).hoverColor,
+                  ),
+                  child: ExpansionTile(
+                    key: Key('account-$account-$isExpanded'), // Force rebuild when expansion state changes
+                    initiallyExpanded: isExpanded,
+                    onExpansionChanged: (expanded) {
+                      setState(() {
+                        _expandedIndex = expanded ? index : null;
+                      });
+                      if (expanded) {
+                        widget.onAccountSelected(account);
+                      }
+                    },
                     title: Text(
                       'Account $account',
                       style: const TextStyle(fontWeight: FontWeight.w500),
@@ -167,15 +236,32 @@ class _AccountsPanelState extends State<AccountsPanel> {
                         ),
                       ],
                     ),
-                  );
-                },
-                body: _buildAccountBody(account, unusedIndices, usedSubaddresses),
-                isExpanded: isExpanded,
-              );
-            }).toList(),
+                    children: [
+                      _buildAccountBody(account, unusedIndices, usedSubaddresses),
+                    ],
+                  ),
+                );
+              }).toList(),
+            ),
           ),
         ),
 
+        const Divider(height: 1),
+
+        // Create new account button at the bottom
+        Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Center(
+            child: ElevatedButton.icon(
+              onPressed: widget.onCreateAccount,
+              icon: const Icon(Icons.add, size: 16),
+              label: const Text('Create new account'),
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              ),
+            ),
+          ),
+        ),
       ],
     );
   }
