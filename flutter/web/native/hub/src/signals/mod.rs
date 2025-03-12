@@ -221,6 +221,8 @@ pub struct StartContinuousScanRequest {
     pub seed: String,
     pub network: String,
     pub account_lookahead: u32,
+    #[serde(default)]
+    pub accounts_to_scan: Option<Vec<u32>>,
 }
 
 #[derive(Deserialize, DartSignal)]
@@ -237,6 +239,8 @@ pub struct MempoolScanRequest {
     pub seed: String,
     pub network: String,
     pub account_lookahead: u32,
+    #[serde(default)]
+    pub accounts_to_scan: Option<Vec<u32>>,
 }
 
 #[derive(Serialize, RustSignal)]
@@ -300,6 +304,8 @@ pub struct WalletConfig {
     pub seed: String,
     pub network: String,
     pub account_lookahead: u32,
+    #[serde(default)]
+    pub accounts_to_scan: Option<Vec<u32>>,
 }
 
 #[derive(Deserialize, DartSignal)]

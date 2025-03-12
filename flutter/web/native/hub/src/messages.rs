@@ -127,6 +127,7 @@ pub struct UpdateScanState {
     pub seed: String,
     pub network: String,
     pub account_lookahead: u32,
+    pub accounts_to_scan: Option<Vec<u32>>, // New: specific accounts to scan
 }
 
 #[derive(Debug, Clone)]
