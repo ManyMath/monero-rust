@@ -34,6 +34,7 @@ class WalletPersistenceService {
     List<int>? accounts,
     Map<int, List<OwnedOutput>>? outputsByAccount,
     int? activeAccount,
+    Set<int>? scanningAccounts,
   }) async {
     try {
       final storageKey = getStorageKey(walletId);
@@ -49,6 +50,7 @@ class WalletPersistenceService {
         accounts: accounts,
         outputsByAccount: outputsByAccount,
         activeAccount: activeAccount,
+        scanningAccounts: scanningAccounts,
       );
 
       final jsonString = jsonEncode(walletData);
@@ -99,6 +101,7 @@ class WalletPersistenceService {
         accounts: parsed.accounts,
         outputsByAccount: parsed.outputsByAccount,
         activeAccount: parsed.activeAccount,
+        scanningAccounts: parsed.scanningAccounts,
       );
     } catch (e) {
       return LoadWalletResult.error('Failed to parse wallet data: $e');
@@ -162,6 +165,7 @@ class WalletPersistenceService {
       accounts: wallet.accounts,
       outputsByAccount: wallet.outputsByAccount,
       activeAccount: wallet.activeAccount,
+      scanningAccounts: wallet.scanningAccounts,
     );
   }
 
@@ -191,6 +195,7 @@ class WalletPersistenceService {
         activeAccount: result.activeAccount ?? 0,
         accounts: result.accounts ?? [0],
         outputsByAccount: result.outputsByAccount ?? {0: result.outputs!},
+        scanningAccounts: result.scanningAccounts,
       );
 
       return LoadWalletInstanceResult.success(
@@ -232,6 +237,7 @@ class LoadWalletResult {
   final List<int>? accounts;
   final Map<int, List<OwnedOutput>>? outputsByAccount;
   final int? activeAccount;
+  final Set<int>? scanningAccounts;
 
   LoadWalletResult._({
     required this.success,
@@ -247,6 +253,7 @@ class LoadWalletResult {
     this.accounts,
     this.outputsByAccount,
     this.activeAccount,
+    this.scanningAccounts,
   });
 
   factory LoadWalletResult.success({
@@ -261,6 +268,7 @@ class LoadWalletResult {
     required List<int> accounts,
     required Map<int, List<OwnedOutput>> outputsByAccount,
     required int activeAccount,
+    required Set<int> scanningAccounts,
   }) =>
       LoadWalletResult._(
         success: true,
@@ -275,6 +283,7 @@ class LoadWalletResult {
         accounts: accounts,
         outputsByAccount: outputsByAccount,
         activeAccount: activeAccount,
+        scanningAccounts: scanningAccounts,
       );
 
   factory LoadWalletResult.error(String error) =>

@@ -19,6 +19,7 @@ class WalletSerializer {
     List<int>? accounts,
     Map<int, List<OwnedOutput>>? outputsByAccount,
     int? activeAccount,
+    Set<int>? scanningAccounts,
   }) {
     return {
       'seed': seed,
@@ -52,6 +53,7 @@ class WalletSerializer {
       'selectedOutputs': selectedOutputs.toList(),
       if (accounts != null) 'accounts': accounts,
       if (activeAccount != null) 'activeAccount': activeAccount,
+      if (scanningAccounts != null) 'scanningAccounts': scanningAccounts.toList(),
       if (outputsByAccount != null)
         'outputsByAccount': outputsByAccount.map((accountIndex, outputs) {
           return MapEntry(
@@ -93,6 +95,7 @@ class WalletSerializer {
     List<int> accounts,
     Map<int, List<OwnedOutput>> outputsByAccount,
     int activeAccount,
+    Set<int> scanningAccounts,
   }) deserialize(Map<String, dynamic> walletData) {
     final outputs = (walletData['outputs'] as List).map((o) {
       final d = o as Map<String, dynamic>;
@@ -135,6 +138,15 @@ class WalletSerializer {
         : [0];
 
     final activeAccount = (walletData['activeAccount'] as int?) ?? 0;
+
+    // Parse scanningAccounts with default to all accounts for backward compatibility
+    final Set<int> scanningAccounts;
+    if (walletData['scanningAccounts'] != null) {
+      scanningAccounts = Set<int>.from((walletData['scanningAccounts'] as List).map((e) => e as int));
+    } else {
+      // Default to scanning all accounts for backward compatibility
+      scanningAccounts = Set<int>.from(accounts);
+    }
 
     final Map<int, List<OwnedOutput>> outputsByAccount = {};
     if (walletData['outputsByAccount'] != null) {
@@ -185,6 +197,7 @@ class WalletSerializer {
       accounts: accounts,
       outputsByAccount: outputsByAccount,
       activeAccount: activeAccount,
+      scanningAccounts: scanningAccounts,
     );
   }
 

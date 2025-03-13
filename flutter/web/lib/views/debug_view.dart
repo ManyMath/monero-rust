@@ -293,12 +293,9 @@ class _DebugViewState extends State<DebugView> {
           _scanResult = signal.message;
           _scanError = null;
           _daemonHeight = signal.message.daemonHeight.toInt();
-          OutputUtils.mergeScannedOutputs(_allOutputsAllAccounts, signal.message.outputs);
 
-          // Track transactions: group outputs by txHash and track spent key images
-          _allTransactionsAllAccounts = TransactionUtils.updateTransactionsFromScan(_allTransactionsAllAccounts, signal.message, _allOutputsAllAccounts);
-
-          _ensureAccountsExistForOutputs(signal.message.outputs);
+          // Integrate scan results into the active wallet instance
+          _lifecycle.integrateSingleBlockScanResults(signal.message);
         } else {
           _scanResult = null;
           _scanError = signal.message.error ?? 'Unknown error during scan';
@@ -1591,9 +1588,26 @@ class _DebugViewState extends State<DebugView> {
     }
 
     final activeWallet = _lifecycle.activeWallet;
-    final accounts = activeWallet?.accounts;
-    final outputsByAccount = activeWallet?.outputsByAccount;
-    final activeAccount = activeWallet?.activeAccount;
+
+    // Derive accounts from outputs if no active wallet exists
+    final Set<int> derivedAccounts = {0}; // Always include account 0
+    for (var output in _allOutputs) {
+      if (output.subaddressIndex != null) {
+        derivedAccounts.add(output.subaddressIndex!.item1);
+      }
+    }
+
+    // Build outputsByAccount from _allOutputs if needed
+    final Map<int, List<OwnedOutput>> derivedOutputsByAccount = {};
+    for (var output in _allOutputs) {
+      final account = output.subaddressIndex?.item1 ?? 0;
+      derivedOutputsByAccount.putIfAbsent(account, () => []).add(output);
+    }
+
+    final accounts = activeWallet?.accounts ?? derivedAccounts.toList()..sort();
+    final outputsByAccount = activeWallet?.outputsByAccount ?? derivedOutputsByAccount;
+    final activeAccount = activeWallet?.activeAccount ?? _activeAccount;
+    final scanningAccounts = activeWallet?.scanningAccounts ?? derivedAccounts;
 
     final saveResult = await WalletPersistenceBrowser.saveWalletData(
       walletId: walletId,
@@ -1609,6 +1623,7 @@ class _DebugViewState extends State<DebugView> {
       accounts: accounts,
       outputsByAccount: outputsByAccount,
       activeAccount: activeAccount,
+      scanningAccounts: scanningAccounts,
     );
 
     final success = saveResult.success;
@@ -1860,7 +1875,7 @@ class _DebugViewState extends State<DebugView> {
         resolvedAddress,
         accounts: loadedAccounts,
         outputsByAccount: loadedOutputsByAccount,
-        activeAccount: loadedActiveAccount,
+        activeAccount: 0,  // Always start with account 0 when loading
       );
     }
 
