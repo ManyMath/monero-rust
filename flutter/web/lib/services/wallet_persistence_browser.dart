@@ -35,9 +35,10 @@ class WalletPersistenceBrowser {
     required List<WalletTransaction> transactions,
     required int continuousScanCurrentHeight,
     required Set<String> selectedOutputs,
-    List<int>? accounts,
-    Map<int, List<OwnedOutput>>? outputsByAccount,
-    int? activeAccount,
+    required List<int> accounts,
+    required Map<int, List<OwnedOutput>> outputsByAccount,
+    required int activeAccount,
+    required Set<int> scanningAccounts,
   }) =>
       _defaultInstance.save(
         walletId: walletId,
@@ -53,6 +54,7 @@ class WalletPersistenceBrowser {
         accounts: accounts,
         outputsByAccount: outputsByAccount,
         activeAccount: activeAccount,
+        scanningAccounts: scanningAccounts,
       );
 
   static Future<LoadWalletResult> loadWalletData({

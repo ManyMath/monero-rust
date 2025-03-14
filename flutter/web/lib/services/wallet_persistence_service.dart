@@ -31,10 +31,10 @@ class WalletPersistenceService {
     required List<WalletTransaction> transactions,
     required int continuousScanCurrentHeight,
     required Set<String> selectedOutputs,
-    List<int>? accounts,
-    Map<int, List<OwnedOutput>>? outputsByAccount,
-    int? activeAccount,
-    Set<int>? scanningAccounts,
+    required List<int> accounts,
+    required Map<int, List<OwnedOutput>> outputsByAccount,
+    required int activeAccount,
+    required Set<int> scanningAccounts,
   }) async {
     try {
       final storageKey = getStorageKey(walletId);
@@ -192,10 +192,10 @@ class WalletPersistenceService {
         daemonHeight: 0,
         isScanning: false,
         isClosed: false,
-        activeAccount: result.activeAccount ?? 0,
-        accounts: result.accounts ?? [0],
-        outputsByAccount: result.outputsByAccount ?? {0: result.outputs!},
-        scanningAccounts: result.scanningAccounts,
+        activeAccount: result.activeAccount!,
+        accounts: result.accounts!,
+        outputsByAccount: result.outputsByAccount!,
+        scanningAccounts: result.scanningAccounts!,
       );
 
       return LoadWalletInstanceResult.success(

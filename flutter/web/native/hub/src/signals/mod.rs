@@ -303,7 +303,7 @@ pub struct WalletDataLoadedResponse {
 pub struct WalletConfig {
     pub seed: String,
     pub network: String,
-    pub account_lookahead: u32,
+    pub account_lookahead: u32, // Keep for backwards compatibility
     #[serde(default)]
     pub accounts_to_scan: Option<Vec<u32>>,
 }

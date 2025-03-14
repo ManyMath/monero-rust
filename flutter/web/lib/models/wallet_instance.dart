@@ -26,8 +26,8 @@ class WalletInstance {
     required this.seed,
     required this.network,
     required this.address,
-    this.outputs = const [],
-    this.transactions = const [],
+    List<OwnedOutput>? outputs,
+    List<WalletTransaction>? transactions,
     this.currentHeight = 0,
     this.daemonHeight = 0,
     this.isScanning = false,
@@ -36,8 +36,10 @@ class WalletInstance {
     List<int>? accounts,
     Map<int, List<OwnedOutput>>? outputsByAccount,
     Set<int>? scanningAccounts,
-  })  : accounts = accounts ?? [0],
-        outputsByAccount = outputsByAccount ?? {0: const []},
+  })  : outputs = outputs ?? [],
+        transactions = transactions ?? [],
+        accounts = accounts ?? [0],
+        outputsByAccount = outputsByAccount ?? {0: []},
         scanningAccounts = scanningAccounts ?? Set.from(accounts ?? [0]); // By default, scan all accounts
   // Get outputs for the active account (or all outputs if activeAccount == -1)
   List<OwnedOutput> get activeAccountOutputs {
@@ -185,7 +187,7 @@ class WalletInstance {
     accountOutputs.add(output);
     newOutputsByAccount[accountIndex] = accountOutputs;
 
-    // Also update the legacy outputs list if this is the active account
+    // Also update the main outputs list if this is the active account
     final newOutputs = accountIndex == activeAccount
         ? (List<OwnedOutput>.from(outputs)..add(output))
         : outputs;
@@ -288,12 +290,17 @@ class WalletInstance {
           paymentId: outputData['paymentId'] as String?,
           receivedOutputBytes: outputData['receivedOutputBytes'] as String,
           blockHeight: Uint64(BigInt.parse(outputData['blockHeight'] as String)),
-          spent: outputData['spent'] as bool,
+          // Handle backward compatibility: these fields were added later
+          spent: outputData.containsKey('spent') && outputData['spent'] != null
+              ? outputData['spent'] as bool
+              : false,  // Default to unspent for backward compatibility
           keyImage: outputData['keyImage'] as String,
-          isCoinbase: (outputData['isCoinbase'] as bool?) ?? false,
+          isCoinbase: outputData.containsKey('isCoinbase') && outputData['isCoinbase'] != null
+              ? outputData['isCoinbase'] as bool
+              : false,  // Default to non-coinbase for backward compatibility
         );
       }).toList(),
-      transactions: (json['transactions'] as List? ?? [])
+      transactions: (json['transactions'] as List)
           .map((t) => WalletTransaction.fromJson(t as Map<String, dynamic>))
           .toList(),
       currentHeight: json['currentHeight'] as int,
@@ -302,9 +309,7 @@ class WalletInstance {
       isClosed: json['isClosed'] as bool,
       activeAccount: json['activeAccount'] as int,
       accounts: (json['accounts'] as List).cast<int>(),
-      scanningAccounts: json['scanningAccounts'] != null
-          ? Set<int>.from((json['scanningAccounts'] as List).cast<int>())
-          : null, // Will use default from constructor
+      scanningAccounts: Set<int>.from((json['scanningAccounts'] as List).cast<int>()),
       outputsByAccount: (json['outputsByAccount'] as Map<String, dynamic>).map(
         (key, value) {
           final accountIndex = int.parse(key);
@@ -327,9 +332,14 @@ class WalletInstance {
               paymentId: outputData['paymentId'] as String?,
               receivedOutputBytes: outputData['receivedOutputBytes'] as String,
               blockHeight: Uint64(BigInt.parse(outputData['blockHeight'] as String)),
-              spent: outputData['spent'] as bool,
+              // Handle backward compatibility: these fields were added later
+              spent: outputData.containsKey('spent') && outputData['spent'] != null
+                  ? outputData['spent'] as bool
+                  : false,  // Default to unspent for backward compatibility
               keyImage: outputData['keyImage'] as String,
-              isCoinbase: (outputData['isCoinbase'] as bool?) ?? false,
+              isCoinbase: outputData.containsKey('isCoinbase') && outputData['isCoinbase'] != null
+                  ? outputData['isCoinbase'] as bool
+                  : false,  // Default to non-coinbase for backward compatibility
             );
           }).toList();
           return MapEntry(accountIndex, accountOutputs);
