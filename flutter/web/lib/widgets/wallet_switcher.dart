@@ -6,6 +6,9 @@ class WalletSwitcher extends StatelessWidget {
   final String? lastSaveTime;
   final bool isLoadingWallet;
   final bool isSaving;
+  final String? seed;
+  final int transactionCount;
+  final int outputCount;
   final ValueChanged<String> onWalletChanged;
   final VoidCallback onNew;
   final VoidCallback onSave;
@@ -19,12 +22,20 @@ class WalletSwitcher extends StatelessWidget {
     required this.lastSaveTime,
     required this.isLoadingWallet,
     required this.isSaving,
+    required this.seed,
+    required this.transactionCount,
+    required this.outputCount,
     required this.onWalletChanged,
     required this.onNew,
     required this.onSave,
     required this.onLoad,
     required this.onDelete,
   });
+
+  bool get hasWalletData =>
+      (seed?.trim().isNotEmpty ?? false) ||
+      transactionCount > 0 ||
+      outputCount > 0;
 
   @override
   Widget build(BuildContext context) {
@@ -91,20 +102,22 @@ class WalletSwitcher extends StatelessWidget {
                   label: const Text('New'),
                 ),
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: isSaving ? null : onSave,
-                  icon: isSaving
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.save),
-                  label: Text(isSaving ? 'Saving...' : 'Save'),
+              if (hasWalletData) ...[
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: isSaving ? null : onSave,
+                    icon: isSaving
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.save),
+                    label: Text(isSaving ? 'Saving...' : 'Save'),
+                  ),
                 ),
-              ),
+              ],
               const SizedBox(width: 8),
               Expanded(
                 child: ElevatedButton.icon(

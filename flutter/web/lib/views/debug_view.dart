@@ -1310,6 +1310,9 @@ class _DebugViewState extends State<DebugView> {
                         loadError: _loadError,
                         exportError: _exportError,
                         importError: _importError,
+                        seed: _controller.text.trim(),
+                        transactionCount: _allTransactionsAllAccounts.length,
+                        outputCount: _allOutputsAllAccounts.length,
                         onWalletChanged: _switchWallet,
                         onLoad: _loadWalletData,
                         onDelete: _clearStoredData,
@@ -1960,8 +1963,8 @@ class _DebugViewState extends State<DebugView> {
   }
 
   Future<void> _importWallet() async {
+    // Don't set _isImporting here - wait until file is selected
     setState(() {
-      _isImporting = true;
       _importError = null;
     });
 
@@ -1971,15 +1974,27 @@ class _DebugViewState extends State<DebugView> {
       uploadInput.accept = '.monero-wallet,*'; // Prefer .monero-wallet, allow all as fallback
       uploadInput.click();
 
-      // Wait for file selection
-      await uploadInput.onChange.first;
-      final files = uploadInput.files;
-      if (files == null || files.isEmpty) {
-        setState(() {
-          _isImporting = false;
-        });
+      // Wait for file selection - this may never complete if cancelled
+      // So we wrap in a timeout
+      try {
+        await uploadInput.onChange.first.timeout(
+          const Duration(seconds: 120),
+        );
+      } on TimeoutException {
+        // Dialog was likely cancelled
         return;
       }
+
+      final files = uploadInput.files;
+      if (files == null || files.isEmpty) {
+        // No file selected (shouldn't happen but be safe)
+        return;
+      }
+
+      // Now we know a file was selected, show loading state
+      setState(() {
+        _isImporting = true;
+      });
 
       final file = files[0];
 

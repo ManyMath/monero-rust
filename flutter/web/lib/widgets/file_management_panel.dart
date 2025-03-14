@@ -18,6 +18,9 @@ class FileManagementPanel extends StatelessWidget {
   final String? loadError;
   final String? exportError;
   final String? importError;
+  final String? seed;
+  final int transactionCount;
+  final int outputCount;
   final Function(String) onWalletChanged;
   final VoidCallback onLoad;
   final VoidCallback onDelete;
@@ -42,6 +45,9 @@ class FileManagementPanel extends StatelessWidget {
     required this.loadError,
     required this.exportError,
     required this.importError,
+    required this.seed,
+    required this.transactionCount,
+    required this.outputCount,
     required this.onWalletChanged,
     required this.onLoad,
     required this.onDelete,
@@ -52,6 +58,11 @@ class FileManagementPanel extends StatelessWidget {
     required this.onCloseWallet,
   });
 
+  bool get hasWalletData =>
+      (seed?.trim().isNotEmpty ?? false) ||
+      transactionCount > 0 ||
+      outputCount > 0;
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -59,13 +70,16 @@ class FileManagementPanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (availableWalletIds.isNotEmpty) ...[
+          if (availableWalletIds.isNotEmpty || hasWalletData) ...[
             WalletSwitcher(
               availableWalletIds: availableWalletIds,
               walletId: walletId,
               lastSaveTime: lastSaveTime,
               isLoadingWallet: isLoadingWallet,
               isSaving: isSaving,
+              seed: seed,
+              transactionCount: transactionCount,
+              outputCount: outputCount,
               onWalletChanged: onWalletChanged,
               onNew: onNew,
               onSave: onSave,
@@ -89,23 +103,6 @@ class FileManagementPanel extends StatelessWidget {
             children: [
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: isExporting ? null : onExport,
-                  icon: isExporting
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.file_download),
-                  label: Text(isExporting ? 'Exporting...' : 'Export'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.blue,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: OutlinedButton.icon(
                   onPressed: isImporting ? null : onImport,
                   icon: isImporting
                       ? const SizedBox(
@@ -120,6 +117,25 @@ class FileManagementPanel extends StatelessWidget {
                   ),
                 ),
               ),
+              if (hasWalletData) ...[
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: isExporting ? null : onExport,
+                    icon: isExporting
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.file_download),
+                    label: Text(isExporting ? 'Exporting...' : 'Export'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.blue,
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
           if (saveError != null) ...[
