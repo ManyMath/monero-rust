@@ -270,18 +270,6 @@ impl WalletActor {
                     let stored_outputs: Vec<StoredOutput> = result
                         .outputs
                         .iter()
-                        .filter(|o| {
-                            // Apply the same filter for stored outputs
-                            if let Some(ref accounts) = accounts_to_scan {
-                                if let Some((account, _)) = o.subaddress_index {
-                                    accounts.contains(&account)
-                                } else {
-                                    accounts.contains(&0)
-                                }
-                            } else {
-                                true
-                            }
-                        })
                         .map(|o| StoredOutput {
                             tx_hash: o.tx_hash.clone(),
                             output_index: o.output_index,
@@ -382,6 +370,7 @@ impl WalletActor {
                     seed: request.seed,
                     network: request.network,
                     account_lookahead: request.account_lookahead,
+                    accounts_to_scan: request.accounts_to_scan,
                 })
                 .await;
         }
@@ -986,18 +975,6 @@ impl Notifiable<ContinueScan> for WalletActor {
                     let stored_outputs: Vec<StoredOutput> = result
                         .outputs
                         .iter()
-                        .filter(|o| {
-                            // Apply the same filter for stored outputs
-                            if let Some(ref accounts) = accounts_to_scan {
-                                if let Some((account, _)) = o.subaddress_index {
-                                    accounts.contains(&account)
-                                } else {
-                                    accounts.contains(&0)
-                                }
-                            } else {
-                                true
-                            }
-                        })
                         .map(|o| StoredOutput {
                             tx_hash: o.tx_hash.clone(),
                             output_index: o.output_index,
