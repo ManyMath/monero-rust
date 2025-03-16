@@ -247,6 +247,12 @@ class _DebugViewState extends State<DebugView> {
           _publicSpendKey = signal.message.publicSpendKey;
           _publicViewKey = signal.message.publicViewKey;
           _responseError = null;
+
+          // Open wallet when keys are derived from seed
+          final seed = _controller.text.trim();
+          if (seed.isNotEmpty && _derivedAddress != null && _lifecycle.activeWallet == null) {
+            _openWallet(_walletId.isEmpty ? 'temp_wallet' : _walletId, seed, _network, _derivedAddress!);
+          }
         } else {
           _derivedAddress = null;
           _secretSpendKey = null;
@@ -1868,21 +1874,24 @@ class _DebugViewState extends State<DebugView> {
 
       _isLoadingWallet = false;
       _loadError = null;
+
+      // Open the wallet INSIDE setState to prevent race condition
+      // This ensures activeWalletId is set before any scan results arrive
+      final resolvedAddress = address ?? _derivedAddress ?? '';
+      if (seed.isNotEmpty && resolvedAddress.isNotEmpty) {
+        // walletId was passed to _loadWalletData, use it
+        _openWallet(
+          _walletId,
+          seed,
+          network,
+          resolvedAddress,
+          accounts: loadedAccounts,
+          outputsByAccount: loadedOutputsByAccount,
+          activeAccount: 0,  // Always start with account 0 when loading
+        );
+      }
     });
     _isRestoringWallet = false;
-
-    final resolvedAddress = address ?? _derivedAddress ?? '';
-    if (seed.isNotEmpty && resolvedAddress.isNotEmpty) {
-      _openWallet(
-        _walletId,
-        seed,
-        network,
-        resolvedAddress,
-        accounts: loadedAccounts,
-        outputsByAccount: loadedOutputsByAccount,
-        activeAccount: 0,  // Always start with account 0 when loading
-      );
-    }
 
     setState(() {
       _lifecycle.restoreLoadedData(
