@@ -1720,6 +1720,8 @@ class _DebugViewState extends State<DebugView> {
           activeAccount: activeAccount ?? 0,
         );
         _lifecycle.openWallets[walletId] = updatedWallet;
+        // CRITICAL: Ensure activeWalletId is still set after replacing the wallet
+        _lifecycle.activeWalletId = walletId;
       }
 
       _derivedAddress = address;
