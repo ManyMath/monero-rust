@@ -248,6 +248,7 @@ class WalletLifecycleManager {
             walletInstance.currentHeight = blockHeight;
           }
           walletInstance.daemonHeight = daemonHeight;
+          openWallets[walletInstance.walletId] = walletInstance;
         }
 
         updatedWalletAddresses.add(walletResult.address);
@@ -420,6 +421,7 @@ class WalletLifecycleManager {
       print('openWallets[${updatedWallet.walletId}].outputs.hashCode AFTER replacement: ${openWallets[updatedWallet.walletId]?.outputs.hashCode}');
     } else {
       print('\n--- No new accounts created ---');
+      openWallets[walletInstance.walletId] = walletInstance;
     }
 
     // Update the derived lists to ensure UI gets fresh references
@@ -499,6 +501,8 @@ class WalletLifecycleManager {
     if (accountsUpdated) {
       print('Accounts updated, replacing in openWallets');
       openWallets[updatedWallet.walletId] = updatedWallet;
+    } else {
+      openWallets[walletInstance.walletId] = walletInstance;
     }
 
     // Update the derived lists to ensure UI gets fresh references
