@@ -831,29 +831,46 @@ class _DebugViewState extends State<DebugView> {
       return;
     }
 
-    // Stop polling timers before starting continuous scan
-    _stopPollingTimers();
+    // Stop any existing scan to ensure clean transition between scan modes
+    final wasScanning = _isContinuousScanning;
+    if (wasScanning) {
+      WalletScanService.pauseContinuousScan();
+      setState(() {
+        _isContinuousScanning = false;
+      });
+    }
 
-    setState(() {
-      _scanError = null;
-      _isContinuousPaused = false;
-      _isContinuousScanning = true;
+    void doStartScan() {
+      _stopPollingTimers();
 
-      for (var wallet in walletsToScan) {
-        wallet.isScanning = true;
-      }
-    });
+      setState(() {
+        _scanError = null;
+        _isContinuousPaused = false;
+        _isContinuousScanning = true;
 
-    final result = walletsToScan.isEmpty ? KeyParser.parse(_controller.text) : null;
-    final highestAccount = _accounts.isEmpty ? 0 : _accounts.reduce((a, b) => a > b ? a : b);
-    WalletScanService.startContinuousScan(
-      nodeUrl: validation.nodeUrl!,
-      startHeight: validation.startHeight!,
-      walletsToScan: walletsToScan,
-      seed: result?.normalizedInput,
-      network: walletsToScan.isEmpty ? _network : null,
-      accountLookahead: highestAccount,
-    );
+        for (var wallet in walletsToScan) {
+          wallet.isScanning = true;
+        }
+      });
+
+      final result = walletsToScan.isEmpty ? KeyParser.parse(_controller.text) : null;
+      final highestAccount = _accounts.isEmpty ? 0 : _accounts.reduce((a, b) => a > b ? a : b);
+      WalletScanService.startContinuousScan(
+        nodeUrl: validation.nodeUrl!,
+        startHeight: validation.startHeight!,
+        walletsToScan: walletsToScan,
+        seed: result?.normalizedInput,
+        network: walletsToScan.isEmpty ? _network : null,
+        accountLookahead: highestAccount,
+      );
+    }
+
+    // If we stopped a previous scan, wait for Rust to process the stop
+    if (wasScanning) {
+      Future.delayed(const Duration(milliseconds: 200), doStartScan);
+    } else {
+      doStartScan();
+    }
   }
 
   void _pauseContinuousScan() {
