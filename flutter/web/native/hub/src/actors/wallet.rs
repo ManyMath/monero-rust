@@ -769,12 +769,14 @@ impl WalletActor {
 
 #[async_trait]
 impl Notifiable<UpdateScanState> for WalletActor {
-    async fn notify(&mut self, msg: UpdateScanState, _ctx: &Context<Self>) {
-        // Check for concurrent scan
+    async fn notify(&mut self, msg: UpdateScanState, ctx: &Context<Self>) {
+        // If multi-wallet scan is active, stop it first to allow transition
         if self.is_scanning && self.active_scan_type == ScanType::MultiWallet {
             #[cfg(target_arch = "wasm32")]
-            web_sys::console::warn_1(&"Cannot start single-wallet scan: multi-wallet scan already running".into());
-            return;
+            web_sys::console::log_1(&"Stopping multi-wallet scan to transition to single-wallet scan".into());
+
+            // Stop the multi-wallet scan
+            self.notify(StopScan {}, ctx).await;
         }
 
         self.is_scanning = msg.is_scanning;
@@ -791,12 +793,14 @@ impl Notifiable<UpdateScanState> for WalletActor {
 
 #[async_trait]
 impl Notifiable<UpdateMultiWalletScanState> for WalletActor {
-    async fn notify(&mut self, msg: UpdateMultiWalletScanState, _ctx: &Context<Self>) {
-        // Check for concurrent scan
+    async fn notify(&mut self, msg: UpdateMultiWalletScanState, ctx: &Context<Self>) {
+        // If single-wallet scan is active, stop it first to allow transition
         if self.is_scanning && self.active_scan_type == ScanType::SingleWallet {
             #[cfg(target_arch = "wasm32")]
-            web_sys::console::warn_1(&"Cannot start multi-wallet scan: single-wallet scan already running".into());
-            return;
+            web_sys::console::log_1(&"Stopping single-wallet scan to transition to multi-wallet scan".into());
+
+            // Stop the single-wallet scan
+            self.notify(StopScan {}, ctx).await;
         }
 
         self.is_scanning = msg.is_scanning;
