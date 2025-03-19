@@ -13,6 +13,7 @@ class ScanningPanel extends StatefulWidget {
   final FocusNode blockHeightFocusNode;
   final bool isScanning;
   final bool isContinuousScanning;
+  final bool isContinuousPaused;
   final bool isSynced;
   final bool isScanningMempool;
   final int continuousScanCurrentHeight;
@@ -35,6 +36,7 @@ class ScanningPanel extends StatefulWidget {
     required this.blockHeightFocusNode,
     required this.isScanning,
     required this.isContinuousScanning,
+    required this.isContinuousPaused,
     required this.isSynced,
     required this.isScanningMempool,
     required this.continuousScanCurrentHeight,
@@ -181,8 +183,8 @@ class _ScanningPanelState extends State<ScanningPanel> {
               ),
             ],
           ),
-          // Show polling countdown even when not scanning or synced
-          if (!widget.isContinuousScanning && !widget.isSynced && (widget.pollingService.blockRefreshCountdown > 0 || widget.pollingService.mempoolCountdown > 0)) ...[
+          // Show polling countdown only when poll is active (not scanning, not paused, not synced)
+          if (!widget.isContinuousScanning && !widget.isContinuousPaused && !widget.isSynced && (widget.pollingService.blockRefreshCountdown > 0 || widget.pollingService.mempoolCountdown > 0)) ...[
             const SizedBox(height: 16),
             Container(
               padding: const EdgeInsets.all(12),

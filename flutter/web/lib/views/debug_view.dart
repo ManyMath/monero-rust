@@ -1400,6 +1400,7 @@ class _DebugViewState extends State<DebugView> {
                         blockHeightFocusNode: _blockHeightFocusNode,
                         isScanning: _isScanning,
                         isContinuousScanning: _isContinuousScanning,
+                        isContinuousPaused: _isContinuousPaused,
                         isSynced: _isSynced,
                         isScanningMempool: _isScanningMempool,
                         continuousScanCurrentHeight: _continuousScanCurrentHeight,
