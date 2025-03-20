@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:monero_extension/utils/network_utils.dart';
 import '../src/bindings/bindings.dart';
 import '../utils/key_parser.dart';
@@ -20,10 +19,9 @@ import '../utils/transaction_utils.dart';
 import '../services/wallet_scan_service.dart';
 import '../services/transaction_service.dart';
 import '../services/wallet_polling_service.dart';
-import '../widgets/common_widgets.dart';
 import '../widgets/payment_proof_dialog.dart';
 import '../widgets/keys_display_panel.dart';
-import '../widgets/accounts_panel.dart';
+import '../widgets/receive_panel.dart';
 import '../widgets/scanning_panel.dart';
 import '../widgets/transactions_panel.dart';
 import '../widgets/outputs_panel.dart';
@@ -34,6 +32,26 @@ import '../widgets/create_transaction_panel.dart';
 import '../widgets/overwrite_wallet_dialog.dart';
 import '../widgets/security_warning_dialog.dart';
 import '../services/wallet_lifecycle_manager.dart';
+
+enum DebugPanel {
+  fileManagement('File Management'),
+  seedPhrase('Seed Phrase'),
+  keys('Keys'),
+  receive('Receive'),
+  scanning('Scanning'),
+  transactions('Transactions'),
+  coins('Coins'),
+  createTransaction('Send');
+
+  final String title;
+  const DebugPanel(this.title);
+
+  static DebugPanel? fromIndex(int? index) {
+    if (index == null) return null;
+    if (index < 0 || index >= DebugPanel.values.length) return null;
+    return DebugPanel.values[index];
+  }
+}
 
 class DebugView extends StatefulWidget {
   const DebugView({super.key});
@@ -194,10 +212,7 @@ class _DebugViewState extends State<DebugView> {
   String? _exportError;
   String? _importError;
 
-  // Helper to get storage key for current wallet
-  String get _storageKey => WalletPersistenceBrowser.getStorageKey(_walletId);
-
-  int? _expandedPanel;
+  DebugPanel? _expandedPanel;
 
   // Stream subscriptions
   StreamSubscription? _keysDerivedSubscription;
@@ -232,6 +247,12 @@ class _DebugViewState extends State<DebugView> {
           _publicSpendKey = signal.message.publicSpendKey;
           _publicViewKey = signal.message.publicViewKey;
           _responseError = null;
+
+          // Open wallet when keys are derived from seed
+          final seed = _controller.text.trim();
+          if (seed.isNotEmpty && _derivedAddress != null && _lifecycle.activeWallet == null) {
+            _openWallet(_walletId.isEmpty ? 'temp_wallet' : _walletId, seed, _network, _derivedAddress!);
+          }
         } else {
           _derivedAddress = null;
           _secretSpendKey = null;
@@ -278,10 +299,9 @@ class _DebugViewState extends State<DebugView> {
           _scanResult = signal.message;
           _scanError = null;
           _daemonHeight = signal.message.daemonHeight.toInt();
-          OutputUtils.mergeScannedOutputs(_allOutputsAllAccounts, signal.message.outputs);
 
-          // Track transactions: group outputs by txHash and track spent key images
-          _allTransactionsAllAccounts = TransactionUtils.updateTransactionsFromScan(_allTransactionsAllAccounts, signal.message, _allOutputsAllAccounts);
+          // Integrate scan results into the active wallet instance
+          _lifecycle.integrateSingleBlockScanResults(signal.message);
         } else {
           _scanResult = null;
           _scanError = signal.message.error ?? 'Unknown error during scan';
@@ -358,12 +378,15 @@ class _DebugViewState extends State<DebugView> {
         }
       });
 
-      // Stop polling timers when scanning starts
+      // Stop polling timers when continuous scanning starts
       if (_isContinuousScanning && !wasScanning) {
         _stopPollingTimers();
       }
-      // Start polling timers when sync completes (or scan finishes while synced)
-      if (_isSynced && !_isContinuousScanning && (wasScanning || !wasSynced)) {
+      // Start polling timers when:
+      // - Sync completes
+      // - Continuous scan finishes or is paused
+      // - We're synced and not actively scanning
+      if (!_isContinuousScanning && (wasScanning || (_isSynced && !wasSynced))) {
         _startPollingTimers();
       }
     });
@@ -380,6 +403,8 @@ class _DebugViewState extends State<DebugView> {
         if (signal.message.success) {
           OutputUtils.addIfAbsent(_allOutputsAllAccounts, signal.message.outputs);
           OutputUtils.markSpentByKeyImages(_allOutputsAllAccounts, signal.message.spentKeyImages, _selectedOutputs);
+
+          _ensureAccountsExistForOutputs(signal.message.outputs);
         }
       });
     });
@@ -603,33 +628,60 @@ class _DebugViewState extends State<DebugView> {
     final result = KeyParser.parse(_controller.text);
     if (!result.isValid) return;
 
-    // Derive first 5 unused subaddresses for the active account
-    final used = _getUsedSubaddresses(_activeAccount);
-    int index = 0;
-    int derived = 0;
+    if (_activeAccount == -1) {
+      // "All" accounts view - derive first 3 unused subaddresses per account
+      for (var account in _accounts) {
+        final used = _getUsedSubaddresses(account);
+        int index = 0;
+        int derived = 0;
 
-    while (derived < 5) {
-      if (!used.contains(index)) {
-        final key = '$_activeAccount,$index';
-        // Only derive if we don't already have it and it's not pending
-        if (!_subaddresses.containsKey(key) && !_pendingSubaddresses.contains(key)) {
-          _pendingSubaddresses.add(key);
-          DeriveSubaddressRequest(
-            seed: result.normalizedInput!,
-            network: _network,
-            account: _activeAccount,
-            addressIndex: index,
-          ).sendSignalToRust();
+        while (derived < 3) {
+          if (!used.contains(index)) {
+            final key = '$account,$index';
+            // Only derive if we don't already have it and it's not pending
+            if (!_subaddresses.containsKey(key) && !_pendingSubaddresses.contains(key)) {
+              _pendingSubaddresses.add(key);
+              DeriveSubaddressRequest(
+                seed: result.normalizedInput!,
+                network: _network,
+                account: account,
+                addressIndex: index,
+              ).sendSignalToRust();
+            }
+            derived++;
+          }
+          index++;
         }
-        derived++;
       }
-      index++;
+    } else {
+      // Derive the first 5 unused subaddresses for the active account
+      final used = _getUsedSubaddresses(_activeAccount);
+      int index = 0;
+      int derived = 0;
+
+      while (derived < 5) {
+        if (!used.contains(index)) {
+          final key = '$_activeAccount,$index';
+          // Only derive if we don't already have it and it's not pending
+          if (!_subaddresses.containsKey(key) && !_pendingSubaddresses.contains(key)) {
+            _pendingSubaddresses.add(key);
+            DeriveSubaddressRequest(
+              seed: result.normalizedInput!,
+              network: _network,
+              account: _activeAccount,
+              addressIndex: index,
+            ).sendSignalToRust();
+          }
+          derived++;
+        }
+        index++;
+      }
     }
   }
 
   Set<int> _getUsedSubaddresses(int account) {
     final used = <int>{};
-    for (var output in _allOutputs) {
+    for (var output in _allOutputsAllAccounts) {
       if (output.subaddressIndex != null) {
         final subIdx = output.subaddressIndex!;
         final outputAccount = subIdx.item1;
@@ -640,6 +692,34 @@ class _DebugViewState extends State<DebugView> {
       }
     }
     return used;
+  }
+
+  void _ensureAccountsExistForOutputs(List<OwnedOutput> outputs) {
+    if (_lifecycle.activeWallet == null) return;
+
+    int highestAccountIndex = 0;
+    for (var output in outputs) {
+      if (output.subaddressIndex != null) {
+        final accountIndex = output.subaddressIndex!.item1;
+        if (accountIndex > highestAccountIndex) {
+          highestAccountIndex = accountIndex;
+        }
+      }
+    }
+
+    var wallet = _lifecycle.activeWallet!;
+    bool updated = false;
+
+    for (int i = 0; i <= highestAccountIndex; i++) {
+      if (!wallet.accounts.contains(i)) {
+        wallet = wallet.createAccount(i);
+        updated = true;
+      }
+    }
+
+    if (updated) {
+      _lifecycle.openWallets[wallet.walletId] = wallet;
+    }
   }
 
   void _createAccount() {
@@ -696,6 +776,16 @@ class _DebugViewState extends State<DebugView> {
     }
   }
 
+  void _toggleAccountScanning(int accountIndex, bool shouldScan) {
+    final activeWallet = _lifecycle.activeWallet;
+    if (activeWallet != null) {
+      final updatedWallet = activeWallet.toggleAccountScanning(accountIndex, shouldScan);
+      setState(() {
+        _lifecycle.openWallets[activeWallet.walletId] = updatedWallet;
+      });
+    }
+  }
+
   void _scanBlock() {
     final validation = WalletScanService.validateScanBlock(
       seed: _controller.text,
@@ -741,26 +831,46 @@ class _DebugViewState extends State<DebugView> {
       return;
     }
 
-    setState(() {
-      _scanError = null;
-      _isContinuousPaused = false;
-      _isContinuousScanning = true;
+    // Stop any existing scan to ensure clean transition between scan modes
+    final wasScanning = _isContinuousScanning;
+    if (wasScanning) {
+      WalletScanService.pauseContinuousScan();
+      setState(() {
+        _isContinuousScanning = false;
+      });
+    }
 
-      for (var wallet in walletsToScan) {
-        wallet.isScanning = true;
-      }
-    });
+    void doStartScan() {
+      _stopPollingTimers();
 
-    final result = walletsToScan.isEmpty ? KeyParser.parse(_controller.text) : null;
-    final highestAccount = _accounts.isEmpty ? 0 : _accounts.reduce((a, b) => a > b ? a : b);
-    WalletScanService.startContinuousScan(
-      nodeUrl: validation.nodeUrl!,
-      startHeight: validation.startHeight!,
-      walletsToScan: walletsToScan,
-      seed: result?.normalizedInput,
-      network: walletsToScan.isEmpty ? _network : null,
-      accountLookahead: highestAccount,
-    );
+      setState(() {
+        _scanError = null;
+        _isContinuousPaused = false;
+        _isContinuousScanning = true;
+
+        for (var wallet in walletsToScan) {
+          wallet.isScanning = true;
+        }
+      });
+
+      final result = walletsToScan.isEmpty ? KeyParser.parse(_controller.text) : null;
+      final highestAccount = _accounts.isEmpty ? 0 : _accounts.reduce((a, b) => a > b ? a : b);
+      WalletScanService.startContinuousScan(
+        nodeUrl: validation.nodeUrl!,
+        startHeight: validation.startHeight!,
+        walletsToScan: walletsToScan,
+        seed: result?.normalizedInput,
+        network: walletsToScan.isEmpty ? _network : null,
+        accountLookahead: highestAccount,
+      );
+    }
+
+    // If we stopped a previous scan, wait for Rust to process the stop
+    if (wasScanning) {
+      Future.delayed(const Duration(milliseconds: 200), doStartScan);
+    } else {
+      doStartScan();
+    }
   }
 
   void _pauseContinuousScan() {
@@ -769,6 +879,8 @@ class _DebugViewState extends State<DebugView> {
       _isContinuousScanning = false;
     });
     WalletScanService.pauseContinuousScan();
+    // Start polling timers when scan is paused
+    _startPollingTimers();
   }
 
   void _scanMempool() {
@@ -821,8 +933,52 @@ class _DebugViewState extends State<DebugView> {
     return Colors.green;
   }
 
+  String? _checkMultiAccountOutputs() {
+    if (_selectedOutputs.isEmpty) {
+      return null;
+    }
+
+    final selectedAccounts = <int>{};
+
+    for (final outputKey in _selectedOutputs) {
+      final output = _allOutputsAllAccounts.where((o) => '${o.txHash}:${o.outputIndex}' == outputKey).firstOrNull;
+      if (output != null) {
+        final account = output.subaddressIndex?.item1 ?? 0;
+        selectedAccounts.add(account);
+      }
+    }
+
+    if (selectedAccounts.length > 1 && _activeAccount != -1) {
+      return 'Cannot create transaction with outputs from multiple accounts (${selectedAccounts.join(', ')}). Switch to "All" accounts view to allow multi-account transactions.';
+    }
+
+    return null;
+  }
+
+  String? _getMultiAccountWarning() {
+    if (_selectedOutputs.isEmpty || _activeAccount != -1) {
+      return null;
+    }
+
+    final selectedAccounts = <int>{};
+
+    for (final outputKey in _selectedOutputs) {
+      final output = _allOutputsAllAccounts.where((o) => '${o.txHash}:${o.outputIndex}' == outputKey).firstOrNull;
+      if (output != null) {
+        final account = output.subaddressIndex?.item1 ?? 0;
+        selectedAccounts.add(account);
+      }
+    }
+
+    if (selectedAccounts.length > 1) {
+      final accountsList = selectedAccounts.toList()..sort();
+      return 'WARNING: Creating transaction with outputs from multiple accounts (${accountsList.join(', ')}). This may reduce privacy.';
+    }
+
+    return null;
+  }
+
   void _createTransaction() {
-    // Build recipient inputs from UI controllers
     final recipientInputs = List.generate(
       _destinationControllers.length,
       (i) => RecipientInput(
@@ -831,37 +987,147 @@ class _DebugViewState extends State<DebugView> {
       ),
     );
 
-    // Validate transaction creation parameters
-    final validation = TransactionService.validateTransactionCreation(
-      seed: _controller.text,
-      availableOutputs: _allOutputs,
-      recipients: recipientInputs,
-      nodeUrl: _nodeUrlController.text,
-      selectedOutputs: _selectedOutputs.isNotEmpty ? _selectedOutputs : null,
-      currentHeight: _currentHeight,
-    );
-
-    if (!validation.isValid) {
+    final multiAccountCheck = _checkMultiAccountOutputs();
+    if (multiAccountCheck != null) {
       setState(() {
-        _txError = validation.error;
+        _txError = multiAccountCheck;
       });
       return;
     }
 
-    setState(() {
-      _isCreatingTx = true;
-      _txResult = null;
-      _txError = null;
-    });
+    // Check if this is a single-recipient transaction sending the max amount
+    final isSingleRecipient = _destinationControllers.length == 1;
+    bool isSendingMax = false;
 
-    // Execute transaction creation
-    TransactionService.createTransaction(
-      seed: validation.normalizedSeed!,
-      network: _network,
-      recipients: validation.recipients!,
-      nodeUrl: validation.nodeUrl!,
-      selectedOutputs: validation.selectedOutputs,
+    if (isSingleRecipient) {
+      final maxSpendable = TransactionService.calculateMaxSpendable(
+        availableOutputs: _allOutputs,
+        selectedOutputs: _selectedOutputs.isNotEmpty ? _selectedOutputs : null,
+        currentHeight: _currentHeight,
+      );
+
+      final amountStr = _amountControllers[0].text.trim();
+      final amount = double.tryParse(amountStr);
+
+      // Check if amount equals max (within small tolerance for floating point)
+      if (amount != null && (amount - maxSpendable).abs() < 0.000000001) {
+        isSendingMax = true;
+      }
+    }
+
+    // If sending max to a single recipient, use sweepAll
+    if (isSendingMax) {
+      final destinationAddress = _destinationControllers[0].text;
+
+      // Validate sweep parameters
+      final validation = TransactionService.validateSweepAll(
+        seed: _controller.text,
+        availableOutputs: _allOutputs,
+        destinationAddress: destinationAddress,
+        nodeUrl: _nodeUrlController.text,
+        selectedOutputs: _selectedOutputs.isNotEmpty ? _selectedOutputs : null,
+        currentHeight: _currentHeight,
+      );
+
+      if (!validation.isValid) {
+        setState(() {
+          _txError = validation.error;
+        });
+        return;
+      }
+
+      setState(() {
+        _isCreatingTx = true;
+        _txResult = null;
+        _txError = null;
+        _broadcastResult = null;
+        _broadcastError = null;
+      });
+
+      // Execute sweep
+      TransactionService.sweepAll(
+        seed: validation.normalizedSeed!,
+        network: _network,
+        destinationAddress: validation.destinationAddress!,
+        nodeUrl: validation.nodeUrl!,
+        selectedOutputs: validation.selectedOutputs,
+      );
+    } else {
+      // Normal transaction creation
+      final validation = TransactionService.validateTransactionCreation(
+        seed: _controller.text,
+        availableOutputs: _allOutputs,
+        recipients: recipientInputs,
+        nodeUrl: _nodeUrlController.text,
+        selectedOutputs: _selectedOutputs.isNotEmpty ? _selectedOutputs : null,
+        currentHeight: _currentHeight,
+      );
+
+      if (!validation.isValid) {
+        setState(() {
+          _txError = validation.error;
+        });
+        return;
+      }
+
+      setState(() {
+        _isCreatingTx = true;
+        _txResult = null;
+        _txError = null;
+      });
+
+      // Execute transaction creation
+      TransactionService.createTransaction(
+        seed: validation.normalizedSeed!,
+        network: _network,
+        recipients: validation.recipients!,
+        nodeUrl: validation.nodeUrl!,
+        selectedOutputs: validation.selectedOutputs,
+      );
+    }
+  }
+
+  void _handleSendMax(int recipientIndex) {
+    if (_activeAccount == -1) {
+      showDialog(
+        context: context,
+        builder: (context) {
+          return AlertDialog(
+            title: const Text('Send Max from all accounts?'),
+            content: const Text(
+              'You are sweeping multiple accounts.\n\nContinue?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  _setMaxAmount(recipientIndex);
+                },
+                child: const Text('Continue'),
+              ),
+            ],
+          );
+        },
+      );
+    } else {
+      _setMaxAmount(recipientIndex);
+    }
+  }
+
+  void _setMaxAmount(int recipientIndex) {
+    final maxSpendable = TransactionService.calculateMaxSpendable(
+      availableOutputs: _allOutputs,
+      selectedOutputs: _selectedOutputs.isNotEmpty ? _selectedOutputs : null,
+      currentHeight: _currentHeight,
     );
+
+    setState(() {
+      _amountControllers[recipientIndex].text = maxSpendable.toStringAsFixed(12);
+    });
   }
 
   void _addRecipient() {
@@ -914,6 +1180,24 @@ class _DebugViewState extends State<DebugView> {
     await ClipboardUtils.copyToClipboard(context, text, label);
   }
 
+  void _navigateToTransaction(String txHash) {
+    setState(() {
+      // Expand the Transactions panel
+      _expandedPanel = DebugPanel.transactions;
+      // Expand the specific transaction
+      _expandedTransactions.add(txHash);
+    });
+    // Scroll to the panel (will be visible after setState)
+    Future.delayed(const Duration(milliseconds: 100), () {
+      // This gives time for the panel to expand before scrolling
+      Scrollable.ensureVisible(
+        context,
+        alignment: 0.5,
+        duration: const Duration(milliseconds: 300),
+      );
+    });
+  }
+
   void _toggleViewMode() {
     _extensionService.isSidePanel
         ? _extensionService.openFullPage()
@@ -954,8 +1238,7 @@ class _DebugViewState extends State<DebugView> {
   }
 
   ExpansionPanel _buildPanel({
-    required int index,
-    required String title,
+    required DebugPanel panel,
     String? subtitle,
     required Widget body,
   }) {
@@ -964,12 +1247,12 @@ class _DebugViewState extends State<DebugView> {
         return GestureDetector(
           onTap: () {
             setState(() {
-              _expandedPanel = (_expandedPanel == index) ? null : index;
+              _expandedPanel = (_expandedPanel == panel) ? null : panel;
             });
           },
           child: ListTile(
             title: Text(
-              title,
+              panel.title,
               style: const TextStyle(fontWeight: FontWeight.bold),
             ),
             subtitle: subtitle != null
@@ -979,7 +1262,7 @@ class _DebugViewState extends State<DebugView> {
         );
       },
       body: body,
-      isExpanded: _expandedPanel == index,
+      isExpanded: _expandedPanel == panel,
     );
   }
 
@@ -1025,7 +1308,8 @@ class _DebugViewState extends State<DebugView> {
               ExpansionPanelList(
                   expansionCallback: (int index, bool isExpanded) {
                     setState(() {
-                      _expandedPanel = (_expandedPanel == index) ? null : index;
+                      final panel = DebugPanel.fromIndex(index);
+                      _expandedPanel = (_expandedPanel == panel) ? null : panel;
                     });
                   },
                   expandIconColor: Theme.of(context).colorScheme.primary,
@@ -1033,8 +1317,7 @@ class _DebugViewState extends State<DebugView> {
                   expandedHeaderPadding: EdgeInsets.zero,
                   children: [
                     _buildPanel(
-                      index: 1,
-                      title: 'File Management',
+                      panel: DebugPanel.fileManagement,
                       subtitle: fileManagementSubtitle,
                       body: FileManagementPanel(
                         walletId: _walletId,
@@ -1050,6 +1333,9 @@ class _DebugViewState extends State<DebugView> {
                         loadError: _loadError,
                         exportError: _exportError,
                         importError: _importError,
+                        seed: _controller.text.trim(),
+                        transactionCount: _allTransactionsAllAccounts.length,
+                        outputCount: _allOutputsAllAccounts.length,
                         onWalletChanged: _switchWallet,
                         onLoad: _loadWalletData,
                         onDelete: _clearStoredData,
@@ -1061,8 +1347,7 @@ class _DebugViewState extends State<DebugView> {
                       ),
                     ),
                     _buildPanel(
-                      index: 0,
-                      title: 'Seed Phrase',
+                      panel: DebugPanel.seedPhrase,
                       body: SeedPhrasePanel(
                         controller: _controller,
                         seedType: _seedType,
@@ -1079,8 +1364,7 @@ class _DebugViewState extends State<DebugView> {
                       ),
                     ),
                     _buildPanel(
-                      index: 2,
-                      title: 'Keys',
+                      panel: DebugPanel.keys,
                       body: KeysDisplayPanel(
                         address: _derivedAddress,
                         secretSpendKey: _secretSpendKey,
@@ -1092,9 +1376,8 @@ class _DebugViewState extends State<DebugView> {
                       ),
                     ),
                     _buildPanel(
-                      index: 3,
-                      title: 'Accounts',
-                      body: AccountsPanel(
+                      panel: DebugPanel.receive,
+                      body: ReceivePanel(
                         seed: _controller.text.trim().isEmpty ? null : _controller.text,
                         network: _network,
                         activeAccount: _activeAccount,
@@ -1104,17 +1387,20 @@ class _DebugViewState extends State<DebugView> {
                         onCreateAccount: _createAccount,
                         onCopyToClipboard: _copyToClipboard,
                         subaddresses: _subaddresses,
+                        onNavigateToTransaction: _navigateToTransaction,
+                        scanningAccounts: _lifecycle.activeWallet?.scanningAccounts ?? {0},
+                        onScanToggle: _toggleAccountScanning,
                       ),
                     ),
                     _buildPanel(
-                      index: 4,
-                      title: 'Scanning',
+                      panel: DebugPanel.scanning,
                       body: ScanningPanel(
                         nodeUrlController: _nodeUrlController,
                         blockHeightController: _blockHeightController,
                         blockHeightFocusNode: _blockHeightFocusNode,
                         isScanning: _isScanning,
                         isContinuousScanning: _isContinuousScanning,
+                        isContinuousPaused: _isContinuousPaused,
                         isSynced: _isSynced,
                         isScanningMempool: _isScanningMempool,
                         continuousScanCurrentHeight: _continuousScanCurrentHeight,
@@ -1132,8 +1418,7 @@ class _DebugViewState extends State<DebugView> {
                       ),
                     ),
                     _buildPanel(
-                      index: 5,
-                      title: 'Transactions',
+                      panel: DebugPanel.transactions,
                       subtitle: transactionsSubtitle,
                       body: TransactionsPanel(
                         allTransactions: _sortedTransactions(),
@@ -1142,6 +1427,7 @@ class _DebugViewState extends State<DebugView> {
                         txSortBy: _txSortBy,
                         txSortAscending: _txSortAscending,
                         expandedTransactions: _expandedTransactions,
+                        activeAccount: _activeAccount,
                         onSortChanged: (sortKey) {
                           setState(() {
                             if (_txSortBy == sortKey) {
@@ -1164,8 +1450,7 @@ class _DebugViewState extends State<DebugView> {
                       ),
                     ),
                     _buildPanel(
-                      index: 6,
-                      title: 'Coins',
+                      panel: DebugPanel.coins,
                       subtitle: coinsSubtitle,
                       body: OutputsPanel(
                         allOutputs: _allOutputs,
@@ -1174,6 +1459,7 @@ class _DebugViewState extends State<DebugView> {
                         sortBy: _sortBy,
                         sortAscending: _sortAscending,
                         selectedOutputs: _selectedOutputs,
+                        activeAccount: _activeAccount,
                         onToggleShowSpent: () {
                           setState(() {
                             _showSpentOutputs = !_showSpentOutputs;
@@ -1203,8 +1489,7 @@ class _DebugViewState extends State<DebugView> {
                       ),
                     ),
                     _buildPanel(
-                      index: 7,
-                      title: 'Create Transaction',
+                      panel: DebugPanel.createTransaction,
                       body: CreateTransactionPanel(
                         destinationControllers: _destinationControllers,
                         amountControllers: _amountControllers,
@@ -1214,6 +1499,7 @@ class _DebugViewState extends State<DebugView> {
                         broadcastResult: _broadcastResult,
                         txError: _txError,
                         broadcastError: _broadcastError,
+                        multiAccountWarning: _getMultiAccountWarning(),
                         onAddRecipient: _addRecipient,
                         onRemoveRecipient: _removeRecipient,
                         onCreateTransaction: _createTransaction,
@@ -1225,6 +1511,7 @@ class _DebugViewState extends State<DebugView> {
                           network: _network,
                         ),
                         onAmountChanged: () => setState(() {}),
+                        onSendMax: _handleSendMax,
                       ),
                     ),
                   ],
@@ -1327,7 +1614,28 @@ class _DebugViewState extends State<DebugView> {
       }
     }
 
-    // Use the persistence service to save wallet data
+    final activeWallet = _lifecycle.activeWallet;
+
+    // Derive accounts from outputs if no active wallet exists
+    final Set<int> derivedAccounts = {0}; // Always include account 0
+    for (var output in _allOutputs) {
+      if (output.subaddressIndex != null) {
+        derivedAccounts.add(output.subaddressIndex!.item1);
+      }
+    }
+
+    // Build outputsByAccount from _allOutputs if needed
+    final Map<int, List<OwnedOutput>> derivedOutputsByAccount = {};
+    for (var output in _allOutputs) {
+      final account = output.subaddressIndex?.item1 ?? 0;
+      derivedOutputsByAccount.putIfAbsent(account, () => []).add(output);
+    }
+
+    final accounts = activeWallet?.accounts ?? derivedAccounts.toList()..sort();
+    final outputsByAccount = activeWallet?.outputsByAccount ?? derivedOutputsByAccount;
+    final activeAccount = activeWallet?.activeAccount ?? _activeAccount;
+    final scanningAccounts = activeWallet?.scanningAccounts ?? derivedAccounts;
+
     final saveResult = await WalletPersistenceBrowser.saveWalletData(
       walletId: walletId,
       password: password,
@@ -1339,6 +1647,10 @@ class _DebugViewState extends State<DebugView> {
       transactions: _allTransactions,
       continuousScanCurrentHeight: _continuousScanCurrentHeight,
       selectedOutputs: _selectedOutputs,
+      accounts: accounts,
+      outputsByAccount: outputsByAccount,
+      activeAccount: activeAccount,
+      scanningAccounts: scanningAccounts,
     );
 
     final success = saveResult.success;
@@ -1417,9 +1729,25 @@ class _DebugViewState extends State<DebugView> {
     }
   }
 
-  void _openWallet(String walletId, String seed, String network, String address) {
+  void _openWallet(String walletId, String seed, String network, String address, {
+    List<int>? accounts,
+    Map<int, List<OwnedOutput>>? outputsByAccount,
+    int? activeAccount,
+  }) {
     setState(() {
-      _lifecycle.openWallet(walletId, seed, network, address);
+      final wallet = _lifecycle.openWallet(walletId, seed, network, address);
+
+      if (accounts != null && accounts.isNotEmpty) {
+        final updatedWallet = wallet.copyWith(
+          accounts: accounts,
+          outputsByAccount: outputsByAccount ?? {},
+          activeAccount: activeAccount ?? 0,
+        );
+        _lifecycle.openWallets[walletId] = updatedWallet;
+        // CRITICAL: Ensure activeWalletId is still set after replacing the wallet
+        _lifecycle.activeWalletId = walletId;
+      }
+
       _derivedAddress = address;
     });
 
@@ -1539,6 +1867,9 @@ class _DebugViewState extends State<DebugView> {
     final loadedTransactions = loadResult.transactions!;
     final loadedHeight = loadResult.continuousScanCurrentHeight!;
     final loadedSelectedOutputs = loadResult.selectedOutputs!;
+    final loadedAccounts = loadResult.accounts ?? [0];
+    final loadedOutputsByAccount = loadResult.outputsByAccount ?? {0: loadedOutputs};
+    final loadedActiveAccount = loadResult.activeAccount ?? 0;
 
     // Restore wallet state (flag prevents _onSeedChanged from wiping data)
     _isRestoringWallet = true;
@@ -1561,13 +1892,24 @@ class _DebugViewState extends State<DebugView> {
 
       _isLoadingWallet = false;
       _loadError = null;
+
+      // Open the wallet INSIDE setState to prevent race condition
+      // This ensures activeWalletId is set before any scan results arrive
+      final resolvedAddress = address ?? _derivedAddress ?? '';
+      if (seed.isNotEmpty && resolvedAddress.isNotEmpty) {
+        // walletId was passed to _loadWalletData, use it
+        _openWallet(
+          _walletId,
+          seed,
+          network,
+          resolvedAddress,
+          accounts: loadedAccounts,
+          outputsByAccount: loadedOutputsByAccount,
+          activeAccount: 0,  // Always start with account 0 when loading
+        );
+      }
     });
     _isRestoringWallet = false;
-
-    final resolvedAddress = address ?? _derivedAddress ?? '';
-    if (seed.isNotEmpty && resolvedAddress.isNotEmpty) {
-      _openWallet(_walletId, seed, network, resolvedAddress);
-    }
 
     setState(() {
       _lifecycle.restoreLoadedData(
@@ -1650,8 +1992,8 @@ class _DebugViewState extends State<DebugView> {
   }
 
   Future<void> _importWallet() async {
+    // Don't set _isImporting here - wait until file is selected
     setState(() {
-      _isImporting = true;
       _importError = null;
     });
 
@@ -1661,15 +2003,27 @@ class _DebugViewState extends State<DebugView> {
       uploadInput.accept = '.monero-wallet,*'; // Prefer .monero-wallet, allow all as fallback
       uploadInput.click();
 
-      // Wait for file selection
-      await uploadInput.onChange.first;
-      final files = uploadInput.files;
-      if (files == null || files.isEmpty) {
-        setState(() {
-          _isImporting = false;
-        });
+      // Wait for file selection - this may never complete if cancelled
+      // So we wrap in a timeout
+      try {
+        await uploadInput.onChange.first.timeout(
+          const Duration(seconds: 120),
+        );
+      } on TimeoutException {
+        // Dialog was likely cancelled
         return;
       }
+
+      final files = uploadInput.files;
+      if (files == null || files.isEmpty) {
+        // No file selected (shouldn't happen but be safe)
+        return;
+      }
+
+      // Now we know a file was selected, show loading state
+      setState(() {
+        _isImporting = true;
+      });
 
       final file = files[0];
 

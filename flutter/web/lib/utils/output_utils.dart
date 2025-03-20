@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../src/bindings/bindings.dart';
+import 'output_lock_utils.dart';
 
 class OutputUtils {
   /// Select all spendable outputs (confirmed and unspent)
@@ -9,10 +10,10 @@ class OutputUtils {
   ) {
     final selected = <String>{};
     for (var output in allOutputs) {
-      if (output.spent) continue;
-      final outputHeight = output.blockHeight.toInt();
-      final confirmations = outputHeight > 0 ? currentHeight - outputHeight : 0;
-      if (confirmations >= 10) {
+      if (OutputLockUtils.isOutputSpendable(
+        output: output,
+        currentHeight: currentHeight,
+      )) {
         final outputKey = '${output.txHash}:${output.outputIndex}';
         selected.add(outputKey);
       }
@@ -28,13 +29,14 @@ class OutputUtils {
   ) {
     int total = 0;
     for (var output in allOutputs) {
-      if (output.spent) continue;
-      final outputHeight = output.blockHeight.toInt();
-      final confirmations = outputHeight > 0 ? currentHeight - outputHeight : 0;
-      if (confirmations < 10) continue;
       final outputKey = '${output.txHash}:${output.outputIndex}';
       if (selectedOutputs.contains(outputKey)) {
-        total += output.amount.toInt();
+        if (OutputLockUtils.isOutputSpendable(
+          output: output,
+          currentHeight: currentHeight,
+        )) {
+          total += output.amount.toInt();
+        }
       }
     }
     return total;
@@ -63,16 +65,30 @@ class OutputUtils {
     List<OwnedOutput> existing,
     List<OwnedOutput> incoming,
   ) {
+    print('DEBUG mergeScannedOutputs: START');
+    print('  - Existing outputs count: ${existing.length}');
+    print('  - Incoming outputs count: ${incoming.length}');
+
     for (var output in incoming) {
+      final accountIdx = output.subaddressIndex?.item1 ?? 0;
+      print('  - Processing output: txHash=${output.txHash.substring(0, 8)}..., outputIndex=${output.outputIndex}, account=$accountIdx, amount=${output.amountXmr}');
+
       final idx = existing.indexWhere((o) =>
         o.txHash == output.txHash && o.outputIndex == output.outputIndex
       );
       if (idx == -1) {
         existing.add(output);
+        print('    → ADDED new output (now ${existing.length} total)');
       } else if (existing[idx].blockHeight.toInt() == 0) {
         existing[idx] = output;
+        print('    → UPDATED unconfirmed output at index $idx');
+      } else {
+        print('    → SKIPPED (already exists at index $idx)');
       }
     }
+
+    print('  - Final existing outputs count: ${existing.length}');
+    print('DEBUG mergeScannedOutputs: END');
   }
 
   /// Add outputs not already present (by txHash+outputIndex) in-place.

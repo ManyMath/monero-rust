@@ -29,6 +29,7 @@ pub struct WalletActor {
     scan_seed: String,
     scan_network: String,
     scan_account_lookahead: u32,
+    scan_accounts_to_scan: Option<Vec<u32>>,
     // Multi-wallet scan state
     multi_wallet_scan_current_height: u64,
     multi_wallet_scan_target_height: u64,
@@ -80,6 +81,7 @@ impl WalletActor {
             scan_seed: String::new(),
             scan_network: String::new(),
             scan_account_lookahead: 0,
+            scan_accounts_to_scan: None,
             multi_wallet_scan_current_height: 0,
             multi_wallet_scan_target_height: 0,
             multi_wallet_scan_node_url: String::new(),
@@ -368,6 +370,7 @@ impl WalletActor {
                     seed: request.seed,
                     network: request.network,
                     account_lookahead: request.account_lookahead,
+                    accounts_to_scan: request.accounts_to_scan,
                 })
                 .await;
         }
@@ -766,12 +769,14 @@ impl WalletActor {
 
 #[async_trait]
 impl Notifiable<UpdateScanState> for WalletActor {
-    async fn notify(&mut self, msg: UpdateScanState, _ctx: &Context<Self>) {
-        // Check for concurrent scan
+    async fn notify(&mut self, msg: UpdateScanState, ctx: &Context<Self>) {
+        // If multi-wallet scan is active, stop it first to allow transition
         if self.is_scanning && self.active_scan_type == ScanType::MultiWallet {
             #[cfg(target_arch = "wasm32")]
-            web_sys::console::warn_1(&"Cannot start single-wallet scan: multi-wallet scan already running".into());
-            return;
+            web_sys::console::log_1(&"Stopping multi-wallet scan to transition to single-wallet scan".into());
+
+            // Stop the multi-wallet scan
+            self.notify(StopScan {}, ctx).await;
         }
 
         self.is_scanning = msg.is_scanning;
@@ -782,17 +787,20 @@ impl Notifiable<UpdateScanState> for WalletActor {
         self.scan_seed = msg.seed;
         self.scan_network = msg.network;
         self.scan_account_lookahead = msg.account_lookahead;
+        self.scan_accounts_to_scan = msg.accounts_to_scan;
     }
 }
 
 #[async_trait]
 impl Notifiable<UpdateMultiWalletScanState> for WalletActor {
-    async fn notify(&mut self, msg: UpdateMultiWalletScanState, _ctx: &Context<Self>) {
-        // Check for concurrent scan
+    async fn notify(&mut self, msg: UpdateMultiWalletScanState, ctx: &Context<Self>) {
+        // If single-wallet scan is active, stop it first to allow transition
         if self.is_scanning && self.active_scan_type == ScanType::SingleWallet {
             #[cfg(target_arch = "wasm32")]
-            web_sys::console::warn_1(&"Cannot start multi-wallet scan: single-wallet scan already running".into());
-            return;
+            web_sys::console::log_1(&"Stopping single-wallet scan to transition to multi-wallet scan".into());
+
+            // Stop the single-wallet scan
+            self.notify(StopScan {}, ctx).await;
         }
 
         self.is_scanning = msg.is_scanning;
@@ -827,6 +835,7 @@ impl Notifiable<StartContinuousScan> for WalletActor {
                             seed: seed.clone(),
                             network: network.clone(),
                             account_lookahead,
+                            accounts_to_scan: msg.accounts_to_scan.clone(),
                         })
                         .await;
 
@@ -910,6 +919,7 @@ impl Notifiable<ContinueScan> for WalletActor {
         let seed = self.scan_seed.clone();
         let network = self.scan_network.clone();
         let account_lookahead = self.scan_account_lookahead;
+        let accounts_to_scan = self.scan_accounts_to_scan.clone();
         let target_height = self.scan_target_height;
         let mut self_addr = ctx.address();
 
@@ -917,8 +927,16 @@ impl Notifiable<ContinueScan> for WalletActor {
         self.scan_current_height += 1;
 
         wasm_bindgen_futures::spawn_local(async move {
+            // If specific accounts are provided, scan up to the highest one
+            // Otherwise use the account_lookahead value
+            let max_account = if let Some(ref accounts) = accounts_to_scan {
+                accounts.iter().max().copied().unwrap_or(0)
+            } else {
+                account_lookahead
+            };
+
             let lookahead = monero_rust::Lookahead {
-                account: account_lookahead,
+                account: max_account,
                 subaddress: monero_rust::DEFAULT_LOOKAHEAD.subaddress,
             };
             match monero_rust::scan_block_for_outputs_with_url_and_lookahead(&node_url, block_height, &seed, &network, lookahead).await {
@@ -926,6 +944,20 @@ impl Notifiable<ContinueScan> for WalletActor {
                     let outputs = result
                         .outputs
                         .iter()
+                        .filter(|o| {
+                            // If specific accounts are provided, filter outputs
+                            if let Some(ref accounts) = accounts_to_scan {
+                                if let Some((account, _)) = o.subaddress_index {
+                                    accounts.contains(&account)
+                                } else {
+                                    // Outputs without subaddress index belong to account 0
+                                    accounts.contains(&0)
+                                }
+                            } else {
+                                // No filter, include all outputs
+                                true
+                            }
+                        })
                         .map(|o| OwnedOutput {
                             tx_hash: o.tx_hash.clone(),
                             output_index: o.output_index,
@@ -1073,13 +1105,23 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
             // Convert wallet configs
             let wallet_configs: Vec<monero_rust::WalletScanConfig> = wallets
                 .iter()
-                .map(|w| monero_rust::WalletScanConfig {
-                    mnemonic: w.seed.clone(),
-                    network: w.network.clone(),
-                    lookahead: monero_rust::Lookahead {
-                        account: w.account_lookahead,
-                        subaddress: 20,
-                    },
+                .map(|w| {
+                    // If specific accounts are provided, scan up to the highest one
+                    // Otherwise use the account_lookahead value
+                    let max_account = if let Some(ref accounts) = w.accounts_to_scan {
+                        accounts.iter().max().copied().unwrap_or(0)
+                    } else {
+                        w.account_lookahead
+                    };
+
+                    monero_rust::WalletScanConfig {
+                        mnemonic: w.seed.clone(),
+                        network: w.network.clone(),
+                        lookahead: monero_rust::Lookahead {
+                            account: max_account,
+                            subaddress: 20,
+                        },
+                    }
                 })
                 .collect();
 
@@ -1091,14 +1133,39 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
             .await
             {
                 Ok(result) => {
+                    // Create a map to track accounts_to_scan by wallet index
+                    let wallet_accounts: Vec<Option<Vec<u32>>> = wallets
+                        .iter()
+                        .map(|w| w.accounts_to_scan.clone())
+                        .collect();
+
                     // Send progress update with results
                     let wallet_results: Vec<WalletScanResult> = result
                         .wallet_results
                         .into_iter()
-                        .map(|(address, wallet_data)| {
+                        .enumerate()
+                        .map(|(idx, (address, wallet_data))| {
+                            // Get the accounts to scan for this wallet by index
+                            let accounts_filter = wallet_accounts.get(idx)
+                                .and_then(|a| a.as_ref());
+
                             let outputs = wallet_data
                                 .outputs
                                 .iter()
+                                .filter(|o| {
+                                    // If specific accounts are provided, filter outputs
+                                    if let Some(accounts) = accounts_filter {
+                                        if let Some((account, _)) = o.subaddress_index {
+                                            accounts.contains(&account)
+                                        } else {
+                                            // Outputs without subaddress index belong to account 0
+                                            accounts.contains(&0)
+                                        }
+                                    } else {
+                                        // No filter, include all outputs
+                                        true
+                                    }
+                                })
                                 .map(|o| OwnedOutput {
                                     tx_hash: o.tx_hash.clone(),
                                     output_index: o.output_index,

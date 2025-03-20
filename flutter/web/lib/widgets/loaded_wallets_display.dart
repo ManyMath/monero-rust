@@ -5,12 +5,14 @@ class LoadedWalletsDisplay extends StatelessWidget {
   final List<WalletInstance> activeWallets;
   final String? activeWalletId;
   final Function(String) onCloseWallet;
+  final Function(String) onWalletChanged;
 
   const LoadedWalletsDisplay({
     super.key,
     required this.activeWallets,
     required this.activeWalletId,
     required this.onCloseWallet,
+    required this.onWalletChanged,
   });
 
   @override
@@ -39,11 +41,62 @@ class LoadedWalletsDisplay extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
+          if (activeWallets.length > 1) ...[
+            Row(
+              children: [
+                SizedBox(
+                  width: 48,
+                  child: Center(
+                    child: Text(
+                      'Active',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.grey.shade700,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Wallet',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey.shade700,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                const SizedBox(width: 18),
+              ],
+            ),
+            const SizedBox(height: 8),
+          ],
           ...activeWallets.map((wallet) {
             return Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: Row(
                 children: [
+                  if (activeWallets.length > 1) ...[
+                    SizedBox(
+                      width: 48,
+                      child: Center(
+                        child: Radio<String>(
+                          value: wallet.walletId,
+                          groupValue: activeWalletId,
+                          onChanged: (value) {
+                            if (value != null) {
+                              onWalletChanged(value);
+                            }
+                          },
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -74,21 +127,6 @@ class LoadedWalletsDisplay extends StatelessWidget {
                       ],
                     ),
                   ),
-                  if (wallet.walletId == activeWalletId)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: Colors.blue.shade100,
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        'viewing',
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: Colors.blue.shade700,
-                        ),
-                      ),
-                    ),
                   const SizedBox(width: 8),
                   IconButton(
                     icon: const Icon(Icons.close, size: 18),

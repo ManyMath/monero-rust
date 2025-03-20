@@ -83,9 +83,14 @@ class WalletTransaction {
           paymentId: outputData['paymentId'] as String?,
           receivedOutputBytes: outputData['receivedOutputBytes'] as String,
           blockHeight: Uint64(BigInt.parse(outputData['blockHeight'] as String)),
-          spent: outputData['spent'] as bool,
+          // Handle backward compatibility: these fields were added later
+          spent: outputData.containsKey('spent') && outputData['spent'] != null
+              ? outputData['spent'] as bool
+              : false,  // Default to unspent for backward compatibility
           keyImage: outputData['keyImage'] as String,
-          isCoinbase: (outputData['isCoinbase'] as bool?) ?? false,
+          isCoinbase: outputData.containsKey('isCoinbase') && outputData['isCoinbase'] != null
+              ? outputData['isCoinbase'] as bool
+              : false,  // Default to non-coinbase for backward compatibility
         );
       }).toList(),
       spentKeyImages: (json['spentKeyImages'] as List).cast<String>(),

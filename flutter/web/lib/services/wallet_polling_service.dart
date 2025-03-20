@@ -53,12 +53,12 @@ class WalletPollingService {
     required VoidCallback onMempoolPoll,
     VoidCallback? onCountdownUpdate,
   }) {
+    // Cancel any existing timers first
+    stopPolling();
+
     _onBlockRefresh = onBlockRefresh;
     _onMempoolPoll = onMempoolPoll;
     _onCountdownUpdate = onCountdownUpdate;
-
-    // Cancel any existing timers first
-    stopPolling();
 
     // Initialize countdowns
     _blockRefreshCountdown = _blockRefreshInterval.inSeconds;

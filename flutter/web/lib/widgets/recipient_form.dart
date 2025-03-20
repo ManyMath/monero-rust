@@ -7,6 +7,7 @@ class RecipientForm extends StatelessWidget {
   final bool canRemove;
   final VoidCallback onRemove;
   final VoidCallback onAmountChanged;
+  final VoidCallback? onSendMax;
 
   const RecipientForm({
     super.key,
@@ -16,6 +17,7 @@ class RecipientForm extends StatelessWidget {
     required this.canRemove,
     required this.onRemove,
     required this.onAmountChanged,
+    this.onSendMax,
   });
 
   @override
@@ -59,16 +61,32 @@ class RecipientForm extends StatelessWidget {
             style: const TextStyle(fontSize: 12),
           ),
           const SizedBox(height: 8),
-          TextField(
-            controller: amountController,
-            decoration: const InputDecoration(
-              labelText: 'Amount (XMR)',
-              border: OutlineInputBorder(),
-              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-            ),
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            style: const TextStyle(fontSize: 12),
-            onChanged: (_) => onAmountChanged(),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: amountController,
+                  decoration: const InputDecoration(
+                    labelText: 'Amount (XMR)',
+                    border: OutlineInputBorder(),
+                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  ),
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  style: const TextStyle(fontSize: 12),
+                  onChanged: (_) => onAmountChanged(),
+                ),
+              ),
+              if (onSendMax != null) ...[
+                const SizedBox(width: 8),
+                OutlinedButton(
+                  onPressed: onSendMax,
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  ),
+                  child: const Text('Max', style: TextStyle(fontSize: 12)),
+                ),
+              ],
+            ],
           ),
         ],
       ),

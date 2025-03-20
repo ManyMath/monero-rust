@@ -1,6 +1,7 @@
 import '../src/bindings/bindings.dart';
 import '../utils/key_parser.dart';
 import '../utils/network_utils.dart';
+import '../utils/output_lock_utils.dart';
 
 /// Service for handling transaction creation and broadcasting operations
 class TransactionService {
@@ -115,6 +116,78 @@ class TransactionService {
     ).sendSignalToRust();
   }
 
+  /// Validate sweep all transaction parameters
+  static SweepAllValidation validateSweepAll({
+    required String seed,
+    required List<OwnedOutput> availableOutputs,
+    required String destinationAddress,
+    required String nodeUrl,
+    Set<String>? selectedOutputs,
+    int currentHeight = 0,
+  }) {
+    // Validate seed phrase
+    final result = KeyParser.parse(seed);
+    if (!result.isValid || result.normalizedInput == null) {
+      return SweepAllValidation.error('Please enter a valid seed phrase first');
+    }
+
+    // Check if outputs are available
+    if (availableOutputs.isEmpty) {
+      return SweepAllValidation.error(
+        'No outputs available. Scan blocks to find outputs first.',
+      );
+    }
+
+    // Validate destination address
+    final destination = destinationAddress.trim();
+    if (destination.isEmpty) {
+      return SweepAllValidation.error('Please enter a destination address');
+    }
+
+    // Validate node URL
+    if (nodeUrl.trim().isEmpty) {
+      return SweepAllValidation.error('Please enter a node URL');
+    }
+
+    // Calculate total amount that will be swept
+    final sweepTotal = _getSelectedOutputsTotal(
+      availableOutputs,
+      selectedOutputs ?? availableOutputs.map((o) => '${o.txHash}:${o.outputIndex}').toSet(),
+      currentHeight,
+    );
+
+    if (sweepTotal == 0) {
+      return SweepAllValidation.error(
+        'No spendable outputs available (outputs need 10 confirmations)',
+      );
+    }
+
+    return SweepAllValidation.success(
+      normalizedSeed: result.normalizedInput!,
+      destinationAddress: destination,
+      nodeUrl: NetworkUtils.normalizeNodeUrl(nodeUrl),
+      selectedOutputs: selectedOutputs?.toList(),
+      totalAmount: sweepTotal,
+    );
+  }
+
+  /// Sweep all funds to a destination address
+  static void sweepAll({
+    required String seed,
+    required String network,
+    required String destinationAddress,
+    required String nodeUrl,
+    List<String>? selectedOutputs,
+  }) {
+    SweepAllRequest(
+      nodeUrl: nodeUrl,
+      seed: seed,
+      network: network,
+      destinationAddress: destinationAddress,
+      selectedOutputs: selectedOutputs,
+    ).sendSignalToRust();
+  }
+
   /// Validate transaction broadcasting parameters
   static TransactionBroadcastValidation validateTransactionBroadcast({
     required TransactionCreatedResponse? txResult,
@@ -148,6 +221,34 @@ class TransactionService {
     ).sendSignalToRust();
   }
 
+  /// Calculate maximum spendable amount (total - estimated fee)
+  static double calculateMaxSpendable({
+    required List<OwnedOutput> availableOutputs,
+    Set<String>? selectedOutputs,
+    int currentHeight = 0,
+  }) {
+    final outputKeys = selectedOutputs ??
+        availableOutputs.map((o) => '${o.txHash}:${o.outputIndex}').toSet();
+
+    final totalAtomic = _getSelectedOutputsTotal(
+      availableOutputs,
+      outputKeys,
+      currentHeight,
+    );
+
+    if (totalAtomic == 0) return 0.0;
+
+    const feePerInputEstimate = 15000000;
+    const baseFeeEstimate = 20000000;
+    final numInputs = outputKeys.length;
+    final estimatedFee = baseFeeEstimate + (numInputs * feePerInputEstimate);
+
+    final maxSpendable = totalAtomic - estimatedFee;
+    if (maxSpendable <= 0) return 0.0;
+
+    return maxSpendable / 1e12;
+  }
+
   /// Calculate total of selected outputs
   static int _getSelectedOutputsTotal(
     List<OwnedOutput> allOutputs,
@@ -158,16 +259,11 @@ class TransactionService {
     for (final output in allOutputs) {
       final outputKey = '${output.txHash}:${output.outputIndex}';
       if (selectedOutputs.contains(outputKey)) {
-        // Check if output is spendable (not spent and has enough confirmations)
-        if (!output.spent) {
-          final blockHeightInt = output.blockHeight.toInt();
-          final confirms = currentHeight > 0 && blockHeightInt > 0
-              ? currentHeight - blockHeightInt + 1
-              : 0;
-          // Only count outputs with at least 10 confirmations (or unconfirmed)
-          if (confirms >= 10 || confirms == 0) {
-            total += output.amount.toInt();
-          }
+        if (OutputLockUtils.isOutputSpendable(
+          output: output,
+          currentHeight: currentHeight,
+        )) {
+          total += output.amount.toInt();
         }
       }
     }
@@ -258,6 +354,51 @@ class TransactionBroadcastValidation {
 
   factory TransactionBroadcastValidation.error(String error) {
     return TransactionBroadcastValidation._(
+      isValid: false,
+      error: error,
+    );
+  }
+}
+
+/// Validation result for sweep all operation
+class SweepAllValidation {
+  final bool isValid;
+  final String? error;
+  final String? normalizedSeed;
+  final String? destinationAddress;
+  final String? nodeUrl;
+  final List<String>? selectedOutputs;
+  final int? totalAmount;
+
+  SweepAllValidation._({
+    required this.isValid,
+    this.error,
+    this.normalizedSeed,
+    this.destinationAddress,
+    this.nodeUrl,
+    this.selectedOutputs,
+    this.totalAmount,
+  });
+
+  factory SweepAllValidation.success({
+    required String normalizedSeed,
+    required String destinationAddress,
+    required String nodeUrl,
+    List<String>? selectedOutputs,
+    required int totalAmount,
+  }) {
+    return SweepAllValidation._(
+      isValid: true,
+      normalizedSeed: normalizedSeed,
+      destinationAddress: destinationAddress,
+      nodeUrl: nodeUrl,
+      selectedOutputs: selectedOutputs,
+      totalAmount: totalAmount,
+    );
+  }
+
+  factory SweepAllValidation.error(String error) {
+    return SweepAllValidation._(
       isValid: false,
       error: error,
     );

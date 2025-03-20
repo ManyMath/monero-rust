@@ -5,14 +5,15 @@ import 'common_widgets.dart';
 
 /// Widget that provides blockchain scanning controls and displays sync progress.
 ///
-/// Includes node URL input, block height input, scan buttons (single, continuous, mempool),
+/// Includes node URL input, block height input, lookahead dropdown, scan buttons (single, continuous, mempool),
 /// sync progress display, and polling countdown display.
-class ScanningPanel extends StatelessWidget {
+class ScanningPanel extends StatefulWidget {
   final TextEditingController nodeUrlController;
   final TextEditingController blockHeightController;
   final FocusNode blockHeightFocusNode;
   final bool isScanning;
   final bool isContinuousScanning;
+  final bool isContinuousPaused;
   final bool isSynced;
   final bool isScanningMempool;
   final int continuousScanCurrentHeight;
@@ -35,6 +36,7 @@ class ScanningPanel extends StatelessWidget {
     required this.blockHeightFocusNode,
     required this.isScanning,
     required this.isContinuousScanning,
+    required this.isContinuousPaused,
     required this.isSynced,
     required this.isScanningMempool,
     required this.continuousScanCurrentHeight,
@@ -52,6 +54,24 @@ class ScanningPanel extends StatelessWidget {
   });
 
   @override
+  State<ScanningPanel> createState() => _ScanningPanelState();
+}
+
+enum LookaheadMode {
+  none('No lookahead', 0, 0),
+  hardware('Hardware wallet', 5, 20),
+  compatibility('Compatibility', 50, 200);
+
+  final String label;
+  final int accounts;
+  final int subaddresses;
+  const LookaheadMode(this.label, this.accounts, this.subaddresses);
+}
+
+class _ScanningPanelState extends State<ScanningPanel> {
+  LookaheadMode _selectedLookahead = LookaheadMode.none;
+
+  @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.all(16.0),
@@ -59,7 +79,7 @@ class ScanningPanel extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           TextField(
-            controller: nodeUrlController,
+            controller: widget.nodeUrlController,
             decoration: const InputDecoration(
               labelText: 'Node Address',
               hintText: '127.0.0.1:38081',
@@ -68,12 +88,13 @@ class ScanningPanel extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
+          // First row: Block height input and Lookahead dropdown
           Row(
             children: [
               Expanded(
                 child: TextField(
-                  controller: blockHeightController,
-                  focusNode: blockHeightFocusNode,
+                  controller: widget.blockHeightController,
+                  focusNode: widget.blockHeightFocusNode,
                   decoration: const InputDecoration(
                     labelText: 'Block Height',
                     hintText: 'Block height for scan',
@@ -82,32 +103,60 @@ class ScanningPanel extends StatelessWidget {
                   keyboardType: TextInputType.number,
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 16),
+              Expanded(
+                child: DropdownButtonFormField<LookaheadMode>(
+                  value: _selectedLookahead,
+                  decoration: const InputDecoration(
+                    labelText: 'Lookahead',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: LookaheadMode.values
+                      .map((mode) => DropdownMenuItem(
+                            value: mode,
+                            child: Text(mode.label),
+                          ))
+                      .toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      setState(() {
+                        _selectedLookahead = value;
+                      });
+                    }
+                  },
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          // Second row: Scan buttons
+          Row(
+            children: [
               Expanded(
                 child: ElevatedButton.icon(
-                  onPressed: (isScanning || isContinuousScanning) ? null : onScanBlock,
-                  icon: isScanning
+                  onPressed: (widget.isScanning || widget.isContinuousScanning) ? null : widget.onScanBlock,
+                  icon: widget.isScanning
                       ? const SizedBox(
                           width: 16,
                           height: 16,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       : const Icon(Icons.search),
-                  label: Text(isScanning ? 'Scanning...' : 'Scan One'),
+                  label: Text(widget.isScanning ? 'Scanning...' : 'Scan One'),
                 ),
               ),
               const SizedBox(width: 8),
               Expanded(
                 child: ElevatedButton.icon(
-                  onPressed: isScanning
+                  onPressed: widget.isScanning
                       ? null
-                      : isContinuousScanning
-                          ? onPauseContinuousScan
-                          : onStartContinuousScan,
-                  icon: Icon(isContinuousScanning ? Icons.pause : Icons.play_arrow),
-                  label: Text(getContinuousScanButtonLabel()),
+                      : widget.isContinuousScanning
+                          ? widget.onPauseContinuousScan
+                          : widget.onStartContinuousScan,
+                  icon: Icon(widget.isContinuousScanning ? Icons.pause : Icons.play_arrow),
+                  label: Text(widget.isContinuousScanning ? 'Pause Scan' : 'Scan All'),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: getContinuousScanButtonColor(),
+                    backgroundColor: widget.getContinuousScanButtonColor(),
                     foregroundColor: Colors.white,
                   ),
                 ),
@@ -115,17 +164,17 @@ class ScanningPanel extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: ElevatedButton.icon(
-                  onPressed: (isScanningMempool || !hasSeedPhrase)
+                  onPressed: (widget.isScanningMempool || !widget.hasSeedPhrase)
                       ? null
-                      : onScanMempool,
-                  icon: isScanningMempool
+                      : widget.onScanMempool,
+                  icon: widget.isScanningMempool
                       ? const SizedBox(
                           width: 16,
                           height: 16,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       : const Icon(Icons.memory),
-                  label: Text(isScanningMempool ? 'Scanning...' : 'Scan Mempool'),
+                  label: Text(widget.isScanningMempool ? 'Scanning...' : 'Scan Mempool'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.purple,
                     foregroundColor: Colors.white,
@@ -134,15 +183,60 @@ class ScanningPanel extends StatelessWidget {
               ),
             ],
           ),
-          if (isContinuousScanning || isSynced) ...[
+          // Show polling countdown only when poll is active (not scanning, not paused, not synced)
+          if (!widget.isContinuousScanning && !widget.isContinuousPaused && !widget.isSynced && (widget.pollingService.blockRefreshCountdown > 0 || widget.pollingService.mempoolCountdown > 0)) ...[
             const SizedBox(height: 16),
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: isSynced ? Colors.green.shade50 : Colors.blue.shade50,
+                color: Colors.grey.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.grey.shade300),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  if (widget.pollingService.blockRefreshCountdown > 0)
+                    Row(
+                      children: [
+                        Icon(Icons.timer, size: 16, color: Colors.grey.shade700),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Next block poll: ${widget.pollingService.blockRefreshCountdown}s',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey.shade700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  if (widget.pollingService.mempoolCountdown > 0)
+                    Row(
+                      children: [
+                        Icon(Icons.memory, size: 16, color: Colors.grey.shade700),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Next mempool poll: ${widget.pollingService.mempoolCountdown}s',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey.shade700,
+                          ),
+                        ),
+                      ],
+                    ),
+                ],
+              ),
+            ),
+          ],
+          if (widget.isContinuousScanning || widget.isSynced) ...[
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: widget.isSynced ? Colors.green.shade50 : Colors.blue.shade50,
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(
-                  color: isSynced ? Colors.green.shade200 : Colors.blue.shade200,
+                  color: widget.isSynced ? Colors.green.shade200 : Colors.blue.shade200,
                 ),
               ),
               child: Column(
@@ -152,13 +246,13 @@ class ScanningPanel extends StatelessWidget {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text(
-                        isSynced ? 'Synced' : 'Scanning Progress',
+                        widget.isSynced ? 'Synced' : 'Scanning Progress',
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
-                          color: isSynced ? Colors.green.shade900 : Colors.blue.shade900,
+                          color: widget.isSynced ? Colors.green.shade900 : Colors.blue.shade900,
                         ),
                       ),
-                      if (isSynced)
+                      if (widget.isSynced)
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                           decoration: BoxDecoration(
@@ -178,42 +272,56 @@ class ScanningPanel extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Block $continuousScanCurrentHeight / $continuousScanTargetHeight',
+                    'Block ${widget.continuousScanCurrentHeight} / ${widget.continuousScanTargetHeight}',
                     style: TextStyle(
                       fontSize: 12,
-                      color: isSynced ? Colors.green.shade900 : Colors.blue.shade900,
+                      color: widget.isSynced ? Colors.green.shade900 : Colors.blue.shade900,
                     ),
                   ),
                   const SizedBox(height: 8),
                   LinearProgressIndicator(
-                    value: continuousScanTargetHeight > 0
-                        ? continuousScanCurrentHeight / continuousScanTargetHeight
+                    value: widget.continuousScanTargetHeight > 0
+                        ? widget.continuousScanCurrentHeight / widget.continuousScanTargetHeight
                         : 0,
                     backgroundColor: Colors.grey.shade300,
                     valueColor: AlwaysStoppedAnimation<Color>(
-                      isSynced ? Colors.green : Colors.blue,
+                      widget.isSynced ? Colors.green : Colors.blue,
                     ),
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    continuousScanTargetHeight > 0
-                        ? '${((continuousScanCurrentHeight / continuousScanTargetHeight) * 100).toStringAsFixed(1)}%'
+                    widget.continuousScanTargetHeight > 0
+                        ? '${((widget.continuousScanCurrentHeight / widget.continuousScanTargetHeight) * 100).toStringAsFixed(1)}%'
                         : '0%',
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.bold,
-                      color: isSynced ? Colors.green.shade900 : Colors.blue.shade900,
+                      color: widget.isSynced ? Colors.green.shade900 : Colors.blue.shade900,
                     ),
                   ),
-                  // Polling countdown when synced
-                  if (isSynced && (pollingService.blockRefreshCountdown > 0 || pollingService.mempoolCountdown > 0)) ...[
+                  // Polling countdown timer display
+                  if ((widget.pollingService.blockRefreshCountdown > 0 || widget.pollingService.mempoolCountdown > 0)) ...[
                     const SizedBox(height: 12),
-                    Text(
-                      'Next poll: ${pollingService.mempoolCountdown > 0 && (pollingService.blockRefreshCountdown == 0 || pollingService.mempoolCountdown < pollingService.blockRefreshCountdown) ? pollingService.mempoolCountdown : pollingService.blockRefreshCountdown}s',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: Colors.green.shade700,
-                      ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        if (widget.pollingService.blockRefreshCountdown > 0)
+                          Text(
+                            'Next block poll: ${widget.pollingService.blockRefreshCountdown}s',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: widget.isSynced ? Colors.green.shade700 : Colors.blue.shade700,
+                            ),
+                          ),
+                        if (widget.pollingService.mempoolCountdown > 0)
+                          Text(
+                            'Next mempool poll: ${widget.pollingService.mempoolCountdown}s',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: widget.isSynced ? Colors.green.shade700 : Colors.blue.shade700,
+                            ),
+                          ),
+                      ],
                     ),
                   ],
                 ],
@@ -221,7 +329,7 @@ class ScanningPanel extends StatelessWidget {
             ),
           ],
           const SizedBox(height: 16),
-          if (scanError != null) ...[
+          if (widget.scanError != null) ...[
             const SizedBox(height: 16),
             Container(
               padding: const EdgeInsets.all(12),
@@ -231,12 +339,12 @@ class ScanningPanel extends StatelessWidget {
                 border: Border.all(color: Colors.red.shade200),
               ),
               child: SelectableText(
-                'Scan Error: $scanError',
+                'Scan Error: ${widget.scanError}',
                 style: TextStyle(color: Colors.red.shade900),
               ),
             ),
           ],
-          if (scanResult != null) ...[
+          if (widget.scanResult != null) ...[
             const SizedBox(height: 16),
             Container(
               padding: const EdgeInsets.all(12),
@@ -257,14 +365,14 @@ class ScanningPanel extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  CommonWidgets.buildScanResultRow(label: 'Block Height', value: scanResult!.blockHeight.toString()),
-                  CommonWidgets.buildScanResultRow(label: 'Block Hash', value: scanResult!.blockHash),
+                  CommonWidgets.buildScanResultRow(label: 'Block Height', value: widget.scanResult!.blockHeight.toString()),
+                  CommonWidgets.buildScanResultRow(label: 'Block Hash', value: widget.scanResult!.blockHash),
                   CommonWidgets.buildScanResultRow(label: 'Timestamp', value: DateTime.fromMillisecondsSinceEpoch(
-                    scanResult!.blockTimestamp.toInt() * 1000,
+                    widget.scanResult!.blockTimestamp.toInt() * 1000,
                   ).toString()),
-                  CommonWidgets.buildScanResultRow(label: 'Transactions', value: scanResult!.txCount.toString()),
-                  CommonWidgets.buildScanResultRow(label: 'Outputs Found', value: scanResult!.outputs.length.toString()),
-                  if (scanResult!.outputs.isNotEmpty) ...[
+                  CommonWidgets.buildScanResultRow(label: 'Transactions', value: widget.scanResult!.txCount.toString()),
+                  CommonWidgets.buildScanResultRow(label: 'Outputs Found', value: widget.scanResult!.outputs.length.toString()),
+                  if (widget.scanResult!.outputs.isNotEmpty) ...[
                     const Divider(height: 24),
                     Text(
                       'Owned Outputs:',
@@ -274,7 +382,7 @@ class ScanningPanel extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 8),
-                    ...scanResult!.outputs.map((output) => Card(
+                    ...widget.scanResult!.outputs.map((output) => Card(
                       margin: const EdgeInsets.only(bottom: 8),
                       child: Padding(
                         padding: const EdgeInsets.all(12),

@@ -47,6 +47,15 @@ pub struct BuildTransaction {
 }
 
 #[derive(Debug, Clone)]
+pub struct SweepAll {
+    pub node_url: String,
+    pub seed: String,
+    pub network: String,
+    pub destination_address: String,
+    pub selected_outputs: Option<Vec<String>>, // "txHash:outputIndex" keys to sweep (for account filtering)
+}
+
+#[derive(Debug, Clone)]
 pub struct GetWalletData;
 
 #[derive(Debug, Clone)]
@@ -98,6 +107,7 @@ pub struct StartContinuousScan {
     pub seed: String,
     pub network: String,
     pub account_lookahead: u32,
+    pub accounts_to_scan: Option<Vec<u32>>,
 }
 
 #[derive(Debug, Clone)]
@@ -118,6 +128,7 @@ pub struct UpdateScanState {
     pub seed: String,
     pub network: String,
     pub account_lookahead: u32,
+    pub accounts_to_scan: Option<Vec<u32>>, // New: specific accounts to scan
 }
 
 #[derive(Debug, Clone)]

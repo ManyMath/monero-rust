@@ -14,6 +14,7 @@ class TransactionsPanel extends StatelessWidget {
   final String txSortBy;
   final bool txSortAscending;
   final Set<String> expandedTransactions;
+  final int activeAccount; // -1 means "All"
   final Function(String sortKey) onSortChanged;
   final Function(String txHash) onToggleExpanded;
 
@@ -25,9 +26,32 @@ class TransactionsPanel extends StatelessWidget {
     required this.txSortBy,
     required this.txSortAscending,
     required this.expandedTransactions,
+    required this.activeAccount,
     required this.onSortChanged,
     required this.onToggleExpanded,
   });
+
+  /// Get the set of account indices involved in this transaction
+  Set<int> _getTransactionAccounts(WalletTransaction tx) {
+    final accounts = <int>{};
+
+    // Add accounts from received outputs
+    for (var output in tx.receivedOutputs) {
+      final account = output.subaddressIndex?.item1 ?? 0;
+      accounts.add(account);
+    }
+
+    // Add accounts from spent outputs
+    for (var keyImage in tx.spentKeyImages) {
+      final spentOutput = allOutputs.where((o) => o.keyImage == keyImage).firstOrNull;
+      if (spentOutput != null) {
+        final account = spentOutput.subaddressIndex?.item1 ?? 0;
+        accounts.add(account);
+      }
+    }
+
+    return accounts;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -88,6 +112,10 @@ class TransactionsPanel extends StatelessWidget {
                 ? 'Outgoing (${tx.txHash.substring(6, 14)}...)'
                 : '${tx.txHash.substring(0, 8)}...${tx.txHash.substring(tx.txHash.length - 8)}';
 
+            // Get accounts involved in this transaction (for "All" view)
+            final txAccounts = activeAccount == -1 ? _getTransactionAccounts(tx) : <int>{};
+            final accountsDisplay = txAccounts.isEmpty ? '' : ' [Acct: ${txAccounts.join(', ')}]';
+
             return Card(
               margin: const EdgeInsets.only(bottom: 12),
               elevation: 2,
@@ -114,7 +142,7 @@ class TransactionsPanel extends StatelessWidget {
                                 const SizedBox(width: 8),
                                 Expanded(
                                   child: Text(
-                                    txIdDisplay,
+                                    '$txIdDisplay$accountsDisplay',
                                     style: const TextStyle(
                                       fontFamily: 'monospace',
                                       fontSize: 12,
@@ -185,6 +213,9 @@ class TransactionsPanel extends StatelessWidget {
                           const SizedBox(height: 4),
                           ...tx.receivedOutputs.map((output) {
                             final isSpent = output.spent;
+                            final accountIndex = output.subaddressIndex?.item1 ?? 0;
+                            final showAccount = activeAccount == -1;
+
                             return Container(
                               margin: const EdgeInsets.only(left: 8, bottom: 4),
                               padding: const EdgeInsets.all(8),
@@ -193,28 +224,45 @@ class TransactionsPanel extends StatelessWidget {
                                 borderRadius: BorderRadius.circular(4),
                                 border: Border.all(color: Colors.green.shade200),
                               ),
-                              child: Row(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Expanded(
-                                    child: Text(
-                                      '+${output.amountXmr} XMR (index ${output.outputIndex})',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        color: isSpent ? Colors.grey : Colors.green.shade800,
-                                        decoration: isSpent ? TextDecoration.lineThrough : null,
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          '+${output.amountXmr} XMR (index ${output.outputIndex})',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            color: isSpent ? Colors.grey : Colors.green.shade800,
+                                            decoration: isSpent ? TextDecoration.lineThrough : null,
+                                          ),
+                                        ),
                                       ),
-                                    ),
+                                      if (isSpent)
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                          decoration: BoxDecoration(
+                                            color: Colors.grey.shade200,
+                                            borderRadius: BorderRadius.circular(2),
+                                          ),
+                                          child: const Text(
+                                            'SPENT',
+                                            style: TextStyle(fontSize: 8, color: Colors.grey),
+                                          ),
+                                        ),
+                                    ],
                                   ),
-                                  if (isSpent)
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                                      decoration: BoxDecoration(
-                                        color: Colors.grey.shade200,
-                                        borderRadius: BorderRadius.circular(2),
-                                      ),
-                                      child: const Text(
-                                        'SPENT',
-                                        style: TextStyle(fontSize: 8, color: Colors.grey),
+                                  if (showAccount)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 2),
+                                      child: Text(
+                                        'Account: $accountIndex',
+                                        style: TextStyle(
+                                          fontSize: 9,
+                                          color: Colors.green.shade700,
+                                          fontWeight: FontWeight.w500,
+                                        ),
                                       ),
                                     ),
                                 ],
@@ -237,6 +285,9 @@ class TransactionsPanel extends StatelessWidget {
                           ...tx.spentKeyImages.map((keyImage) {
                             final spentOutput = allOutputs.where((o) => o.keyImage == keyImage).firstOrNull;
                             final amountStr = spentOutput?.amountXmr ?? 'Unknown';
+                            final accountIndex = spentOutput?.subaddressIndex?.item1 ?? 0;
+                            final showAccount = activeAccount == -1;
+
                             return Container(
                               margin: const EdgeInsets.only(left: 8, bottom: 4),
                               padding: const EdgeInsets.all(8),
@@ -245,12 +296,29 @@ class TransactionsPanel extends StatelessWidget {
                                 borderRadius: BorderRadius.circular(4),
                                 border: Border.all(color: Colors.red.shade200),
                               ),
-                              child: Text(
-                                '-$amountStr XMR',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: Colors.red.shade800,
-                                ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    '-$amountStr XMR',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: Colors.red.shade800,
+                                    ),
+                                  ),
+                                  if (showAccount && spentOutput != null)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 2),
+                                      child: Text(
+                                        'Account: $accountIndex',
+                                        style: TextStyle(
+                                          fontSize: 9,
+                                          color: Colors.red.shade700,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                    ),
+                                ],
                               ),
                             );
                           }),
