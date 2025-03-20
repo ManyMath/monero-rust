@@ -51,20 +51,22 @@ class CreateTransactionPanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Recipients: ${destinationControllers.length}/15',
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-              Text(
-                'Total: ${OutputUtils.getRecipientsTotal(amountControllers).toStringAsFixed(12)} XMR',
-                style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
+          if (destinationControllers.length > 1) ...[
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Recipients: ${destinationControllers.length}/15',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                Text(
+                  'Total: ${OutputUtils.getRecipientsTotal(amountControllers).toStringAsFixed(12)} XMR',
+                  style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+          ],
           ...List.generate(destinationControllers.length, (index) {
             return RecipientForm(
               index: index,
