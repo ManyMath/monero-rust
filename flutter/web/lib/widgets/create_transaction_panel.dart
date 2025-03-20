@@ -119,7 +119,7 @@ class CreateTransactionPanel extends StatelessWidget {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.send),
-            label: Text(isCreatingTx ? 'Creating Transaction...' : 'Create Transaction'),
+            label: Text(isCreatingTx ? 'Sending...' : 'Send'),
           ),
           if (txError != null) ...[
             const SizedBox(height: 16),

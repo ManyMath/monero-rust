@@ -41,7 +41,7 @@ enum DebugPanel {
   scanning('Scanning'),
   transactions('Transactions'),
   coins('Coins'),
-  createTransaction('Create Transaction');
+  createTransaction('Send');
 
   final String title;
   const DebugPanel(this.title);
