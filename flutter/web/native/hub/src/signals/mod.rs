@@ -95,13 +95,16 @@ pub struct TransactionCreatedResponse {
 }
 
 #[derive(Deserialize, DartSignal)]
-pub struct GenerateSeedRequest {}
+pub struct GenerateSeedRequest {
+    pub seed_type: String,
+}
 
 #[derive(Serialize, RustSignal)]
 pub struct SeedGeneratedResponse {
     pub seed: String,
     pub success: bool,
     pub error: Option<String>,
+    pub restore_height: Option<u64>,
 }
 
 #[derive(Deserialize, DartSignal)]
