@@ -83,7 +83,7 @@ class _DebugViewState extends State<DebugView> {
   int get _lowestSyncedHeight => _lifecycle.lowestSyncedHeight;
 
   String _network = 'stagenet';
-  final String _seedType = '25 word';
+  String _seedType = '25 word (classic)';
   String? _validationError;
   String? _derivedAddress;
   String? _responseError;
@@ -284,6 +284,19 @@ class _DebugViewState extends State<DebugView> {
           _validationError = null;
           _responseError = null;
           _derivedAddress = null;
+
+          // Auto-populate block height for polyseed if available
+          if (signal.message.restoreHeight != null) {
+            final timestamp = signal.message.restoreHeight!.toInt();
+            if (timestamp > 0) {
+              final genesisTimestamp = _getGenesisTimestamp(_network);
+              final approxHeight = ((timestamp - genesisTimestamp) / 120).toInt();
+              // Subtract safety margin (~720 blocks = ~1 day) to avoid missing transactions
+              final safeHeight = (approxHeight - 720).clamp(0, approxHeight);
+              _blockHeightController.text = safeHeight.toString();
+              _blockHeightUserEdited = false;
+            }
+          }
         });
       } else {
         setState(() {
@@ -566,6 +579,20 @@ class _DebugViewState extends State<DebugView> {
     }
   }
 
+  int _getGenesisTimestamp(String network) {
+    // Genesis timestamps (Unix seconds) for different Monero networks
+    switch (network.toLowerCase()) {
+      case 'mainnet':
+        return 1397818193; // April 18, 2014
+      case 'stagenet':
+        return 1458748658; // March 23, 2016
+      case 'testnet':
+        return 1410295020; // September 10, 2014
+      default:
+        return 1397818193; // Default to mainnet genesis
+    }
+  }
+
   void _generateSeed() {
     setState(() {
       _validationError = null;
@@ -577,7 +604,9 @@ class _DebugViewState extends State<DebugView> {
       _publicViewKey = null;
     });
 
-    GenerateSeedRequest().sendSignalToRust();
+    // Convert UI seed type to backend value
+    final seedType = _seedType.contains('polyseed') ? 'polyseed' : 'classic';
+    GenerateSeedRequest(seedType: seedType).sendSignalToRust();
   }
 
   void _deriveAddress() {
@@ -1360,6 +1389,11 @@ class _DebugViewState extends State<DebugView> {
                             _network = value;
                           });
                           _deriveAddress();
+                        },
+                        onSeedTypeChanged: (value) {
+                          setState(() {
+                            _seedType = value;
+                          });
                         },
                       ),
                     ),
