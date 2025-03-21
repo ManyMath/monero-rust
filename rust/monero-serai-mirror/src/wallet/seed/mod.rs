@@ -7,7 +7,6 @@ use thiserror::Error;
 
 pub(crate) mod classic;
 use classic::{CLASSIC_SEED_LENGTH, CLASSIC_SEED_LENGTH_WITH_CHECKSUM, ClassicSeed};
-use polyseed::Polyseed as PolyseedImpl;
 
 /// Error when decoding a seed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Error)]
@@ -45,7 +44,7 @@ pub enum Language {
 #[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub enum Seed {
   Classic(ClassicSeed),
-  Polyseed(PolyseedImpl),
+  Polyseed(polyseed::Polyseed),
 }
 
 impl fmt::Debug for Seed {
@@ -65,7 +64,8 @@ impl Seed {
 
   /// Create a new polyseed.
   pub fn new_polyseed<R: RngCore + CryptoRng>(rng: &mut R) -> Seed {
-    Seed::Polyseed(PolyseedImpl::new(rng))
+    use polyseed::{Polyseed, Language};
+    Seed::Polyseed(Polyseed::new(rng, Language::English))
   }
 
   /// Parse a seed from a String.
@@ -73,7 +73,8 @@ impl Seed {
     let word_count = words.split_whitespace().count();
     match word_count {
       16 => {
-        PolyseedImpl::from_string(polyseed::Language::English, words)
+        use polyseed::{Polyseed, Language as PolyseedLanguage};
+        Polyseed::from_string(PolyseedLanguage::English, words)
           .map(Seed::Polyseed)
           .map_err(|_| SeedError::InvalidSeed)
       }
@@ -101,7 +102,7 @@ impl Seed {
   pub fn entropy(&self) -> Zeroizing<[u8; 32]> {
     match self {
       Seed::Classic(seed) => seed.entropy(),
-      Seed::Polyseed(seed) => Zeroizing::new(seed.entropy()),
+      Seed::Polyseed(seed) => seed.entropy().clone(),
     }
   }
 
@@ -109,7 +110,7 @@ impl Seed {
   pub fn key_bytes(&self) -> Zeroizing<[u8; 32]> {
     match self {
       Seed::Classic(seed) => seed.entropy(),
-      Seed::Polyseed(seed) => Zeroizing::new(seed.key()),
+      Seed::Polyseed(seed) => seed.key(),
     }
   }
 

@@ -52,11 +52,11 @@ monero-epee-bin-serde = "1"
 digest_auth = { version = "0.3", optional = true }
 reqwest = { version = "0.11", features = ["json"], optional = true }
 
+polyseed = { git = "https://github.com/kayabaNerve/monero-wallet-util", rev = "3aa28da1eb636550f2cc54798521f43e8920b15b", default-features = false }
+
 [build-dependencies]
 dalek-ff-group = { package = "dalek-ff-group-mirror", version = "0.3" }
 monero-generators = { path = "generators", version = "0.3" }
-
-polyseed = { git = "https://github.com/kayabaNerve/monero-wallet-util", rev = "3aa28da1eb636550f2cc54798521f43e8920b15b" }
 
 [dev-dependencies]
 hex-literal = "0.4"
