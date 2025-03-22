@@ -1165,7 +1165,7 @@ mod tests {
 
     #[test]
     fn test_seed_generation_and_address_derivation() {
-        let seed = generate_seed().expect("Failed to generate seed");
+        let seed = generate_seed("classic").expect("Failed to generate seed");
 
         let mainnet_address = derive_address(&seed, "mainnet")
             .expect("Failed to derive mainnet address from generated seed");
