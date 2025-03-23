@@ -177,7 +177,11 @@ fn register_subaddresses(scanner: &mut Scanner, lookahead: Lookahead) {
 }
 
 pub fn generate_seed(seed_type: &str) -> Result<String, String> {
-    let mut rng = rand::rngs::OsRng;
+    // Use StdRng::from_entropy() which works in both native and WASM contexts
+    // In WASM, it uses getrandom (with "js" feature) via the entropy source
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::StdRng::from_entropy();
+
     let seed = match seed_type {
         "polyseed" => Seed::new_polyseed(&mut rng),
         _ => Seed::new(&mut rng, Language::English),
