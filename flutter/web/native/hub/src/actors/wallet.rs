@@ -119,13 +119,20 @@ impl WalletActor {
 
     async fn listen_to_generate_seed(mut self_addr: Address<Self>) {
         let receiver = GenerateSeedRequest::get_dart_signal_receiver();
-        while let Some(_signal_pack) = receiver.recv().await {
-            match monero_rust::generate_seed() {
+        while let Some(signal_pack) = receiver.recv().await {
+            let request = signal_pack.message;
+            match monero_rust::generate_seed(&request.seed_type) {
                 Ok(seed) => {
+                    let restore_height = if request.seed_type == "polyseed" {
+                        monero_rust::seed_birthday(&seed)
+                    } else {
+                        None
+                    };
                     SeedGeneratedResponse {
                         seed,
                         success: true,
                         error: None,
+                        restore_height,
                     }
                     .send_signal_to_dart();
                 }
@@ -134,6 +141,7 @@ impl WalletActor {
                         seed: String::new(),
                         success: false,
                         error: Some(e),
+                        restore_height: None,
                     }
                     .send_signal_to_dart();
                 }
