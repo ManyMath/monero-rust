@@ -46,4 +46,11 @@ impl TestApi {
     pub fn test_wasm() -> String {
         "WASM OK".to_string()
     }
+
+    /// Test polyseed generation directly (for debugging)
+    #[wasm_bindgen]
+    pub fn test_polyseed() -> Result<String, JsValue> {
+        generate_seed("polyseed")
+            .map_err(|e| JsValue::from_str(&format!("polyseed test failed: {}", e)))
+    }
 }
