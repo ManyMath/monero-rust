@@ -193,6 +193,16 @@ pub fn seed_birthday(mnemonic: &str) -> Option<u64> {
     seed.birthday()
 }
 
+pub fn validate_seed(mnemonic: &str) -> Result<(), String> {
+    if mnemonic.trim().is_empty() {
+        return Err("Seed phrase is empty".to_string());
+    }
+
+    Seed::from_string(Zeroizing::new(mnemonic.to_string()))
+        .map(|_| ())
+        .map_err(|e| format!("Invalid seed phrase: {:?}", e))
+}
+
 pub fn derive_address(mnemonic: &str, network_str: &str) -> Result<String, String> {
     let network = parse_network(network_str)?;
 

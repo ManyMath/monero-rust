@@ -4,7 +4,7 @@
 
 use wasm_bindgen::prelude::*;
 use serde_wasm_bindgen::to_value;
-use monero_rust::{generate_seed, derive_address, derive_keys};
+use monero_rust::{generate_seed, derive_address, derive_keys, validate_seed};
 
 #[wasm_bindgen]
 pub struct TestApi;
@@ -40,6 +40,12 @@ impl TestApi {
         // TODO: optimize serialization
         to_value(&keys)
             .map_err(|e| JsValue::from_str(&format!("serialize failed: {}", e)))
+    }
+
+    #[wasm_bindgen]
+    pub fn validate_seed(seed: &str) -> Result<(), JsValue> {
+        validate_seed(seed)
+            .map_err(|e| JsValue::from_str(&e))
     }
 
     #[wasm_bindgen]

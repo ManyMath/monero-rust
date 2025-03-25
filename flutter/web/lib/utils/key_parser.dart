@@ -21,8 +21,9 @@ class KeyParser {
     final normalized = input.trim().replaceAll(RegExp(r'\s+'), ' ');
     final words = normalized.split(' ');
 
-    if (words.length != 25) {
-      return KeyParseResult.invalid('Expected 25 words, got ${words.length}');
+    // Accept both 16-word (polyseed) and 25-word (classic) seeds
+    if (words.length != 16 && words.length != 25) {
+      return KeyParseResult.invalid('Expected 16 or 25 words, got ${words.length}');
     }
 
     for (final word in words) {
@@ -33,4 +34,5 @@ class KeyParser {
 
     return KeyParseResult.valid(normalized);
   }
+
 }
