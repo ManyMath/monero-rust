@@ -108,6 +108,31 @@ pub struct SeedGeneratedResponse {
 }
 
 #[derive(Deserialize, DartSignal)]
+pub struct GetSeedBirthdayRequest {
+    pub seed: String,
+}
+
+#[derive(Serialize, RustSignal)]
+pub struct SeedBirthdayResponse {
+    pub birthday: Option<u64>,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Deserialize, DartSignal)]
+pub struct GetBlockHeightFromTimestampRequest {
+    pub timestamp: u64,
+    pub node_url: String,
+}
+
+#[derive(Serialize, RustSignal)]
+pub struct BlockHeightFromTimestampResponse {
+    pub block_height: u64,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Deserialize, DartSignal)]
 pub struct DeriveAddressRequest {
     pub seed: String,
     pub network: String,

@@ -111,6 +111,7 @@ class _DebugViewState extends State<DebugView> {
 
   BlockScanResponse? _scanResult;
   String? _scanError;
+  int? _polyseedRestoreHeight;
 
   // All outputs across all accounts
   List<OwnedOutput> get _allOutputsAllAccounts => _lifecycle.allOutputs;
@@ -218,6 +219,8 @@ class _DebugViewState extends State<DebugView> {
   StreamSubscription? _keysDerivedSubscription;
   StreamSubscription? _subaddressDerivedSubscription;
   StreamSubscription? _seedGeneratedSubscription;
+  StreamSubscription? _seedBirthdaySubscription;
+  StreamSubscription? _blockHeightFromTimestampSubscription;
   StreamSubscription? _blockScanSubscription;
   StreamSubscription? _daemonHeightSubscription;
   StreamSubscription? _transactionCreatedSubscription;
@@ -253,6 +256,11 @@ class _DebugViewState extends State<DebugView> {
           if (seed.isNotEmpty && _derivedAddress != null && _lifecycle.activeWallet == null) {
             _openWallet(_walletId.isEmpty ? 'temp_wallet' : _walletId, seed, _network, _derivedAddress!);
           }
+
+          // Get seed birthday for polyseed display if seed was manually entered
+          if (seed.isNotEmpty) {
+            GetSeedBirthdayRequest(seed: seed).sendSignalToRust();
+          }
         } else {
           _derivedAddress = null;
           _secretSpendKey = null;
@@ -260,6 +268,7 @@ class _DebugViewState extends State<DebugView> {
           _publicSpendKey = null;
           _publicViewKey = null;
           _responseError = signal.message.error ?? 'Unknown error';
+          _polyseedRestoreHeight = null;
         }
       });
     });
@@ -286,23 +295,87 @@ class _DebugViewState extends State<DebugView> {
           _derivedAddress = null;
 
           // Auto-populate block height for polyseed if available
+          // restoreHeight is seconds since Unix epoch (from polyseed birthday())
           if (signal.message.restoreHeight != null) {
             final timestamp = signal.message.restoreHeight!.toInt();
             if (timestamp > 0) {
               final genesisTimestamp = _getGenesisTimestamp(_network);
               final approxHeight = ((timestamp - genesisTimestamp) / 120).toInt();
-              // Subtract safety margin (~720 blocks = ~1 day) to avoid missing transactions
               final safeHeight = (approxHeight - 720).clamp(0, approxHeight);
+
+              _polyseedRestoreHeight = safeHeight;
               _blockHeightController.text = safeHeight.toString();
               _blockHeightUserEdited = false;
+
+              // Try to get exact height from daemon
+              final nodeUrl = _normalizeNodeUrl(_nodeUrlController.text);
+              if (nodeUrl.isNotEmpty) {
+                GetBlockHeightFromTimestampRequest(
+                  timestamp: Uint64(BigInt.from(timestamp)),
+                  nodeUrl: nodeUrl,
+                ).sendSignalToRust();
+              }
+            } else {
+              _polyseedRestoreHeight = null;
             }
+          } else {
+            _polyseedRestoreHeight = null;
           }
         });
       } else {
         setState(() {
           _responseError = signal.message.error ?? 'Failed to generate seed';
+          _polyseedRestoreHeight = null;
         });
       }
+    });
+
+    _seedBirthdaySubscription = SeedBirthdayResponse.rustSignalStream.listen((signal) {
+      if (signal.message.success && signal.message.birthday != null) {
+        // birthday is seconds since Unix epoch (from polyseed birthday())
+        final timestamp = signal.message.birthday!.toInt();
+        if (timestamp > 0) {
+          final genesisTimestamp = _getGenesisTimestamp(_network);
+          final approxHeight = ((timestamp - genesisTimestamp) / 120).toInt();
+          final safeHeight = (approxHeight - 720).clamp(0, approxHeight);
+
+          setState(() {
+            _polyseedRestoreHeight = safeHeight;
+          });
+
+          // Try to get exact height from daemon
+          final nodeUrl = _normalizeNodeUrl(_nodeUrlController.text);
+          if (nodeUrl.isNotEmpty) {
+            GetBlockHeightFromTimestampRequest(
+              timestamp: Uint64(BigInt.from(timestamp)),
+              nodeUrl: nodeUrl,
+            ).sendSignalToRust();
+          }
+        } else {
+          setState(() {
+            _polyseedRestoreHeight = null;
+          });
+        }
+      } else {
+        setState(() {
+          _polyseedRestoreHeight = null;
+        });
+      }
+    });
+
+    _blockHeightFromTimestampSubscription = BlockHeightFromTimestampResponse.rustSignalStream.listen((signal) {
+      if (signal.message.success) {
+        setState(() {
+          final blockHeight = signal.message.blockHeight.toInt();
+          // Subtract safety margin (~720 blocks = ~1 day) to avoid missing transactions
+          final safeHeight = (blockHeight - 720).clamp(0, blockHeight);
+          _polyseedRestoreHeight = safeHeight;
+          _blockHeightController.text = safeHeight.toString();
+          _blockHeightUserEdited = false;
+        });
+      }
+      // On error, keep the estimated value that was already set
+      // This provides a reasonable fallback if RPC lookup fails
     });
 
     _blockScanSubscription = BlockScanResponse.rustSignalStream.listen((signal) {
@@ -523,6 +596,8 @@ class _DebugViewState extends State<DebugView> {
     _keysDerivedSubscription?.cancel();
     _subaddressDerivedSubscription?.cancel();
     _seedGeneratedSubscription?.cancel();
+    _seedBirthdaySubscription?.cancel();
+    _blockHeightFromTimestampSubscription?.cancel();
     _blockScanSubscription?.cancel();
     _daemonHeightSubscription?.cancel();
     _transactionCreatedSubscription?.cancel();
@@ -566,6 +641,7 @@ class _DebugViewState extends State<DebugView> {
       _selectedOutputs = {};
       _daemonHeight = null;
       _scanResult = null;
+      _polyseedRestoreHeight = null;
     });
 
     _debounceTimer = Timer(const Duration(milliseconds: 800), () {
@@ -1261,6 +1337,7 @@ class _DebugViewState extends State<DebugView> {
     _daemonHeight = null;
     _scanResult = null;
     _scanError = null;
+    _polyseedRestoreHeight = null;
     _lastSaveTime = null;
     _loadError = null;
     _saveError = null;
@@ -1443,6 +1520,7 @@ class _DebugViewState extends State<DebugView> {
                         scanResult: _scanResult,
                         hasSeedPhrase: _controller.text.trim().isNotEmpty,
                         pollingService: _pollingService,
+                        restoreHeight: _polyseedRestoreHeight,
                         onScanBlock: _scanBlock,
                         onStartContinuousScan: _startContinuousScan,
                         onPauseContinuousScan: _pauseContinuousScan,

@@ -4,7 +4,7 @@
 
 use wasm_bindgen::prelude::*;
 use serde_wasm_bindgen::to_value;
-use monero_rust::{generate_seed, derive_address, derive_keys, validate_seed};
+use monero_rust::{generate_seed, derive_address, derive_keys, validate_seed, seed_birthday};
 
 #[wasm_bindgen]
 pub struct TestApi;
@@ -58,5 +58,12 @@ impl TestApi {
     pub fn test_polyseed() -> Result<String, JsValue> {
         generate_seed("polyseed")
             .map_err(|e| JsValue::from_str(&format!("polyseed test failed: {}", e)))
+    }
+
+    /// Get polyseed birthday (restoration timestamp) for a given seed
+    /// Returns null for classic seeds, the Unix timestamp (seconds) for polyseeds
+    #[wasm_bindgen]
+    pub fn get_seed_birthday(seed: &str) -> Option<u64> {
+        seed_birthday(seed)
     }
 }

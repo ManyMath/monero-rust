@@ -47,6 +47,8 @@ impl WalletActor {
         _owned_tasks.spawn(Self::listen_to_balance_requests(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_test(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_generate_seed(self_addr.clone()));
+        _owned_tasks.spawn(Self::listen_to_get_seed_birthday(self_addr.clone()));
+        _owned_tasks.spawn(Self::listen_to_get_block_height_from_timestamp(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_derive_address(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_derive_subaddress(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_derive_keys(self_addr.clone()));
@@ -147,6 +149,144 @@ impl WalletActor {
                 }
             }
         }
+    }
+
+    async fn listen_to_get_seed_birthday(mut self_addr: Address<Self>) {
+        let receiver = GetSeedBirthdayRequest::get_dart_signal_receiver();
+        while let Some(signal_pack) = receiver.recv().await {
+            let request = signal_pack.message;
+            let birthday = monero_rust::seed_birthday(&request.seed);
+            SeedBirthdayResponse {
+                birthday,
+                success: true,
+                error: None,
+            }
+            .send_signal_to_dart();
+        }
+    }
+
+    async fn listen_to_get_block_height_from_timestamp(mut self_addr: Address<Self>) {
+        let receiver = GetBlockHeightFromTimestampRequest::get_dart_signal_receiver();
+        while let Some(signal_pack) = receiver.recv().await {
+            let request = signal_pack.message;
+            match Self::find_block_height_for_timestamp(&request.node_url, request.timestamp).await {
+                Ok(block_height) => {
+                    BlockHeightFromTimestampResponse {
+                        block_height,
+                        success: true,
+                        error: None,
+                    }
+                    .send_signal_to_dart();
+                }
+                Err(e) => {
+                    BlockHeightFromTimestampResponse {
+                        block_height: 0,
+                        success: false,
+                        error: Some(e),
+                    }
+                    .send_signal_to_dart();
+                }
+            }
+        }
+    }
+
+    /// Binary search to find the block height closest to a given timestamp.
+    /// Uses JSON-RPC methods (get_block_count, get_block_header_by_height)
+    /// which are supported on the /json_rpc endpoint.
+    async fn find_block_height_for_timestamp(node_url: &str, target_timestamp: u64) -> Result<u64, String> {
+        // Ensure we're hitting the /json_rpc endpoint
+        let rpc_url = if node_url.ends_with("/json_rpc") {
+            node_url.to_string()
+        } else {
+            format!("{}/json_rpc", node_url.trim_end_matches('/'))
+        };
+
+        // Get current chain height via get_block_count (proper JSON-RPC method)
+        let height_resp = Self::json_rpc_call(&rpc_url, "get_block_count", serde_json::json!({})).await?;
+        let max_height = height_resp["count"].as_u64()
+            .ok_or_else(|| "Invalid get_block_count response".to_string())?;
+
+        let mut low = 1u64; // skip genesis
+        let mut high = max_height.saturating_sub(1);
+        let mut best_height = 0u64;
+        let mut best_diff = u64::MAX;
+
+        while low <= high {
+            let mid = low + (high - low) / 2;
+
+            let header_resp = Self::json_rpc_call(
+                &rpc_url,
+                "get_block_header_by_height",
+                serde_json::json!({"height": mid}),
+            ).await?;
+
+            let block_timestamp = header_resp["block_header"]["timestamp"].as_u64()
+                .ok_or_else(|| format!("No timestamp in block header at height {}", mid))?;
+
+            let diff = block_timestamp.abs_diff(target_timestamp);
+            if diff < best_diff {
+                best_diff = diff;
+                best_height = mid;
+            }
+
+            if block_timestamp < target_timestamp {
+                low = mid + 1;
+            } else if block_timestamp > target_timestamp {
+                if mid == 0 { break; }
+                high = mid - 1;
+            } else {
+                return Ok(mid);
+            }
+        }
+
+        Ok(best_height)
+    }
+
+    /// Make a JSON-RPC call to a Monero daemon.
+    async fn json_rpc_call(url: &str, method: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {
+        use wasm_bindgen::JsCast;
+        use wasm_bindgen_futures::JsFuture;
+        use web_sys::{Request, RequestInit, RequestMode, RequestCredentials, Response};
+
+        let window = web_sys::window().ok_or("No window object")?;
+
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "0",
+            "method": method,
+            "params": params,
+        });
+        let body_str = serde_json::to_string(&body).map_err(|e| e.to_string())?;
+
+        let opts = RequestInit::new();
+        opts.set_method("POST");
+        opts.set_mode(RequestMode::Cors);
+        opts.set_credentials(RequestCredentials::SameOrigin);
+        opts.set_body(&wasm_bindgen::JsValue::from_str(&body_str));
+
+        let request = Request::new_with_str_and_init(url, &opts)
+            .map_err(|e| format!("Request creation failed: {:?}", e))?;
+        request.headers().set("Content-Type", "application/json")
+            .map_err(|e| format!("Header set failed: {:?}", e))?;
+
+        let resp_val = JsFuture::from(window.fetch_with_request(&request))
+            .await
+            .map_err(|e| format!("Fetch failed: {:?}", e))?;
+        let resp: Response = resp_val.dyn_into()
+            .map_err(|e| format!("Invalid response: {:?}", e))?;
+
+        let text_val = JsFuture::from(resp.text().map_err(|e| format!("{:?}", e))?)
+            .await
+            .map_err(|e| format!("Read failed: {:?}", e))?;
+        let text = text_val.as_string().ok_or("Response not a string")?;
+
+        let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+
+        if let Some(error) = json.get("error") {
+            return Err(format!("RPC error: {}", error));
+        }
+
+        json.get("result").cloned().ok_or_else(|| "No 'result' in JSON-RPC response".to_string())
     }
 
     async fn listen_to_derive_address(mut self_addr: Address<Self>) {
