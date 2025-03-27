@@ -289,4 +289,26 @@ fn test_polyseed_stagenet() {
     expected_address,
     "Stagenet address mismatch"
   );
+
+  // Account 0, subaddress index 1
+  let subaddr_0_1 = view_pair.address(
+    Network::Stagenet,
+    AddressSpec::Subaddress(SubaddressIndex::new(0, 1).unwrap()),
+  );
+  assert_eq!(
+    subaddr_0_1.to_string(),
+    "7BdZnJevfquGJ4DMR7E6UwAFVrpK1z1NYgd9RQi7YvH3SykuQRKtkNfbXfG4fPqkrGSeGhnCT79Gz1uL1KegPMbz3u6DKCJ",
+    "Stagenet account 0 subaddress 1 mismatch"
+  );
+
+  // Account 1, subaddress index 1
+  let subaddr_1_1 = view_pair.address(
+    Network::Stagenet,
+    AddressSpec::Subaddress(SubaddressIndex::new(1, 1).unwrap()),
+  );
+  assert_eq!(
+    subaddr_1_1.to_string(),
+    "7AjduMBq2obQFyWuEYYZ6GcmCPDmyFJUpPTNmxiD3bv34cPbi7JzExeUKiieQzdhWoDJKcdn6N11Rf4aW794fmDQVXF8seo",
+    "Stagenet account 1 subaddress 1 mismatch"
+  );
 }
