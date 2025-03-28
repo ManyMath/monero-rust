@@ -22,6 +22,7 @@ class ScanningPanel extends StatefulWidget {
   final BlockScanResponse? scanResult;
   final bool hasSeedPhrase;
   final WalletPollingService pollingService;
+  final int? restoreHeight;
   final VoidCallback onScanBlock;
   final VoidCallback onStartContinuousScan;
   final VoidCallback onPauseContinuousScan;
@@ -51,6 +52,7 @@ class ScanningPanel extends StatefulWidget {
     required this.onScanMempool,
     required this.getContinuousScanButtonLabel,
     required this.getContinuousScanButtonColor,
+    this.restoreHeight,
   });
 
   @override
@@ -128,6 +130,55 @@ class _ScanningPanelState extends State<ScanningPanel> {
               ),
             ],
           ),
+          if (widget.restoreHeight != null) ...[
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.blue.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.blue.shade200),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Polyseed Restore Height',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.blue.shade900,
+                            fontSize: 12,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        SelectableText(
+                          widget.restoreHeight.toString(),
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontFamily: 'monospace',
+                            color: Colors.blue.shade900,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    '(from polyseed birthday)',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Colors.blue.shade700,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 16),
           // Second row: Scan buttons
           Row(

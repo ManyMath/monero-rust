@@ -4,17 +4,24 @@
 
 use wasm_bindgen::prelude::*;
 use serde_wasm_bindgen::to_value;
-use monero_rust::{generate_seed, derive_address, derive_keys};
+use monero_rust::{generate_seed, derive_address, derive_keys, validate_seed, seed_birthday};
 
 #[wasm_bindgen]
 pub struct TestApi;
 
 #[wasm_bindgen]
 impl TestApi {
-    /// Generate seed
+    /// Generate seed (classic 25-word by default)
     #[wasm_bindgen]
     pub fn generate_seed() -> Result<String, JsValue> {
-        generate_seed()
+        generate_seed("classic")
+            .map_err(|e| JsValue::from_str(&format!("seed gen failed: {}", e)))
+    }
+
+    /// Generate seed with specified type ("classic" or "polyseed")
+    #[wasm_bindgen]
+    pub fn generate_seed_typed(seed_type: &str) -> Result<String, JsValue> {
+        generate_seed(seed_type)
             .map_err(|e| JsValue::from_str(&format!("seed gen failed: {}", e)))
     }
 
@@ -36,7 +43,27 @@ impl TestApi {
     }
 
     #[wasm_bindgen]
+    pub fn validate_seed(seed: &str) -> Result<(), JsValue> {
+        validate_seed(seed)
+            .map_err(|e| JsValue::from_str(&e))
+    }
+
+    #[wasm_bindgen]
     pub fn test_wasm() -> String {
         "WASM OK".to_string()
+    }
+
+    /// Test polyseed generation directly (for debugging)
+    #[wasm_bindgen]
+    pub fn test_polyseed() -> Result<String, JsValue> {
+        generate_seed("polyseed")
+            .map_err(|e| JsValue::from_str(&format!("polyseed test failed: {}", e)))
+    }
+
+    /// Get polyseed birthday (restoration timestamp) for a given seed
+    /// Returns null for classic seeds, the Unix timestamp (seconds) for polyseeds
+    #[wasm_bindgen]
+    pub fn get_seed_birthday(seed: &str) -> Option<u64> {
+        seed_birthday(seed)
     }
 }

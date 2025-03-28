@@ -8,7 +8,7 @@ use crate::{
   hash, hash_to_scalar,
   wallet::{
     seed::{Seed, Language, classic::trim_by_lang},
-    address::{Network, AddressSpec, MoneroAddress},
+    address::{Network, AddressSpec, SubaddressIndex, MoneroAddress},
     ViewPair,
   },
 };
@@ -259,5 +259,56 @@ fn test_polyseed() {
     parsed_address.view,
     view_key,
     "Parsed address view key doesn't match derived view key"
+  );
+}
+
+#[test]
+fn test_polyseed_stagenet() {
+  use polyseed::{Polyseed, Language as PolyseedLanguage};
+
+  let seed_phrase = "capital chief route liar question fix clutch water outside pave hamster occur always learn license knife";
+
+  let polyseed = Polyseed::from_string(
+    PolyseedLanguage::English,
+    Zeroizing::new(seed_phrase.to_string())
+  ).unwrap();
+
+  let key = polyseed.key();
+  let spend_scalar = Scalar::from_bytes_mod_order(*key);
+  let spend_key = &spend_scalar * &ED25519_BASEPOINT_TABLE;
+
+  let view_scalar = hash_to_scalar(&spend_scalar.to_bytes());
+
+  let view_pair = ViewPair::new(spend_key, Zeroizing::new(view_scalar));
+  let address = view_pair.address(Network::Stagenet, AddressSpec::Standard);
+
+  let expected_address = "56HeZM3u6xYCV8oVVh7CuWWHs7yeB1oxhNPrsEM5FKSqadTXmobLqsNEtRnyGsbN1rbDuBtWdtxtXhTJda1Lm9vcH73iSWn";
+
+  assert_eq!(
+    address.to_string(),
+    expected_address,
+    "Stagenet address mismatch"
+  );
+
+  // Account 0, subaddress index 1
+  let subaddr_0_1 = view_pair.address(
+    Network::Stagenet,
+    AddressSpec::Subaddress(SubaddressIndex::new(0, 1).unwrap()),
+  );
+  assert_eq!(
+    subaddr_0_1.to_string(),
+    "7BdZnJevfquGJ4DMR7E6UwAFVrpK1z1NYgd9RQi7YvH3SykuQRKtkNfbXfG4fPqkrGSeGhnCT79Gz1uL1KegPMbz3u6DKCJ",
+    "Stagenet account 0 subaddress 1 mismatch"
+  );
+
+  // Account 1, subaddress index 1
+  let subaddr_1_1 = view_pair.address(
+    Network::Stagenet,
+    AddressSpec::Subaddress(SubaddressIndex::new(1, 1).unwrap()),
+  );
+  assert_eq!(
+    subaddr_1_1.to_string(),
+    "7AjduMBq2obQFyWuEYYZ6GcmCPDmyFJUpPTNmxiD3bv34cPbi7JzExeUKiieQzdhWoDJKcdn6N11Rf4aW794fmDQVXF8seo",
+    "Stagenet account 1 subaddress 1 mismatch"
   );
 }

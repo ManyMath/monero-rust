@@ -1,6 +1,4 @@
 import 'package:flutter/material.dart';
-import '../utils/key_parser.dart';
-import '../src/bindings/bindings.dart';
 import '../utils/clipboard_utils.dart';
 import 'error_message_container.dart';
 
@@ -12,6 +10,7 @@ class SeedPhrasePanel extends StatelessWidget {
   final String? responseError;
   final VoidCallback onGenerateSeed;
   final ValueChanged<String> onNetworkChanged;
+  final ValueChanged<String> onSeedTypeChanged;
 
   const SeedPhrasePanel({
     super.key,
@@ -22,6 +21,7 @@ class SeedPhrasePanel extends StatelessWidget {
     required this.responseError,
     required this.onGenerateSeed,
     required this.onNetworkChanged,
+    required this.onSeedTypeChanged,
   });
 
   Future<void> _copyToClipboard(BuildContext context, String text, String label) async {
@@ -52,9 +52,14 @@ class SeedPhrasePanel extends StatelessWidget {
                     contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   ),
                   items: const [
-                    DropdownMenuItem(value: '25 word', child: Text('25 word')),
+                    DropdownMenuItem(value: '25 word', child: Text('25 word (classic)')),
+                    DropdownMenuItem(value: '16-word (polyseed)', child: Text('16 word (polyseed)')),
                   ],
-                  onChanged: null,
+                  onChanged: (value) {
+                    if (value != null) {
+                      onSeedTypeChanged(value);
+                    }
+                  },
                 ),
               ),
               const SizedBox(width: 8),
@@ -88,7 +93,7 @@ class SeedPhrasePanel extends StatelessWidget {
                   controller: controller,
                   decoration: InputDecoration(
                     labelText: 'Seed Phrase',
-                    hintText: 'Enter or generate a 25-word seed phrase',
+                    hintText: 'Enter or generate a 16 or 25-word seed phrase',
                     border: const OutlineInputBorder(),
                     errorText: validationError,
                   ),

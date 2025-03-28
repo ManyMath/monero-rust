@@ -127,28 +127,29 @@ fn parse_network(network_str: &str) -> Result<Network, String> {
 }
 
 fn spend_key_from_seed(seed: &Seed) -> EdwardsPoint {
-    let entropy = seed.entropy();
+    let key_bytes = seed.key_bytes();
     let mut spend_bytes = [0u8; 32];
-    spend_bytes.copy_from_slice(&entropy[..]);
+    spend_bytes.copy_from_slice(&key_bytes[..]);
 
     let spend_scalar = Scalar::from_bytes_mod_order(spend_bytes);
     &spend_scalar * &ED25519_BASEPOINT_TABLE
 }
 
 fn view_key_from_seed(seed: &Seed) -> Scalar {
-    let entropy = seed.entropy();
+    let key_bytes = seed.key_bytes();
     let mut spend_bytes = [0u8; 32];
-    spend_bytes.copy_from_slice(&entropy[..]);
+    spend_bytes.copy_from_slice(&key_bytes[..]);
 
-    let view: [u8; 32] = Keccak256::digest(spend_bytes).into();
+    let spend_scalar = Scalar::from_bytes_mod_order(spend_bytes);
+    let view: [u8; 32] = Keccak256::digest(spend_scalar.to_bytes()).into();
     Scalar::from_bytes_mod_order(view)
 }
 
 #[cfg(target_arch = "wasm32")]
 fn spend_key_scalar_from_seed(seed: &Seed) -> Scalar {
-    let entropy = seed.entropy();
+    let key_bytes = seed.key_bytes();
     let mut spend_bytes = [0u8; 32];
-    spend_bytes.copy_from_slice(&entropy[..]);
+    spend_bytes.copy_from_slice(&key_bytes[..]);
     Scalar::from_bytes_mod_order(spend_bytes)
 }
 
@@ -176,10 +177,31 @@ fn register_subaddresses(scanner: &mut Scanner, lookahead: Lookahead) {
     }
 }
 
-pub fn generate_seed() -> Result<String, String> {
-    let mut rng = rand::rngs::OsRng;
-    let seed = Seed::new(&mut rng, Language::English);
+pub fn generate_seed(seed_type: &str) -> Result<String, String> {
+    // Use thread_rng which works in both native and WASM contexts
+    let mut rng = rand::thread_rng();
+
+    let seed = match seed_type {
+        "polyseed" => Seed::new_polyseed(&mut rng),
+        _ => Seed::new(&mut rng, Language::English),
+    };
+
     Ok(Seed::to_string(&seed).to_string())
+}
+
+pub fn seed_birthday(mnemonic: &str) -> Option<u64> {
+    let seed = Seed::from_string(Zeroizing::new(mnemonic.to_string())).ok()?;
+    seed.birthday()
+}
+
+pub fn validate_seed(mnemonic: &str) -> Result<(), String> {
+    if mnemonic.trim().is_empty() {
+        return Err("Seed phrase is empty".to_string());
+    }
+
+    Seed::from_string(Zeroizing::new(mnemonic.to_string()))
+        .map(|_| ())
+        .map_err(|e| format!("Invalid seed phrase: {:?}", e))
 }
 
 pub fn derive_address(mnemonic: &str, network_str: &str) -> Result<String, String> {
@@ -188,11 +210,11 @@ pub fn derive_address(mnemonic: &str, network_str: &str) -> Result<String, Strin
     let seed = Seed::from_string(Zeroizing::new(mnemonic.to_string()))
         .map_err(|e| format!("Failed to parse seed: {:?}", e))?;
 
-    let spend: [u8; 32] = *seed.entropy();
+    let spend: [u8; 32] = *seed.key_bytes();
     let spend_scalar = Scalar::from_bytes_mod_order(spend);
     let spend_point: EdwardsPoint = &spend_scalar * &ED25519_BASEPOINT_TABLE;
 
-    let view: [u8; 32] = Keccak256::digest(spend).into();
+    let view: [u8; 32] = Keccak256::digest(spend_scalar.to_bytes()).into();
     let view_scalar = Scalar::from_bytes_mod_order(view);
     let view_point: EdwardsPoint = &view_scalar * &ED25519_BASEPOINT_TABLE;
 
@@ -218,11 +240,11 @@ pub fn derive_subaddress(
     let seed = Seed::from_string(Zeroizing::new(mnemonic.to_string()))
         .map_err(|e| format!("Failed to parse seed: {:?}", e))?;
 
-    let spend: [u8; 32] = *seed.entropy();
+    let spend: [u8; 32] = *seed.key_bytes();
     let spend_scalar = Scalar::from_bytes_mod_order(spend);
     let spend_point: EdwardsPoint = &spend_scalar * &ED25519_BASEPOINT_TABLE;
 
-    let view: [u8; 32] = Keccak256::digest(&spend).into();
+    let view: [u8; 32] = Keccak256::digest(spend_scalar.to_bytes()).into();
     let view_scalar = Scalar::from_bytes_mod_order(view);
 
     let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
@@ -250,11 +272,11 @@ pub fn derive_keys(mnemonic: &str, network_str: &str) -> Result<DerivedKeys, Str
     let seed = Seed::from_string(Zeroizing::new(mnemonic.to_string()))
         .map_err(|e| format!("Failed to parse seed: {:?}", e))?;
 
-    let spend: [u8; 32] = *seed.entropy();
+    let spend: [u8; 32] = *seed.key_bytes();
     let spend_scalar = Scalar::from_bytes_mod_order(spend);
     let spend_point: EdwardsPoint = &spend_scalar * &ED25519_BASEPOINT_TABLE;
 
-    let view: [u8; 32] = Keccak256::digest(spend).into();
+    let view: [u8; 32] = Keccak256::digest(spend_scalar.to_bytes()).into();
     let view_scalar = Scalar::from_bytes_mod_order(view);
     let view_point: EdwardsPoint = &view_scalar * &ED25519_BASEPOINT_TABLE;
 
@@ -1012,7 +1034,7 @@ mod tests {
 
     #[test]
     fn test_generate_seed() {
-        let seed = generate_seed().expect("Failed to generate seed");
+        let seed = generate_seed("classic").expect("Failed to generate seed");
         let words: Vec<&str> = seed.split_whitespace().collect();
         assert_eq!(words.len(), 25);
     }
@@ -1157,7 +1179,7 @@ mod tests {
 
     #[test]
     fn test_seed_generation_and_address_derivation() {
-        let seed = generate_seed().expect("Failed to generate seed");
+        let seed = generate_seed("classic").expect("Failed to generate seed");
 
         let mainnet_address = derive_address(&seed, "mainnet")
             .expect("Failed to derive mainnet address from generated seed");

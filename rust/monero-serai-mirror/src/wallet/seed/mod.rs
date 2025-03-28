@@ -41,16 +41,17 @@ pub enum Language {
 }
 
 /// A Monero seed.
-// TODO: Add polyseed to enum
 #[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub enum Seed {
   Classic(ClassicSeed),
+  Polyseed(polyseed::Polyseed),
 }
 
 impl fmt::Debug for Seed {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
     match self {
       Seed::Classic(_) => f.debug_struct("Seed::Classic").finish_non_exhaustive(),
+      Seed::Polyseed(_) => f.debug_struct("Seed::Polyseed").finish_non_exhaustive(),
     }
   }
 }
@@ -61,9 +62,22 @@ impl Seed {
     Seed::Classic(ClassicSeed::new(rng, lang))
   }
 
+  /// Create a new polyseed.
+  pub fn new_polyseed<R: RngCore + CryptoRng>(rng: &mut R) -> Seed {
+    use polyseed::{Polyseed, Language};
+    Seed::Polyseed(Polyseed::new(rng, Language::English))
+  }
+
   /// Parse a seed from a String.
   pub fn from_string(words: Zeroizing<String>) -> Result<Seed, SeedError> {
-    match words.split_whitespace().count() {
+    let word_count = words.split_whitespace().count();
+    match word_count {
+      16 => {
+        use polyseed::{Polyseed, Language as PolyseedLanguage};
+        Polyseed::from_string(PolyseedLanguage::English, words)
+          .map(Seed::Polyseed)
+          .map_err(|_| SeedError::InvalidSeed)
+      }
       CLASSIC_SEED_LENGTH | CLASSIC_SEED_LENGTH_WITH_CHECKSUM => {
         ClassicSeed::from_string(words).map(Seed::Classic)
       }
@@ -80,6 +94,7 @@ impl Seed {
   pub fn to_string(&self) -> Zeroizing<String> {
     match self {
       Seed::Classic(seed) => seed.to_string(),
+      Seed::Polyseed(seed) => Zeroizing::new(seed.to_string().to_string()),
     }
   }
 
@@ -87,6 +102,23 @@ impl Seed {
   pub fn entropy(&self) -> Zeroizing<[u8; 32]> {
     match self {
       Seed::Classic(seed) => seed.entropy(),
+      Seed::Polyseed(seed) => seed.entropy().clone(),
+    }
+  }
+
+  /// Return the key bytes for this seed (entropy for Classic, PBKDF2-derived for Polyseed).
+  pub fn key_bytes(&self) -> Zeroizing<[u8; 32]> {
+    match self {
+      Seed::Classic(seed) => seed.entropy(),
+      Seed::Polyseed(seed) => seed.key(),
+    }
+  }
+
+  /// Return the birthday (creation timestamp) for this seed.
+  pub fn birthday(&self) -> Option<u64> {
+    match self {
+      Seed::Classic(_) => None,
+      Seed::Polyseed(seed) => Some(seed.birthday()),
     }
   }
 }
