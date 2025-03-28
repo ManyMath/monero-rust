@@ -140,7 +140,8 @@ fn view_key_from_seed(seed: &Seed) -> Scalar {
     let mut spend_bytes = [0u8; 32];
     spend_bytes.copy_from_slice(&key_bytes[..]);
 
-    let view: [u8; 32] = Keccak256::digest(spend_bytes).into();
+    let spend_scalar = Scalar::from_bytes_mod_order(spend_bytes);
+    let view: [u8; 32] = Keccak256::digest(spend_scalar.to_bytes()).into();
     Scalar::from_bytes_mod_order(view)
 }
 
@@ -213,7 +214,7 @@ pub fn derive_address(mnemonic: &str, network_str: &str) -> Result<String, Strin
     let spend_scalar = Scalar::from_bytes_mod_order(spend);
     let spend_point: EdwardsPoint = &spend_scalar * &ED25519_BASEPOINT_TABLE;
 
-    let view: [u8; 32] = Keccak256::digest(spend).into();
+    let view: [u8; 32] = Keccak256::digest(spend_scalar.to_bytes()).into();
     let view_scalar = Scalar::from_bytes_mod_order(view);
     let view_point: EdwardsPoint = &view_scalar * &ED25519_BASEPOINT_TABLE;
 
@@ -243,7 +244,7 @@ pub fn derive_subaddress(
     let spend_scalar = Scalar::from_bytes_mod_order(spend);
     let spend_point: EdwardsPoint = &spend_scalar * &ED25519_BASEPOINT_TABLE;
 
-    let view: [u8; 32] = Keccak256::digest(&spend).into();
+    let view: [u8; 32] = Keccak256::digest(spend_scalar.to_bytes()).into();
     let view_scalar = Scalar::from_bytes_mod_order(view);
 
     let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
@@ -275,7 +276,7 @@ pub fn derive_keys(mnemonic: &str, network_str: &str) -> Result<DerivedKeys, Str
     let spend_scalar = Scalar::from_bytes_mod_order(spend);
     let spend_point: EdwardsPoint = &spend_scalar * &ED25519_BASEPOINT_TABLE;
 
-    let view: [u8; 32] = Keccak256::digest(spend).into();
+    let view: [u8; 32] = Keccak256::digest(spend_scalar.to_bytes()).into();
     let view_scalar = Scalar::from_bytes_mod_order(view);
     let view_point: EdwardsPoint = &view_scalar * &ED25519_BASEPOINT_TABLE;
 
