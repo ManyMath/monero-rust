@@ -1851,6 +1851,11 @@ class _DebugViewState extends State<DebugView> {
       _broadcastError = null;
     });
 
+    // Clean up any leftover temp_wallet from localStorage when starting fresh
+    if (WalletPersistenceBrowser.hasWalletData('temp_wallet')) {
+      WalletPersistenceBrowser.clearWalletData('temp_wallet');
+    }
+
     _showSnackBar('Ready for new wallet - generate or enter a seed phrase');
   }
 
