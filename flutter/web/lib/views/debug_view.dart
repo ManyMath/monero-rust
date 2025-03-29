@@ -1710,6 +1710,10 @@ class _DebugViewState extends State<DebugView> {
     final walletId = result['walletId']!;
     final password = result['password']!;
 
+    // Check if we're renaming from temp_wallet
+    final oldWalletId = _walletId;
+    final isRenamingFromTemp = oldWalletId == 'temp_wallet' && walletId != 'temp_wallet';
+
     // Update the current wallet ID to the one being saved
     setState(() {
       _walletId = walletId;
@@ -1780,6 +1784,44 @@ class _DebugViewState extends State<DebugView> {
     // Refresh wallet list to include the newly saved wallet
     if (success) {
       _refreshAvailableWallets();
+
+      // Handle renaming from temp_wallet
+      if (isRenamingFromTemp) {
+        // Remove temp_wallet from openWallets and create a new instance with the proper ID
+        if (_lifecycle.openWallets.containsKey('temp_wallet')) {
+          final tempWallet = _lifecycle.openWallets['temp_wallet'];
+          _lifecycle.openWallets.remove('temp_wallet');
+
+          // Create a new wallet instance with the new ID (maintaining all the data)
+          if (tempWallet != null) {
+            final renamedWallet = WalletInstance(
+              walletId: walletId,
+              seed: tempWallet.seed,
+              network: tempWallet.network,
+              address: tempWallet.address,
+              outputs: tempWallet.outputs,
+              transactions: tempWallet.transactions,
+              currentHeight: tempWallet.currentHeight,
+              daemonHeight: tempWallet.daemonHeight,
+              isScanning: tempWallet.isScanning,
+              isClosed: tempWallet.isClosed,
+              activeAccount: tempWallet.activeAccount,
+              accounts: tempWallet.accounts,
+              outputsByAccount: tempWallet.outputsByAccount,
+              scanningAccounts: tempWallet.scanningAccounts,
+            );
+            _lifecycle.openWallets[walletId] = renamedWallet;
+          }
+        }
+
+        // Update activeWalletId if it was temp_wallet
+        if (_lifecycle.activeWalletId == 'temp_wallet') {
+          _lifecycle.activeWalletId = walletId;
+        }
+
+        // Clean up temp_wallet from localStorage
+        WalletPersistenceBrowser.clearWalletData('temp_wallet');
+      }
     }
 
     if (success) {
