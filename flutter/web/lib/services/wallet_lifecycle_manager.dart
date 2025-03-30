@@ -48,7 +48,7 @@ class WalletLifecycleManager {
 
   void refreshAvailableWallets() {
     final walletIds = _persistence.listWallets();
-    availableWalletIds = walletIds;
+    availableWalletIds = walletIds.where((id) => id != 'temp_wallet').toList();
     // Only auto-select when the current non-empty walletId disappeared from
     // the list (e.g. after deletion). Do NOT auto-select when walletId is
     // intentionally empty (e.g. after startNewWallet before an import).
