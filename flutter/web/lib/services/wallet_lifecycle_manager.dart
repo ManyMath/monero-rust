@@ -44,7 +44,7 @@ class WalletLifecycleManager {
       activeWalletId != null ? openWallets[activeWalletId] : null;
 
   List<WalletInstance> get activeWallets =>
-      openWallets.values.where((w) => !w.isClosed).toList();
+      openWallets.values.where((w) => !w.isClosed && w.walletId != 'temp_wallet').toList();
 
   void refreshAvailableWallets() {
     final walletIds = _persistence.listWallets();
