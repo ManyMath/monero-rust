@@ -646,4 +646,231 @@ impl<R: RpcConnection> Rpc<R> {
 
     Ok((transactions, spent_key_images))
   }
+
+  /// Fetch multiple blocks at once using the binary `/getblocks.bin` endpoint.
+  ///
+  /// Returns up to ~1000 blocks starting from `start_height`. The `block_ids`
+  /// parameter should contain at least one known block hash (e.g., the genesis
+  /// block hash) for the daemon to find the fork point.
+  ///
+  /// Blocks are returned unpruned with full transaction data.
+  pub async fn get_blocks_fast(
+    &self,
+    block_ids: &[[u8; 32]],
+    start_height: u64,
+  ) -> Result<GetBlocksFastResponse, RpcError> {
+    // block_ids must be serialized as a contiguous blob (KV_SERIALIZE_CONTAINER_POD_AS_BLOB)
+    let block_ids_blob: Vec<u8> = block_ids.iter().flat_map(|h| h.iter().copied()).collect();
+
+    #[derive(Serialize, Debug)]
+    struct Request {
+      block_ids: Vec<u8>,
+      start_height: u64,
+      prune: bool,
+      no_miner_tx: bool,
+    }
+
+    let req = Request {
+      block_ids: block_ids_blob,
+      start_height,
+      prune: false,
+      no_miner_tx: false,
+    };
+
+    let res: GetBlocksFastResponse = self
+      .bin_call(
+        "getblocks.bin",
+        monero_epee_bin_serde::to_bytes(&req).unwrap(),
+      )
+      .await?;
+
+    if res.status != "OK" {
+      return Err(RpcError::InvalidNode);
+    }
+
+    Ok(res)
+  }
+}
+
+/// Deserialize a single `Vec<u8>` from an epee byte-blob field.
+mod epee_byte_blob {
+  use serde::de::{Deserializer, Visitor};
+  use std::fmt;
+
+  struct ByteBlobVisitor;
+
+  impl<'de> Visitor<'de> for ByteBlobVisitor {
+    type Value = Vec<u8>;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+      f.write_str("a byte blob")
+    }
+
+    fn visit_bytes<E: serde::de::Error>(self, v: &[u8]) -> Result<Self::Value, E> {
+      Ok(v.to_vec())
+    }
+
+    fn visit_byte_buf<E: serde::de::Error>(self, v: Vec<u8>) -> Result<Self::Value, E> {
+      Ok(v)
+    }
+
+    fn visit_string<E: serde::de::Error>(self, v: String) -> Result<Self::Value, E> {
+      Ok(v.into_bytes())
+    }
+
+    fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+      Ok(v.as_bytes().to_vec())
+    }
+  }
+
+  pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+  where
+    D: Deserializer<'de>,
+  {
+    deserializer.deserialize_byte_buf(ByteBlobVisitor)
+  }
+
+  #[allow(dead_code)]
+  pub fn serialize<S>(data: &[u8], serializer: S) -> Result<S::Ok, S::Error>
+  where
+    S: serde::Serializer,
+  {
+    serializer.serialize_bytes(data)
+  }
+}
+
+/// Deserialize a `Vec<Vec<u8>>` where each element is an epee byte-blob field.
+mod vec_of_bytes {
+  use serde::de::{Deserializer, SeqAccess, Visitor};
+  use std::fmt;
+
+  struct ByteBlob;
+
+  impl<'de> serde::de::DeserializeSeed<'de> for ByteBlob {
+    type Value = Vec<u8>;
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
+      struct ByteBlobVisitor;
+
+      impl<'de> Visitor<'de> for ByteBlobVisitor {
+        type Value = Vec<u8>;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+          f.write_str("a byte blob")
+        }
+
+        fn visit_bytes<E: serde::de::Error>(self, v: &[u8]) -> Result<Self::Value, E> {
+          Ok(v.to_vec())
+        }
+
+        fn visit_byte_buf<E: serde::de::Error>(self, v: Vec<u8>) -> Result<Self::Value, E> {
+          Ok(v)
+        }
+
+        fn visit_string<E: serde::de::Error>(self, v: String) -> Result<Self::Value, E> {
+          Ok(v.into_bytes())
+        }
+
+        fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+          Ok(v.as_bytes().to_vec())
+        }
+      }
+
+      deserializer.deserialize_byte_buf(ByteBlobVisitor)
+    }
+  }
+
+  pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<Vec<u8>>, D::Error>
+  where
+    D: Deserializer<'de>,
+  {
+    struct VecOfBytesVisitor;
+
+    impl<'de> Visitor<'de> for VecOfBytesVisitor {
+      type Value = Vec<Vec<u8>>;
+
+      fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("a sequence of byte blobs")
+      }
+
+      fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+      where
+        A: SeqAccess<'de>,
+      {
+        let mut result = Vec::new();
+        while let Some(bytes) = seq.next_element_seed(ByteBlob)? {
+          result.push(bytes);
+        }
+        Ok(result)
+      }
+    }
+
+    deserializer.deserialize_seq(VecOfBytesVisitor)
+  }
+
+  #[allow(dead_code)]
+  pub fn serialize<S>(data: &[Vec<u8>], serializer: S) -> Result<S::Ok, S::Error>
+  where
+    S: serde::Serializer,
+  {
+    use serde::ser::SerializeSeq;
+    let mut seq = serializer.serialize_seq(Some(data.len()))?;
+    for item in data {
+      seq.serialize_element(&serde_bytes::Bytes::new(item))?;
+    }
+    seq.end()
+  }
+}
+
+/// A single block entry returned by `/getblocks.bin`.
+#[allow(dead_code)]
+#[derive(Deserialize, Debug, Clone)]
+pub struct BlockCompleteEntry {
+  /// Raw block blob (header + miner tx + tx hashes).
+  #[serde(with = "epee_byte_blob")]
+  pub block: Vec<u8>,
+  /// Raw transaction blobs (full transactions when prune=false).
+  #[serde(default, with = "vec_of_bytes")]
+  pub txs: Vec<Vec<u8>>,
+  /// Whether the transaction data is pruned.
+  #[serde(default)]
+  pub pruned: bool,
+  /// Block weight.
+  #[serde(default)]
+  pub block_weight: u64,
+}
+
+/// Output indices for a single transaction.
+#[derive(Deserialize, Debug, Clone)]
+pub struct TxOutputIndices {
+  #[serde(default)]
+  pub indices: Vec<u64>,
+}
+
+/// Output indices for all transactions in a block.
+#[derive(Deserialize, Debug, Clone)]
+pub struct BlockOutputIndices {
+  #[serde(default)]
+  pub indices: Vec<TxOutputIndices>,
+}
+
+/// Response from the `/getblocks.bin` binary RPC endpoint.
+#[allow(dead_code)]
+#[derive(Deserialize, Debug)]
+pub struct GetBlocksFastResponse {
+  pub status: String,
+  #[serde(default)]
+  pub blocks: Vec<BlockCompleteEntry>,
+  pub start_height: u64,
+  pub current_height: u64,
+  #[serde(default)]
+  pub output_indices: Vec<BlockOutputIndices>,
+  #[serde(default)]
+  pub untrusted: bool,
+  #[serde(default)]
+  pub credits: u64,
+  #[serde(default)]
+  pub top_hash: String,
+  #[serde(default)]
+  pub daemon_time: u64,
 }
