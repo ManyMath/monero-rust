@@ -43,9 +43,14 @@ impl RpcConnection for WasmRpcConnection {
         let request = Request::new_with_str_and_init(&url, &opts)
             .map_err(|_| RpcError::ConnectionError)?;
 
+        let content_type = if route.ends_with(".bin") {
+            "application/octet-stream"
+        } else {
+            "application/json"
+        };
         request
             .headers()
-            .set("Content-Type", "application/json")
+            .set("Content-Type", content_type)
             .map_err(|_| RpcError::ConnectionError)?;
 
         let resp_value = JsFuture::from(window.fetch_with_request(&request))
