@@ -5,7 +5,9 @@
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, edwards::EdwardsPoint, scalar::Scalar};
 use monero_serai::{
-    rpc::{Rpc, RpcConnection},
+    block::Block,
+    rpc::{GetBlocksFastResponse, Rpc, RpcConnection},
+    transaction::{Input, Transaction},
     wallet::{
         address::{AddressMeta, AddressType, MoneroAddress, Network, SubaddressIndex},
         seed::{Language, Seed},
@@ -14,7 +16,6 @@ use monero_serai::{
 };
 #[cfg(target_arch = "wasm32")]
 use monero_serai::ringct::generate_key_image;
-use monero_serai::transaction::Input;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use std::collections::{HashMap, HashSet};
@@ -508,6 +509,401 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
         daemon_height,
         spent_key_images,
     })
+}
+
+/// Scan a batch of blocks fetched via `/getblocks.bin` for outputs belonging to the wallet.
+///
+/// This is dramatically faster than scanning one block at a time because it fetches
+/// up to ~1000 blocks in a single RPC call instead of 4 calls per block.
+///
+/// The scanner is set up once and reused across all blocks in the batch.
+pub async fn scan_blocks_batch<R: RpcConnection>(
+    rpc: &Rpc<R>,
+    start_height: u64,
+    mnemonic: &str,
+    network_str: &str,
+    lookahead: Lookahead,
+) -> Result<Vec<BlockScanResult>, String> {
+    // Get a known block hash so the daemon can find the fork point.
+    let known_hash = rpc
+        .get_block_hash(start_height as usize)
+        .await
+        .map_err(|e| format!("Failed to get block hash at {}: {:?}", start_height, e))?;
+
+    // Fetch batch of blocks via binary RPC (up to ~1000 blocks per call)
+    let response = rpc
+        .get_blocks_fast(&[known_hash], start_height)
+        .await
+        .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
+
+    process_batch_response(response, mnemonic, network_str, lookahead)
+}
+
+/// Process a batch of blocks fetched via `/getblocks.bin` and scan them for outputs.
+///
+/// This is the core scanning logic, separated from the RPC layer for testability.
+pub fn process_batch_response(
+    response: GetBlocksFastResponse,
+    mnemonic: &str,
+    network_str: &str,
+    lookahead: Lookahead,
+) -> Result<Vec<BlockScanResult>, String> {
+    let _network = parse_network(network_str)?;
+
+    let seed = Seed::from_string(Zeroizing::new(mnemonic.to_string()))
+        .map_err(|e| format!("Invalid mnemonic: {:?}", e))?;
+    let spend_point = spend_key_from_seed(&seed);
+    let view_scalar = view_key_from_seed(&seed);
+    #[cfg(target_arch = "wasm32")]
+    let spend_scalar = spend_key_scalar_from_seed(&seed);
+    let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
+    let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+    register_subaddresses(&mut scanner, lookahead);
+
+    let daemon_height = response.current_height;
+    let mut results = Vec::with_capacity(response.blocks.len());
+
+    for (block_idx, block_entry) in response.blocks.iter().enumerate() {
+        let block_height = response.start_height + block_idx as u64;
+
+        let block = Block::read::<&[u8]>(&mut block_entry.block.as_ref())
+            .map_err(|e| format!("Failed to parse block at height {}: {:?}", block_height, e))?;
+
+        if block.number() != block_height as usize {
+            return Err(format!(
+                "Block height mismatch: expected {}, got {}",
+                block_height,
+                block.number()
+            ));
+        }
+
+        let block_timestamp = block.header.timestamp;
+        let block_hash = hex::encode(Keccak256::digest(&block_entry.block));
+
+        let miner_tx = block.miner_tx;
+        let mut parsed_txs = Vec::with_capacity(block_entry.txs.len());
+        for tx_blob in &block_entry.txs {
+            let tx = Transaction::read::<&[u8]>(&mut tx_blob.as_ref())
+                .map_err(|e| format!("Failed to parse tx at height {}: {:?}", block_height, e))?;
+            parsed_txs.push(tx);
+        }
+
+        let all_transactions: Vec<&Transaction> = std::iter::once(&miner_tx)
+            .chain(parsed_txs.iter())
+            .collect();
+
+        let tx_count = all_transactions.len();
+        let mut outputs = Vec::new();
+        let mut spent_key_images = Vec::new();
+
+        for tx in &all_transactions {
+            let tx_hash = hex::encode(tx.hash());
+            let is_coinbase = matches!(tx.prefix.inputs.get(0), Some(Input::Gen(_)));
+
+            for input in &tx.prefix.inputs {
+                if let Input::ToKey { key_image, .. } = input {
+                    let ki_hex = hex::encode(key_image.compress().to_bytes());
+                    spent_key_images.push(ki_hex);
+                }
+            }
+
+            let scan_result = scanner.scan_transaction(tx);
+            let owned_outputs = scan_result.ignore_timelock();
+
+            for output in owned_outputs {
+                let amount = output.data.commitment.amount;
+                let amount_xmr = format!("{:.12}", amount as f64 / 1_000_000_000_000.0);
+                let output_index = output.absolute.o;
+                let key = hex::encode(output.data.key.compress().to_bytes());
+                let key_offset = hex::encode(output.data.key_offset.to_bytes());
+                let commitment_mask = hex::encode(output.data.commitment.mask.to_bytes());
+                let subaddress_index = output
+                    .metadata
+                    .subaddress
+                    .map(|idx| (idx.account(), idx.address()));
+                let payment_id = if output.metadata.payment_id != [0u8; 8] {
+                    Some(hex::encode(output.metadata.payment_id))
+                } else {
+                    None
+                };
+                let received_output_bytes = hex::encode(output.serialize());
+
+                #[cfg(target_arch = "wasm32")]
+                let key_image = {
+                    let key_image_point =
+                        calculate_key_image(&spend_scalar, &output.data.key_offset);
+                    hex::encode(key_image_point.compress().to_bytes())
+                };
+                #[cfg(not(target_arch = "wasm32"))]
+                let key_image = String::new();
+
+                outputs.push(OwnedOutputInfo {
+                    tx_hash: tx_hash.clone(),
+                    output_index,
+                    amount,
+                    amount_xmr,
+                    key,
+                    key_offset,
+                    commitment_mask,
+                    subaddress_index,
+                    payment_id,
+                    received_output_bytes,
+                    block_height,
+                    spent: false,
+                    key_image,
+                    is_coinbase,
+                });
+            }
+        }
+
+        results.push(BlockScanResult {
+            block_height,
+            block_hash,
+            block_timestamp,
+            tx_count,
+            outputs,
+            daemon_height,
+            spent_key_images,
+        });
+    }
+
+    Ok(results)
+}
+
+/// Convenience wrapper for batch scanning with URL-based RPC creation.
+pub async fn scan_blocks_batch_with_url(
+    node_url: &str,
+    start_height: u64,
+    mnemonic: &str,
+    network_str: &str,
+    lookahead: Lookahead,
+) -> Result<Vec<BlockScanResult>, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use monero_serai::rpc::HttpRpc;
+        let rpc = HttpRpc::new(node_url.to_string())
+            .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
+        scan_blocks_batch(&rpc, start_height, mnemonic, network_str, lookahead).await
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        use crate::rpc_serai::WasmRpcConnection;
+        let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
+        scan_blocks_batch(&rpc, start_height, mnemonic, network_str, lookahead).await
+    }
+}
+
+/// Scan a batch of blocks for outputs belonging to multiple wallets.
+///
+/// Fetches up to ~1000 blocks in a single `/getblocks.bin` call, parses them once,
+/// then scans each wallet against all blocks sequentially. Returns one
+/// `MultiWalletScanResult` per block.
+pub async fn scan_blocks_batch_multi_wallet<R: RpcConnection>(
+    rpc: &Rpc<R>,
+    start_height: u64,
+    wallet_configs: Vec<WalletScanConfig>,
+) -> Result<Vec<MultiWalletScanResult>, String> {
+    if wallet_configs.is_empty() {
+        return Err("No wallet configurations provided".to_string());
+    }
+
+    // Get a known block hash for the daemon to find the fork point
+    let known_hash = rpc
+        .get_block_hash(start_height as usize)
+        .await
+        .map_err(|e| format!("Failed to get block hash at {}: {:?}", start_height, e))?;
+
+    // Fetch batch of blocks via binary RPC
+    let response = rpc
+        .get_blocks_fast(&[known_hash], start_height)
+        .await
+        .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
+
+    process_batch_multi_wallet_response(response, wallet_configs)
+}
+
+/// Process a batch of blocks fetched via `/getblocks.bin` and scan for multiple wallets.
+///
+/// This is the core multi-wallet scanning logic, separated from the RPC layer for testability.
+pub fn process_batch_multi_wallet_response(
+    response: GetBlocksFastResponse,
+    wallet_configs: Vec<WalletScanConfig>,
+) -> Result<Vec<MultiWalletScanResult>, String> {
+    if wallet_configs.is_empty() {
+        return Err("No wallet configurations provided".to_string());
+    }
+
+    let daemon_height = response.current_height;
+
+    struct WalletScanner {
+        address: String,
+        scanner: Scanner,
+        #[cfg(target_arch = "wasm32")]
+        spend_scalar: Scalar,
+    }
+
+    let mut wallet_scanners = Vec::with_capacity(wallet_configs.len());
+    for config in &wallet_configs {
+        let address = derive_address(&config.mnemonic, &config.network)?;
+        let _network = parse_network(&config.network)?;
+        let seed = Seed::from_string(Zeroizing::new(config.mnemonic.clone()))
+            .map_err(|e| format!("Invalid mnemonic: {:?}", e))?;
+        let spend_point = spend_key_from_seed(&seed);
+        let view_scalar = view_key_from_seed(&seed);
+        #[cfg(target_arch = "wasm32")]
+        let spend_scalar = spend_key_scalar_from_seed(&seed);
+        let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
+        let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+        register_subaddresses(&mut scanner, config.lookahead);
+
+        wallet_scanners.push(WalletScanner {
+            address,
+            scanner,
+            #[cfg(target_arch = "wasm32")]
+            spend_scalar,
+        });
+    }
+
+    let mut results = Vec::with_capacity(response.blocks.len());
+
+    for (block_idx, block_entry) in response.blocks.iter().enumerate() {
+        let block_height = response.start_height + block_idx as u64;
+
+        let block = Block::read::<&[u8]>(&mut block_entry.block.as_ref())
+            .map_err(|e| format!("Failed to parse block at height {}: {:?}", block_height, e))?;
+
+        if block.number() != block_height as usize {
+            return Err(format!(
+                "Block height mismatch: expected {}, got {}",
+                block_height,
+                block.number()
+            ));
+        }
+
+        let block_timestamp = block.header.timestamp;
+        let block_hash = hex::encode(Keccak256::digest(&block_entry.block));
+
+        let miner_tx = block.miner_tx;
+        let mut parsed_txs = Vec::with_capacity(block_entry.txs.len());
+        for tx_blob in &block_entry.txs {
+            let tx = Transaction::read::<&[u8]>(&mut tx_blob.as_ref())
+                .map_err(|e| format!("Failed to parse tx at height {}: {:?}", block_height, e))?;
+            parsed_txs.push(tx);
+        }
+
+        let all_transactions: Vec<&Transaction> = std::iter::once(&miner_tx)
+            .chain(parsed_txs.iter())
+            .collect();
+        let tx_count = all_transactions.len();
+
+        let mut spent_key_images = Vec::new();
+        for tx in &all_transactions {
+            for input in &tx.prefix.inputs {
+                if let Input::ToKey { key_image, .. } = input {
+                    spent_key_images.push(hex::encode(key_image.compress().to_bytes()));
+                }
+            }
+        }
+
+        let mut wallet_results = HashMap::new();
+        for ws in &mut wallet_scanners {
+            let mut outputs = Vec::new();
+            for tx in &all_transactions {
+                let tx_hash = hex::encode(tx.hash());
+                let is_coinbase = matches!(tx.prefix.inputs.get(0), Some(Input::Gen(_)));
+
+                let scan_result = ws.scanner.scan_transaction(tx);
+                let owned_outputs = scan_result.ignore_timelock();
+
+                for output in owned_outputs {
+                    let amount = output.data.commitment.amount;
+                    let amount_xmr = format!("{:.12}", amount as f64 / 1_000_000_000_000.0);
+                    let output_index = output.absolute.o;
+                    let key = hex::encode(output.data.key.compress().to_bytes());
+                    let key_offset = hex::encode(output.data.key_offset.to_bytes());
+                    let commitment_mask = hex::encode(output.data.commitment.mask.to_bytes());
+                    let subaddress_index = output
+                        .metadata
+                        .subaddress
+                        .map(|idx| (idx.account(), idx.address()));
+                    let payment_id = if output.metadata.payment_id != [0u8; 8] {
+                        Some(hex::encode(output.metadata.payment_id))
+                    } else {
+                        None
+                    };
+                    let received_output_bytes = hex::encode(output.serialize());
+
+                    #[cfg(target_arch = "wasm32")]
+                    let key_image = {
+                        let key_image_point =
+                            calculate_key_image(&ws.spend_scalar, &output.data.key_offset);
+                        hex::encode(key_image_point.compress().to_bytes())
+                    };
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let key_image = String::new();
+
+                    outputs.push(OwnedOutputInfo {
+                        tx_hash: tx_hash.clone(),
+                        output_index,
+                        amount,
+                        amount_xmr,
+                        key,
+                        key_offset,
+                        commitment_mask,
+                        subaddress_index,
+                        payment_id,
+                        received_output_bytes,
+                        block_height,
+                        spent: false,
+                        key_image,
+                        is_coinbase,
+                    });
+                }
+            }
+            wallet_results.insert(
+                ws.address.clone(),
+                WalletScanData {
+                    address: ws.address.clone(),
+                    outputs,
+                },
+            );
+        }
+
+        results.push(MultiWalletScanResult {
+            block_height,
+            block_hash,
+            block_timestamp,
+            tx_count,
+            daemon_height,
+            spent_key_images,
+            wallet_results,
+        });
+    }
+
+    Ok(results)
+}
+
+/// Convenience wrapper for multi-wallet batch scanning with URL-based RPC creation.
+pub async fn scan_blocks_batch_multi_wallet_with_url(
+    node_url: &str,
+    start_height: u64,
+    wallet_configs: Vec<WalletScanConfig>,
+) -> Result<Vec<MultiWalletScanResult>, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use monero_serai::rpc::HttpRpc;
+        let rpc = HttpRpc::new(node_url.to_string())
+            .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
+        scan_blocks_batch_multi_wallet(&rpc, start_height, wallet_configs).await
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        use crate::rpc_serai::WasmRpcConnection;
+        let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
+        scan_blocks_batch_multi_wallet(&rpc, start_height, wallet_configs).await
+    }
 }
 
 /// Scan a single block for outputs belonging to multiple wallets simultaneously.

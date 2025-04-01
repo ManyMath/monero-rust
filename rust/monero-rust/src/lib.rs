@@ -16,6 +16,11 @@ pub use scanner::{
     DEFAULT_LOOKAHEAD, derive_address, derive_keys, derive_subaddress, generate_seed, seed_birthday, validate_seed,
     get_daemon_height, scan_block_for_outputs_with_url, scan_block_for_outputs_with_url_and_lookahead,
     scan_mempool_for_outputs, scan_mempool_for_outputs_with_lookahead, scan_mempool_for_outputs_with_account_lookahead,
+    // Batch scanning exports
+    scan_blocks_batch_with_url,
+    scan_blocks_batch_multi_wallet_with_url,
+    process_batch_response,
+    process_batch_multi_wallet_response,
     // Multi-wallet scanning exports
     MultiWalletScanResult, WalletScanConfig, WalletScanData,
     scan_block_multi_wallet_with_url,
