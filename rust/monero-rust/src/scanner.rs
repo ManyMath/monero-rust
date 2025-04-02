@@ -566,6 +566,22 @@ pub fn process_batch_response(
     for (block_idx, block_entry) in response.blocks.iter().enumerate() {
         let block_height = response.start_height + block_idx as u64;
 
+        // Pre-RingCT blocks can't be parsed by monero-serai
+        let major_version = block_entry.block.first().copied().unwrap_or(0);
+        if major_version < 4 {
+            let block_hash = hex::encode(Keccak256::digest(&block_entry.block));
+            results.push(BlockScanResult {
+                block_height,
+                block_hash,
+                block_timestamp: 0,
+                daemon_height,
+                outputs: vec![],
+                spent_key_images: vec![],
+                tx_count: 0,
+            });
+            continue;
+        }
+
         let block = Block::read::<&[u8]>(&mut block_entry.block.as_ref())
             .map_err(|e| format!("Failed to parse block at height {}: {:?}", block_height, e))?;
 
@@ -769,6 +785,32 @@ pub fn process_batch_multi_wallet_response(
 
     for (block_idx, block_entry) in response.blocks.iter().enumerate() {
         let block_height = response.start_height + block_idx as u64;
+
+        // Pre-RingCT blocks can't be parsed by monero-serai
+        let major_version = block_entry.block.first().copied().unwrap_or(0);
+        if major_version < 4 {
+            let block_hash = hex::encode(Keccak256::digest(&block_entry.block));
+            let mut wallet_results = HashMap::new();
+            for ws in &wallet_scanners {
+                wallet_results.insert(
+                    ws.address.clone(),
+                    WalletScanData {
+                        address: ws.address.clone(),
+                        outputs: vec![],
+                    },
+                );
+            }
+            results.push(MultiWalletScanResult {
+                block_height,
+                block_hash,
+                block_timestamp: 0,
+                tx_count: 0,
+                daemon_height: response.current_height,
+                spent_key_images: vec![],
+                wallet_results,
+            });
+            continue;
+        }
 
         let block = Block::read::<&[u8]>(&mut block_entry.block.as_ref())
             .map_err(|e| format!("Failed to parse block at height {}: {:?}", block_height, e))?;
