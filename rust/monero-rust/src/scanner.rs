@@ -24,6 +24,58 @@ use zeroize::Zeroizing;
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::task::JoinSet;
 
+/// Fallback key image extraction from raw tx bytes when `Transaction::read()` fails.
+pub fn extract_key_images_from_raw_tx(tx_blob: &[u8]) -> Vec<String> {
+    use std::io::{Cursor, Read};
+
+    fn read_varint(r: &mut Cursor<&[u8]>) -> Option<u64> {
+        let mut bits = 0u32;
+        let mut res = 0u64;
+        loop {
+            let mut b = [0u8; 1];
+            r.read_exact(&mut b).ok()?;
+            let b = b[0];
+            res += u64::from(b & 0x7f) << bits;
+            bits += 7;
+            if bits > 64 { return None; }
+            if b & 0x80 == 0 { return Some(res); }
+        }
+    }
+
+    let mut key_images = Vec::new();
+    let mut cursor = Cursor::new(tx_blob);
+
+    let Some(_version) = read_varint(&mut cursor) else { return key_images };
+    let Some(_timelock) = read_varint(&mut cursor) else { return key_images };
+    let Some(num_inputs) = read_varint(&mut cursor) else { return key_images };
+
+    for _ in 0..num_inputs {
+        let mut type_byte = [0u8; 1];
+        if cursor.read_exact(&mut type_byte).is_err() { break; }
+
+        match type_byte[0] {
+            0xff => {
+                // Gen input: varint height
+                if read_varint(&mut cursor).is_none() { break; }
+            }
+            0x02 => {
+                // ToKey input: amount, key_offsets, 32-byte key_image
+                let Some(_amount) = read_varint(&mut cursor) else { break };
+                let Some(num_offsets) = read_varint(&mut cursor) else { break };
+                for _ in 0..num_offsets {
+                    if read_varint(&mut cursor).is_none() { break; }
+                }
+                let mut ki = [0u8; 32];
+                if cursor.read_exact(&mut ki).is_err() { break; }
+                key_images.push(hex::encode(ki));
+            }
+            _ => break,
+        }
+    }
+
+    key_images
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockScanResult {
     pub block_height: u64,
@@ -598,19 +650,23 @@ pub fn process_batch_response(
 
         let miner_tx = block.miner_tx;
         let mut parsed_txs = Vec::with_capacity(block_entry.txs.len());
+        let mut skipped_key_images = Vec::new();
         for tx_blob in &block_entry.txs {
-            let tx = Transaction::read::<&[u8]>(&mut tx_blob.as_ref())
-                .map_err(|e| format!("Failed to parse tx at height {}: {:?}", block_height, e))?;
-            parsed_txs.push(tx);
+            match Transaction::read::<&[u8]>(&mut tx_blob.as_ref()) {
+                Ok(tx) => parsed_txs.push(tx),
+                Err(_) => {
+                    skipped_key_images.extend(extract_key_images_from_raw_tx(tx_blob));
+                }
+            }
         }
 
         let all_transactions: Vec<&Transaction> = std::iter::once(&miner_tx)
             .chain(parsed_txs.iter())
             .collect();
 
-        let tx_count = all_transactions.len();
+        let tx_count = 1 + block_entry.txs.len();
         let mut outputs = Vec::new();
-        let mut spent_key_images = Vec::new();
+        let mut spent_key_images = skipped_key_images;
 
         for tx in &all_transactions {
             let tx_hash = hex::encode(tx.hash());
@@ -828,18 +884,22 @@ pub fn process_batch_multi_wallet_response(
 
         let miner_tx = block.miner_tx;
         let mut parsed_txs = Vec::with_capacity(block_entry.txs.len());
+        let mut skipped_key_images = Vec::new();
         for tx_blob in &block_entry.txs {
-            let tx = Transaction::read::<&[u8]>(&mut tx_blob.as_ref())
-                .map_err(|e| format!("Failed to parse tx at height {}: {:?}", block_height, e))?;
-            parsed_txs.push(tx);
+            match Transaction::read::<&[u8]>(&mut tx_blob.as_ref()) {
+                Ok(tx) => parsed_txs.push(tx),
+                Err(_) => {
+                    skipped_key_images.extend(extract_key_images_from_raw_tx(tx_blob));
+                }
+            }
         }
 
         let all_transactions: Vec<&Transaction> = std::iter::once(&miner_tx)
             .chain(parsed_txs.iter())
             .collect();
-        let tx_count = all_transactions.len();
+        let tx_count = 1 + block_entry.txs.len();
 
-        let mut spent_key_images = Vec::new();
+        let mut spent_key_images = skipped_key_images;
         for tx in &all_transactions {
             for input in &tx.prefix.inputs {
                 if let Input::ToKey { key_image, .. } = input {
