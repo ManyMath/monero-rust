@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use monero_serai::rpc::{RpcConnection, RpcError};
@@ -16,6 +17,7 @@ struct RpcCall {
 pub struct MockRpc {
     calls: Arc<Vec<RpcCall>>,
     call_sequence: Arc<Mutex<Vec<usize>>>,
+    binary_files: Arc<HashMap<String, Vec<u8>>>,
 }
 
 impl MockRpc {
@@ -26,10 +28,35 @@ impl MockRpc {
         Ok(MockRpc {
             calls: Arc::new(calls),
             call_sequence: Arc::new(Mutex::new(Vec::new())),
+            binary_files: Arc::new(HashMap::new()),
         })
     }
 
+    pub fn from_json(json: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let calls: Vec<RpcCall> = serde_json::from_str(json)?;
+        Ok(MockRpc {
+            calls: Arc::new(calls),
+            call_sequence: Arc::new(Mutex::new(Vec::new())),
+            binary_files: Arc::new(HashMap::new()),
+        })
+    }
+
+    pub fn with_binary_file<P: AsRef<Path>>(mut self, route: &str, path: P) -> Self {
+        let bytes = std::fs::read(path).expect("failed to read binary fixture");
+        Arc::make_mut(&mut self.binary_files).insert(route.to_string(), bytes);
+        self
+    }
+
     fn find_matching_call(&self, route: &str, body: &[u8]) -> Option<RpcCall> {
+        if let Some(bytes) = self.binary_files.get(route) {
+            return Some(RpcCall {
+                route: route.to_string(),
+                body: String::new(),
+                response: base64::engine::general_purpose::STANDARD.encode(bytes),
+                is_binary: true,
+            });
+        }
+
         for (idx, call) in self.calls.iter().enumerate() {
             if call.route != route {
                 continue;
