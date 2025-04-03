@@ -479,6 +479,10 @@ class _DebugViewState extends State<DebugView> {
 
     _spentStatusUpdatedSubscription = SpentStatusUpdatedResponse.rustSignalStream.listen((signal) {
       setState(() {
+        // Mark on canonical wallet outputs so spent state survives re-copy
+        for (var wallet in _lifecycle.openWallets.values) {
+          OutputUtils.markSpentByKeyImages(wallet.outputs, signal.message.spentKeyImages, _selectedOutputs);
+        }
         OutputUtils.markSpentByKeyImages(_allOutputsAllAccounts, signal.message.spentKeyImages, _selectedOutputs);
       });
     });

@@ -424,6 +424,13 @@ class WalletLifecycleManager {
       openWallets[walletInstance.walletId] = walletInstance;
     }
 
+    // Mark spent on the canonical list before copying to allOutputs
+    if (scanResult.spentKeyImages.isNotEmpty) {
+      final walletToMark = accountsUpdated ? updatedWallet : walletInstance;
+      OutputUtils.markSpentByKeyImages(
+          walletToMark.outputs, scanResult.spentKeyImages, selectedOutputs);
+    }
+
     // Update the derived lists to ensure UI gets fresh references
     print('\n--- Updating allOutputs and allTransactions ---');
     print('activeWallet before final copy:');
@@ -433,7 +440,7 @@ class WalletLifecycleManager {
     print('  activeWallet === walletInstance: ${identical(activeWallet, walletInstance)}');
     print('  activeWallet === updatedWallet: ${identical(activeWallet, updatedWallet)}');
     print('  activeWallet === openWallets[activeWalletId]: ${identical(activeWallet, openWallets[activeWalletId])}');
-    
+
     // Force new list references to trigger UI updates
     allOutputs = List<OwnedOutput>.from(activeWallet!.outputs);
     allTransactions = List<WalletTransaction>.from(activeWallet!.transactions);
