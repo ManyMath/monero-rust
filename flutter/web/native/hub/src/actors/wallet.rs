@@ -1026,11 +1026,15 @@ impl Notifiable<StopScan> for WalletActor {
     async fn notify(&mut self, _msg: StopScan, _ctx: &Context<Self>) {
         self.is_scanning = false;
 
+        if self.active_scan_type == ScanType::None {
+            return;
+        }
+
         // Use correct state fields based on which scan was active
         let (current_height, target_height) = match self.active_scan_type {
             ScanType::SingleWallet => (self.scan_current_height, self.scan_target_height),
             ScanType::MultiWallet => (self.multi_wallet_scan_current_height, self.multi_wallet_scan_target_height),
-            ScanType::None => (0, 0),
+            ScanType::None => unreachable!(),
         };
 
         self.active_scan_type = ScanType::None;

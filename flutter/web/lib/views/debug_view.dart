@@ -546,7 +546,7 @@ class _DebugViewState extends State<DebugView> {
   }
 
   void _onBlockRefreshTimer() {
-    if (_isContinuousPaused || !_isContinuousScanning) {
+    if (_isContinuousPaused || _isContinuousScanning) {
       return;
     }
 
