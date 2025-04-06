@@ -77,47 +77,47 @@ fn lookahead() -> Lookahead {
 
 // ── Error handling ──
 
-#[test]
-fn test_invalid_seed_rejected() {
+#[tokio::test]
+async fn test_invalid_seed_rejected() {
     let resp = make_response(100, 1, 101);
-    let err = process_batch_response(resp, "bad seed", "stagenet", lookahead()).unwrap_err();
+    let err = process_batch_response(resp, "bad seed", "stagenet", lookahead()).await.unwrap_err();
     assert!(err.contains("mnemonic") || err.contains("seed"), "{err}");
 }
 
-#[test]
-fn test_invalid_network_rejected() {
+#[tokio::test]
+async fn test_invalid_network_rejected() {
     let resp = make_response(100, 1, 101);
-    let err = process_batch_response(resp, STAGENET_SEED, "badnet", lookahead()).unwrap_err();
+    let err = process_batch_response(resp, STAGENET_SEED, "badnet", lookahead()).await.unwrap_err();
     assert!(err.contains("network") || err.contains("Network"), "{err}");
 }
 
-#[test]
-fn test_empty_configs_rejected() {
+#[tokio::test]
+async fn test_empty_configs_rejected() {
     let resp = make_response(100, 1, 101);
-    let err = process_batch_multi_wallet_response(resp, vec![]).unwrap_err();
+    let err = process_batch_multi_wallet_response(resp, vec![]).await.unwrap_err();
     assert!(err.contains("No wallet"));
 }
 
-#[test]
-fn test_one_bad_seed_fails_multi_wallet_batch() {
+#[tokio::test]
+async fn test_one_bad_seed_fails_multi_wallet_batch() {
     let resp = make_response(100, 1, 101);
     let configs = vec![
         WalletScanConfig { mnemonic: STAGENET_SEED.to_string(), network: "stagenet".to_string(), lookahead: lookahead() },
         WalletScanConfig { mnemonic: "bad".to_string(), network: "stagenet".to_string(), lookahead: lookahead() },
     ];
-    assert!(process_batch_multi_wallet_response(resp, configs).is_err());
+    assert!(process_batch_multi_wallet_response(resp, configs).await.is_err());
 }
 
 // ── Edge cases ──
 
-#[test]
-fn test_empty_batch_returns_empty() {
+#[tokio::test]
+async fn test_empty_batch_returns_empty() {
     let resp = make_response(100, 0, 100);
-    assert!(process_batch_response(resp, STAGENET_SEED, "stagenet", lookahead()).unwrap().is_empty());
+    assert!(process_batch_response(resp, STAGENET_SEED, "stagenet", lookahead()).await.unwrap().is_empty());
 }
 
-#[test]
-fn test_height_mismatch_detected() {
+#[tokio::test]
+async fn test_height_mismatch_detected() {
     let block = make_coinbase_block(999);
     let resp = GetBlocksFastResponse {
         status: "OK".to_string(),
@@ -132,14 +132,14 @@ fn test_height_mismatch_detected() {
         top_hash: String::new(),
         daemon_time: 0,
     };
-    let err = process_batch_response(resp, STAGENET_SEED, "stagenet", lookahead()).unwrap_err();
+    let err = process_batch_response(resp, STAGENET_SEED, "stagenet", lookahead()).await.unwrap_err();
     assert!(err.contains("mismatch"), "{err}");
 }
 
 // ── Multi-wallet structure ──
 
-#[test]
-fn test_multi_wallet_produces_entry_per_wallet() {
+#[tokio::test]
+async fn test_multi_wallet_produces_entry_per_wallet() {
     let resp = make_response(100, 3, 103);
     let other_seed = "honked bagpipe alpine juicy faked afoot jostle claim cowl tunnel orphans negative pheasants feast jetting quote frown teeming cycling tribal womanly hills cottage daytime daytime";
     let configs = vec![
@@ -150,7 +150,7 @@ fn test_multi_wallet_produces_entry_per_wallet() {
             lookahead: lookahead(),
         },
     ];
-    let results = process_batch_multi_wallet_response(resp, configs).unwrap();
+    let results = process_batch_multi_wallet_response(resp, configs).await.unwrap();
     assert_eq!(results.len(), 3);
     for r in &results {
         assert_eq!(r.wallet_results.len(), 2);

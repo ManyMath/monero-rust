@@ -24,6 +24,18 @@ use zeroize::Zeroizing;
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::task::JoinSet;
 
+/// How often to yield to the browser event loop during batch processing.
+const YIELD_EVERY_N_BLOCKS: usize = 50;
+
+/// Yield to other tasks on wasm; do nothing on native targets.
+#[inline]
+async fn yield_to_event_loop() {
+    #[cfg(target_arch = "wasm32")]
+    {
+        gloo_timers::future::TimeoutFuture::new(0).await;
+    }
+}
+
 /// Fallback key image extraction from raw tx bytes when `Transaction::read()` fails.
 pub fn extract_key_images_from_raw_tx(tx_blob: &[u8]) -> Vec<String> {
     use std::io::{Cursor, Read};
@@ -588,13 +600,13 @@ pub async fn scan_blocks_batch<R: RpcConnection>(
         .await
         .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
 
-    process_batch_response(response, mnemonic, network_str, lookahead)
+    process_batch_response(response, mnemonic, network_str, lookahead).await
 }
 
 /// Process a batch of blocks fetched via `/getblocks.bin` and scan them for outputs.
 ///
 /// This is the core scanning logic, separated from the RPC layer for testability.
-pub fn process_batch_response(
+pub async fn process_batch_response(
     response: GetBlocksFastResponse,
     mnemonic: &str,
     network_str: &str,
@@ -737,6 +749,10 @@ pub fn process_batch_response(
             daemon_height,
             spent_key_images,
         });
+
+        if block_idx % YIELD_EVERY_N_BLOCKS == YIELD_EVERY_N_BLOCKS - 1 {
+            yield_to_event_loop().await;
+        }
     }
 
     Ok(results)
@@ -792,13 +808,13 @@ pub async fn scan_blocks_batch_multi_wallet<R: RpcConnection>(
         .await
         .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
 
-    process_batch_multi_wallet_response(response, wallet_configs)
+    process_batch_multi_wallet_response(response, wallet_configs).await
 }
 
 /// Process a batch of blocks fetched via `/getblocks.bin` and scan for multiple wallets.
 ///
 /// This is the core multi-wallet scanning logic, separated from the RPC layer for testability.
-pub fn process_batch_multi_wallet_response(
+pub async fn process_batch_multi_wallet_response(
     response: GetBlocksFastResponse,
     wallet_configs: Vec<WalletScanConfig>,
 ) -> Result<Vec<MultiWalletScanResult>, String> {
@@ -981,6 +997,10 @@ pub fn process_batch_multi_wallet_response(
             spent_key_images,
             wallet_results,
         });
+
+        if block_idx % YIELD_EVERY_N_BLOCKS == YIELD_EVERY_N_BLOCKS - 1 {
+            yield_to_event_loop().await;
+        }
     }
 
     Ok(results)
