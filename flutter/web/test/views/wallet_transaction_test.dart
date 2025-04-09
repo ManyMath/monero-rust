@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:tuple/tuple.dart';
 import '../../lib/models/wallet_transaction.dart';
 import '../../lib/src/bindings/bindings.dart';
+import '../../lib/utils/transaction_utils.dart';
 import '../test_helpers.dart';
 
 void main() {
@@ -24,8 +25,8 @@ void main() {
         );
 
         final allOutputs = [output];
-        expect(transaction.balanceChange(allOutputs), equals(1.5));
-        expect(transaction.isIncoming(allOutputs), isTrue);
+        expect(transaction.balanceChange(TransactionUtils.buildKeyImageMap(allOutputs)), equals(1.5));
+        expect(transaction.isIncoming(TransactionUtils.buildKeyImageMap(allOutputs)), isTrue);
       });
 
       test('Incoming transaction with multiple outputs sums correctly', () {
@@ -51,8 +52,8 @@ void main() {
         );
 
         final allOutputs = [output1, output2];
-        expect(transaction.balanceChange(allOutputs), equals(3.8));
-        expect(transaction.isIncoming(allOutputs), isTrue);
+        expect(transaction.balanceChange(TransactionUtils.buildKeyImageMap(allOutputs)), equals(3.8));
+        expect(transaction.isIncoming(TransactionUtils.buildKeyImageMap(allOutputs)), isTrue);
       });
 
       test('Outgoing transaction with spent outputs has negative balance', () {
@@ -73,8 +74,8 @@ void main() {
         );
 
         final allOutputs = [ownedOutput];
-        expect(spendTx.balanceChange(allOutputs), equals(-5.0));
-        expect(spendTx.isIncoming(allOutputs), isFalse);
+        expect(spendTx.balanceChange(TransactionUtils.buildKeyImageMap(allOutputs)), equals(-5.0));
+        expect(spendTx.isIncoming(TransactionUtils.buildKeyImageMap(allOutputs)), isFalse);
       });
 
       test('Self-send transaction (consolidation) has zero net balance', () {
@@ -103,7 +104,7 @@ void main() {
         );
 
         final allOutputs = [receivedOutput, spentOutput];
-        expect(transaction.balanceChange(allOutputs), equals(0.0));
+        expect(transaction.balanceChange(TransactionUtils.buildKeyImageMap(allOutputs)), equals(0.0));
       });
 
       test('Balance calculation handles missing key images gracefully', () {
@@ -123,7 +124,7 @@ void main() {
         );
 
         final allOutputs = [output];
-        expect(transaction.balanceChange(allOutputs), equals(2.0));
+        expect(transaction.balanceChange(TransactionUtils.buildKeyImageMap(allOutputs)), equals(2.0));
       });
 
       test('Balance calculation preserves precision for 12-decimal amounts', () {
@@ -160,7 +161,7 @@ void main() {
           spentKeyImages: [],
         );
 
-        final balance = transaction.balanceChange([output1, output2]);
+        final balance = transaction.balanceChange(TransactionUtils.buildKeyImageMap([output1, output2]));
         // double can represent 0.123456789013 but may lose precision
         // at least verify it's in the right ballpark
         expect(balance, closeTo(0.123456789013, 1e-10));
@@ -193,7 +194,7 @@ void main() {
         );
 
         final allOutputs = [output];
-        expect(transaction.balanceChange(allOutputs), equals(0.0));
+        expect(transaction.balanceChange(TransactionUtils.buildKeyImageMap(allOutputs)), equals(0.0));
       });
     });
 
@@ -286,6 +287,99 @@ void main() {
         expect(reconstructed.blockTimestamp, equals(original.blockTimestamp));
         expect(reconstructed.receivedOutputs.length, equals(original.receivedOutputs.length));
         expect(reconstructed.spentKeyImages, equals(original.spentKeyImages));
+      });
+
+      test('toJson preserves spent field on receivedOutputs', () {
+        final output = TestHelpers.createMockOutput(
+          txHash: 'tx_coinbase',
+          outputIndex: 0,
+          amountXmr: '0.6',
+          blockHeight: 500,
+          spent: true,
+          isCoinbase: true,
+        );
+
+        final transaction = WalletTransaction(
+          txHash: 'tx_coinbase',
+          blockHeight: 500,
+          blockTimestamp: 1700000000,
+          receivedOutputs: [output],
+          spentKeyImages: [],
+        );
+
+        final json = transaction.toJson();
+        final outputMap = json['receivedOutputs'][0] as Map<String, dynamic>;
+
+        // spent IS included in toJson
+        expect(outputMap['spent'], isTrue);
+        // isCoinbase is NOT included in toJson - this is a known gap
+        expect(outputMap.containsKey('isCoinbase'), isFalse);
+
+        // Round-trip: fromJson defaults isCoinbase to false since it is missing
+        final reconstructed = WalletTransaction.fromJson(json);
+        expect(reconstructed.receivedOutputs[0].spent, isTrue);
+        expect(reconstructed.receivedOutputs[0].isCoinbase, isFalse);
+      });
+
+      test('fromJson backward compatibility: missing spent defaults to false', () {
+        final json = {
+          'txHash': 'tx_old',
+          'blockHeight': 800,
+          'blockTimestamp': 1699000000,
+          'receivedOutputs': [
+            {
+              'txHash': 'tx_old',
+              'outputIndex': 0,
+              'amount': '2000000000000',
+              'amountXmr': '2.0',
+              'key': 'mock_key',
+              'keyOffset': 'mock_offset',
+              'commitmentMask': 'mock_mask',
+              'subaddressIndex': null,
+              'paymentId': null,
+              'receivedOutputBytes': 'mock_bytes',
+              'blockHeight': '800',
+              // 'spent' key intentionally omitted
+              'keyImage': 'ki_old',
+            }
+          ],
+          'spentKeyImages': [],
+        };
+
+        final transaction = WalletTransaction.fromJson(json);
+
+        expect(transaction.receivedOutputs[0].spent, isFalse);
+      });
+
+      test('fromJson backward compatibility: missing isCoinbase defaults to false', () {
+        final json = {
+          'txHash': 'tx_old2',
+          'blockHeight': 900,
+          'blockTimestamp': 1699500000,
+          'receivedOutputs': [
+            {
+              'txHash': 'tx_old2',
+              'outputIndex': 0,
+              'amount': '3000000000000',
+              'amountXmr': '3.0',
+              'key': 'mock_key',
+              'keyOffset': 'mock_offset',
+              'commitmentMask': 'mock_mask',
+              'subaddressIndex': null,
+              'paymentId': null,
+              'receivedOutputBytes': 'mock_bytes',
+              'blockHeight': '900',
+              'spent': false,
+              'keyImage': 'ki_old2',
+              // 'isCoinbase' key intentionally omitted
+            }
+          ],
+          'spentKeyImages': [],
+        };
+
+        final transaction = WalletTransaction.fromJson(json);
+
+        expect(transaction.receivedOutputs[0].isCoinbase, isFalse);
       });
 
       test('fromJson handles null subaddressIndex and paymentId', () {

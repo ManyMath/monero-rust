@@ -269,7 +269,7 @@ class WalletLifecycleManager {
         activeWalletInstance.transactions = TransactionUtils.updateTransactionsFromScan(
           activeWalletInstance.transactions,
           walletScanResponse,
-          activeWalletInstance.outputs,
+          TransactionUtils.buildKeyImageMap(activeWalletInstance.outputs),
         );
         print('activeWalletInstance.transactions.length: ${activeWalletInstance.transactions.length}');
       } else {
@@ -299,7 +299,7 @@ class WalletLifecycleManager {
           walletInstance.transactions = TransactionUtils.updateTransactionsFromScan(
             walletInstance.transactions,
             walletScanResponse,
-            walletInstance.outputs,
+            TransactionUtils.buildKeyImageMap(walletInstance.outputs),
           );
         }
       }
@@ -360,7 +360,7 @@ class WalletLifecycleManager {
     walletInstance.transactions = TransactionUtils.updateTransactionsFromScan(
       walletInstance.transactions,
       scanResult,
-      walletInstance.outputs,
+      TransactionUtils.buildKeyImageMap(walletInstance.outputs),
     );
     print('walletInstance.transactions.length: ${walletInstance.transactions.length}');
 

@@ -2,10 +2,14 @@ import '../src/bindings/bindings.dart';
 import '../models/wallet_transaction.dart';
 
 class TransactionUtils {
+  static Map<String, OwnedOutput> buildKeyImageMap(List<OwnedOutput> outputs) {
+    return {for (var o in outputs) o.keyImage: o};
+  }
+
   static List<WalletTransaction> updateTransactionsFromScan(
     List<WalletTransaction> existingTransactions,
     BlockScanResponse scan,
-    List<OwnedOutput> allOutputs,
+    Map<String, OwnedOutput> keyImageMap,
   ) {
     final transactions = List<WalletTransaction>.from(existingTransactions);
     final blockHeight = scan.blockHeight.toInt();
@@ -49,7 +53,7 @@ class TransactionUtils {
     }
 
     for (var spentKeyImage in scan.spentKeyImages) {
-      final spentOutput = allOutputs.where((o) => o.keyImage == spentKeyImage).firstOrNull;
+      final spentOutput = keyImageMap[spentKeyImage];
       if (spentOutput == null) continue;
 
       final existingTx = transactions.where((t) =>
@@ -71,7 +75,7 @@ class TransactionUtils {
 
   static List<WalletTransaction> sortTransactions(
     List<WalletTransaction> transactions,
-    List<OwnedOutput> allOutputs,
+    Map<String, OwnedOutput> keyImageMap,
     String sortBy,
     bool ascending,
     int currentHeight,
@@ -85,8 +89,8 @@ class TransactionUtils {
         final bConf = currentHeight - b.blockHeight;
         comparison = aConf.compareTo(bConf);
       } else {
-        final aAmount = a.balanceChange(allOutputs).abs();
-        final bAmount = b.balanceChange(allOutputs).abs();
+        final aAmount = a.balanceChange(keyImageMap).abs();
+        final bAmount = b.balanceChange(keyImageMap).abs();
         comparison = aAmount.compareTo(bAmount);
       }
       return ascending ? comparison : -comparison;

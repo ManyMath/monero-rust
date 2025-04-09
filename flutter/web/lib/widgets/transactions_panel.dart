@@ -9,7 +9,7 @@ import 'common_widgets.dart';
 /// and balance change display for each transaction.
 class TransactionsPanel extends StatelessWidget {
   final List<WalletTransaction> allTransactions;
-  final List<OwnedOutput> allOutputs;
+  final Map<String, OwnedOutput> keyImageMap;
   final int currentHeight;
   final String txSortBy;
   final bool txSortAscending;
@@ -21,7 +21,7 @@ class TransactionsPanel extends StatelessWidget {
   const TransactionsPanel({
     super.key,
     required this.allTransactions,
-    required this.allOutputs,
+    required this.keyImageMap,
     required this.currentHeight,
     required this.txSortBy,
     required this.txSortAscending,
@@ -43,7 +43,7 @@ class TransactionsPanel extends StatelessWidget {
 
     // Add accounts from spent outputs
     for (var keyImage in tx.spentKeyImages) {
-      final spentOutput = allOutputs.where((o) => o.keyImage == keyImage).firstOrNull;
+      final spentOutput = keyImageMap[keyImage];
       if (spentOutput != null) {
         final account = spentOutput.subaddressIndex?.item1 ?? 0;
         accounts.add(account);
@@ -99,7 +99,7 @@ class TransactionsPanel extends StatelessWidget {
           // Transaction cards
           ...allTransactions.map((tx) {
             final isExpanded = expandedTransactions.contains(tx.txHash);
-            final balanceChange = tx.balanceChange(allOutputs);
+            final balanceChange = tx.balanceChange(keyImageMap);
             final isIncoming = balanceChange > 0;
             final confirmations = currentHeight > 0 && tx.blockHeight > 0
                 ? currentHeight - tx.blockHeight
@@ -283,7 +283,7 @@ class TransactionsPanel extends StatelessWidget {
                           ),
                           const SizedBox(height: 4),
                           ...tx.spentKeyImages.map((keyImage) {
-                            final spentOutput = allOutputs.where((o) => o.keyImage == keyImage).firstOrNull;
+                            final spentOutput = keyImageMap[keyImage];
                             final amountStr = spentOutput?.amountXmr ?? 'Unknown';
                             final accountIndex = spentOutput?.subaddressIndex?.item1 ?? 0;
                             final showAccount = activeAccount == -1;

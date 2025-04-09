@@ -16,7 +16,7 @@ class WalletTransaction {
     required this.spentKeyImages,
   });
 
-  double balanceChange(List<OwnedOutput> allOutputs) {
+  double balanceChange(Map<String, OwnedOutput> keyImageMap) {
     double received = 0;
     for (var output in receivedOutputs) {
       received += double.tryParse(output.amountXmr) ?? 0;
@@ -24,7 +24,7 @@ class WalletTransaction {
 
     double spent = 0;
     for (var keyImage in spentKeyImages) {
-      final spentOutput = allOutputs.where((o) => o.keyImage == keyImage).firstOrNull;
+      final spentOutput = keyImageMap[keyImage];
       if (spentOutput != null) {
         spent += double.tryParse(spentOutput.amountXmr) ?? 0;
       }
@@ -33,7 +33,7 @@ class WalletTransaction {
     return received - spent;
   }
 
-  bool isIncoming(List<OwnedOutput> allOutputs) => balanceChange(allOutputs) > 0;
+  bool isIncoming(Map<String, OwnedOutput> keyImageMap) => balanceChange(keyImageMap) > 0;
 
   Map<String, dynamic> toJson() => {
     'txHash': txHash,

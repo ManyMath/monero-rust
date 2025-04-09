@@ -139,8 +139,12 @@ class _DebugViewState extends State<DebugView> {
   List<WalletTransaction> get _allTransactionsAllAccounts => _lifecycle.allTransactions;
   set _allTransactionsAllAccounts(List<WalletTransaction> v) => _lifecycle.allTransactions = v;
 
+  // Build keyImage lookup map once from all outputs
+  Map<String, OwnedOutput> get _keyImageMap =>
+      TransactionUtils.buildKeyImageMap(_allOutputsAllAccounts);
+
   // Filtered transactions for active account only (or all accounts if _activeAccount == -1)
-  List<WalletTransaction> get _allTransactions {
+  List<WalletTransaction> _getFilteredTransactions(Map<String, OwnedOutput> keyImageMap) {
     // If "All" is selected, return all transactions
     if (_activeAccount == -1) {
       return _allTransactionsAllAccounts;
@@ -157,7 +161,7 @@ class _DebugViewState extends State<DebugView> {
 
       // OR if it spent outputs from this account
       final hasSpentOutputs = tx.spentKeyImages.any((keyImage) {
-        final spentOutput = _allOutputsAllAccounts.where((o) => o.keyImage == keyImage).firstOrNull;
+        final spentOutput = keyImageMap[keyImage];
         if (spentOutput == null) return false;
         if (spentOutput.subaddressIndex == null) {
           return _activeAccount == 0;
@@ -1387,8 +1391,10 @@ class _DebugViewState extends State<DebugView> {
         ? 'Data stored: ${_formatBytes(totalBytes)}'
         : 'No stored data';
 
-    final txCount = _allTransactions.length;
-    final incomingCount = _allTransactions.where((t) => t.isIncoming(_allOutputs)).length;
+    final keyImageMap = _keyImageMap;
+    final filteredTransactions = _getFilteredTransactions(keyImageMap);
+    final txCount = filteredTransactions.length;
+    final incomingCount = filteredTransactions.where((t) => t.isIncoming(keyImageMap)).length;
     final outgoingCount = txCount - incomingCount;
     final transactionsSubtitle = txCount == 0
         ? 'No transactions'
@@ -1537,8 +1543,8 @@ class _DebugViewState extends State<DebugView> {
                       panel: DebugPanel.transactions,
                       subtitle: transactionsSubtitle,
                       body: TransactionsPanel(
-                        allTransactions: _sortedTransactions(),
-                        allOutputs: _allOutputsAllAccounts,
+                        allTransactions: _sortedTransactions(filteredTransactions, keyImageMap),
+                        keyImageMap: keyImageMap,
                         currentHeight: _currentHeight,
                         txSortBy: _txSortBy,
                         txSortAscending: _txSortAscending,
@@ -1666,10 +1672,13 @@ class _DebugViewState extends State<DebugView> {
     }
   }
 
-  List<WalletTransaction> _sortedTransactions() {
+  List<WalletTransaction> _sortedTransactions(
+    List<WalletTransaction> transactions,
+    Map<String, OwnedOutput> keyImageMap,
+  ) {
     return TransactionUtils.sortTransactions(
-      _allTransactions,
-      _allOutputsAllAccounts,
+      transactions,
+      keyImageMap,
       _txSortBy,
       _txSortAscending,
       _currentHeight,
@@ -1764,7 +1773,7 @@ class _DebugViewState extends State<DebugView> {
       address: _derivedAddress,
       nodeUrl: _nodeUrlController.text,
       outputs: _allOutputs,
-      transactions: _allTransactions,
+      transactions: _getFilteredTransactions(_keyImageMap),
       continuousScanCurrentHeight: _continuousScanCurrentHeight,
       selectedOutputs: _selectedOutputs,
       accounts: accounts,
