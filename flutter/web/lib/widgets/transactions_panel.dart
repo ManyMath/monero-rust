@@ -97,7 +97,12 @@ class TransactionsPanel extends StatelessWidget {
             ),
           ),
           // Transaction cards
-          ...allTransactions.map((tx) {
+          ListView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: allTransactions.length,
+            itemBuilder: (context, index) {
+            final tx = allTransactions[index];
             final isExpanded = expandedTransactions.contains(tx.txHash);
             final balanceChange = tx.balanceChange(keyImageMap);
             final isIncoming = balanceChange > 0;
@@ -329,7 +334,8 @@ class TransactionsPanel extends StatelessWidget {
                 ),
               ),
             );
-          }),
+          },
+          ),
         ],
       ),
     );

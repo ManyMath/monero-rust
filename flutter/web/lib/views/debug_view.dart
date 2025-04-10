@@ -1392,6 +1392,7 @@ class _DebugViewState extends State<DebugView> {
         : 'No stored data';
 
     final keyImageMap = _keyImageMap;
+    final filteredOutputs = _allOutputs;
     final filteredTransactions = _getFilteredTransactions(keyImageMap);
     final txCount = filteredTransactions.length;
     final incomingCount = filteredTransactions.where((t) => t.isIncoming(keyImageMap)).length;
@@ -1400,7 +1401,7 @@ class _DebugViewState extends State<DebugView> {
         ? 'No transactions'
         : '$txCount transaction${txCount == 1 ? '' : 's'} ($incomingCount in, $outgoingCount out)';
 
-    final balance = BalanceUtils.calculate(_allOutputs, _currentHeight, _selectedOutputs);
+    final balance = BalanceUtils.calculate(filteredOutputs, _currentHeight, _selectedOutputs);
     final coinsSubtitle = '${balance.balanceStr} - ${balance.outputCountStr}${balance.selectedStr}';
 
     return Scaffold(
@@ -1503,7 +1504,7 @@ class _DebugViewState extends State<DebugView> {
                         network: _network,
                         activeAccount: _activeAccount,
                         accounts: _accounts,
-                        allOutputs: _allOutputs,
+                        allOutputs: filteredOutputs,
                         onAccountSelected: _selectAccount,
                         onCreateAccount: _createAccount,
                         onCopyToClipboard: _copyToClipboard,
@@ -1575,7 +1576,7 @@ class _DebugViewState extends State<DebugView> {
                       panel: DebugPanel.coins,
                       subtitle: coinsSubtitle,
                       body: OutputsPanel(
-                        allOutputs: _allOutputs,
+                        allOutputs: filteredOutputs,
                         currentHeight: _currentHeight,
                         showSpentOutputs: _showSpentOutputs,
                         sortBy: _sortBy,

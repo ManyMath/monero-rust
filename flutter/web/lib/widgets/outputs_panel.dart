@@ -118,7 +118,14 @@ class OutputsPanel extends StatelessWidget {
               ],
             ),
           ),
-          ..._sortedOutputs().map((output) {
+          Builder(builder: (context) {
+            final sortedOutputs = _sortedOutputs();
+            return ListView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: sortedOutputs.length,
+            itemBuilder: (context, index) {
+            final output = sortedOutputs[index];
             final outputHeight = output.blockHeight.toInt();
             final confirmations = outputHeight > 0
                 ? currentHeight - outputHeight
@@ -218,6 +225,8 @@ class OutputsPanel extends StatelessWidget {
                 ),
               ),
             );
+          },
+          );
           }),
         ],
       ),
