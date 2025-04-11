@@ -32,7 +32,6 @@ class WalletPersistenceService {
     required int continuousScanCurrentHeight,
     required Set<String> selectedOutputs,
     required List<int> accounts,
-    required Map<int, List<OwnedOutput>> outputsByAccount,
     required int activeAccount,
     required Set<int> scanningAccounts,
   }) async {
@@ -48,7 +47,6 @@ class WalletPersistenceService {
         continuousScanCurrentHeight: continuousScanCurrentHeight,
         selectedOutputs: selectedOutputs,
         accounts: accounts,
-        outputsByAccount: outputsByAccount,
         activeAccount: activeAccount,
         scanningAccounts: scanningAccounts,
       );
@@ -163,7 +161,6 @@ class WalletPersistenceService {
       continuousScanCurrentHeight: wallet.currentHeight,
       selectedOutputs: selectedOutputs,
       accounts: wallet.accounts,
-      outputsByAccount: wallet.outputsByAccount,
       activeAccount: wallet.activeAccount,
       scanningAccounts: wallet.scanningAccounts,
     );

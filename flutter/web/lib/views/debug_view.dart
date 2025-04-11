@@ -1754,15 +1754,7 @@ class _DebugViewState extends State<DebugView> {
       }
     }
 
-    // Build outputsByAccount from _allOutputs if needed
-    final Map<int, List<OwnedOutput>> derivedOutputsByAccount = {};
-    for (var output in _allOutputs) {
-      final account = output.subaddressIndex?.item1 ?? 0;
-      derivedOutputsByAccount.putIfAbsent(account, () => []).add(output);
-    }
-
     final accounts = activeWallet?.accounts ?? derivedAccounts.toList()..sort();
-    final outputsByAccount = activeWallet?.outputsByAccount ?? derivedOutputsByAccount;
     final activeAccount = activeWallet?.activeAccount ?? _activeAccount;
     final scanningAccounts = activeWallet?.scanningAccounts ?? derivedAccounts;
 
@@ -1778,7 +1770,6 @@ class _DebugViewState extends State<DebugView> {
       continuousScanCurrentHeight: _continuousScanCurrentHeight,
       selectedOutputs: _selectedOutputs,
       accounts: accounts,
-      outputsByAccount: outputsByAccount,
       activeAccount: activeAccount,
       scanningAccounts: scanningAccounts,
     );

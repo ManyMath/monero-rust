@@ -36,7 +36,6 @@ class WalletPersistenceBrowser {
     required int continuousScanCurrentHeight,
     required Set<String> selectedOutputs,
     required List<int> accounts,
-    required Map<int, List<OwnedOutput>> outputsByAccount,
     required int activeAccount,
     required Set<int> scanningAccounts,
   }) =>
@@ -52,7 +51,6 @@ class WalletPersistenceBrowser {
         continuousScanCurrentHeight: continuousScanCurrentHeight,
         selectedOutputs: selectedOutputs,
         accounts: accounts,
-        outputsByAccount: outputsByAccount,
         activeAccount: activeAccount,
         scanningAccounts: scanningAccounts,
       );

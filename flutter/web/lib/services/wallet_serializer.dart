@@ -21,7 +21,6 @@ class WalletSerializer {
     required int continuousScanCurrentHeight,
     required Set<String> selectedOutputs,
     required List<int> accounts,
-    required Map<int, List<OwnedOutput>> outputsByAccount,
     required int activeAccount,
     required Set<int> scanningAccounts,
   }) {
@@ -59,29 +58,6 @@ class WalletSerializer {
       'accounts': accounts,
       'activeAccount': activeAccount,
       'scanningAccounts': scanningAccounts.toList(),
-      'outputsByAccount': outputsByAccount.map((accountIndex, outputs) {
-          return MapEntry(
-            accountIndex.toString(),
-            outputs.map((o) => {
-              'txHash': o.txHash,
-              'outputIndex': o.outputIndex,
-              'amount': o.amount.toString(),
-              'amountXmr': o.amountXmr,
-              'key': o.key,
-              'keyOffset': o.keyOffset,
-              'commitmentMask': o.commitmentMask,
-              'subaddressIndex': o.subaddressIndex != null
-                  ? [o.subaddressIndex!.item1, o.subaddressIndex!.item2]
-                  : null,
-              'paymentId': o.paymentId,
-              'receivedOutputBytes': o.receivedOutputBytes,
-              'blockHeight': o.blockHeight.toString(),
-              'spent': o.spent,
-              'keyImage': o.keyImage,
-              'isCoinbase': o.isCoinbase,
-            }).toList(),
-          );
-        }),
     };
   }
 
@@ -180,46 +156,12 @@ class WalletSerializer {
     final activeAccount = walletData['activeAccount'] as int;
     final scanningAccounts = Set<int>.from((walletData['scanningAccounts'] as List).map((e) => e as int));
 
+    // Derive outputsByAccount from the flat outputs list (no longer stored separately)
     final Map<int, List<OwnedOutput>> outputsByAccount = {};
-    final outputsByAccountJson = walletData['outputsByAccount'] as Map<String, dynamic>;
-    outputsByAccountJson.forEach((key, value) {
-      final accountIndex = int.parse(key);
-      final accountOutputs = (value as List).map((o) {
-        final d = o as Map<String, dynamic>;
-
-        // Handle missing fields for backward compatibility
-        // Also handle cases where the field exists but has a null value
-        final bool spentValue = d.containsKey('spent') && d['spent'] != null
-            ? d['spent'] as bool
-            : false;  // Assume unspent if field is missing or null
-        final bool isCoinbaseValue = d.containsKey('isCoinbase') && d['isCoinbase'] != null
-            ? d['isCoinbase'] as bool
-            : false;  // Assume not coinbase if field is missing or null
-
-        return OwnedOutput(
-          txHash: d['txHash'] as String,
-          outputIndex: d['outputIndex'] as int,
-          amount: Uint64(BigInt.parse(d['amount'] as String)),
-          amountXmr: d['amountXmr'] as String,
-          key: d['key'] as String,
-          keyOffset: d['keyOffset'] as String,
-          commitmentMask: d['commitmentMask'] as String,
-          subaddressIndex: d['subaddressIndex'] != null
-              ? Tuple2<int, int>(
-                  d['subaddressIndex'][0] as int,
-                  d['subaddressIndex'][1] as int,
-                )
-              : null,
-          paymentId: d['paymentId'] as String?,
-          receivedOutputBytes: d['receivedOutputBytes'] as String,
-          blockHeight: Uint64(BigInt.parse(d['blockHeight'] as String)),
-          spent: spentValue,
-          keyImage: d['keyImage'] as String,
-          isCoinbase: isCoinbaseValue,
-        );
-      }).toList();
-      outputsByAccount[accountIndex] = accountOutputs;
-    });
+    for (var output in outputs) {
+      final account = output.subaddressIndex?.item1 ?? 0;
+      outputsByAccount.putIfAbsent(account, () => []).add(output);
+    }
 
     return (
       seed: walletData['seed'] as String,
