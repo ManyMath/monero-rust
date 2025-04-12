@@ -59,6 +59,26 @@ class WalletTransaction {
     'spentKeyImages': spentKeyImages,
   };
 
+  factory WalletTransaction.fromJsonCompact(
+    Map<String, dynamic> json,
+    Map<String, OwnedOutput> outputLookup,
+  ) {
+    final refs = (json['receivedOutputRefs'] as List).cast<String>();
+    final outputs = refs
+        .map((ref) => outputLookup[ref])
+        .where((o) => o != null)
+        .cast<OwnedOutput>()
+        .toList();
+
+    return WalletTransaction(
+      txHash: json['txHash'] as String,
+      blockHeight: json['blockHeight'] as int,
+      blockTimestamp: json['blockTimestamp'] as int,
+      receivedOutputs: outputs,
+      spentKeyImages: (json['spentKeyImages'] as List).cast<String>(),
+    );
+  }
+
   factory WalletTransaction.fromJson(Map<String, dynamic> json) {
     return WalletTransaction(
       txHash: json['txHash'] as String,

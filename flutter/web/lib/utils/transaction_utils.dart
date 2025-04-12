@@ -82,6 +82,10 @@ class TransactionUtils {
   ) {
     final sorted = List<WalletTransaction>.from(transactions);
 
+    final Map<String, double> balanceCache = sortBy != 'confirms'
+        ? {for (var tx in transactions) tx.txHash: tx.balanceChange(keyImageMap).abs()}
+        : {};
+
     sorted.sort((a, b) {
       int comparison;
       if (sortBy == 'confirms') {
@@ -89,9 +93,7 @@ class TransactionUtils {
         final bConf = currentHeight - b.blockHeight;
         comparison = aConf.compareTo(bConf);
       } else {
-        final aAmount = a.balanceChange(keyImageMap).abs();
-        final bAmount = b.balanceChange(keyImageMap).abs();
-        comparison = aAmount.compareTo(bAmount);
+        comparison = balanceCache[a.txHash]!.compareTo(balanceCache[b.txHash]!);
       }
       return ascending ? comparison : -comparison;
     });

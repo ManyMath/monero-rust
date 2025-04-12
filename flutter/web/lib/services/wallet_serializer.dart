@@ -50,7 +50,15 @@ class WalletSerializer {
                 'isCoinbase': o.isCoinbase,
               })
           .toList(),
-      'transactions': transactions.map((t) => t.toJson()).toList(),
+      'transactions': transactions.map((t) => {
+            'txHash': t.txHash,
+            'blockHeight': t.blockHeight,
+            'blockTimestamp': t.blockTimestamp,
+            'receivedOutputRefs': t.receivedOutputs
+                .map((o) => '${o.txHash}:${o.outputIndex}')
+                .toList(),
+            'spentKeyImages': t.spentKeyImages,
+          }).toList(),
       'scanState': {
         'continuousScanCurrentHeight': continuousScanCurrentHeight,
       },
@@ -141,10 +149,18 @@ class WalletSerializer {
       );
     }).toList();
 
+    final Map<String, OwnedOutput> outputLookup = {
+      for (var o in outputs) '${o.txHash}:${o.outputIndex}': o
+    };
+
     final transactions = walletData['transactions'] != null
-        ? (walletData['transactions'] as List)
-            .map((t) => WalletTransaction.fromJson(t as Map<String, dynamic>))
-            .toList()
+        ? (walletData['transactions'] as List).map((t) {
+            final txData = t as Map<String, dynamic>;
+            if (txData.containsKey('receivedOutputRefs')) {
+              return WalletTransaction.fromJsonCompact(txData, outputLookup);
+            }
+            return WalletTransaction.fromJson(txData);
+          }).toList()
         : <WalletTransaction>[];
 
     final scanState = walletData['scanState'] as Map<String, dynamic>;
