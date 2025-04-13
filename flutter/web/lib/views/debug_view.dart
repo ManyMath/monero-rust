@@ -115,62 +115,107 @@ class _DebugViewState extends State<DebugView> {
 
   // All outputs across all accounts
   List<OwnedOutput> get _allOutputsAllAccounts => _lifecycle.allOutputs;
-  set _allOutputsAllAccounts(List<OwnedOutput> v) => _lifecycle.allOutputs = v;
+  set _allOutputsAllAccounts(List<OwnedOutput> v) {
+    _lifecycle.allOutputs = v;
+    _invalidateCaches();
+  }
+
+  // Cached computed values — invalidated by _invalidateCaches()
+  Map<String, OwnedOutput>? _cachedKeyImageMap;
+  List<OwnedOutput>? _cachedFilteredOutputs;
+  List<WalletTransaction>? _cachedFilteredTransactions;
+  int? _cachedTotalStorageBytes;
+  // Track identity for cache invalidation
+  int _lastOutputsIdentity = 0;
+  int _lastTransactionsIdentity = 0;
+  int _lastActiveAccount = -2; // sentinel
+
+  void _invalidateCaches() {
+    _cachedKeyImageMap = null;
+    _cachedFilteredOutputs = null;
+    _cachedFilteredTransactions = null;
+  }
+
+  void _invalidateStorageBytesCache() {
+    _cachedTotalStorageBytes = null;
+  }
 
   // Filtered outputs for active account only (or all accounts if _activeAccount == -1)
   List<OwnedOutput> get _allOutputs {
-    // If "All" is selected, return all outputs
-    if (_activeAccount == -1) {
-      return _allOutputsAllAccounts;
-    }
+    _maybeInvalidateOnIdentityChange();
+    if (_cachedFilteredOutputs != null) return _cachedFilteredOutputs!;
 
-    return _allOutputsAllAccounts.where((output) {
-      if (output.subaddressIndex == null) {
-        // Outputs without subaddress index belong to account 0, address 0
-        return _activeAccount == 0;
-      }
-      return output.subaddressIndex!.item1 == _activeAccount;
-    }).toList();
+    if (_activeAccount == -1) {
+      _cachedFilteredOutputs = _allOutputsAllAccounts;
+    } else {
+      _cachedFilteredOutputs = _allOutputsAllAccounts.where((output) {
+        if (output.subaddressIndex == null) {
+          return _activeAccount == 0;
+        }
+        return output.subaddressIndex!.item1 == _activeAccount;
+      }).toList();
+    }
+    return _cachedFilteredOutputs!;
   }
 
   int? _daemonHeight;
 
   // Transaction tracking state
   List<WalletTransaction> get _allTransactionsAllAccounts => _lifecycle.allTransactions;
-  set _allTransactionsAllAccounts(List<WalletTransaction> v) => _lifecycle.allTransactions = v;
+  set _allTransactionsAllAccounts(List<WalletTransaction> v) {
+    _lifecycle.allTransactions = v;
+    _invalidateCaches();
+  }
 
-  // Build keyImage lookup map once from all outputs
-  Map<String, OwnedOutput> get _keyImageMap =>
-      TransactionUtils.buildKeyImageMap(_allOutputsAllAccounts);
+  Map<String, OwnedOutput> get _keyImageMap {
+    _maybeInvalidateOnIdentityChange();
+    _cachedKeyImageMap ??= TransactionUtils.buildKeyImageMap(_allOutputsAllAccounts);
+    return _cachedKeyImageMap!;
+  }
+
+  void _maybeInvalidateOnIdentityChange() {
+    final outputsId = identityHashCode(_lifecycle.allOutputs);
+    final txId = identityHashCode(_lifecycle.allTransactions);
+    final account = _activeAccount;
+    if (outputsId != _lastOutputsIdentity ||
+        txId != _lastTransactionsIdentity ||
+        account != _lastActiveAccount) {
+      _lastOutputsIdentity = outputsId;
+      _lastTransactionsIdentity = txId;
+      _lastActiveAccount = account;
+      _invalidateCaches();
+    }
+  }
 
   // Filtered transactions for active account only (or all accounts if _activeAccount == -1)
   List<WalletTransaction> _getFilteredTransactions(Map<String, OwnedOutput> keyImageMap) {
-    // If "All" is selected, return all transactions
+    _maybeInvalidateOnIdentityChange();
+    if (_cachedFilteredTransactions != null) return _cachedFilteredTransactions!;
+
     if (_activeAccount == -1) {
-      return _allTransactionsAllAccounts;
+      _cachedFilteredTransactions = _allTransactionsAllAccounts;
+    } else {
+      _cachedFilteredTransactions = _allTransactionsAllAccounts.where((tx) {
+        final hasReceivedOutputs = tx.receivedOutputs.any((output) {
+          if (output.subaddressIndex == null) {
+            return _activeAccount == 0;
+          }
+          return output.subaddressIndex!.item1 == _activeAccount;
+        });
+
+        final hasSpentOutputs = tx.spentKeyImages.any((keyImage) {
+          final spentOutput = keyImageMap[keyImage];
+          if (spentOutput == null) return false;
+          if (spentOutput.subaddressIndex == null) {
+            return _activeAccount == 0;
+          }
+          return spentOutput.subaddressIndex!.item1 == _activeAccount;
+        });
+
+        return hasReceivedOutputs || hasSpentOutputs;
+      }).toList();
     }
-
-    return _allTransactionsAllAccounts.where((tx) {
-      // A transaction is relevant to this account if it has any received outputs for this account
-      final hasReceivedOutputs = tx.receivedOutputs.any((output) {
-        if (output.subaddressIndex == null) {
-          return _activeAccount == 0;
-        }
-        return output.subaddressIndex!.item1 == _activeAccount;
-      });
-
-      // OR if it spent outputs from this account
-      final hasSpentOutputs = tx.spentKeyImages.any((keyImage) {
-        final spentOutput = keyImageMap[keyImage];
-        if (spentOutput == null) return false;
-        if (spentOutput.subaddressIndex == null) {
-          return _activeAccount == 0;
-        }
-        return spentOutput.subaddressIndex!.item1 == _activeAccount;
-      });
-
-      return hasReceivedOutputs || hasSpentOutputs;
-    }).toList();
+    return _cachedFilteredTransactions!;
   }
   String _txSortBy = 'confirms'; // 'confirms' or 'amount'
   bool _txSortAscending = false;
@@ -534,9 +579,6 @@ class _DebugViewState extends State<DebugView> {
     _pollingService.startPolling(
       onBlockRefresh: _onBlockRefreshTimer,
       onMempoolPoll: _onMempoolPollTimer,
-      onCountdownUpdate: () {
-        setState(() {}); // Trigger UI update for countdown changes
-      },
     );
   }
 
@@ -1646,8 +1688,8 @@ class _DebugViewState extends State<DebugView> {
     );
   }
 
-  // Helper methods for storage size calculation
   int _calculateTotalStorageBytes() {
+    if (_cachedTotalStorageBytes != null) return _cachedTotalStorageBytes!;
     int totalBytes = 0;
     for (var i = 0; i < html.window.localStorage.length; i++) {
       final key = html.window.localStorage.keys.elementAt(i);
@@ -1658,6 +1700,7 @@ class _DebugViewState extends State<DebugView> {
         }
       }
     }
+    _cachedTotalStorageBytes = totalBytes;
     return totalBytes;
   }
 
@@ -1781,6 +1824,7 @@ class _DebugViewState extends State<DebugView> {
       if (success) {
         _saveError = null;
         _lastSaveTime = DateTime.now().toString().substring(0, 19);
+        _invalidateStorageBytesCache();
       } else {
         _saveError = saveResult.error ?? 'Failed to save wallet data';
       }
@@ -2056,6 +2100,7 @@ class _DebugViewState extends State<DebugView> {
 
       _isLoadingWallet = false;
       _loadError = null;
+      _invalidateStorageBytesCache();
 
       // Open the wallet INSIDE setState to prevent race condition
       // This ensures activeWalletId is set before any scan results arrive
@@ -2314,6 +2359,7 @@ class _DebugViewState extends State<DebugView> {
 
     final deletedWalletId = _walletId;
     WalletPersistenceBrowser.clearWalletData(deletedWalletId);
+    _invalidateStorageBytesCache();
     _refreshAvailableWallets();
     _startNewWallet();
     _showSnackBar('Deleted wallet: $deletedWalletId');

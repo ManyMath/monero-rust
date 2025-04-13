@@ -3,10 +3,6 @@ import '../src/bindings/bindings.dart';
 import '../services/wallet_polling_service.dart';
 import 'common_widgets.dart';
 
-/// Widget that provides blockchain scanning controls and displays sync progress.
-///
-/// Includes node URL input, block height input, lookahead dropdown, scan buttons (single, continuous, mempool),
-/// sync progress display, and polling countdown display.
 class ScanningPanel extends StatefulWidget {
   final TextEditingController nodeUrlController;
   final TextEditingController blockHeightController;
@@ -72,6 +68,62 @@ enum LookaheadMode {
 
 class _ScanningPanelState extends State<ScanningPanel> {
   LookaheadMode _selectedLookahead = LookaheadMode.none;
+
+  Widget _buildCountdownRow({
+    required ValueNotifier<int> blockNotifier,
+    required ValueNotifier<int> mempoolNotifier,
+    required Color textColor,
+    bool showIcons = false,
+  }) {
+    return ValueListenableBuilder<int>(
+      valueListenable: blockNotifier,
+      builder: (context, blockVal, _) {
+        return ValueListenableBuilder<int>(
+          valueListenable: mempoolNotifier,
+          builder: (context, mempoolVal, _) {
+            if (blockVal <= 0 && mempoolVal <= 0) return const SizedBox.shrink();
+            return Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                if (blockVal > 0)
+                  Row(
+                    children: [
+                      if (showIcons) ...[
+                        Icon(Icons.timer, size: 16, color: textColor),
+                        const SizedBox(width: 4),
+                      ],
+                      Text(
+                        'Next block poll: ${blockVal}s',
+                        style: TextStyle(
+                          fontSize: showIcons ? 12 : 11,
+                          color: textColor,
+                        ),
+                      ),
+                    ],
+                  ),
+                if (mempoolVal > 0)
+                  Row(
+                    children: [
+                      if (showIcons) ...[
+                        Icon(Icons.memory, size: 16, color: textColor),
+                        const SizedBox(width: 4),
+                      ],
+                      Text(
+                        'Next mempool poll: ${mempoolVal}s',
+                        style: TextStyle(
+                          fontSize: showIcons ? 12 : 11,
+                          color: textColor,
+                        ),
+                      ),
+                    ],
+                  ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -234,49 +286,35 @@ class _ScanningPanelState extends State<ScanningPanel> {
               ),
             ],
           ),
-          // Show polling countdown only when poll is active (not scanning, not paused, not synced)
-          if (!widget.isContinuousScanning && !widget.isContinuousPaused && !widget.isSynced && (widget.pollingService.blockRefreshCountdown > 0 || widget.pollingService.mempoolCountdown > 0)) ...[
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.grey.shade50,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.grey.shade300),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  if (widget.pollingService.blockRefreshCountdown > 0)
-                    Row(
-                      children: [
-                        Icon(Icons.timer, size: 16, color: Colors.grey.shade700),
-                        const SizedBox(width: 4),
-                        Text(
-                          'Next block poll: ${widget.pollingService.blockRefreshCountdown}s',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey.shade700,
-                          ),
+          // Standalone polling countdown (not scanning, not paused, not synced)
+          if (!widget.isContinuousScanning && !widget.isContinuousPaused && !widget.isSynced) ...[
+            ValueListenableBuilder<int>(
+              valueListenable: widget.pollingService.blockRefreshCountdown,
+              builder: (context, blockVal, _) {
+                return ValueListenableBuilder<int>(
+                  valueListenable: widget.pollingService.mempoolCountdown,
+                  builder: (context, mempoolVal, _) {
+                    if (blockVal <= 0 && mempoolVal <= 0) return const SizedBox.shrink();
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 16),
+                      child: Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.grey.shade300),
                         ),
-                      ],
-                    ),
-                  if (widget.pollingService.mempoolCountdown > 0)
-                    Row(
-                      children: [
-                        Icon(Icons.memory, size: 16, color: Colors.grey.shade700),
-                        const SizedBox(width: 4),
-                        Text(
-                          'Next mempool poll: ${widget.pollingService.mempoolCountdown}s',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey.shade700,
-                          ),
+                        child: _buildCountdownRow(
+                          blockNotifier: widget.pollingService.blockRefreshCountdown,
+                          mempoolNotifier: widget.pollingService.mempoolCountdown,
+                          textColor: Colors.grey.shade700,
+                          showIcons: true,
                         ),
-                      ],
-                    ),
-                ],
-              ),
+                      ),
+                    );
+                  },
+                );
+              },
             ),
           ],
           if (widget.isContinuousScanning || widget.isSynced) ...[
@@ -350,31 +388,13 @@ class _ScanningPanelState extends State<ScanningPanel> {
                       color: widget.isSynced ? Colors.green.shade900 : Colors.blue.shade900,
                     ),
                   ),
-                  // Polling countdown timer display
-                  if ((widget.pollingService.blockRefreshCountdown > 0 || widget.pollingService.mempoolCountdown > 0)) ...[
-                    const SizedBox(height: 12),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        if (widget.pollingService.blockRefreshCountdown > 0)
-                          Text(
-                            'Next block poll: ${widget.pollingService.blockRefreshCountdown}s',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: widget.isSynced ? Colors.green.shade700 : Colors.blue.shade700,
-                            ),
-                          ),
-                        if (widget.pollingService.mempoolCountdown > 0)
-                          Text(
-                            'Next mempool poll: ${widget.pollingService.mempoolCountdown}s',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: widget.isSynced ? Colors.green.shade700 : Colors.blue.shade700,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ],
+                  // Polling countdown timer display (inside sync panel)
+                  const SizedBox(height: 12),
+                  _buildCountdownRow(
+                    blockNotifier: widget.pollingService.blockRefreshCountdown,
+                    mempoolNotifier: widget.pollingService.mempoolCountdown,
+                    textColor: widget.isSynced ? Colors.green.shade700 : Colors.blue.shade700,
+                  ),
                 ],
               ),
             ),
