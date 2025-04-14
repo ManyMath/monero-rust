@@ -96,11 +96,12 @@ class OutputUtils {
     List<OwnedOutput> existing,
     List<OwnedOutput> incoming,
   ) {
+    final existingKeys = <String>{
+      for (var o in existing) '${o.txHash}:${o.outputIndex}',
+    };
     for (var output in incoming) {
-      final exists = existing.any((o) =>
-        o.txHash == output.txHash && o.outputIndex == output.outputIndex
-      );
-      if (!exists) {
+      final key = '${output.txHash}:${output.outputIndex}';
+      if (existingKeys.add(key)) {
         existing.add(output);
       }
     }

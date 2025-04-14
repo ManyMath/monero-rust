@@ -190,9 +190,11 @@ class WalletLifecycleManager {
     print('\n========== START distributeMultiWalletScanResults ==========');
     print('Block height: $blockHeight');
     print('Wallet results count: ${walletResults.length}');
-    
+
     // Track which wallets have been updated with new outputs
     final updatedWalletAddresses = <String>{};
+    // Cache keyImageMap per wallet to avoid rebuilding O(n) map multiple times
+    final keyImageMaps = <String, Map<String, OwnedOutput>>{};
 
     // Update outputs and transactions per wallet
     for (var walletResult in walletResults) {
@@ -266,10 +268,12 @@ class WalletLifecycleManager {
           spentKeyImages: spentKeyImages,
         );
 
+        final walletKeyImageMap = TransactionUtils.buildKeyImageMap(activeWalletInstance.outputs);
+        keyImageMaps[activeWalletInstance.walletId] = walletKeyImageMap;
         activeWalletInstance.transactions = TransactionUtils.updateTransactionsFromScan(
           activeWalletInstance.transactions,
           walletScanResponse,
-          TransactionUtils.buildKeyImageMap(activeWalletInstance.outputs),
+          walletKeyImageMap,
         );
         print('activeWalletInstance.transactions.length: ${activeWalletInstance.transactions.length}');
       } else {
@@ -296,10 +300,12 @@ class WalletLifecycleManager {
             spentKeyImages: spentKeyImages,
           );
 
+          final cachedMap = keyImageMaps[walletInstance.walletId]
+              ?? TransactionUtils.buildKeyImageMap(walletInstance.outputs);
           walletInstance.transactions = TransactionUtils.updateTransactionsFromScan(
             walletInstance.transactions,
             walletScanResponse,
-            TransactionUtils.buildKeyImageMap(walletInstance.outputs),
+            cachedMap,
           );
         }
       }
