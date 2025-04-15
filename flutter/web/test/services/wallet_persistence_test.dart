@@ -52,6 +52,9 @@ void main() {
         transactions: transactions,
         continuousScanCurrentHeight: 300,
         selectedOutputs: {'tx1:0'},
+        accounts: [0],
+        activeAccount: 0,
+        scanningAccounts: {0},
       );
       expect(saveResult.success, true);
 
@@ -87,6 +90,7 @@ void main() {
         address: null, nodeUrl: 'http://n', outputs: [],
         transactions: [], continuousScanCurrentHeight: 0,
         selectedOutputs: {},
+        accounts: [0], activeAccount: 0, scanningAccounts: {0},
       );
       expect(result.success, false);
       expect(result.error, contains('Encryption failed'));
@@ -150,6 +154,9 @@ void main() {
         transactions: transactions,
         continuousScanCurrentHeight: 700,
         selectedOutputs: {'tx1:0'},
+        accounts: [0],
+        activeAccount: 0,
+        scanningAccounts: {0},
       );
       expect(saveResult.success, true);
 
@@ -218,6 +225,7 @@ void main() {
         nodeUrl: 'http://node', outputs: [],
         transactions: [], continuousScanCurrentHeight: 100,
         selectedOutputs: {},
+        accounts: [0], activeAccount: 0, scanningAccounts: {0},
       );
 
       // Save wallet B under the same ID (overwrite)
@@ -227,6 +235,7 @@ void main() {
         nodeUrl: 'http://other-node', outputs: [],
         transactions: [], continuousScanCurrentHeight: 200,
         selectedOutputs: {'out1'},
+        accounts: [0], activeAccount: 0, scanningAccounts: {0},
       );
 
       final result = await svc.load(walletId: 'shared-id', password: 'p');
@@ -266,6 +275,7 @@ void main() {
         address: null, nodeUrl: 'http://n', outputs: [],
         transactions: [], continuousScanCurrentHeight: 0,
         selectedOutputs: {},
+        accounts: [0], activeAccount: 0, scanningAccounts: {0},
       );
       expect(svc.has('exists'), true);
       expect(svc.has('nope'), false);
@@ -278,6 +288,7 @@ void main() {
         address: null, nodeUrl: 'http://n', outputs: [],
         transactions: [], continuousScanCurrentHeight: 0,
         selectedOutputs: {},
+        accounts: [0], activeAccount: 0, scanningAccounts: {0},
       );
       expect(svc.has('to-delete'), true);
 

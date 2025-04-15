@@ -71,7 +71,7 @@ class OutputUtils {
 
     for (var output in incoming) {
       final accountIdx = output.subaddressIndex?.item1 ?? 0;
-      print('  - Processing output: txHash=${output.txHash.substring(0, 8)}..., outputIndex=${output.outputIndex}, account=$accountIdx, amount=${output.amountXmr}');
+      print('  - Processing output: txHash=${output.txHash.length > 8 ? output.txHash.substring(0, 8) : output.txHash}..., outputIndex=${output.outputIndex}, account=$accountIdx, amount=${output.amountXmr}');
 
       final idx = existing.indexWhere((o) =>
         o.txHash == output.txHash && o.outputIndex == output.outputIndex

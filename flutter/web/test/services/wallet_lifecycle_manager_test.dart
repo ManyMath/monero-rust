@@ -57,6 +57,9 @@ Future<void> saveTestWallet(
     transactions: transactions,
     continuousScanCurrentHeight: 500,
     selectedOutputs: {'tx0:0'},
+    accounts: [0],
+    activeAccount: 0,
+    scanningAccounts: {0},
   );
 }
 
@@ -744,6 +747,9 @@ void main() {
         transactions: transactions,
         continuousScanCurrentHeight: 500,
         selectedOutputs: {'tx1:0'},
+        accounts: [0],
+        activeAccount: 0,
+        scanningAccounts: {0},
       );
       expect(saveResult.success, true);
 

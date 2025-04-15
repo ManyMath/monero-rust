@@ -24,6 +24,7 @@ void main() {
         nodeUrl: 'http://node:38081', outputs: [output],
         transactions: [], continuousScanCurrentHeight: 0,
         selectedOutputs: {},
+        accounts: [0], activeAccount: 0, scanningAccounts: {0},
       );
 
       // Simulate JSON encode/decode (what actually happens during persistence)
@@ -59,6 +60,7 @@ void main() {
         nodeUrl: 'http://node', outputs: [output],
         transactions: [], continuousScanCurrentHeight: 0,
         selectedOutputs: {},
+        accounts: [0], activeAccount: 0, scanningAccounts: {0},
       );
       final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
@@ -81,6 +83,7 @@ void main() {
         nodeUrl: 'http://node', outputs: [spentOutput, unspentOutput],
         transactions: [], continuousScanCurrentHeight: 0,
         selectedOutputs: {},
+        accounts: [0], activeAccount: 0, scanningAccounts: {0},
       );
       final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
@@ -106,6 +109,7 @@ void main() {
         nodeUrl: 'http://node', outputs: [output],
         transactions: [], continuousScanCurrentHeight: 0,
         selectedOutputs: {},
+        accounts: [0], activeAccount: 0, scanningAccounts: {0},
       );
       final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
@@ -124,6 +128,7 @@ void main() {
         nodeUrl: 'http://node', outputs: outputs,
         transactions: [], continuousScanCurrentHeight: 0,
         selectedOutputs: {},
+        accounts: [0], activeAccount: 0, scanningAccounts: {0},
       );
       final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
@@ -151,6 +156,7 @@ void main() {
         nodeUrl: 'http://node', outputs: [output],
         transactions: [tx], continuousScanCurrentHeight: 500,
         selectedOutputs: {},
+        accounts: [0], activeAccount: 0, scanningAccounts: {0},
       );
       final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
@@ -178,6 +184,7 @@ void main() {
         nodeUrl: 'http://node', outputs: [],
         transactions: [tx], continuousScanCurrentHeight: 600,
         selectedOutputs: {},
+        accounts: [0], activeAccount: 0, scanningAccounts: {0},
       );
       final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
@@ -208,6 +215,7 @@ void main() {
         nodeUrl: 'http://node', outputs: [out1, out2],
         transactions: transactions, continuousScanCurrentHeight: 200,
         selectedOutputs: {},
+        accounts: [0], activeAccount: 0, scanningAccounts: {0},
       );
       final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
@@ -216,11 +224,13 @@ void main() {
 
     test('handles transaction with null transactions field gracefully', () {
       final data = {
+        'version': 1,
         'seed': 'test', 'network': 'stagenet', 'address': null,
         'nodeUrl': 'http://node', 'outputs': [],
         'transactions': null,
         'scanState': {'continuousScanCurrentHeight': 0},
         'selectedOutputs': [],
+        'accounts': [0], 'activeAccount': 0, 'scanningAccounts': [0],
       };
 
       final loaded = WalletSerializer.deserialize(data);
@@ -271,6 +281,7 @@ void main() {
         transactions: transactions,
         continuousScanCurrentHeight: 350,
         selectedOutputs: selectedOutputs,
+        accounts: [0], activeAccount: 0, scanningAccounts: {0},
       );
 
       // Full JSON roundtrip
@@ -303,6 +314,7 @@ void main() {
         nodeUrl: 'http://127.0.0.1:38081', outputs: [],
         transactions: [], continuousScanCurrentHeight: 0,
         selectedOutputs: {},
+        accounts: [0], activeAccount: 0, scanningAccounts: {0},
       );
       final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
@@ -328,6 +340,7 @@ void main() {
         nodeUrl: 'http://node', outputs: outputs,
         transactions: [], continuousScanCurrentHeight: 1100,
         selectedOutputs: {'tx_0:0', 'tx_1:0', 'tx_2:0'},
+        accounts: [0], activeAccount: 0, scanningAccounts: {0},
       );
       final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
@@ -360,6 +373,7 @@ void main() {
         nodeUrl: 'http://node', outputs: [output],
         transactions: [], continuousScanCurrentHeight: 0,
         selectedOutputs: {},
+        accounts: [0], activeAccount: 0, scanningAccounts: {0},
       );
       final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
@@ -384,6 +398,7 @@ void main() {
         nodeUrl: 'http://node', outputs: [output],
         transactions: [tx], continuousScanCurrentHeight: 500,
         selectedOutputs: {},
+        accounts: [0], activeAccount: 0, scanningAccounts: {0},
       );
       final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
@@ -415,6 +430,7 @@ void main() {
         nodeUrl: 'http://node', outputs: [],
         transactions: [], continuousScanCurrentHeight: 0,
         selectedOutputs: {'tx1:0', 'tx1:1', 'tx2:0'},
+        accounts: [0], activeAccount: 0, scanningAccounts: {0},
       );
       final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
@@ -427,6 +443,7 @@ void main() {
         nodeUrl: 'http://node', outputs: [],
         transactions: [], continuousScanCurrentHeight: 0,
         selectedOutputs: {},
+        accounts: [0], activeAccount: 0, scanningAccounts: {0},
       );
       final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
@@ -441,6 +458,7 @@ void main() {
         nodeUrl: 'http://node', outputs: [],
         transactions: [], continuousScanCurrentHeight: 987654,
         selectedOutputs: {},
+        accounts: [0], activeAccount: 0, scanningAccounts: {0},
       );
       final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
@@ -453,6 +471,7 @@ void main() {
         nodeUrl: 'http://node', outputs: [],
         transactions: [], continuousScanCurrentHeight: 0,
         selectedOutputs: {},
+        accounts: [0], activeAccount: 0, scanningAccounts: {0},
       );
       final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
@@ -468,6 +487,7 @@ void main() {
           nodeUrl: 'http://node', outputs: [],
           transactions: [], continuousScanCurrentHeight: 0,
           selectedOutputs: {},
+          accounts: [0], activeAccount: 0, scanningAccounts: {0},
         );
         final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
@@ -476,78 +496,60 @@ void main() {
     }
   });
 
-  group('Wallet Data Format - Default Values', () {
-    test('defaults seed to empty string when missing', () {
-      final data = {
-        'network': 'stagenet', 'address': null,
-        'nodeUrl': 'http://node', 'outputs': [],
-        'transactions': null,
-        'scanState': {'continuousScanCurrentHeight': 0},
-        'selectedOutputs': [],
-      };
-      final loaded = WalletSerializer.deserialize(data);
-      expect(loaded.seed, '');
-    });
-
-    test('defaults network to stagenet when missing', () {
-      final data = {
-        'seed': 'test', 'address': null,
-        'nodeUrl': 'http://node', 'outputs': [],
-        'transactions': null,
-        'scanState': {'continuousScanCurrentHeight': 0},
-        'selectedOutputs': [],
-      };
-      final loaded = WalletSerializer.deserialize(data);
-      expect(loaded.network, 'stagenet');
-    });
-
-    test('defaults nodeUrl when missing', () {
-      final data = {
-        'seed': 'test', 'network': 'stagenet', 'address': null,
-        'outputs': [],
-        'transactions': null,
-        'scanState': {'continuousScanCurrentHeight': 0},
-        'selectedOutputs': [],
-      };
-      final loaded = WalletSerializer.deserialize(data);
-      expect(loaded.nodeUrl, 'http://127.0.0.1:38081');
-    });
-  });
-
   group('Wallet Data Format - Deserialization Error Cases', () {
-    test('throws on missing scanState field', () {
+    test('throws on missing version field', () {
       final data = {
         'seed': 'test', 'network': 'stagenet', 'address': null,
         'nodeUrl': 'http://node', 'outputs': [],
         'transactions': [],
+        'scanState': {'continuousScanCurrentHeight': 0},
         'selectedOutputs': [],
+        'accounts': [0], 'activeAccount': 0, 'scanningAccounts': [0],
+      };
+      expect(() => WalletSerializer.deserialize(data),
+          throwsA(isA<FormatException>()));
+    });
+
+    test('throws on missing scanState field', () {
+      final data = {
+        'version': 1,
+        'seed': 'test', 'network': 'stagenet', 'address': null,
+        'nodeUrl': 'http://node', 'outputs': [],
+        'transactions': [],
+        'selectedOutputs': [],
+        'accounts': [0], 'activeAccount': 0, 'scanningAccounts': [0],
       };
       expect(() => WalletSerializer.deserialize(data), throwsA(anything));
     });
 
     test('throws on missing selectedOutputs field', () {
       final data = {
+        'version': 1,
         'seed': 'test', 'network': 'stagenet', 'address': null,
         'nodeUrl': 'http://node', 'outputs': [],
         'transactions': [],
         'scanState': {'continuousScanCurrentHeight': 0},
+        'accounts': [0], 'activeAccount': 0, 'scanningAccounts': [0],
       };
       expect(() => WalletSerializer.deserialize(data), throwsA(anything));
     });
 
     test('throws on missing outputs field', () {
       final data = {
+        'version': 1,
         'seed': 'test', 'network': 'stagenet', 'address': null,
         'nodeUrl': 'http://node',
         'transactions': [],
         'scanState': {'continuousScanCurrentHeight': 0},
         'selectedOutputs': [],
+        'accounts': [0], 'activeAccount': 0, 'scanningAccounts': [0],
       };
       expect(() => WalletSerializer.deserialize(data), throwsA(anything));
     });
 
     test('throws on malformed output amount', () {
       final data = {
+        'version': 1,
         'seed': 'test', 'network': 'stagenet', 'address': null,
         'nodeUrl': 'http://node',
         'outputs': [
@@ -563,6 +565,7 @@ void main() {
         'transactions': [],
         'scanState': {'continuousScanCurrentHeight': 0},
         'selectedOutputs': [],
+        'accounts': [0], 'activeAccount': 0, 'scanningAccounts': [0],
       };
       expect(() => WalletSerializer.deserialize(data), throwsA(anything));
     });
@@ -573,12 +576,14 @@ void main() {
 
     test('throws on output missing required fields', () {
       final data = {
+        'version': 1,
         'seed': 'test', 'network': 'stagenet', 'address': null,
         'nodeUrl': 'http://node',
         'outputs': [{'txHash': 'tx1'}],
         'transactions': [],
         'scanState': {'continuousScanCurrentHeight': 0},
         'selectedOutputs': [],
+        'accounts': [0], 'activeAccount': 0, 'scanningAccounts': [0],
       };
       expect(() => WalletSerializer.deserialize(data), throwsA(anything));
     });

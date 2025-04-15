@@ -198,7 +198,7 @@ class WalletLifecycleManager {
 
     // Update outputs and transactions per wallet
     for (var walletResult in walletResults) {
-      print('\n--- Processing wallet: ${walletResult.address.substring(0, 20)}...');
+      print('\n--- Processing wallet: ${walletResult.address.length > 20 ? walletResult.address.substring(0, 20) : walletResult.address}...');
       print('Outputs for this wallet: ${walletResult.outputs.length}');
       
       final walletInstance = openWallets.values.cast<WalletInstance?>().firstWhere(
