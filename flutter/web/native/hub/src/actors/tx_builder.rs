@@ -3,6 +3,7 @@ use crate::signals::*;
 use async_trait::async_trait;
 use messages::prelude::{Actor, Address, Context, Handler, Notifiable};
 use rinf::{DartSignal, RustSignal};
+use std::collections::HashSet;
 use tokio::task::JoinSet;
 use tokio_with_wasm::alias as tokio;
 
@@ -155,9 +156,10 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
 
                     // If specific outputs are manually selected, use only those
                     if let Some(ref selected) = msg.selected_outputs {
+                        let selected_set: HashSet<&String> = selected.iter().collect();
                         spendable_outputs.retain(|o| {
                             let output_key = format!("{}:{}", o.tx_hash, o.output_index);
-                            selected.contains(&output_key)
+                            selected_set.contains(&output_key)
                         });
                     } else {
                         // No manual selection: use smart input selection to avoid linking all outputs
@@ -362,9 +364,10 @@ impl Notifiable<SweepAll> for TxBuilderActor {
 
                     // Apply manual output selection if provided (for account filtering)
                     if let Some(ref selected) = msg.selected_outputs {
+                        let selected_set: HashSet<&String> = selected.iter().collect();
                         spendable_outputs.retain(|o| {
                             let output_key = format!("{}:{}", o.tx_hash, o.output_index);
-                            selected.contains(&output_key)
+                            selected_set.contains(&output_key)
                         });
                     }
 
