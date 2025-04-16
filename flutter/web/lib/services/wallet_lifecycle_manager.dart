@@ -187,30 +187,24 @@ class WalletLifecycleManager {
     required List<String> spentKeyImages,
     int blockTimestamp = 0,
   }) {
-    print('\n========== START distributeMultiWalletScanResults ==========');
-    print('Block height: $blockHeight');
-    print('Wallet results count: ${walletResults.length}');
-
     // Track which wallets have been updated with new outputs
     final updatedWalletAddresses = <String>{};
     // Cache keyImageMap per wallet to avoid rebuilding O(n) map multiple times
     final keyImageMaps = <String, Map<String, OwnedOutput>>{};
 
+    // Build address -> wallet map ONCE for O(1) lookups inside the loop
+    final walletsByAddress = <String, WalletInstance>{};
+    for (var w in openWallets.values) {
+      walletsByAddress[w.address] = w;
+    }
+
     // Update outputs and transactions per wallet
     for (var walletResult in walletResults) {
-      print('\n--- Processing wallet: ${walletResult.address.length > 20 ? walletResult.address.substring(0, 20) : walletResult.address}...');
-      print('Outputs for this wallet: ${walletResult.outputs.length}');
-      
-      final walletInstance = openWallets.values.cast<WalletInstance?>().firstWhere(
-        (w) => w != null && w.address == walletResult.address,
-        orElse: () => null,
-      );
+      final walletInstance = walletsByAddress[walletResult.address];
 
       if (walletInstance != null) {
-        print('walletInstance.outputs.length BEFORE addIfAbsent: ${walletInstance.outputs.length}');
         OutputUtils.addIfAbsent(
             walletInstance.outputs, walletResult.outputs.toList());
-        print('walletInstance.outputs.length AFTER addIfAbsent: ${walletInstance.outputs.length}');
 
         int highestAccountIndex = 0;
         for (var output in walletResult.outputs) {
@@ -221,27 +215,21 @@ class WalletLifecycleManager {
             }
           }
         }
-        print('Highest account index: $highestAccountIndex');
 
         var updatedWallet = walletInstance;
         bool accountsUpdated = false;
+        final existingAccounts = Set<int>.from(updatedWallet.accounts);
         for (int i = 0; i <= highestAccountIndex; i++) {
-          if (!updatedWallet.accounts.contains(i)) {
-            print('Creating new account: $i');
-            print('updatedWallet.outputs.length BEFORE createAccount: ${updatedWallet.outputs.length}');
+          if (!existingAccounts.contains(i)) {
             updatedWallet = updatedWallet.createAccount(i);
-            print('updatedWallet.outputs.length AFTER createAccount: ${updatedWallet.outputs.length}');
-            print('identical(walletInstance.outputs, updatedWallet.outputs): ${identical(walletInstance.outputs, updatedWallet.outputs)}');
+            existingAccounts.add(i);
             accountsUpdated = true;
           }
         }
 
         WalletInstance activeWalletInstance = walletInstance;
         if (accountsUpdated) {
-          print('Accounts updated, replacing in openWallets');
-          print('openWallets[${updatedWallet.walletId}].outputs.length BEFORE: ${openWallets[updatedWallet.walletId]?.outputs.length}');
           openWallets[updatedWallet.walletId] = updatedWallet;
-          print('openWallets[${updatedWallet.walletId}].outputs.length AFTER: ${openWallets[updatedWallet.walletId]?.outputs.length}');
           updatedWallet.currentHeight = blockHeight > updatedWallet.currentHeight ? blockHeight : updatedWallet.currentHeight;
           updatedWallet.daemonHeight = daemonHeight;
           activeWalletInstance = updatedWallet;
@@ -275,15 +263,11 @@ class WalletLifecycleManager {
           walletScanResponse,
           walletKeyImageMap,
         );
-        print('activeWalletInstance.transactions.length: ${activeWalletInstance.transactions.length}');
-      } else {
-        print('WARNING: Wallet instance not found for address');
       }
     }
 
     // Update all wallets with spent key images (even those without new outputs)
     if (spentKeyImages.isNotEmpty) {
-      print('\n--- Processing spent key images ---');
       for (var walletInstance in openWallets.values) {
         // Skip wallets that were already updated above
         if (!updatedWalletAddresses.contains(walletInstance.address)) {
@@ -311,64 +295,35 @@ class WalletLifecycleManager {
       }
     }
 
-    print('\n--- Marking spent outputs ---');
     for (var walletInstance in openWallets.values) {
       OutputUtils.markSpentByKeyImages(
           walletInstance.outputs, spentKeyImages, selectedOutputs);
     }
 
     if (activeWalletId != null && activeWallet != null) {
-      print('\n--- Updating allOutputs and allTransactions ---');
-      print('activeWallet.outputs.length: ${activeWallet?.outputs.length}');
       // Create new list instances to trigger Flutter's change detection
       allOutputs = List<OwnedOutput>.from(activeWallet!.outputs);
       allTransactions = List<WalletTransaction>.from(activeWallet!.transactions);
-      print('allOutputs.length: ${allOutputs.length}');
-      print('allTransactions.length: ${allTransactions.length}');
     }
-    
-    print('========== END distributeMultiWalletScanResults ==========\n');
   }
 
   /// Integrates single block scan results into the active wallet instance
   void integrateSingleBlockScanResults(BlockScanResponse scanResult) {
-    print('\n========== START integrateSingleBlockScanResults ==========');
-    print('Block height: ${scanResult.blockHeight.toInt()}');
-    print('Incoming outputs count: ${scanResult.outputs.length}');
-    
     if (activeWalletId == null || activeWallet == null) {
-      print('ERROR: No active wallet to integrate scan results');
-      print('========== END integrateSingleBlockScanResults ==========\n');
       return;
     }
 
-    print('Active wallet ID: $activeWalletId');
     final walletInstance = activeWallet!;
-    print('walletInstance.hashCode: ${walletInstance.hashCode}');
-    print('walletInstance.walletId: ${walletInstance.walletId}');
-    print('walletInstance.outputs.hashCode BEFORE merge: ${walletInstance.outputs.hashCode}');
-    print('walletInstance.outputs.length BEFORE merge: ${walletInstance.outputs.length}');
-    print('openWallets[activeWalletId].hashCode: ${openWallets[activeWalletId].hashCode}');
-    print('openWallets[activeWalletId].outputs.hashCode: ${openWallets[activeWalletId]!.outputs.hashCode}');
-    print('walletInstance === openWallets[activeWalletId]: ${identical(walletInstance, openWallets[activeWalletId])}');
-    print('walletInstance.outputs === openWallets[activeWalletId].outputs: ${identical(walletInstance.outputs, openWallets[activeWalletId]!.outputs)}');
 
     // Add new outputs to the wallet instance
-    print('\n--- Calling mergeScannedOutputs ---');
     OutputUtils.mergeScannedOutputs(walletInstance.outputs, scanResult.outputs);
-    print('walletInstance.outputs.length AFTER merge: ${walletInstance.outputs.length}');
-    print('walletInstance.outputs.hashCode AFTER merge: ${walletInstance.outputs.hashCode}');
-    print('openWallets[activeWalletId].outputs.length AFTER merge: ${openWallets[activeWalletId]!.outputs.length}');
-    print('openWallets[activeWalletId].outputs.hashCode AFTER merge: ${openWallets[activeWalletId]!.outputs.hashCode}');
 
     // Update transactions in the wallet instance
-    print('\n--- Updating transactions ---');
     walletInstance.transactions = TransactionUtils.updateTransactionsFromScan(
       walletInstance.transactions,
       scanResult,
       TransactionUtils.buildKeyImageMap(walletInstance.outputs),
     );
-    print('walletInstance.transactions.length: ${walletInstance.transactions.length}');
 
     // Update wallet heights
     final blockHeight = scanResult.blockHeight.toInt();
@@ -376,11 +331,8 @@ class WalletLifecycleManager {
       walletInstance.currentHeight = blockHeight;
     }
     walletInstance.daemonHeight = scanResult.daemonHeight.toInt();
-    print('walletInstance.currentHeight: ${walletInstance.currentHeight}');
-    print('walletInstance.daemonHeight: ${walletInstance.daemonHeight}');
 
     // Ensure accounts exist for new outputs
-    print('\n--- Checking for new accounts ---');
     int highestAccountIndex = 0;
     for (var output in scanResult.outputs) {
       if (output.subaddressIndex != null) {
@@ -390,43 +342,21 @@ class WalletLifecycleManager {
         }
       }
     }
-    print('Highest account index in outputs: $highestAccountIndex');
-    print('Current accounts: ${walletInstance.accounts}');
 
     var updatedWallet = walletInstance;
     bool accountsUpdated = false;
+    final existingAccounts = Set<int>.from(updatedWallet.accounts);
     for (int i = 0; i <= highestAccountIndex; i++) {
-      if (!updatedWallet.accounts.contains(i)) {
-        print('Creating new account: $i');
-        print('updatedWallet.hashCode BEFORE createAccount($i): ${updatedWallet.hashCode}');
-        print('updatedWallet.outputs.hashCode BEFORE createAccount($i): ${updatedWallet.outputs.hashCode}');
-        print('updatedWallet.outputs.length BEFORE createAccount($i): ${updatedWallet.outputs.length}');
-        
-        final oldWallet = updatedWallet;
+      if (!existingAccounts.contains(i)) {
         updatedWallet = updatedWallet.createAccount(i);
-        
-        print('updatedWallet.hashCode AFTER createAccount($i): ${updatedWallet.hashCode}');
-        print('updatedWallet.outputs.hashCode AFTER createAccount($i): ${updatedWallet.outputs.hashCode}');
-        print('updatedWallet.outputs.length AFTER createAccount($i): ${updatedWallet.outputs.length}');
-        print('oldWallet === updatedWallet: ${identical(oldWallet, updatedWallet)}');
-        print('oldWallet.outputs === updatedWallet.outputs: ${identical(oldWallet.outputs, updatedWallet.outputs)}');
-        
+        existingAccounts.add(i);
         accountsUpdated = true;
       }
     }
 
     if (accountsUpdated) {
-      print('\n--- Accounts were updated, replacing in openWallets ---');
-      print('openWallets[${updatedWallet.walletId}].hashCode BEFORE replacement: ${openWallets[updatedWallet.walletId]?.hashCode}');
-      print('openWallets[${updatedWallet.walletId}].outputs.length BEFORE replacement: ${openWallets[updatedWallet.walletId]?.outputs.length}');
-      
       openWallets[updatedWallet.walletId] = updatedWallet;
-      
-      print('openWallets[${updatedWallet.walletId}].hashCode AFTER replacement: ${openWallets[updatedWallet.walletId]?.hashCode}');
-      print('openWallets[${updatedWallet.walletId}].outputs.length AFTER replacement: ${openWallets[updatedWallet.walletId]?.outputs.length}');
-      print('openWallets[${updatedWallet.walletId}].outputs.hashCode AFTER replacement: ${openWallets[updatedWallet.walletId]?.outputs.hashCode}');
     } else {
-      print('\n--- No new accounts created ---');
       openWallets[walletInstance.walletId] = walletInstance;
     }
 
@@ -437,52 +367,21 @@ class WalletLifecycleManager {
           walletToMark.outputs, scanResult.spentKeyImages, selectedOutputs);
     }
 
-    // Update the derived lists to ensure UI gets fresh references
-    print('\n--- Updating allOutputs and allTransactions ---');
-    print('activeWallet before final copy:');
-    print('  activeWallet.hashCode: ${activeWallet?.hashCode}');
-    print('  activeWallet.outputs.hashCode: ${activeWallet?.outputs.hashCode}');
-    print('  activeWallet.outputs.length: ${activeWallet?.outputs.length}');
-    print('  activeWallet === walletInstance: ${identical(activeWallet, walletInstance)}');
-    print('  activeWallet === updatedWallet: ${identical(activeWallet, updatedWallet)}');
-    print('  activeWallet === openWallets[activeWalletId]: ${identical(activeWallet, openWallets[activeWalletId])}');
-
     // Force new list references to trigger UI updates
     allOutputs = List<OwnedOutput>.from(activeWallet!.outputs);
     allTransactions = List<WalletTransaction>.from(activeWallet!.transactions);
-    
-    print('allOutputs.length: ${allOutputs.length}');
-    print('allTransactions.length: ${allTransactions.length}');
-    print('allOutputs.hashCode: ${allOutputs.hashCode}');
-    
-    print('\n--- Final verification ---');
-    print('walletInstance.outputs.length: ${walletInstance.outputs.length}');
-    print('updatedWallet.outputs.length: ${updatedWallet.outputs.length}');
-    print('openWallets[activeWalletId].outputs.length: ${openWallets[activeWalletId]?.outputs.length}');
-    print('activeWallet.outputs.length: ${activeWallet?.outputs.length}');
-    print('allOutputs.length: ${allOutputs.length}');
-    
-    print('========== END integrateSingleBlockScanResults ==========\n');
   }
 
   /// Integrates mempool scan results into the active wallet instance
   void integrateMempoolScanResults(MempoolScanResponse scanResult, Set<String> selectedOutputKeys) {
-    print('\n========== START integrateMempoolScanResults ==========');
-    print('Incoming outputs count: ${scanResult.outputs.length}');
-    
     if (activeWalletId == null || activeWallet == null) {
-      print('ERROR: No active wallet to integrate mempool scan results');
-      print('========== END integrateMempoolScanResults ==========\n');
       return;
     }
 
-    print('Active wallet ID: $activeWalletId');
     final walletInstance = activeWallet!;
-    print('walletInstance.outputs.length BEFORE merge: ${walletInstance.outputs.length}');
 
     // Add new outputs to the wallet instance
     OutputUtils.addIfAbsent(walletInstance.outputs, scanResult.outputs);
-    print('walletInstance.outputs.length AFTER merge: ${walletInstance.outputs.length}');
 
     // Mark spent outputs based on key images from mempool
     OutputUtils.markSpentByKeyImages(walletInstance.outputs, scanResult.spentKeyImages, selectedOutputKeys);
@@ -497,34 +396,26 @@ class WalletLifecycleManager {
         }
       }
     }
-    print('Highest account index in outputs: $highestAccountIndex');
 
     var updatedWallet = walletInstance;
     bool accountsUpdated = false;
+    final existingAccounts = Set<int>.from(updatedWallet.accounts);
     for (int i = 0; i <= highestAccountIndex; i++) {
-      if (!updatedWallet.accounts.contains(i)) {
-        print('Creating new account: $i');
-        print('updatedWallet.outputs.length BEFORE createAccount($i): ${updatedWallet.outputs.length}');
+      if (!existingAccounts.contains(i)) {
         updatedWallet = updatedWallet.createAccount(i);
-        print('updatedWallet.outputs.length AFTER createAccount($i): ${updatedWallet.outputs.length}');
+        existingAccounts.add(i);
         accountsUpdated = true;
       }
     }
 
     if (accountsUpdated) {
-      print('Accounts updated, replacing in openWallets');
       openWallets[updatedWallet.walletId] = updatedWallet;
     } else {
       openWallets[walletInstance.walletId] = walletInstance;
     }
 
     // Update the derived lists to ensure UI gets fresh references
-    print('Updating allOutputs from activeWallet');
-    print('activeWallet.outputs.length: ${activeWallet?.outputs.length}');
     allOutputs = List<OwnedOutput>.from(activeWallet!.outputs);
     allTransactions = List<WalletTransaction>.from(activeWallet!.transactions);
-    print('allOutputs.length after copy: ${allOutputs.length}');
-    
-    print('========== END integrateMempoolScanResults ==========\n');
   }
 }

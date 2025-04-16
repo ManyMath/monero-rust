@@ -65,30 +65,22 @@ class OutputUtils {
     List<OwnedOutput> existing,
     List<OwnedOutput> incoming,
   ) {
-    print('DEBUG mergeScannedOutputs: START');
-    print('  - Existing outputs count: ${existing.length}');
-    print('  - Incoming outputs count: ${incoming.length}');
-
-    for (var output in incoming) {
-      final accountIdx = output.subaddressIndex?.item1 ?? 0;
-      print('  - Processing output: txHash=${output.txHash.length > 8 ? output.txHash.substring(0, 8) : output.txHash}..., outputIndex=${output.outputIndex}, account=$accountIdx, amount=${output.amountXmr}');
-
-      final idx = existing.indexWhere((o) =>
-        o.txHash == output.txHash && o.outputIndex == output.outputIndex
-      );
-      if (idx == -1) {
-        existing.add(output);
-        print('    → ADDED new output (now ${existing.length} total)');
-      } else if (existing[idx].blockHeight.toInt() == 0) {
-        existing[idx] = output;
-        print('    → UPDATED unconfirmed output at index $idx');
-      } else {
-        print('    → SKIPPED (already exists at index $idx)');
-      }
+    // Build O(1) lookup: "txHash:outputIndex" → index in existing list
+    final indexMap = <String, int>{};
+    for (int i = 0; i < existing.length; i++) {
+      indexMap['${existing[i].txHash}:${existing[i].outputIndex}'] = i;
     }
 
-    print('  - Final existing outputs count: ${existing.length}');
-    print('DEBUG mergeScannedOutputs: END');
+    for (var output in incoming) {
+      final key = '${output.txHash}:${output.outputIndex}';
+      final idx = indexMap[key];
+      if (idx == null) {
+        indexMap[key] = existing.length;
+        existing.add(output);
+      } else if (existing[idx].blockHeight.toInt() == 0) {
+        existing[idx] = output;
+      }
+    }
   }
 
   /// Add outputs not already present (by txHash+outputIndex) in-place.

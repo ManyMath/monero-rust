@@ -15,6 +15,12 @@ class TransactionUtils {
     final blockHeight = scan.blockHeight.toInt();
     final blockTimestamp = scan.blockTimestamp.toInt();
 
+    // Build O(1) lookup: txHash → index in transactions list
+    final txIndexMap = <String, int>{};
+    for (int i = 0; i < transactions.length; i++) {
+      txIndexMap[transactions[i].txHash] = i;
+    }
+
     final outputsByTx = <String, List<OwnedOutput>>{};
     for (var output in scan.outputs) {
       outputsByTx.putIfAbsent(output.txHash, () => []).add(output);
@@ -24,8 +30,9 @@ class TransactionUtils {
       final txHash = entry.key;
       final outputs = entry.value;
 
-      final existingIndex = transactions.indexWhere((t) => t.txHash == txHash);
-      if (existingIndex == -1) {
+      final existingIndex = txIndexMap[txHash];
+      if (existingIndex == null) {
+        txIndexMap[txHash] = transactions.length;
         transactions.add(WalletTransaction(
           txHash: txHash,
           blockHeight: blockHeight,
@@ -36,9 +43,13 @@ class TransactionUtils {
       } else {
         final existing = transactions[existingIndex];
         final updatedOutputs = [...existing.receivedOutputs];
+        // Build O(1) dedup set from existing outputs
+        final outputKeys = <String>{
+          for (var o in updatedOutputs) '${o.txHash}:${o.outputIndex}',
+        };
         for (var output in outputs) {
-          if (!updatedOutputs.any((o) =>
-              o.txHash == output.txHash && o.outputIndex == output.outputIndex)) {
+          final key = '${output.txHash}:${output.outputIndex}';
+          if (outputKeys.add(key)) {
             updatedOutputs.add(output);
           }
         }
@@ -52,14 +63,20 @@ class TransactionUtils {
       }
     }
 
+    // Build O(1) lookup for spent key images across all transactions
+    final spentKeyImageSet = <String>{};
+    for (var t in transactions) {
+      spentKeyImageSet.addAll(t.spentKeyImages);
+    }
+
     for (var spentKeyImage in scan.spentKeyImages) {
       final spentOutput = keyImageMap[spentKeyImage];
       if (spentOutput == null) continue;
 
-      final existingTx = transactions.where((t) =>
-          t.spentKeyImages.contains(spentKeyImage)).firstOrNull;
-      if (existingTx == null) {
+      if (!spentKeyImageSet.contains(spentKeyImage)) {
         final syntheticTxHash = 'spend:$spentKeyImage';
+        txIndexMap[syntheticTxHash] = transactions.length;
+        spentKeyImageSet.add(spentKeyImage);
         transactions.add(WalletTransaction(
           txHash: syntheticTxHash,
           blockHeight: blockHeight,
