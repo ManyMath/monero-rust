@@ -1675,7 +1675,7 @@ class _DebugViewState extends State<DebugView> {
                           destinationControllers: _destinationControllers,
                           network: _network,
                         ),
-                        onAmountChanged: () {},
+                        onAmountChanged: () => setState(() {}),
                         onSendMax: _handleSendMax,
                       ),
                     ),

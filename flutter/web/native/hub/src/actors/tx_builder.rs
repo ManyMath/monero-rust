@@ -156,7 +156,7 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
 
                     // If specific outputs are manually selected, use only those
                     if let Some(ref selected) = msg.selected_outputs {
-                        let selected_set: HashSet<&String> = selected.iter().collect();
+                        let selected_set: HashSet<String> = selected.iter().cloned().collect();
                         spendable_outputs.retain(|o| {
                             let output_key = format!("{}:{}", o.tx_hash, o.output_index);
                             selected_set.contains(&output_key)
@@ -364,7 +364,7 @@ impl Notifiable<SweepAll> for TxBuilderActor {
 
                     // Apply manual output selection if provided (for account filtering)
                     if let Some(ref selected) = msg.selected_outputs {
-                        let selected_set: HashSet<&String> = selected.iter().collect();
+                        let selected_set: HashSet<String> = selected.iter().cloned().collect();
                         spendable_outputs.retain(|o| {
                             let output_key = format!("{}:{}", o.tx_hash, o.output_index);
                             selected_set.contains(&output_key)
