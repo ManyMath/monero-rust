@@ -30,14 +30,6 @@ pub struct WalletState {
 }
 
 #[derive(Debug, Clone)]
-pub struct QueryHeight;
-
-#[derive(Debug, Clone)]
-pub struct FetchBlock {
-    pub height: u64,
-}
-
-#[derive(Debug, Clone)]
 pub struct BuildTransaction {
     pub node_url: String,
     pub seed: String,

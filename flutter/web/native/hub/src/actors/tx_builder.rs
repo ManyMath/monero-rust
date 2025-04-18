@@ -9,7 +9,6 @@ use tokio_with_wasm::alias as tokio;
 
 pub struct TxBuilderActor {
     wallet_actor: Option<Address<super::wallet::WalletActor>>,
-    rpc_actor: Option<Address<super::rpc::RpcActor>>,
     _owned_tasks: JoinSet<()>,
 }
 
@@ -25,17 +24,12 @@ impl TxBuilderActor {
 
         TxBuilderActor {
             wallet_actor: None,
-            rpc_actor: None,
             _owned_tasks,
         }
     }
 
     pub fn set_wallet_actor(&mut self, addr: Address<super::wallet::WalletActor>) {
         self.wallet_actor = Some(addr);
-    }
-
-    pub fn set_rpc_actor(&mut self, addr: Address<super::rpc::RpcActor>) {
-        self.rpc_actor = Some(addr);
     }
 
     async fn listen_to_tx_requests(mut self_addr: Address<Self>) {

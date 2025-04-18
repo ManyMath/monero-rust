@@ -16,7 +16,6 @@ enum ScanType {
 
 pub struct WalletActor {
     state: WalletState,
-    rpc_actor: Option<Address<super::rpc::RpcActor>>,
     _owned_tasks: JoinSet<()>,
     // Shared scan state
     is_scanning: bool,
@@ -72,7 +71,6 @@ impl WalletActor {
                 network: None,
                 outputs: Vec::new(),
             },
-            rpc_actor: None,
             _owned_tasks,
             is_scanning: false,
             active_scan_type: ScanType::None,
@@ -90,10 +88,6 @@ impl WalletActor {
             multi_wallet_scan_wallets: Vec::new(),
             self_addr: Some(self_addr),
         }
-    }
-
-    pub fn set_rpc_actor(&mut self, addr: Address<super::rpc::RpcActor>) {
-        self.rpc_actor = Some(addr);
     }
 
     async fn listen_to_create_wallet(mut self_addr: Address<Self>) {
