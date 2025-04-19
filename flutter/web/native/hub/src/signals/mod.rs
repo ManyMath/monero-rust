@@ -199,8 +199,71 @@ pub struct OwnedOutput {
     pub received_output_bytes: String,
     pub block_height: u64,
     pub spent: bool,
-    pub key_image: String, // Hex-encoded key image for spent detection
+    pub key_image: String,
     pub is_coinbase: bool,
+}
+
+impl From<monero_rust::WalletOutput> for OwnedOutput {
+    fn from(o: monero_rust::WalletOutput) -> Self {
+        OwnedOutput {
+            tx_hash: o.tx_hash,
+            output_index: o.output_index,
+            amount: o.amount,
+            amount_xmr: o.amount_xmr,
+            key: o.key,
+            key_offset: o.key_offset,
+            commitment_mask: o.commitment_mask,
+            subaddress_index: o.subaddress_index,
+            payment_id: o.payment_id,
+            received_output_bytes: o.received_output_bytes,
+            block_height: o.block_height,
+            spent: o.spent,
+            key_image: o.key_image,
+            is_coinbase: o.is_coinbase,
+        }
+    }
+}
+
+impl From<&monero_rust::WalletOutput> for OwnedOutput {
+    fn from(o: &monero_rust::WalletOutput) -> Self {
+        OwnedOutput {
+            tx_hash: o.tx_hash.clone(),
+            output_index: o.output_index,
+            amount: o.amount,
+            amount_xmr: o.amount_xmr.clone(),
+            key: o.key.clone(),
+            key_offset: o.key_offset.clone(),
+            commitment_mask: o.commitment_mask.clone(),
+            subaddress_index: o.subaddress_index,
+            payment_id: o.payment_id.clone(),
+            received_output_bytes: o.received_output_bytes.clone(),
+            block_height: o.block_height,
+            spent: o.spent,
+            key_image: o.key_image.clone(),
+            is_coinbase: o.is_coinbase,
+        }
+    }
+}
+
+impl From<OwnedOutput> for monero_rust::WalletOutput {
+    fn from(o: OwnedOutput) -> Self {
+        monero_rust::WalletOutput {
+            tx_hash: o.tx_hash,
+            output_index: o.output_index,
+            amount: o.amount,
+            amount_xmr: o.amount_xmr,
+            key: o.key,
+            key_offset: o.key_offset,
+            commitment_mask: o.commitment_mask,
+            subaddress_index: o.subaddress_index,
+            payment_id: o.payment_id,
+            received_output_bytes: o.received_output_bytes,
+            block_height: o.block_height,
+            spent: o.spent,
+            key_image: o.key_image,
+            is_coinbase: o.is_coinbase,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, RustSignal)]

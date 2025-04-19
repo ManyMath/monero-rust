@@ -4,9 +4,12 @@ pub mod abstractions;
 pub mod scanner;
 pub mod rpc_serai;
 pub mod tx_proof;
+pub mod wallet_output;
 
 pub mod tx_builder;
 pub use tx_builder::native;
+
+pub use wallet_output::WalletOutput;
 
 pub use scanner::{
     BlockScanResult, DerivedKeys, Lookahead, MempoolScanResult, OwnedOutputInfo,

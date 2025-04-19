@@ -99,23 +99,7 @@ pub struct BlockScanResult {
     pub spent_key_images: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OwnedOutputInfo {
-    pub tx_hash: String,
-    pub output_index: u8,
-    pub amount: u64,
-    pub amount_xmr: String,
-    pub key: String,
-    pub key_offset: String,
-    pub commitment_mask: String,
-    pub subaddress_index: Option<(u32, u32)>,
-    pub payment_id: Option<String>,
-    pub received_output_bytes: String,
-    pub block_height: u64,
-    pub spent: bool,
-    pub key_image: String,
-    pub is_coinbase: bool,
-}
+pub type OwnedOutputInfo = crate::wallet_output::WalletOutput;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MempoolScanResult {

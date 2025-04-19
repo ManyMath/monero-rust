@@ -387,21 +387,10 @@ impl Notifiable<SweepAll> for TxBuilderActor {
                         .map(|o| format!("{}:{}", o.tx_hash, o.output_index))
                         .collect();
 
-                    // Convert StoredOutput to StoredOutputData
                     let stored_outputs: Vec<monero_rust::tx_builder::native::StoredOutputData> =
                         spendable_outputs
                             .into_iter()
-                            .map(|o| monero_rust::tx_builder::native::StoredOutputData {
-                                tx_hash: o.tx_hash.clone(),
-                                output_index: o.output_index,
-                                amount: o.amount,
-                                key: o.key.clone(),
-                                key_offset: o.key_offset.clone(),
-                                commitment_mask: o.commitment_mask.clone(),
-                                subaddress: o.subaddress,
-                                payment_id: o.payment_id.clone(),
-                                received_output_bytes: o.received_output_bytes.clone(),
-                            })
+                            .map(|o| o.into())
                             .collect();
 
                     // Spawn sweep operation in local task to avoid Send requirements
@@ -579,18 +568,8 @@ impl TxBuilderActor {
 
         let outputs_vec: Vec<monero_rust::native::StoredOutputData> = wallet_data
             .outputs
-            .iter()
-            .map(|o| monero_rust::native::StoredOutputData {
-                tx_hash: o.tx_hash.clone(),
-                output_index: o.output_index,
-                amount: o.amount,
-                key: o.key.clone(),
-                key_offset: o.key_offset.clone(),
-                commitment_mask: o.commitment_mask.clone(),
-                subaddress: o.subaddress,
-                payment_id: o.payment_id.clone(),
-                received_output_bytes: o.received_output_bytes.clone(),
-            })
+            .into_iter()
+            .map(|o| o.into())
             .collect();
 
         Box::pin(async move {
@@ -681,10 +660,11 @@ mod tests {
             tx_hash: tx_hash.to_string(),
             output_index,
             amount,
+            amount_xmr: format!("{:.12}", amount as f64 / 1_000_000_000_000.0),
             key: "test_key".to_string(),
             key_offset: "test_offset".to_string(),
             commitment_mask: "test_mask".to_string(),
-            subaddress: None,
+            subaddress_index: None,
             payment_id: None,
             received_output_bytes: String::new(),
             block_height,

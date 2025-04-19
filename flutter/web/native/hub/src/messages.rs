@@ -1,21 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StoredOutput {
-    pub tx_hash: String,
-    pub output_index: u8,
-    pub amount: u64,
-    pub key: String,
-    pub key_offset: String,
-    pub commitment_mask: String,
-    pub subaddress: Option<(u32, u32)>,
-    pub payment_id: Option<String>,
-    pub received_output_bytes: String,
-    pub block_height: u64,
-    pub spent: bool,
-    pub key_image: String, // Hex-encoded key image for spent detection
-    pub is_coinbase: bool,
-}
+pub type StoredOutput = monero_rust::WalletOutput;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletState {

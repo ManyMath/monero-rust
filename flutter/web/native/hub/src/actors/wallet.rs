@@ -388,52 +388,17 @@ impl WalletActor {
             .await
             {
                 Ok(result) => {
-                    let outputs = result
+                    let outputs: Vec<OwnedOutput> = result
                         .outputs
                         .iter()
-                        .map(|o| OwnedOutput {
-                            tx_hash: o.tx_hash.clone(),
-                            output_index: o.output_index,
-                            amount: o.amount,
-                            amount_xmr: o.amount_xmr.clone(),
-                            key: o.key.clone(),
-                            key_offset: o.key_offset.clone(),
-                            commitment_mask: o.commitment_mask.clone(),
-                            subaddress_index: o.subaddress_index,
-                            payment_id: o.payment_id.clone(),
-                            received_output_bytes: o.received_output_bytes.clone(),
-                            block_height: o.block_height,
-                            spent: o.spent,
-                            key_image: o.key_image.clone(),
-                            is_coinbase: o.is_coinbase,
-                        })
-                        .collect();
-
-                    let stored_outputs: Vec<StoredOutput> = result
-                        .outputs
-                        .iter()
-                        .map(|o| StoredOutput {
-                            tx_hash: o.tx_hash.clone(),
-                            output_index: o.output_index,
-                            amount: o.amount,
-                            key: o.key.clone(),
-                            key_offset: o.key_offset.clone(),
-                            commitment_mask: o.commitment_mask.clone(),
-                            subaddress: o.subaddress_index,
-                            payment_id: o.payment_id.clone(),
-                            received_output_bytes: o.received_output_bytes.clone(),
-                            block_height: o.block_height,
-                            spent: o.spent,
-                            key_image: o.key_image.clone(),
-                            is_coinbase: o.is_coinbase,
-                        })
+                        .map(|o| o.into())
                         .collect();
 
                     let _ = self_addr
                         .notify(StoreOutputs {
                             seed,
                             network,
-                            outputs: stored_outputs,
+                            outputs: result.outputs.clone(),
                             daemon_height: result.daemon_height,
                         })
                         .await;
@@ -540,24 +505,13 @@ impl WalletActor {
                 .await
                 {
                     Ok(result) => {
-                        let outputs = result
+                        let outputs: Vec<OwnedOutput> = result
                             .outputs
                             .iter()
-                            .map(|o| OwnedOutput {
-                                tx_hash: o.tx_hash.clone(),
-                                output_index: o.output_index,
-                                amount: o.amount,
-                                amount_xmr: o.amount_xmr.clone(),
-                                key: o.key.clone(),
-                                key_offset: o.key_offset.clone(),
-                                commitment_mask: o.commitment_mask.clone(),
-                                subaddress_index: o.subaddress_index,
-                                payment_id: o.payment_id.clone(),
-                                received_output_bytes: o.received_output_bytes.clone(),
-                                block_height: 0, // Unconfirmed - in mempool
-                                spent: o.spent,
-                                key_image: o.key_image.clone(),
-                                is_coinbase: o.is_coinbase,
+                            .map(|o| {
+                                let mut out: OwnedOutput = o.into();
+                                out.block_height = 0; // Unconfirmed - in mempool
+                                out
                             })
                             .collect();
 
@@ -621,22 +575,7 @@ impl WalletActor {
                                 let outputs = wallet_data
                                     .outputs
                                     .iter()
-                                    .map(|o| OwnedOutput {
-                                        tx_hash: o.tx_hash.clone(),
-                                        output_index: o.output_index,
-                                        amount: o.amount,
-                                        amount_xmr: o.amount_xmr.clone(),
-                                        key: o.key.clone(),
-                                        key_offset: o.key_offset.clone(),
-                                        commitment_mask: o.commitment_mask.clone(),
-                                        subaddress_index: o.subaddress_index,
-                                        payment_id: o.payment_id.clone(),
-                                        received_output_bytes: o.received_output_bytes.clone(),
-                                        block_height: o.block_height,
-                                        spent: o.spent,
-                                        key_image: o.key_image.clone(),
-                                        is_coinbase: o.is_coinbase,
-                                    })
+                                    .map(|o| o.into())
                                     .collect();
 
                                 WalletScanResult { address, outputs }
@@ -734,25 +673,11 @@ impl WalletActor {
         let receiver = RestoreWalletDataRequest::get_dart_signal_receiver();
         while let Some(signal_pack) = receiver.recv().await {
             let msg = signal_pack.message;
-            let stored_outputs: Vec<StoredOutput> = msg.outputs.iter().map(|o| StoredOutput {
-                tx_hash: o.tx_hash.clone(),
-                output_index: o.output_index,
-                amount: o.amount,
-                key: o.key.clone(),
-                key_offset: o.key_offset.clone(),
-                commitment_mask: o.commitment_mask.clone(),
-                subaddress: o.subaddress_index,
-                payment_id: o.payment_id.clone(),
-                received_output_bytes: o.received_output_bytes.clone(),
-                block_height: o.block_height,
-                spent: o.spent,
-                key_image: o.key_image.clone(),
-                is_coinbase: o.is_coinbase,
-            }).collect();
+            let outputs: Vec<StoredOutput> = msg.outputs.into_iter().map(|o| o.into()).collect();
             let _ = self_addr.notify(RestoreOutputs {
                 seed: msg.seed,
                 network: msg.network,
-                outputs: stored_outputs,
+                outputs,
                 daemon_height: msg.daemon_height,
                 current_height: msg.current_height,
             }).await;
@@ -1140,44 +1065,12 @@ impl Notifiable<ContinueScan> for WalletActor {
                         if !filtered_outputs.is_empty() {
                             let outputs: Vec<OwnedOutput> = filtered_outputs
                                 .iter()
-                                .map(|o| OwnedOutput {
-                                    tx_hash: o.tx_hash.clone(),
-                                    output_index: o.output_index,
-                                    amount: o.amount,
-                                    amount_xmr: o.amount_xmr.clone(),
-                                    key: o.key.clone(),
-                                    key_offset: o.key_offset.clone(),
-                                    commitment_mask: o.commitment_mask.clone(),
-                                    subaddress_index: o.subaddress_index,
-                                    payment_id: o.payment_id.clone(),
-                                    received_output_bytes: o.received_output_bytes.clone(),
-                                    block_height: o.block_height,
-                                    spent: o.spent,
-                                    key_image: o.key_image.clone(),
-                                    is_coinbase: o.is_coinbase,
-                                })
+                                .map(|o| (*o).into())
                                 .collect();
 
-                            let stored: Vec<StoredOutput> = filtered_outputs
-                                .iter()
-                                .map(|o| StoredOutput {
-                                    tx_hash: o.tx_hash.clone(),
-                                    output_index: o.output_index,
-                                    amount: o.amount,
-                                    key: o.key.clone(),
-                                    key_offset: o.key_offset.clone(),
-                                    commitment_mask: o.commitment_mask.clone(),
-                                    subaddress: o.subaddress_index,
-                                    payment_id: o.payment_id.clone(),
-                                    received_output_bytes: o.received_output_bytes.clone(),
-                                    block_height: o.block_height,
-                                    spent: o.spent,
-                                    key_image: o.key_image.clone(),
-                                    is_coinbase: o.is_coinbase,
-                                })
-                                .collect();
-
-                            all_stored_outputs.extend(stored);
+                            all_stored_outputs.extend(
+                                filtered_outputs.iter().map(|o| (*o).clone())
+                            );
 
                             BlockScanResponse {
                                 success: true,
@@ -1376,22 +1269,7 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                                             true
                                         }
                                     })
-                                    .map(|o| OwnedOutput {
-                                        tx_hash: o.tx_hash.clone(),
-                                        output_index: o.output_index,
-                                        amount: o.amount,
-                                        amount_xmr: o.amount_xmr.clone(),
-                                        key: o.key.clone(),
-                                        key_offset: o.key_offset.clone(),
-                                        commitment_mask: o.commitment_mask.clone(),
-                                        subaddress_index: o.subaddress_index,
-                                        payment_id: o.payment_id.clone(),
-                                        received_output_bytes: o.received_output_bytes.clone(),
-                                        block_height: o.block_height,
-                                        spent: o.spent,
-                                        key_image: o.key_image.clone(),
-                                        is_coinbase: o.is_coinbase,
-                                    })
+                                    .map(|o| o.into())
                                     .collect();
 
                                 WalletScanResult {

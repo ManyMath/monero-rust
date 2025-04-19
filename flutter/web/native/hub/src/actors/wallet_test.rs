@@ -24,10 +24,11 @@ async fn test_store_outputs_message() {
             tx_hash: "test_hash".to_string(),
             output_index: 0,
             amount: 1000000000000,
+            amount_xmr: "1.000000000000".to_string(),
             key: "test_key".to_string(),
             key_offset: "test_offset".to_string(),
             commitment_mask: "test_mask".to_string(),
-            subaddress: None,
+            subaddress_index: None,
             payment_id: None,
             received_output_bytes: String::new(),
             block_height: 1000,
@@ -67,6 +68,7 @@ async fn test_update_scan_state_message() {
         seed: "test seed".to_string(),
         network: "stagenet".to_string(),
         account_lookahead: 50,
+        accounts_to_scan: None,
     };
 
     let test_ctx = Context::new();
@@ -90,6 +92,7 @@ async fn test_stop_scan_message() {
         seed: "test seed".to_string(),
         network: "stagenet".to_string(),
         account_lookahead: 50,
+        accounts_to_scan: None,
     };
 
     let test_ctx = Context::new();
@@ -114,10 +117,11 @@ async fn test_multiple_output_batches() {
             tx_hash: "hash1".to_string(),
             output_index: 0,
             amount: 1000000000000,
+            amount_xmr: "1.000000000000".to_string(),
             key: "key1".to_string(),
             key_offset: "offset1".to_string(),
             commitment_mask: "mask1".to_string(),
-            subaddress: None,
+            subaddress_index: None,
             payment_id: None,
             received_output_bytes: String::new(),
             block_height: 1000,
@@ -140,10 +144,11 @@ async fn test_multiple_output_batches() {
             tx_hash: "hash2".to_string(),
             output_index: 1,
             amount: 2000000000000,
+            amount_xmr: "2.000000000000".to_string(),
             key: "key2".to_string(),
             key_offset: "offset2".to_string(),
             commitment_mask: "mask2".to_string(),
-            subaddress: None,
+            subaddress_index: None,
             payment_id: None,
             received_output_bytes: String::new(),
             block_height: 1050,
@@ -179,6 +184,7 @@ async fn test_scan_state_transitions() {
         seed: "test seed".to_string(),
         network: "stagenet".to_string(),
         account_lookahead: 50,
+        accounts_to_scan: None,
     }, &test_ctx).await;
 
     // Update progress
@@ -190,6 +196,7 @@ async fn test_scan_state_transitions() {
         seed: "test seed".to_string(),
         network: "stagenet".to_string(),
         account_lookahead: 50,
+        accounts_to_scan: None,
     }, &test_ctx).await;
 
     // Complete scan
@@ -201,6 +208,7 @@ async fn test_scan_state_transitions() {
         seed: "test seed".to_string(),
         network: "stagenet".to_string(),
         account_lookahead: 50,
+        accounts_to_scan: None,
     }, &test_ctx).await;
 
     // Stop scan
