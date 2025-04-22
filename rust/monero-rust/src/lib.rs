@@ -1,15 +1,21 @@
 //! Monero WASM Wallet Library
 
 pub mod abstractions;
+pub mod coin_selection;
+pub mod encryption;
 pub mod scanner;
 pub mod rpc_serai;
 pub mod tx_proof;
 pub mod wallet_output;
+pub mod wallet_state;
 
 pub mod tx_builder;
 pub use tx_builder::native;
 
+pub use coin_selection::{select_inputs, find_best_combination, CoinSelectionResult};
+pub use encryption::{encrypt, decrypt, EncryptionError};
 pub use wallet_output::WalletOutput;
+pub use wallet_state::{WalletState, Balance};
 
 pub use scanner::{
     BlockScanResult, DerivedKeys, Lookahead, MempoolScanResult, OwnedOutputInfo,

@@ -20,6 +20,10 @@ base64 = "0.21"
 zeroize = "1.7"
 base58-monero = { version = "1", default-features = false, features = ["check"] }
 
+# Encryption
+chacha20poly1305 = "0.10"
+argon2 = "0.5"
+
 # Scanner
 curve25519-dalek = { version = "3.2", default-features = false }
 sha3 = { version = "0.10", default-features = false }
