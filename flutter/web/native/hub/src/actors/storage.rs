@@ -1,4 +1,4 @@
-use crate::encryption;
+use monero_rust::encryption;
 use crate::signals::{
     LoadWalletDataRequest, SaveWalletDataRequest, WalletDataLoadedResponse,
     WalletDataSavedResponse,

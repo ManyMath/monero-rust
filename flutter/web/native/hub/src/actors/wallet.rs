@@ -15,7 +15,10 @@ enum ScanType {
 }
 
 pub struct WalletActor {
-    state: WalletState,
+    core_state: monero_rust::WalletState,
+    address: String,
+    seed: Option<String>,
+    network: Option<String>,
     _owned_tasks: JoinSet<()>,
     // Shared scan state
     is_scanning: bool,
@@ -61,16 +64,10 @@ impl WalletActor {
         _owned_tasks.spawn(Self::listen_to_restore_wallet_data(self_addr.clone()));
 
         WalletActor {
-            state: WalletState {
-                address: String::new(),
-                current_height: 0,
-                daemon_height: 0,
-                confirmed_balance: 0,
-                unconfirmed_balance: 0,
-                seed: None,
-                network: None,
-                outputs: Vec::new(),
-            },
+            core_state: monero_rust::WalletState::new(),
+            address: String::new(),
+            seed: None,
+            network: None,
             _owned_tasks,
             is_scanning: false,
             active_scan_type: ScanType::None,
@@ -697,21 +694,20 @@ struct RestoreOutputs {
 #[async_trait]
 impl Notifiable<RestoreOutputs> for WalletActor {
     async fn notify(&mut self, msg: RestoreOutputs, _ctx: &Context<Self>) {
-        self.state.seed = Some(msg.seed);
-        self.state.network = Some(msg.network);
-        self.state.daemon_height = msg.daemon_height;
-        self.state.current_height = msg.current_height;
-        self.state.outputs = msg.outputs;
-        self.recalculate_balances();
+        self.seed = Some(msg.seed);
+        self.network = Some(msg.network);
+        self.core_state.daemon_height = msg.daemon_height;
+        self.core_state.current_height = msg.current_height;
+        self.core_state.replace_outputs(msg.outputs);
     }
 }
 
 #[async_trait]
 impl Notifiable<CreateWalletRequest> for WalletActor {
     async fn notify(&mut self, msg: CreateWalletRequest, _ctx: &Context<Self>) {
-        self.state.address = format!("4{}_placeholder", msg.network);
+        self.address = format!("4{}_placeholder", msg.network);
         WalletCreatedResponse {
-            address: self.state.address.clone(),
+            address: self.address.clone(),
         }
         .send_signal_to_dart();
     }
@@ -719,18 +715,18 @@ impl Notifiable<CreateWalletRequest> for WalletActor {
 
 #[async_trait]
 impl Notifiable<UpdateBalance> for WalletActor {
-    async fn notify(&mut self, msg: UpdateBalance, _ctx: &Context<Self>) {
-        self.state.confirmed_balance = msg.confirmed;
-        self.state.unconfirmed_balance = msg.unconfirmed;
+    async fn notify(&mut self, _msg: UpdateBalance, _ctx: &Context<Self>) {
+        // Balance is now computed from core_state, no-op
     }
 }
 
 #[async_trait]
 impl Notifiable<GetBalanceRequest> for WalletActor {
     async fn notify(&mut self, _msg: GetBalanceRequest, _ctx: &Context<Self>) {
+        let bal = self.core_state.balance();
         BalanceResponse {
-            confirmed: self.state.confirmed_balance,
-            unconfirmed: self.state.unconfirmed_balance,
+            confirmed: bal.confirmed,
+            unconfirmed: bal.unconfirmed,
         }
         .send_signal_to_dart();
     }
@@ -738,21 +734,10 @@ impl Notifiable<GetBalanceRequest> for WalletActor {
 #[async_trait]
 impl Notifiable<StoreOutputs> for WalletActor {
     async fn notify(&mut self, msg: StoreOutputs, _ctx: &Context<Self>) {
-        self.state.seed = Some(msg.seed);
-        self.state.network = Some(msg.network);
-        self.state.daemon_height = msg.daemon_height;
-
-        // Update current_height to the highest block_height among new outputs
-        for output in &msg.outputs {
-            if output.block_height > self.state.current_height {
-                self.state.current_height = output.block_height;
-            }
-        }
-
-        self.state.outputs.extend(msg.outputs);
-
-        // Recalculate balances after adding outputs
-        self.recalculate_balances();
+        self.seed = Some(msg.seed);
+        self.network = Some(msg.network);
+        self.core_state.daemon_height = msg.daemon_height;
+        self.core_state.add_outputs(msg.outputs);
     }
 }
 
@@ -762,9 +747,9 @@ impl Handler<GetWalletData> for WalletActor {
 
     async fn handle(&mut self, _msg: GetWalletData, _ctx: &Context<Self>) -> Self::Result {
         WalletData {
-            seed: self.state.seed.clone(),
-            network: self.state.network.clone(),
-            outputs: self.state.outputs.clone(),
+            seed: self.seed.clone(),
+            network: self.network.clone(),
+            outputs: self.core_state.outputs().to_vec(),
         }
     }
 }
@@ -772,15 +757,7 @@ impl Handler<GetWalletData> for WalletActor {
 #[async_trait]
 impl Notifiable<MarkOutputsSpent> for WalletActor {
     async fn notify(&mut self, msg: MarkOutputsSpent, _ctx: &Context<Self>) {
-        for output in &mut self.state.outputs {
-            let output_key = format!("{}:{}", output.tx_hash, output.output_index);
-            if msg.output_keys.contains(&output_key) {
-                output.spent = true;
-            }
-        }
-
-        // Recalculate balances after marking outputs as spent
-        self.recalculate_balances();
+        self.core_state.mark_spent_by_output_keys(&msg.output_keys);
     }
 }
 
@@ -790,47 +767,9 @@ impl Handler<GetWalletHeight> for WalletActor {
 
     async fn handle(&mut self, _msg: GetWalletHeight, _ctx: &Context<Self>) -> Self::Result {
         WalletHeight {
-            current_height: self.state.current_height,
-            daemon_height: self.state.daemon_height,
+            current_height: self.core_state.current_height,
+            daemon_height: self.core_state.daemon_height,
         }
-    }
-}
-
-impl WalletActor {
-    fn recalculate_balances(&mut self) {
-        const CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE: u64 = 10;
-        const CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW: u64 = 60;
-
-        let mut confirmed = 0u64;
-        let mut unconfirmed = 0u64;
-
-        for output in &self.state.outputs {
-            if output.spent {
-                continue;
-            }
-
-            let confirmations = if self.state.current_height > output.block_height {
-                self.state.current_height - output.block_height
-            } else {
-                0
-            };
-
-            // Use 60 blocks for coinbase outputs, 10 for regular outputs
-            let required_confirmations = if output.is_coinbase {
-                CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW
-            } else {
-                CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE
-            };
-
-            if confirmations >= required_confirmations {
-                confirmed += output.amount;
-            } else {
-                unconfirmed += output.amount;
-            }
-        }
-
-        self.state.confirmed_balance = confirmed;
-        self.state.unconfirmed_balance = unconfirmed;
     }
 }
 
@@ -1347,20 +1286,14 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
 #[async_trait]
 impl Notifiable<UpdateSpentStatus> for WalletActor {
     async fn notify(&mut self, msg: UpdateSpentStatus, _ctx: &Context<Self>) {
-        let mut updated_count = 0;
-        for output in &mut self.state.outputs {
-            if !output.spent && msg.key_images.contains(&output.key_image) {
-                output.spent = true;
-                updated_count += 1;
-            }
-        }
+        let updated_count = self.core_state.mark_spent_by_key_images(&msg.key_images);
 
         if updated_count > 0 {
-            self.recalculate_balances();
+            let balance = self.core_state.balance();
 
             BalanceResponse {
-                confirmed: self.state.confirmed_balance,
-                unconfirmed: self.state.unconfirmed_balance,
+                confirmed: balance.confirmed,
+                unconfirmed: balance.unconfirmed,
             }
             .send_signal_to_dart();
 

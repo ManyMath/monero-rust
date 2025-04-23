@@ -131,116 +131,46 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                     const CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE: u64 = 10;
 
                     // Filter outputs: only use unspent outputs with >= 10 confirmations
-                    let mut spendable_outputs: Vec<_> = wallet_data
+                    let spendable_outputs: Vec<_> = wallet_data
                         .outputs
                         .iter()
                         .filter(|o| {
                             if o.spent {
                                 return false;
                             }
-                            let confirmations = if wallet_height.daemon_height > o.block_height {
-                                wallet_height.daemon_height - o.block_height
-                            } else {
-                                0
-                            };
+                            let confirmations = wallet_height.daemon_height.saturating_sub(o.block_height);
                             confirmations >= CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE
                         })
                         .cloned()
                         .collect();
 
-                    // If specific outputs are manually selected, use only those
-                    if let Some(ref selected) = msg.selected_outputs {
-                        let selected_set: HashSet<String> = selected.iter().cloned().collect();
-                        spendable_outputs.retain(|o| {
-                            let output_key = format!("{}:{}", o.tx_hash, o.output_index);
-                            selected_set.contains(&output_key)
-                        });
-                    } else {
-                        // No manual selection: use smart input selection to avoid linking all outputs
-                        // Strategy: Use the smallest single output that can cover the amount,
-                        // or if no single output suffices, combine minimum number of outputs
+                    let total_send_amount: u64 = msg.recipients.iter().map(|(_, amt)| amt).sum();
 
-                        let total_send_amount: u64 = msg.recipients.iter().map(|(_, amt)| amt).sum();
+                    // Use core coin selection (handles both manual and auto selection)
+                    let selection_result = monero_rust::select_inputs(
+                        &spendable_outputs,
+                        total_send_amount,
+                        msg.selected_outputs.as_deref(),
+                    );
 
-                        // Fee estimates (conservative)
-                        const FEE_PER_INPUT_ESTIMATE: u64 = 15_000_000; // ~0.015 XMR per input
-                        const BASE_FEE_ESTIMATE: u64 = 20_000_000; // ~0.02 XMR base fee
-
-                        // First, try to find the smallest single output that can cover the transaction
-                        let single_input_fee = BASE_FEE_ESTIMATE + FEE_PER_INPUT_ESTIMATE;
-                        let needed_for_single = total_send_amount + single_input_fee;
-
-                        // Sort by amount to find candidates
-                        spendable_outputs.sort_by_key(|o| o.amount);
-
-                        // Find the smallest output that's >= needed amount
-                        let single_output = spendable_outputs.iter()
-                            .find(|o| o.amount >= needed_for_single);
-
-                        if let Some(output) = single_output {
-                            // Found a single output that can cover it: only use it
-                            spendable_outputs = vec![output.clone()];
-                        } else {
-                            // No single output works: find optimal combination
-                            // Strategy: Find combinations with minimum number of inputs,
-                            // then among those, pick the one with smallest total value
-
-                            // Sort by amount descending for efficient searching
-                            spendable_outputs.sort_by_key(|o| std::cmp::Reverse(o.amount));
-
-                            let mut best_selection: Option<Vec<StoredOutput>> = None;
-                            let mut best_count = usize::MAX;
-                            let mut best_total = u64::MAX;
-
-                            // Try different numbers of inputs, starting from 2
-                            for target_count in 2..=spendable_outputs.len() {
-                                let estimated_fee = BASE_FEE_ESTIMATE + (target_count as u64 * FEE_PER_INPUT_ESTIMATE);
-                                let needed_total = total_send_amount + estimated_fee;
-
-                                // Try to find a combination of exactly target_count outputs
-                                if let Some((selection, total)) = Self::find_best_combination(
-                                    &spendable_outputs,
-                                    needed_total,
-                                    target_count,
-                                ) {
-                                    // Found a valid combination with this many inputs
-                                    if target_count < best_count || (target_count == best_count && total < best_total) {
-                                        best_selection = Some(selection);
-                                        best_count = target_count;
-                                        best_total = total;
-                                        // Found minimum number of inputs, no need to try more
-                                        break;
-                                    }
-                                }
+                    let spendable_outputs = match selection_result {
+                        Ok(result) => result.selected,
+                        Err(error_msg) => {
+                            TransactionCreatedResponse {
+                                success: false,
+                                error: Some(error_msg),
+                                tx_id: String::new(),
+                                fee: 0,
+                                tx_blob: None,
+                                tx_key: None,
+                                tx_key_additional: Vec::new(),
+                                spent_output_hashes: Vec::new(),
+                                change_outputs: Vec::new(),
                             }
-
-                            if let Some(selection) = best_selection {
-                                spendable_outputs = selection;
-                            }
-                            // else: keep all outputs, will fail later with proper error
+                            .send_signal_to_dart();
+                            return;
                         }
-                    }
-
-                    if spendable_outputs.is_empty() {
-                        let error_msg = if msg.selected_outputs.is_some() {
-                            "No selected outputs available to spend".to_string()
-                        } else {
-                            "No confirmed outputs available to spend (outputs need 10 confirmations)".to_string()
-                        };
-                        TransactionCreatedResponse {
-                            success: false,
-                            error: Some(error_msg),
-                            tx_id: String::new(),
-                            fee: 0,
-                            tx_blob: None,
-                            tx_key: None,
-                            tx_key_additional: Vec::new(),
-                            spent_output_hashes: Vec::new(),
-                            change_outputs: Vec::new(),
-                        }
-                        .send_signal_to_dart();
-                        return;
-                    }
+                    };
 
                     // Collect output keys (txHash:outputIndex) of outputs that will be spent
                     let spent_hashes: Vec<String> = spendable_outputs
@@ -346,11 +276,7 @@ impl Notifiable<SweepAll> for TxBuilderActor {
                             if o.spent {
                                 return false;
                             }
-                            let confirmations = if wallet_height.daemon_height > o.block_height {
-                                wallet_height.daemon_height - o.block_height
-                            } else {
-                                0
-                            };
+                            let confirmations = wallet_height.daemon_height.saturating_sub(o.block_height);
                             confirmations >= CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE
                         })
                         .cloned()
@@ -358,11 +284,7 @@ impl Notifiable<SweepAll> for TxBuilderActor {
 
                     // Apply manual output selection if provided (for account filtering)
                     if let Some(ref selected) = msg.selected_outputs {
-                        let selected_set: HashSet<String> = selected.iter().cloned().collect();
-                        spendable_outputs.retain(|o| {
-                            let output_key = format!("{}:{}", o.tx_hash, o.output_index);
-                            selected_set.contains(&output_key)
-                        });
+                        spendable_outputs.retain(|o| selected.contains(&o.output_key()));
                     }
 
                     if spendable_outputs.is_empty() {
@@ -491,74 +413,6 @@ impl Notifiable<SweepAll> for TxBuilderActor {
 }
 
 impl TxBuilderActor {
-    /// Find the best combination of exactly `target_count` outputs that sum to >= `needed_total`.
-    /// Returns the combination closest to needed_total (minimizes excess) among valid combinations.
-    fn find_best_combination(
-        outputs: &[StoredOutput],
-        needed_total: u64,
-        target_count: usize,
-    ) -> Option<(Vec<StoredOutput>, u64)> {
-        if target_count == 0 || target_count > outputs.len() {
-            return None;
-        }
-
-        // Exhaustive search to find combination closest to needed amount (minimizes waste)
-        fn search(
-            outputs: &[StoredOutput],
-            needed: u64,
-            target_count: usize,
-            start_idx: usize,
-            current: &mut Vec<StoredOutput>,
-            current_sum: u64,
-            best: &mut Option<(Vec<StoredOutput>, u64)>,
-        ) {
-            // Found a combination of the right size
-            if current.len() == target_count {
-                if current_sum >= needed {
-                    // Update best if this is closer to needed amount (less excess)
-                    let current_excess = current_sum - needed;
-                    let is_better = match best {
-                        None => true,
-                        Some((_, best_sum)) => {
-                            let best_excess = *best_sum - needed;
-                            current_excess < best_excess
-                        }
-                    };
-                    if is_better {
-                        *best = Some((current.clone(), current_sum));
-                    }
-                }
-                return;
-            }
-
-            // Try each remaining output
-            let remaining_needed = target_count - current.len();
-            for i in start_idx..outputs.len() {
-                // Pruning: not enough outputs left to reach target_count
-                if outputs.len() - i < remaining_needed {
-                    break;
-                }
-
-                current.push(outputs[i].clone());
-                search(
-                    outputs,
-                    needed,
-                    target_count,
-                    i + 1,
-                    current,
-                    current_sum + outputs[i].amount,
-                    best,
-                );
-                current.pop();
-            }
-        }
-
-        let mut best: Option<(Vec<StoredOutput>, u64)> = None;
-        let mut current = Vec::new();
-        search(outputs, needed_total, target_count, 0, &mut current, 0, &mut best);
-        best
-    }
-
     fn build_transaction_impl_inner(
         &self,
         msg: BuildTransaction,
@@ -674,121 +528,14 @@ mod tests {
         }
     }
 
-    // Helper function to simulate the input selection logic
+    // Helper function to simulate the input selection logic using core
     fn select_outputs(
-        mut available_outputs: Vec<StoredOutput>,
+        available_outputs: Vec<StoredOutput>,
         total_send_amount: u64,
     ) -> Vec<StoredOutput> {
-        // Fee estimates (same as in the actual code)
-        const FEE_PER_INPUT_ESTIMATE: u64 = 15_000_000;
-        const BASE_FEE_ESTIMATE: u64 = 20_000_000;
-
-        // First, try to find the smallest single output that can cover the transaction
-        let single_input_fee = BASE_FEE_ESTIMATE + FEE_PER_INPUT_ESTIMATE;
-        let needed_for_single = total_send_amount + single_input_fee;
-
-        // Sort by amount to find candidates
-        available_outputs.sort_by_key(|o| o.amount);
-
-        // Find the smallest output that's >= needed amount
-        let single_output = available_outputs.iter()
-            .find(|o| o.amount >= needed_for_single);
-
-        if let Some(output) = single_output {
-            // Found a single output that can cover it - use only that
-            vec![output.clone()]
-        } else {
-            // No single output works - find optimal combination
-            // Helper function matching the actor's implementation
-            fn find_best_combination(
-                outputs: &[StoredOutput],
-                needed_total: u64,
-                target_count: usize,
-            ) -> Option<(Vec<StoredOutput>, u64)> {
-                if target_count == 0 || target_count > outputs.len() {
-                    return None;
-                }
-
-                fn search(
-                    outputs: &[StoredOutput],
-                    needed: u64,
-                    target_count: usize,
-                    start_idx: usize,
-                    current: &mut Vec<StoredOutput>,
-                    current_sum: u64,
-                    best: &mut Option<(Vec<StoredOutput>, u64)>,
-                ) {
-                    if current.len() == target_count {
-                        if current_sum >= needed {
-                            // Update best if this is closer to needed amount (less excess)
-                            let current_excess = current_sum - needed;
-                            let is_better = match best {
-                                None => true,
-                                Some((_, best_sum)) => {
-                                    let best_excess = *best_sum - needed;
-                                    current_excess < best_excess
-                                }
-                            };
-                            if is_better {
-                                *best = Some((current.clone(), current_sum));
-                            }
-                        }
-                        return;
-                    }
-
-                    let remaining_needed = target_count - current.len();
-                    for i in start_idx..outputs.len() {
-                        if outputs.len() - i < remaining_needed {
-                            break;
-                        }
-
-                        current.push(outputs[i].clone());
-                        search(
-                            outputs,
-                            needed,
-                            target_count,
-                            i + 1,
-                            current,
-                            current_sum + outputs[i].amount,
-                            best,
-                        );
-                        current.pop();
-                    }
-                }
-
-                let mut best: Option<(Vec<StoredOutput>, u64)> = None;
-                let mut current = Vec::new();
-                search(outputs, needed_total, target_count, 0, &mut current, 0, &mut best);
-                best
-            }
-
-            // Sort by amount descending for efficient searching
-            available_outputs.sort_by_key(|o| std::cmp::Reverse(o.amount));
-
-            let mut best_selection: Option<Vec<StoredOutput>> = None;
-            let mut best_count = usize::MAX;
-            let mut best_total = u64::MAX;
-
-            for target_count in 2..=available_outputs.len() {
-                let estimated_fee = BASE_FEE_ESTIMATE + (target_count as u64 * FEE_PER_INPUT_ESTIMATE);
-                let needed_total = total_send_amount + estimated_fee;
-
-                if let Some((selection, total)) = find_best_combination(
-                    &available_outputs,
-                    needed_total,
-                    target_count,
-                ) {
-                    if target_count < best_count || (target_count == best_count && total < best_total) {
-                        best_selection = Some(selection);
-                        best_count = target_count;
-                        best_total = total;
-                        break;
-                    }
-                }
-            }
-
-            best_selection.unwrap_or(available_outputs)
-        }
+        monero_rust::select_inputs(&available_outputs, total_send_amount, None)
+            .map(|r| r.selected)
+            .unwrap_or(available_outputs)
     }
 
     #[test]

@@ -4,7 +4,6 @@
 mod actors;
 mod signals;
 mod messages;
-mod encryption;
 
 #[cfg(target_arch = "wasm32")]
 pub mod test_api;
