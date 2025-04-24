@@ -187,7 +187,6 @@ class WalletLifecycleManager {
     required List<String> spentKeyImages,
     int blockTimestamp = 0,
   }) {
-    // Track which wallets have been updated with new outputs
     final updatedWalletAddresses = <String>{};
     // Cache keyImageMap per wallet to avoid rebuilding O(n) map multiple times
     final keyImageMaps = <String, Map<String, OwnedOutput>>{};
@@ -198,80 +197,57 @@ class WalletLifecycleManager {
       walletsByAddress[w.address] = w;
     }
 
-    // Update outputs and transactions per wallet
     for (var walletResult in walletResults) {
       final walletInstance = walletsByAddress[walletResult.address];
+      if (walletInstance == null) continue;
 
-      if (walletInstance != null) {
-        OutputUtils.addIfAbsent(
-            walletInstance.outputs, walletResult.outputs.toList());
+      OutputUtils.addIfAbsent(
+          walletInstance.outputs, walletResult.outputs.toList());
 
-        int highestAccountIndex = 0;
-        for (var output in walletResult.outputs) {
-          if (output.subaddressIndex != null) {
-            final accountIndex = output.subaddressIndex!.item1;
-            if (accountIndex > highestAccountIndex) {
-              highestAccountIndex = accountIndex;
-            }
-          }
+      var updatedWallet = _ensureAccountsExist(walletInstance, walletResult.outputs);
+      bool accountsUpdated = !identical(updatedWallet, walletInstance);
+
+      WalletInstance activeWalletInstance;
+      if (accountsUpdated) {
+        openWallets[updatedWallet.walletId] = updatedWallet;
+        updatedWallet.currentHeight = blockHeight > updatedWallet.currentHeight ? blockHeight : updatedWallet.currentHeight;
+        updatedWallet.daemonHeight = daemonHeight;
+        activeWalletInstance = updatedWallet;
+      } else {
+        if (blockHeight > walletInstance.currentHeight) {
+          walletInstance.currentHeight = blockHeight;
         }
-
-        var updatedWallet = walletInstance;
-        bool accountsUpdated = false;
-        final existingAccounts = Set<int>.from(updatedWallet.accounts);
-        for (int i = 0; i <= highestAccountIndex; i++) {
-          if (!existingAccounts.contains(i)) {
-            updatedWallet = updatedWallet.createAccount(i);
-            existingAccounts.add(i);
-            accountsUpdated = true;
-          }
-        }
-
-        WalletInstance activeWalletInstance = walletInstance;
-        if (accountsUpdated) {
-          openWallets[updatedWallet.walletId] = updatedWallet;
-          updatedWallet.currentHeight = blockHeight > updatedWallet.currentHeight ? blockHeight : updatedWallet.currentHeight;
-          updatedWallet.daemonHeight = daemonHeight;
-          activeWalletInstance = updatedWallet;
-        } else {
-          if (blockHeight > walletInstance.currentHeight) {
-            walletInstance.currentHeight = blockHeight;
-          }
-          walletInstance.daemonHeight = daemonHeight;
-          openWallets[walletInstance.walletId] = walletInstance;
-        }
-
-        updatedWalletAddresses.add(walletResult.address);
-
-        // Update transactions for this specific wallet
-        final walletScanResponse = BlockScanResponse(
-          success: true,
-          error: null,
-          blockHeight: Uint64(BigInt.from(blockHeight)),
-          blockHash: '',
-          blockTimestamp: Uint64(BigInt.from(blockTimestamp)),
-          txCount: 0,
-          outputs: walletResult.outputs,
-          daemonHeight: Uint64(BigInt.from(daemonHeight)),
-          spentKeyImages: spentKeyImages,
-        );
-
-        final walletKeyImageMap = TransactionUtils.buildKeyImageMap(activeWalletInstance.outputs);
-        keyImageMaps[activeWalletInstance.walletId] = walletKeyImageMap;
-        activeWalletInstance.transactions = TransactionUtils.updateTransactionsFromScan(
-          activeWalletInstance.transactions,
-          walletScanResponse,
-          walletKeyImageMap,
-        );
+        walletInstance.daemonHeight = daemonHeight;
+        openWallets[walletInstance.walletId] = walletInstance;
+        activeWalletInstance = walletInstance;
       }
+
+      updatedWalletAddresses.add(walletResult.address);
+
+      final walletScanResponse = BlockScanResponse(
+        success: true,
+        error: null,
+        blockHeight: Uint64(BigInt.from(blockHeight)),
+        blockHash: '',
+        blockTimestamp: Uint64(BigInt.from(blockTimestamp)),
+        txCount: 0,
+        outputs: walletResult.outputs,
+        daemonHeight: Uint64(BigInt.from(daemonHeight)),
+        spentKeyImages: spentKeyImages,
+      );
+
+      final walletKeyImageMap = TransactionUtils.buildKeyImageMap(activeWalletInstance.outputs);
+      keyImageMaps[activeWalletInstance.walletId] = walletKeyImageMap;
+      activeWalletInstance.transactions = TransactionUtils.updateTransactionsFromScan(
+        activeWalletInstance.transactions,
+        walletScanResponse,
+        walletKeyImageMap,
+      );
     }
 
-    // Update all wallets with spent key images (even those without new outputs)
     if (spentKeyImages.isNotEmpty) {
       for (var walletInstance in openWallets.values) {
-        // Skip wallets that were already updated above
         if (!updatedWalletAddresses.contains(walletInstance.address)) {
-          // Update transactions for spent key images
           final walletScanResponse = BlockScanResponse(
             success: true,
             error: null,
@@ -301,58 +277,32 @@ class WalletLifecycleManager {
     }
 
     if (activeWalletId != null && activeWallet != null) {
-      // Create new list instances to trigger Flutter's change detection
       allOutputs = List<OwnedOutput>.from(activeWallet!.outputs);
       allTransactions = List<WalletTransaction>.from(activeWallet!.transactions);
     }
   }
 
-  /// Integrates single block scan results into the active wallet instance
   void integrateSingleBlockScanResults(BlockScanResponse scanResult) {
-    if (activeWalletId == null || activeWallet == null) {
-      return;
-    }
+    if (activeWalletId == null || activeWallet == null) return;
 
     final walletInstance = activeWallet!;
 
-    // Add new outputs to the wallet instance
     OutputUtils.mergeScannedOutputs(walletInstance.outputs, scanResult.outputs);
 
-    // Update transactions in the wallet instance
     walletInstance.transactions = TransactionUtils.updateTransactionsFromScan(
       walletInstance.transactions,
       scanResult,
       TransactionUtils.buildKeyImageMap(walletInstance.outputs),
     );
 
-    // Update wallet heights
     final blockHeight = scanResult.blockHeight.toInt();
     if (blockHeight > walletInstance.currentHeight) {
       walletInstance.currentHeight = blockHeight;
     }
     walletInstance.daemonHeight = scanResult.daemonHeight.toInt();
 
-    // Ensure accounts exist for new outputs
-    int highestAccountIndex = 0;
-    for (var output in scanResult.outputs) {
-      if (output.subaddressIndex != null) {
-        final accountIndex = output.subaddressIndex!.item1;
-        if (accountIndex > highestAccountIndex) {
-          highestAccountIndex = accountIndex;
-        }
-      }
-    }
-
-    var updatedWallet = walletInstance;
-    bool accountsUpdated = false;
-    final existingAccounts = Set<int>.from(updatedWallet.accounts);
-    for (int i = 0; i <= highestAccountIndex; i++) {
-      if (!existingAccounts.contains(i)) {
-        updatedWallet = updatedWallet.createAccount(i);
-        existingAccounts.add(i);
-        accountsUpdated = true;
-      }
-    }
+    var updatedWallet = _ensureAccountsExist(walletInstance, scanResult.outputs);
+    bool accountsUpdated = !identical(updatedWallet, walletInstance);
 
     if (accountsUpdated) {
       openWallets[updatedWallet.walletId] = updatedWallet;
@@ -360,35 +310,42 @@ class WalletLifecycleManager {
       openWallets[walletInstance.walletId] = walletInstance;
     }
 
-    // Mark spent on the canonical list before copying to allOutputs
     if (scanResult.spentKeyImages.isNotEmpty) {
       final walletToMark = accountsUpdated ? updatedWallet : walletInstance;
       OutputUtils.markSpentByKeyImages(
           walletToMark.outputs, scanResult.spentKeyImages, selectedOutputs);
     }
 
-    // Force new list references to trigger UI updates
     allOutputs = List<OwnedOutput>.from(activeWallet!.outputs);
     allTransactions = List<WalletTransaction>.from(activeWallet!.transactions);
   }
 
-  /// Integrates mempool scan results into the active wallet instance
   void integrateMempoolScanResults(MempoolScanResponse scanResult, Set<String> selectedOutputKeys) {
-    if (activeWalletId == null || activeWallet == null) {
-      return;
-    }
+    if (activeWalletId == null || activeWallet == null) return;
 
     final walletInstance = activeWallet!;
 
-    // Add new outputs to the wallet instance
     OutputUtils.addIfAbsent(walletInstance.outputs, scanResult.outputs);
-
-    // Mark spent outputs based on key images from mempool
     OutputUtils.markSpentByKeyImages(walletInstance.outputs, scanResult.spentKeyImages, selectedOutputKeys);
 
-    // Ensure accounts exist for new outputs
+    var updatedWallet = _ensureAccountsExist(walletInstance, scanResult.outputs);
+    bool accountsUpdated = !identical(updatedWallet, walletInstance);
+
+    if (accountsUpdated) {
+      openWallets[updatedWallet.walletId] = updatedWallet;
+    } else {
+      openWallets[walletInstance.walletId] = walletInstance;
+    }
+
+    allOutputs = List<OwnedOutput>.from(activeWallet!.outputs);
+    allTransactions = List<WalletTransaction>.from(activeWallet!.transactions);
+  }
+
+  /// Ensures wallet accounts exist for all subaddress indices in the given outputs.
+  /// Returns the same instance if no changes, or a new instance with accounts added.
+  WalletInstance _ensureAccountsExist(WalletInstance wallet, Iterable<OwnedOutput> outputs) {
     int highestAccountIndex = 0;
-    for (var output in scanResult.outputs) {
+    for (var output in outputs) {
       if (output.subaddressIndex != null) {
         final accountIndex = output.subaddressIndex!.item1;
         if (accountIndex > highestAccountIndex) {
@@ -397,25 +354,14 @@ class WalletLifecycleManager {
       }
     }
 
-    var updatedWallet = walletInstance;
-    bool accountsUpdated = false;
-    final existingAccounts = Set<int>.from(updatedWallet.accounts);
+    var updated = wallet;
+    final existingAccounts = Set<int>.from(updated.accounts);
     for (int i = 0; i <= highestAccountIndex; i++) {
       if (!existingAccounts.contains(i)) {
-        updatedWallet = updatedWallet.createAccount(i);
+        updated = updated.createAccount(i);
         existingAccounts.add(i);
-        accountsUpdated = true;
       }
     }
-
-    if (accountsUpdated) {
-      openWallets[updatedWallet.walletId] = updatedWallet;
-    } else {
-      openWallets[walletInstance.walletId] = walletInstance;
-    }
-
-    // Update the derived lists to ensure UI gets fresh references
-    allOutputs = List<OwnedOutput>.from(activeWallet!.outputs);
-    allTransactions = List<WalletTransaction>.from(activeWallet!.transactions);
+    return updated;
   }
 }
