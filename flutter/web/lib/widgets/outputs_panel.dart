@@ -38,8 +38,15 @@ class OutputsPanel extends StatelessWidget {
 
   List<OwnedOutput> _sortedOutputs() {
     final outputs = showSpentOutputs
-        ? allOutputs
+        ? List<OwnedOutput>.from(allOutputs)
         : allOutputs.where((o) => !o.spent).toList();
+
+    final amountValues = <OwnedOutput, double>{};
+    if (sortBy != 'confirms') {
+      for (var o in outputs) {
+        amountValues[o] = double.tryParse(o.amountXmr) ?? 0;
+      }
+    }
 
     outputs.sort((a, b) {
       int comparison;
@@ -50,9 +57,7 @@ class OutputsPanel extends StatelessWidget {
         final bConfirms = bHeight > 0 ? currentHeight - bHeight : 0;
         comparison = aConfirms.compareTo(bConfirms);
       } else {
-        final aValue = double.tryParse(a.amountXmr) ?? 0;
-        final bValue = double.tryParse(b.amountXmr) ?? 0;
-        comparison = aValue.compareTo(bValue);
+        comparison = amountValues[a]!.compareTo(amountValues[b]!);
       }
       return sortAscending ? comparison : -comparison;
     });
@@ -74,6 +79,8 @@ class OutputsPanel extends StatelessWidget {
       );
     }
 
+    final hasSpentOutputs = allOutputs.any((o) => o.spent);
+
     return Padding(
       padding: const EdgeInsets.all(16.0),
       child: Column(
@@ -83,7 +90,7 @@ class OutputsPanel extends StatelessWidget {
             padding: const EdgeInsets.only(bottom: 12),
             child: Row(
               children: [
-                if (allOutputs.any((o) => o.spent)) ...[
+                if (hasSpentOutputs) ...[
                   Checkbox(
                     value: showSpentOutputs,
                     onChanged: (value) => onToggleShowSpent(),

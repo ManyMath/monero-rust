@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::wallet_output::WalletOutput;
 
@@ -71,11 +71,12 @@ impl WalletState {
     /// Mark outputs as spent by output keys ("txHash:outputIndex" format).
     /// Returns the number of outputs newly marked as spent.
     pub fn mark_spent_by_output_keys(&mut self, output_keys: &[String]) -> usize {
+        let key_set: HashSet<&str> = output_keys.iter().map(|s| s.as_str()).collect();
         let mut count = 0;
         for output in &mut self.outputs {
             if !output.spent {
                 let key = output.output_key();
-                if output_keys.contains(&key) {
+                if key_set.contains(key.as_str()) {
                     output.spent = true;
                     count += 1;
                 }

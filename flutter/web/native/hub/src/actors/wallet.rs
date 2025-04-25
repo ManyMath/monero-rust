@@ -3,6 +3,7 @@ use crate::signals::*;
 use async_trait::async_trait;
 use messages::prelude::{Actor, Address, Context, Handler, Notifiable};
 use rinf::{DartSignal, RustSignal};
+use std::collections::HashSet;
 use tokio::task::JoinSet;
 use tokio_with_wasm::alias as tokio;
 use wasm_bindgen_futures;
@@ -977,6 +978,8 @@ impl Notifiable<ContinueScan> for WalletActor {
                     let mut all_stored_outputs = Vec::new();
                     let mut last_daemon_height = 0u64;
 
+                    let accounts_set: Option<HashSet<u32>> = accounts_to_scan.as_ref().map(|a| a.iter().copied().collect());
+
                     for result in &batch_results {
                         last_daemon_height = result.daemon_height;
 
@@ -988,7 +991,7 @@ impl Notifiable<ContinueScan> for WalletActor {
                             .outputs
                             .iter()
                             .filter(|o| {
-                                if let Some(ref accounts) = accounts_to_scan {
+                                if let Some(ref accounts) = accounts_set {
                                     if let Some((account, _)) = o.subaddress_index {
                                         accounts.contains(&account)
                                     } else {
@@ -1002,14 +1005,11 @@ impl Notifiable<ContinueScan> for WalletActor {
 
                         // Only send BlockScanResponse for blocks that have outputs
                         if !filtered_outputs.is_empty() {
-                            let outputs: Vec<OwnedOutput> = filtered_outputs
-                                .iter()
-                                .map(|o| (*o).into())
-                                .collect();
-
-                            all_stored_outputs.extend(
-                                filtered_outputs.iter().map(|o| (*o).clone())
-                            );
+                            let mut outputs: Vec<OwnedOutput> = Vec::with_capacity(filtered_outputs.len());
+                            for o in &filtered_outputs {
+                                outputs.push((*o).into());
+                                all_stored_outputs.push((*o).clone());
+                            }
 
                             BlockScanResponse {
                                 success: true,
@@ -1179,9 +1179,9 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                         .map(|r| r.block_height + 1)
                         .unwrap_or(batch_start_height);
 
-                    let wallet_accounts: Vec<Option<Vec<u32>>> = wallets
+                    let wallet_accounts: Vec<Option<HashSet<u32>>> = wallets
                         .iter()
-                        .map(|w| w.accounts_to_scan.clone())
+                        .map(|w| w.accounts_to_scan.as_ref().map(|a| a.iter().copied().collect()))
                         .collect();
 
                     for result in &batch_results {

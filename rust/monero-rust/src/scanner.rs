@@ -1413,7 +1413,7 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
 
     let tx_count = mempool_txs.len();
     let mut outputs = Vec::new();
-    let mut spent_key_images: Vec<String> = mempool_spent_key_images
+    let mut spent_key_images_set: HashSet<String> = mempool_spent_key_images
         .iter()
         .map(hex::encode)
         .collect();
@@ -1422,13 +1422,10 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
         let tx_hash = hex::encode(tx.hash());
         let is_coinbase = matches!(tx.prefix.inputs.get(0), Some(Input::Gen(_)));
 
-        // Also extract spent key images from transaction inputs
         for input in &tx.prefix.inputs {
             if let Input::ToKey { key_image, .. } = input {
                 let ki_hex = hex::encode(key_image.compress().to_bytes());
-                if !spent_key_images.contains(&ki_hex) {
-                    spent_key_images.push(ki_hex);
-                }
+                spent_key_images_set.insert(ki_hex);
             }
         }
 
@@ -1484,7 +1481,7 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
     Ok(MempoolScanResult {
         tx_count,
         outputs,
-        spent_key_images,
+        spent_key_images: spent_key_images_set.into_iter().collect(),
     })
 }
 
