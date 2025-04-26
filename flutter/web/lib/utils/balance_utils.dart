@@ -1,4 +1,5 @@
 import '../src/bindings/bindings.dart';
+import 'output_lock_utils.dart';
 
 class BalanceInfo {
   final double totalBalance;
@@ -41,12 +42,7 @@ class BalanceUtils {
       if (!output.spent) {
         final amount = double.tryParse(output.amountXmr) ?? 0;
         totalBalance += amount;
-        final outputHeight = output.blockHeight.toInt();
-        final confirmations =
-            outputHeight > 0 ? currentHeight - outputHeight : 0;
-        // Use 60 blocks for coinbase outputs, 10 for regular outputs
-        final requiredConfirmations = output.isCoinbase ? 60 : 10;
-        if (confirmations >= requiredConfirmations) {
+        if (OutputLockUtils.isOutputUnlocked(output: output, currentHeight: currentHeight)) {
           unlockedBalance += amount;
           spendableCount++;
           final outputKey = '${output.txHash}:${output.outputIndex}';

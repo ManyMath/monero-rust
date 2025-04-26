@@ -20,7 +20,7 @@ async fn test_store_outputs_message() {
     let mut wallet = WalletActor::new(addr.clone());
 
     let outputs = vec![
-        StoredOutput {
+        monero_rust::WalletOutput {
             tx_hash: "test_hash".to_string(),
             output_index: 0,
             amount: 1000000000000,
@@ -113,7 +113,7 @@ async fn test_multiple_output_batches() {
 
     // First batch
     let outputs1 = vec![
-        StoredOutput {
+        monero_rust::WalletOutput {
             tx_hash: "hash1".to_string(),
             output_index: 0,
             amount: 1000000000000,
@@ -140,7 +140,7 @@ async fn test_multiple_output_batches() {
 
     // Second batch
     let outputs2 = vec![
-        StoredOutput {
+        monero_rust::WalletOutput {
             tx_hash: "hash2".to_string(),
             output_index: 1,
             amount: 2000000000000,

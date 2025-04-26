@@ -18,6 +18,8 @@ use monero_serai::{
 use monero_serai::ringct::generate_key_image;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
+
+use crate::wallet_output::WalletOutput;
 use std::collections::{HashMap, HashSet};
 use zeroize::Zeroizing;
 
@@ -94,17 +96,16 @@ pub struct BlockScanResult {
     pub block_hash: String,
     pub block_timestamp: u64,
     pub tx_count: usize,
-    pub outputs: Vec<OwnedOutputInfo>,
+    pub outputs: Vec<WalletOutput>,
     pub daemon_height: u64,
     pub spent_key_images: Vec<String>,
 }
 
-pub type OwnedOutputInfo = crate::wallet_output::WalletOutput;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MempoolScanResult {
     pub tx_count: usize,
-    pub outputs: Vec<OwnedOutputInfo>,
+    pub outputs: Vec<WalletOutput>,
     pub spent_key_images: Vec<String>,
 }
 
@@ -125,7 +126,7 @@ pub struct MultiWalletScanResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletScanData {
     pub address: String,
-    pub outputs: Vec<OwnedOutputInfo>,
+    pub outputs: Vec<WalletOutput>,
 }
 
 /// Configuration for a single wallet in multi-wallet scanning
@@ -529,7 +530,7 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
             #[cfg(not(target_arch = "wasm32"))]
             let key_image = String::new();
 
-            outputs.push(OwnedOutputInfo {
+            outputs.push(WalletOutput {
                 tx_hash: tx_hash.clone(),
                 output_index,
                 amount,
@@ -705,7 +706,7 @@ pub async fn process_batch_response(
                 #[cfg(not(target_arch = "wasm32"))]
                 let key_image = String::new();
 
-                outputs.push(OwnedOutputInfo {
+                outputs.push(WalletOutput {
                     tx_hash: tx_hash.clone(),
                     output_index,
                     amount,
@@ -945,7 +946,7 @@ pub async fn process_batch_multi_wallet_response(
                     #[cfg(not(target_arch = "wasm32"))]
                     let key_image = String::new();
 
-                    outputs.push(OwnedOutputInfo {
+                    outputs.push(WalletOutput {
                         tx_hash: tx_hash.clone(),
                         output_index,
                         amount,
@@ -1136,7 +1137,7 @@ pub async fn scan_block_multi_wallet<R: RpcConnection + Send + Sync + Clone + 's
                     #[cfg(not(target_arch = "wasm32"))]
                     let key_image = String::new();
 
-                    outputs.push(OwnedOutputInfo {
+                    outputs.push(WalletOutput {
                         tx_hash: tx_hash.clone(),
                         output_index,
                         amount,
@@ -1306,7 +1307,7 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
                 #[cfg(not(target_arch = "wasm32"))]
                 let key_image = String::new();
 
-                outputs.push(OwnedOutputInfo {
+                outputs.push(WalletOutput {
                     tx_hash: tx_hash.clone(),
                     output_index,
                     amount,
@@ -1459,7 +1460,7 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
             #[cfg(not(target_arch = "wasm32"))]
             let key_image = String::new();
 
-            outputs.push(OwnedOutputInfo {
+            outputs.push(WalletOutput {
                 tx_hash: tx_hash.clone(),
                 output_index,
                 amount,
@@ -1855,7 +1856,7 @@ mod tests {
 
     #[test]
     fn test_owned_output_info_serialization() {
-        let output = OwnedOutputInfo {
+        let output = WalletOutput {
             tx_hash: "deadbeef".to_string(),
             output_index: 0,
             amount: 1000000000000,
@@ -1873,7 +1874,7 @@ mod tests {
         };
 
         let json = serde_json::to_string(&output).unwrap();
-        let deserialized: OwnedOutputInfo = serde_json::from_str(&json).unwrap();
+        let deserialized: WalletOutput = serde_json::from_str(&json).unwrap();
         assert_eq!(output.tx_hash, deserialized.tx_hash);
         assert_eq!(output.amount, deserialized.amount);
         assert_eq!(output.subaddress_index, deserialized.subaddress_index);

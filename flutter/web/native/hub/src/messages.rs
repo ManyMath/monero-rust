@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-pub type StoredOutput = monero_rust::WalletOutput;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletState {
     pub address: String,
@@ -11,7 +9,7 @@ pub struct WalletState {
     pub unconfirmed_balance: u64,
     pub seed: Option<String>,
     pub network: Option<String>,
-    pub outputs: Vec<StoredOutput>,
+    pub outputs: Vec<monero_rust::WalletOutput>,
 }
 
 #[derive(Debug, Clone)]
@@ -39,7 +37,7 @@ pub struct GetWalletData;
 pub struct WalletData {
     pub seed: Option<String>,
     pub network: Option<String>,
-    pub outputs: Vec<StoredOutput>,
+    pub outputs: Vec<monero_rust::WalletOutput>,
 }
 
 #[derive(Debug, Clone)]
@@ -52,7 +50,7 @@ pub struct UpdateBalance {
 pub struct StoreOutputs {
     pub seed: String,
     pub network: String,
-    pub outputs: Vec<StoredOutput>,
+    pub outputs: Vec<monero_rust::WalletOutput>,
     pub daemon_height: u64,
 }
 

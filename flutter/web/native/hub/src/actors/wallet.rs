@@ -671,7 +671,7 @@ impl WalletActor {
         let receiver = RestoreWalletDataRequest::get_dart_signal_receiver();
         while let Some(signal_pack) = receiver.recv().await {
             let msg = signal_pack.message;
-            let outputs: Vec<StoredOutput> = msg.outputs.into_iter().map(|o| o.into()).collect();
+            let outputs: Vec<monero_rust::WalletOutput> = msg.outputs.into_iter().map(|o| o.into()).collect();
             let _ = self_addr.notify(RestoreOutputs {
                 seed: msg.seed,
                 network: msg.network,
@@ -687,7 +687,7 @@ impl WalletActor {
 struct RestoreOutputs {
     seed: String,
     network: String,
-    outputs: Vec<StoredOutput>,
+    outputs: Vec<monero_rust::WalletOutput>,
     daemon_height: u64,
     current_height: u64,
 }
@@ -987,7 +987,7 @@ impl Notifiable<ContinueScan> for WalletActor {
                         all_spent_key_images.extend(result.spent_key_images.iter().cloned());
 
                         // Filter and collect outputs
-                        let filtered_outputs: Vec<&monero_rust::OwnedOutputInfo> = result
+                        let filtered_outputs: Vec<&monero_rust::WalletOutput> = result
                             .outputs
                             .iter()
                             .filter(|o| {

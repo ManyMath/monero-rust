@@ -32,7 +32,7 @@ pub use encryption::{encrypt, decrypt, EncryptionError};
 // -- Scanning --
 pub use scanner::{
     // Types
-    BlockScanResult, DerivedKeys, Lookahead, MempoolScanResult, OwnedOutputInfo,
+    BlockScanResult, DerivedKeys, Lookahead, MempoolScanResult,
     MultiWalletScanResult, WalletScanConfig, WalletScanData,
     // Constants
     DEFAULT_LOOKAHEAD,

@@ -509,8 +509,8 @@ mod tests {
     use super::*;
 
     // Helper function to create a test output
-    fn create_output(amount: u64, tx_hash: &str, output_index: u8, block_height: u64) -> StoredOutput {
-        StoredOutput {
+    fn create_output(amount: u64, tx_hash: &str, output_index: u8, block_height: u64) -> monero_rust::WalletOutput {
+        monero_rust::WalletOutput {
             tx_hash: tx_hash.to_string(),
             output_index,
             amount,
@@ -530,9 +530,9 @@ mod tests {
 
     // Helper function to simulate the input selection logic using core
     fn select_outputs(
-        available_outputs: Vec<StoredOutput>,
+        available_outputs: Vec<monero_rust::WalletOutput>,
         total_send_amount: u64,
-    ) -> Vec<StoredOutput> {
+    ) -> Vec<monero_rust::WalletOutput> {
         monero_rust::select_inputs(&available_outputs, total_send_amount, None)
             .map(|r| r.selected)
             .unwrap_or(available_outputs)
