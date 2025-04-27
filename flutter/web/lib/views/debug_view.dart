@@ -79,6 +79,7 @@ class _DebugViewState extends State<DebugView> {
   Map<String, WalletInstance> get _openWallets => _lifecycle.openWallets;
   String? get _activeWalletId => _lifecycle.activeWalletId;
   List<WalletInstance> get _activeWallets => _lifecycle.activeWallets;
+  bool get _hasActiveWallets => _lifecycle.hasActiveWallets;
 
   int get _lowestSyncedHeight => _lifecycle.lowestSyncedHeight;
 
@@ -1963,7 +1964,7 @@ class _DebugViewState extends State<DebugView> {
   }
 
   void _updateBlockHeightFromWallets() {
-    if (_activeWallets.isNotEmpty) {
+    if (_hasActiveWallets) {
       final lowestHeight = _lowestSyncedHeight;
       if (lowestHeight > 0 && !_blockHeightUserEdited) {
         setState(() {
@@ -2006,7 +2007,7 @@ class _DebugViewState extends State<DebugView> {
 
     _updateBlockHeightFromWallets();
 
-    if (_isContinuousScanning && _activeWallets.isNotEmpty) {
+    if (_isContinuousScanning && _hasActiveWallets) {
       _pauseContinuousScan();
       Future.delayed(const Duration(milliseconds: 500), () {
         _startContinuousScan();

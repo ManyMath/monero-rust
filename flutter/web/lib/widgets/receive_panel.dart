@@ -86,36 +86,37 @@ class _ReceivePanelState extends State<ReceivePanel> {
     }
   }
 
-  /// Get used subaddress indices for an account with transaction info
-  Map<int, _SubaddressInfo> _getUsedSubaddressesWithTxInfo(int account) {
-    final used = <int, _SubaddressInfo>{};
+  /// Group all outputs by account in a single pass.
+  /// Returns a map from account number to (subaddress index -> first output info).
+  Map<int, Map<int, _SubaddressInfo>> _groupOutputsByAccount() {
+    final grouped = <int, Map<int, _SubaddressInfo>>{};
     for (var output in widget.allOutputs) {
       if (output.subaddressIndex != null) {
         final subIdx = output.subaddressIndex!;
         final outputAccount = subIdx.item1;
         final addressIndex = subIdx.item2;
-        if (outputAccount == account) {
-          // Store the first output found for this subaddress
-          if (!used.containsKey(addressIndex)) {
-            used[addressIndex] = _SubaddressInfo(
-              txHash: output.txHash,
-              blockHeight: output.blockHeight.toInt(),
-            );
-          }
+        final accountMap = grouped.putIfAbsent(outputAccount, () => <int, _SubaddressInfo>{});
+        // Store the first output found for this subaddress
+        if (!accountMap.containsKey(addressIndex)) {
+          accountMap[addressIndex] = _SubaddressInfo(
+            txHash: output.txHash,
+            blockHeight: output.blockHeight.toInt(),
+          );
         }
       }
     }
-    return used;
+    return grouped;
   }
 
-  /// Get the first 5 unused subaddress indices for an account
-  List<int> _getUnusedSubaddresses(int account) {
-    final used = _getUsedSubaddressesWithTxInfo(account).keys.toSet();
+  /// Get the first 5 unused subaddress indices for an account,
+  /// given the pre-computed set of used indices.
+  List<int> _getUnusedSubaddresses(Map<int, _SubaddressInfo> usedSubaddresses) {
+    final usedKeys = usedSubaddresses.keys.toSet();
     final unused = <int>[];
 
     int index = 0;
     while (unused.length < 5) {
-      if (!used.contains(index)) {
+      if (!usedKeys.contains(index)) {
         unused.add(index);
       }
       index++;
@@ -134,11 +135,14 @@ class _ReceivePanelState extends State<ReceivePanel> {
       );
     }
 
+    // Pre-compute outputs grouped by account in a single pass
+    final outputsByAccount = _groupOutputsByAccount();
+
     // If only one account, show its contents directly
     if (widget.accounts.length == 1) {
       final account = widget.accounts[0];
-      final unusedIndices = _getUnusedSubaddresses(account);
-      final usedSubaddresses = _getUsedSubaddressesWithTxInfo(account);
+      final usedSubaddresses = outputsByAccount[account] ?? <int, _SubaddressInfo>{};
+      final unusedIndices = _getUnusedSubaddresses(usedSubaddresses);
       final isScanning = widget.scanningAccounts.contains(account);
 
       return Column(
@@ -201,8 +205,8 @@ class _ReceivePanelState extends State<ReceivePanel> {
                 final index = entry.key;
                 final account = entry.value;
                 final isExpanded = _expandedIndex == index;
-                final unusedIndices = _getUnusedSubaddresses(account);
-                final usedSubaddresses = _getUsedSubaddressesWithTxInfo(account);
+                final usedSubaddresses = outputsByAccount[account] ?? <int, _SubaddressInfo>{};
+                final unusedIndices = _getUnusedSubaddresses(usedSubaddresses);
                 final isScanning = widget.scanningAccounts.contains(account);
 
                 return Theme(

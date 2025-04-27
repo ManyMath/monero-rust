@@ -32,22 +32,22 @@ class BalanceUtils {
     int currentHeight,
     Set<String> selectedOutputs,
   ) {
-    double totalBalance = 0;
-    double unlockedBalance = 0;
-    double selectedBalance = 0;
+    int totalAtomicBalance = 0;
+    int unlockedAtomicBalance = 0;
+    int selectedAtomicBalance = 0;
     int spendableCount = 0;
     int lockedCount = 0;
     int selectedCount = 0;
     for (var output in allOutputs) {
       if (!output.spent) {
-        final amount = double.tryParse(output.amountXmr) ?? 0;
-        totalBalance += amount;
+        final amount = output.amount.toInt();
+        totalAtomicBalance += amount;
         if (OutputLockUtils.isOutputUnlocked(output: output, currentHeight: currentHeight)) {
-          unlockedBalance += amount;
+          unlockedAtomicBalance += amount;
           spendableCount++;
           final outputKey = '${output.txHash}:${output.outputIndex}';
           if (selectedOutputs.contains(outputKey)) {
-            selectedBalance += amount;
+            selectedAtomicBalance += amount;
             selectedCount++;
           }
         } else {
@@ -55,6 +55,9 @@ class BalanceUtils {
         }
       }
     }
+    final totalBalance = totalAtomicBalance / 1e12;
+    final unlockedBalance = unlockedAtomicBalance / 1e12;
+    final selectedBalance = selectedAtomicBalance / 1e12;
     final hasLockedBalance = unlockedBalance < totalBalance;
     final balanceStr = hasLockedBalance
         ? '${totalBalance.toStringAsFixed(12)} XMR (Unlocked: ${unlockedBalance.toStringAsFixed(12)})'

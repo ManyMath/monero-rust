@@ -58,45 +58,27 @@ class WalletInstance {
     }).toList();
   }
 
-  double get confirmedBalance {
-    const minConfirmations = 10;
-    double balance = 0.0;
+  double get confirmedBalance => _computeBalances().$1;
 
+  double get unconfirmedBalance => _computeBalances().$2;
+
+  (double, double) _computeBalances() {
+    const minConfirmations = 10;
+    int confirmedAtomic = 0;
+    int unconfirmedAtomic = 0;
     for (var output in activeAccountOutputs) {
       if (output.spent) continue;
-
       final confirmations = daemonHeight - output.blockHeight.toInt();
       if (confirmations >= minConfirmations) {
-        balance += double.tryParse(output.amountXmr) ?? 0.0;
+        confirmedAtomic += output.amount.toInt();
+      } else {
+        unconfirmedAtomic += output.amount.toInt();
       }
     }
-
-    return balance;
-  }
-
-  double get unconfirmedBalance {
-    const minConfirmations = 10;
-    double balance = 0.0;
-
-    for (var output in activeAccountOutputs) {
-      if (output.spent) continue;
-
-      final confirmations = daemonHeight - output.blockHeight.toInt();
-      if (confirmations < minConfirmations) {
-        balance += double.tryParse(output.amountXmr) ?? 0.0;
-      }
-    }
-
-    return balance;
+    return (confirmedAtomic / 1e12, unconfirmedAtomic / 1e12);
   }
 
   double get totalBalance => confirmedBalance + unconfirmedBalance;
-
-  List<OwnedOutput> get unspentOutputs =>
-      activeAccountOutputs.where((o) => !o.spent).toList();
-
-  List<OwnedOutput> get spentOutputs =>
-      activeAccountOutputs.where((o) => o.spent).toList();
 
   WalletInstance copyWith({
     String? walletId,

@@ -17,20 +17,18 @@ class WalletTransaction {
   });
 
   double balanceChange(Map<String, OwnedOutput> keyImageMap) {
-    double received = 0;
+    int receivedAtomic = 0;
     for (var output in receivedOutputs) {
-      received += double.tryParse(output.amountXmr) ?? 0;
+      receivedAtomic += output.amount.toInt();
     }
-
-    double spent = 0;
+    int spentAtomic = 0;
     for (var keyImage in spentKeyImages) {
       final spentOutput = keyImageMap[keyImage];
       if (spentOutput != null) {
-        spent += double.tryParse(spentOutput.amountXmr) ?? 0;
+        spentAtomic += spentOutput.amount.toInt();
       }
     }
-
-    return received - spent;
+    return (receivedAtomic - spentAtomic) / 1e12;
   }
 
   bool isIncoming(Map<String, OwnedOutput> keyImageMap) => balanceChange(keyImageMap) > 0;

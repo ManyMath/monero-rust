@@ -167,7 +167,7 @@ void main() {
         expect(balance, closeTo(0.123456789013, 1e-10));
       });
 
-      test('Balance calculation handles invalid amount strings', () {
+      test('Balance calculation uses atomic amount field not amountXmr string', () {
         final output = OwnedOutput(
           txHash: 'tx123',
           outputIndex: 0,
@@ -194,7 +194,7 @@ void main() {
         );
 
         final allOutputs = [output];
-        expect(transaction.balanceChange(TransactionUtils.buildKeyImageMap(allOutputs)), equals(0.0));
+        expect(transaction.balanceChange(TransactionUtils.buildKeyImageMap(allOutputs)), equals(1.0));
       });
     });
 

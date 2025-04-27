@@ -46,6 +46,10 @@ class WalletLifecycleManager {
   List<WalletInstance> get activeWallets =>
       openWallets.values.where((w) => !w.isClosed && w.walletId != 'temp_wallet').toList();
 
+  /// Check if any active wallets exist without allocating a list.
+  bool get hasActiveWallets =>
+      openWallets.values.any((w) => !w.isClosed && w.walletId != 'temp_wallet');
+
   void refreshAvailableWallets() {
     final walletIds = _persistence.listWallets();
     availableWalletIds = walletIds.where((id) => id != 'temp_wallet').toList();
@@ -151,11 +155,14 @@ class WalletLifecycleManager {
   }
 
   int get lowestSyncedHeight {
-    final heights = activeWallets
-        .where((w) => w.currentHeight > 0)
-        .map((w) => w.currentHeight)
-        .toList();
-    return heights.isEmpty ? 0 : heights.reduce((a, b) => a < b ? a : b);
+    int lowest = 0;
+    for (final w in openWallets.values) {
+      if (w.isClosed || w.walletId == 'temp_wallet') continue;
+      if (w.currentHeight > 0 && (lowest == 0 || w.currentHeight < lowest)) {
+        lowest = w.currentHeight;
+      }
+    }
+    return lowest;
   }
 
   CloseWalletResult closeWallet(String walletId) {
