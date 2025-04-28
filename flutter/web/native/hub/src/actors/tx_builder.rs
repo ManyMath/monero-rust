@@ -128,19 +128,10 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
 
             match (wallet_data_result, wallet_height_result) {
                 (Ok(wallet_data), Ok(wallet_height)) => {
-                    const CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE: u64 = 10;
-
-                    // Filter outputs: only use unspent outputs with >= 10 confirmations
                     let spendable_outputs: Vec<_> = wallet_data
                         .outputs
                         .iter()
-                        .filter(|o| {
-                            if o.spent {
-                                return false;
-                            }
-                            let confirmations = wallet_height.daemon_height.saturating_sub(o.block_height);
-                            confirmations >= CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE
-                        })
+                        .filter(|o| !o.spent && monero_rust::is_spendable(o, wallet_height.daemon_height))
                         .cloned()
                         .collect();
 
@@ -266,19 +257,10 @@ impl Notifiable<SweepAll> for TxBuilderActor {
 
             match (wallet_data_result, wallet_height_result) {
                 (Ok(wallet_data), Ok(wallet_height)) => {
-                    const CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE: u64 = 10;
-
-                    // Filter to spendable outputs
                     let mut spendable_outputs: Vec<_> = wallet_data
                         .outputs
                         .iter()
-                        .filter(|o| {
-                            if o.spent {
-                                return false;
-                            }
-                            let confirmations = wallet_height.daemon_height.saturating_sub(o.block_height);
-                            confirmations >= CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE
-                        })
+                        .filter(|o| !o.spent && monero_rust::is_spendable(o, wallet_height.daemon_height))
                         .cloned()
                         .collect();
 

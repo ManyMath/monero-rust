@@ -155,7 +155,7 @@ impl WalletState {
     }
 }
 
-fn is_spendable(output: &WalletOutput, height: u64) -> bool {
+pub fn is_spendable(output: &WalletOutput, height: u64) -> bool {
     // The scanner uses zero for unconfirmed pool outputs, not their age.
     if output.block_height == 0 {
         return false;

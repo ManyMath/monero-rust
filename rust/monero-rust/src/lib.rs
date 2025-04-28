@@ -21,7 +21,7 @@ pub mod rpc_serai;
 
 // -- Wallet state & output types --
 pub use wallet_output::WalletOutput;
-pub use wallet_state::{WalletState, Balance};
+pub use wallet_state::{WalletState, Balance, is_spendable};
 
 // -- Coin selection --
 pub use coin_selection::{select_inputs, find_best_combination, CoinSelectionResult};
