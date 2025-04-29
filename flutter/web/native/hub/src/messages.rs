@@ -41,6 +41,7 @@ pub struct WalletData {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct UpdateBalance {
     pub confirmed: u64,
     pub unconfirmed: u64,
@@ -64,6 +65,7 @@ pub struct GetWalletHeight;
 
 #[derive(Debug, Clone)]
 pub struct WalletHeight {
+    #[allow(dead_code)]
     pub current_height: u64,
     pub daemon_height: u64,
 }

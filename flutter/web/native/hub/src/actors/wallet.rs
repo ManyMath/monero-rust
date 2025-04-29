@@ -25,7 +25,6 @@ pub struct WalletActor {
     is_scanning: bool,
     active_scan_type: ScanType,
     // Single-wallet scan state
-    scan_start_height: u64,
     scan_current_height: u64,
     scan_target_height: u64,
     scan_node_url: String,
@@ -38,7 +37,6 @@ pub struct WalletActor {
     multi_wallet_scan_target_height: u64,
     multi_wallet_scan_node_url: String,
     multi_wallet_scan_wallets: Vec<WalletConfig>,
-    self_addr: Option<Address<Self>>,
 }
 
 impl Actor for WalletActor {}
@@ -72,7 +70,6 @@ impl WalletActor {
             _owned_tasks,
             is_scanning: false,
             active_scan_type: ScanType::None,
-            scan_start_height: 0,
             scan_current_height: 0,
             scan_target_height: 0,
             scan_node_url: String::new(),
@@ -84,7 +81,6 @@ impl WalletActor {
             multi_wallet_scan_target_height: 0,
             multi_wallet_scan_node_url: String::new(),
             multi_wallet_scan_wallets: Vec::new(),
-            self_addr: Some(self_addr),
         }
     }
 
@@ -103,7 +99,7 @@ impl WalletActor {
         }
     }
 
-    async fn listen_to_test(mut self_addr: Address<Self>) {
+    async fn listen_to_test(_self_addr: Address<Self>) {
         let receiver = MoneroTestRequest::get_dart_signal_receiver();
         while let Some(_signal_pack) = receiver.recv().await {
             let result = monero_rust::test_integration();
@@ -111,7 +107,7 @@ impl WalletActor {
         }
     }
 
-    async fn listen_to_generate_seed(mut self_addr: Address<Self>) {
+    async fn listen_to_generate_seed(_self_addr: Address<Self>) {
         let receiver = GenerateSeedRequest::get_dart_signal_receiver();
         while let Some(signal_pack) = receiver.recv().await {
             let request = signal_pack.message;
@@ -143,7 +139,7 @@ impl WalletActor {
         }
     }
 
-    async fn listen_to_get_seed_birthday(mut self_addr: Address<Self>) {
+    async fn listen_to_get_seed_birthday(_self_addr: Address<Self>) {
         let receiver = GetSeedBirthdayRequest::get_dart_signal_receiver();
         while let Some(signal_pack) = receiver.recv().await {
             let request = signal_pack.message;
@@ -157,7 +153,7 @@ impl WalletActor {
         }
     }
 
-    async fn listen_to_get_block_height_from_timestamp(mut self_addr: Address<Self>) {
+    async fn listen_to_get_block_height_from_timestamp(_self_addr: Address<Self>) {
         let receiver = GetBlockHeightFromTimestampRequest::get_dart_signal_receiver();
         while let Some(signal_pack) = receiver.recv().await {
             let request = signal_pack.message;
@@ -281,7 +277,7 @@ impl WalletActor {
         json.get("result").cloned().ok_or_else(|| "No 'result' in JSON-RPC response".to_string())
     }
 
-    async fn listen_to_derive_address(mut self_addr: Address<Self>) {
+    async fn listen_to_derive_address(_self_addr: Address<Self>) {
         let receiver = DeriveAddressRequest::get_dart_signal_receiver();
         while let Some(signal_pack) = receiver.recv().await {
             let request = signal_pack.message;
@@ -306,7 +302,7 @@ impl WalletActor {
         }
     }
 
-    async fn listen_to_derive_subaddress(mut self_addr: Address<Self>) {
+    async fn listen_to_derive_subaddress(_self_addr: Address<Self>) {
         let receiver = DeriveSubaddressRequest::get_dart_signal_receiver();
         while let Some(signal_pack) = receiver.recv().await {
             let request = signal_pack.message;
@@ -336,7 +332,7 @@ impl WalletActor {
         }
     }
 
-    async fn listen_to_derive_keys(mut self_addr: Address<Self>) {
+    async fn listen_to_derive_keys(_self_addr: Address<Self>) {
         let receiver = DeriveKeysRequest::get_dart_signal_receiver();
         while let Some(signal_pack) = receiver.recv().await {
             let request = signal_pack.message;
@@ -612,7 +608,7 @@ impl WalletActor {
         }
     }
 
-    async fn listen_to_start_multi_wallet_scan(mut self_addr: Address<Self>) {
+    async fn listen_to_start_multi_wallet_scan(self_addr: Address<Self>) {
         let receiver = StartMultiWalletScanRequest::get_dart_signal_receiver();
         while let Some(signal_pack) = receiver.recv().await {
             let request = signal_pack.message;

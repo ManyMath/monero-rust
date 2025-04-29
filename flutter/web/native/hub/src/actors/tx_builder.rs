@@ -1,9 +1,8 @@
 use crate::messages::*;
 use crate::signals::*;
 use async_trait::async_trait;
-use messages::prelude::{Actor, Address, Context, Handler, Notifiable};
+use messages::prelude::{Actor, Address, Context, Notifiable};
 use rinf::{DartSignal, RustSignal};
-use std::collections::HashSet;
 use tokio::task::JoinSet;
 use tokio_with_wasm::alias as tokio;
 

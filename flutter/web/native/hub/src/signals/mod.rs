@@ -17,6 +17,7 @@ pub struct MoneroTestResponse {
 
 #[derive(Deserialize, DartSignal)]
 pub struct CreateWalletRequest {
+    #[allow(dead_code)]
     pub password: String,
     pub network: String,
 }
@@ -331,6 +332,7 @@ pub struct MempoolScanRequest {
     pub network: String,
     pub account_lookahead: u32,
     #[serde(default)]
+    #[allow(dead_code)]
     pub accounts_to_scan: Option<Vec<u32>>,
 }
 
