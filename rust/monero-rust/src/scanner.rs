@@ -24,6 +24,8 @@ use std::collections::{HashMap, HashSet};
 use zeroize::Zeroizing;
 
 #[cfg(not(target_arch = "wasm32"))]
+use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::task::JoinSet;
 
 /// How often to yield to the browser event loop during batch processing.
@@ -254,27 +256,24 @@ pub fn validate_seed(mnemonic: &str) -> Result<(), String> {
         .map_err(|e| format!("Invalid seed phrase: {:?}", e))
 }
 
-pub fn derive_address(mnemonic: &str, network_str: &str) -> Result<String, String> {
-    let network = parse_network(network_str)?;
-
-    let seed = Seed::from_string(Zeroizing::new(mnemonic.to_string()))
-        .map_err(|e| format!("Failed to parse seed: {:?}", e))?;
-
-    let spend: [u8; 32] = *seed.key_bytes();
-    let spend_scalar = Scalar::from_bytes_mod_order(spend);
-    let spend_point: EdwardsPoint = &spend_scalar * &ED25519_BASEPOINT_TABLE;
-
-    let view: [u8; 32] = Keccak256::digest(spend_scalar.to_bytes()).into();
-    let view_scalar = Scalar::from_bytes_mod_order(view);
+fn address_from_seed(seed: &Seed, network: Network) -> String {
+    let spend_point = spend_key_from_seed(seed);
+    let view_scalar = view_key_from_seed(seed);
     let view_point: EdwardsPoint = &view_scalar * &ED25519_BASEPOINT_TABLE;
 
-    let address = MoneroAddress::new(
+    MoneroAddress::new(
         AddressMeta::new(network, AddressType::Standard),
         spend_point,
         view_point,
-    );
+    )
+    .to_string()
+}
 
-    Ok(address.to_string())
+pub fn derive_address(mnemonic: &str, network_str: &str) -> Result<String, String> {
+    let network = parse_network(network_str)?;
+    let seed = Seed::from_string(Zeroizing::new(mnemonic.to_string()))
+        .map_err(|e| format!("Failed to parse seed: {:?}", e))?;
+    Ok(address_from_seed(&seed, network))
 }
 
 pub fn derive_subaddress(
@@ -818,10 +817,10 @@ pub async fn process_batch_multi_wallet_response(
 
     let mut wallet_scanners = Vec::with_capacity(wallet_configs.len());
     for config in &wallet_configs {
-        let address = derive_address(&config.mnemonic, &config.network)?;
-        let _network = parse_network(&config.network)?;
+        let network = parse_network(&config.network)?;
         let seed = Seed::from_string(Zeroizing::new(config.mnemonic.clone()))
             .map_err(|e| format!("Invalid mnemonic: {:?}", e))?;
+        let address = address_from_seed(&seed, network);
         let spend_point = spend_key_from_seed(&seed);
         let view_scalar = view_key_from_seed(&seed);
         #[cfg(target_arch = "wasm32")]
@@ -1078,18 +1077,17 @@ pub async fn scan_block_multi_wallet<R: RpcConnection + Send + Sync + Clone + 's
 
     // Step 2: Spawn parallel scanning tasks for each wallet
     let mut join_set = JoinSet::new();
+    let txs = Arc::new(all_transactions);
 
     for wallet_config in wallet_configs {
-        let txs_clone = all_transactions.clone();
+        let txs = Arc::clone(&txs);
 
         join_set.spawn(async move {
-            // Derive wallet address for result mapping
-            let address = derive_address(&wallet_config.mnemonic, &wallet_config.network)?;
-
-            // Parse wallet seed and create scanner
-            let _network = parse_network(&wallet_config.network)?;
+            // Parse seed once — used for both address derivation and scanner setup
+            let network = parse_network(&wallet_config.network)?;
             let seed = Seed::from_string(Zeroizing::new(wallet_config.mnemonic.clone()))
                 .map_err(|e| format!("Invalid mnemonic: {:?}", e))?;
+            let address = address_from_seed(&seed, network);
 
             let spend_point = spend_key_from_seed(&seed);
             let view_scalar = view_key_from_seed(&seed);
@@ -1103,7 +1101,7 @@ pub async fn scan_block_multi_wallet<R: RpcConnection + Send + Sync + Clone + 's
             // Scan all transactions for this wallet
             let mut outputs = Vec::new();
 
-            for tx in txs_clone.iter() {
+            for tx in txs.iter() {
                 let tx_hash = hex::encode(tx.hash());
                 let is_coinbase = matches!(tx.prefix.inputs.get(0), Some(Input::Gen(_)));
 
@@ -1253,13 +1251,11 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
     let mut wallet_results = HashMap::new();
 
     for wallet_config in wallet_configs {
-        // Derive wallet address for result mapping
-        let address = derive_address(&wallet_config.mnemonic, &wallet_config.network)?;
-
-        // Parse wallet seed and create scanner
-        let _network = parse_network(&wallet_config.network)?;
+        // Parse seed once — used for both address derivation and scanner setup
+        let network = parse_network(&wallet_config.network)?;
         let seed = Seed::from_string(Zeroizing::new(wallet_config.mnemonic.clone()))
             .map_err(|e| format!("Invalid mnemonic: {:?}", e))?;
+        let address = address_from_seed(&seed, network);
 
         let spend_point = spend_key_from_seed(&seed);
         let view_scalar = view_key_from_seed(&seed);

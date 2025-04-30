@@ -7,6 +7,8 @@ use monero_rust::scanner::{
 };
 
 const STAGENET_SEED: &str = "vocal either anvil films dolphin zeal bacon cuisine quote syndrome rejoices envy okay pancakes tulips lair greater petals organs enmity dedicated oust thwart tomorrow tomorrow";
+const HONKED_BAGPIPE_SEED: &str = "honked bagpipe alpine juicy faked afoot jostle claim cowl tunnel orphans negative pheasants feast jetting quote frown teeming cycling tribal womanly hills cottage daytime daytime";
+const HEMLOCK_SEED: &str = "hemlock jubilee eden hacksaw boil superior inroads epoxy exhale orders cavernous second brunt saved richly lower upgrade hitched launching deepest mostly playful layout lower eden";
 const STAGENET_NODE: &str = "http://127.0.0.1:38081";
 
 fn make_coinbase_block(height: u64) -> Block {
@@ -197,4 +199,255 @@ async fn test_batch_scan_later_blocks() {
     println!("Scanned blocks 800000..{}: {} blocks, {} outputs",
         last_height, results.len(), total_outputs);
     assert!(total_outputs > 0, "wallet should have outputs in this range");
+}
+
+// ── Multi-wallet batch safety-net tests ──
+
+#[tokio::test]
+async fn test_multi_wallet_batch_metadata_matches_single_wallet() {
+    let resp_single = make_response(100, 5, 105);
+    let resp_multi = make_response(100, 5, 105);
+
+    let single_results = process_batch_response(resp_single, STAGENET_SEED, "stagenet", lookahead())
+        .await
+        .unwrap();
+
+    let configs = vec![WalletScanConfig {
+        mnemonic: STAGENET_SEED.to_string(),
+        network: "stagenet".to_string(),
+        lookahead: lookahead(),
+    }];
+    let multi_results = process_batch_multi_wallet_response(resp_multi, configs)
+        .await
+        .unwrap();
+
+    assert_eq!(single_results.len(), multi_results.len());
+    for (s, m) in single_results.iter().zip(multi_results.iter()) {
+        assert_eq!(s.block_height, m.block_height, "block_height mismatch at height {}", s.block_height);
+        assert_eq!(s.block_timestamp, m.block_timestamp, "block_timestamp mismatch at height {}", s.block_height);
+        assert_eq!(s.tx_count, m.tx_count, "tx_count mismatch at height {}", s.block_height);
+    }
+}
+
+#[tokio::test]
+async fn test_multi_wallet_batch_deterministic() {
+    let configs = || {
+        vec![
+            WalletScanConfig {
+                mnemonic: STAGENET_SEED.to_string(),
+                network: "stagenet".to_string(),
+                lookahead: lookahead(),
+            },
+            WalletScanConfig {
+                mnemonic: HONKED_BAGPIPE_SEED.to_string(),
+                network: "stagenet".to_string(),
+                lookahead: lookahead(),
+            },
+        ]
+    };
+
+    let resp1 = make_response(200, 10, 210);
+    let resp2 = make_response(200, 10, 210);
+
+    let results1 = process_batch_multi_wallet_response(resp1, configs()).await.unwrap();
+    let results2 = process_batch_multi_wallet_response(resp2, configs()).await.unwrap();
+
+    assert_eq!(results1.len(), results2.len(), "result count differs between runs");
+
+    for (r1, r2) in results1.iter().zip(results2.iter()) {
+        assert_eq!(r1.block_height, r2.block_height);
+        assert_eq!(r1.block_hash, r2.block_hash);
+        assert_eq!(r1.block_timestamp, r2.block_timestamp);
+        assert_eq!(r1.tx_count, r2.tx_count);
+
+        // Same wallet addresses in both runs
+        let addrs1: std::collections::BTreeSet<_> = r1.wallet_results.keys().collect();
+        let addrs2: std::collections::BTreeSet<_> = r2.wallet_results.keys().collect();
+        assert_eq!(addrs1, addrs2, "wallet addresses differ at height {}", r1.block_height);
+
+        // Same output counts per wallet
+        for addr in &addrs1 {
+            let o1 = r1.wallet_results[*addr].outputs.len();
+            let o2 = r2.wallet_results[*addr].outputs.len();
+            assert_eq!(o1, o2, "output count differs for wallet {} at height {}", addr, r1.block_height);
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_multi_wallet_batch_wallets_independent() {
+    let resp = make_response(100, 3, 103);
+    let configs = vec![
+        WalletScanConfig {
+            mnemonic: STAGENET_SEED.to_string(),
+            network: "stagenet".to_string(),
+            lookahead: lookahead(),
+        },
+        WalletScanConfig {
+            mnemonic: HONKED_BAGPIPE_SEED.to_string(),
+            network: "stagenet".to_string(),
+            lookahead: lookahead(),
+        },
+    ];
+
+    let results = process_batch_multi_wallet_response(resp, configs).await.unwrap();
+    assert_eq!(results.len(), 3);
+
+    // Derive expected addresses
+    let addr1 = monero_rust::scanner::derive_address(STAGENET_SEED, "stagenet").unwrap();
+    let addr2 = monero_rust::scanner::derive_address(HONKED_BAGPIPE_SEED, "stagenet").unwrap();
+    assert_ne!(addr1, addr2, "the two wallets must have different addresses");
+
+    for r in &results {
+        assert_eq!(r.wallet_results.len(), 2, "each block should have 2 wallet entries");
+        assert!(
+            r.wallet_results.contains_key(&addr1),
+            "missing entry for first wallet at height {}",
+            r.block_height
+        );
+        assert!(
+            r.wallet_results.contains_key(&addr2),
+            "missing entry for second wallet at height {}",
+            r.block_height
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_multi_wallet_batch_spent_key_images_shared() {
+    let resp = make_response(100, 5, 105);
+    let configs = vec![
+        WalletScanConfig {
+            mnemonic: STAGENET_SEED.to_string(),
+            network: "stagenet".to_string(),
+            lookahead: lookahead(),
+        },
+        WalletScanConfig {
+            mnemonic: HONKED_BAGPIPE_SEED.to_string(),
+            network: "stagenet".to_string(),
+            lookahead: lookahead(),
+        },
+    ];
+
+    let results = process_batch_multi_wallet_response(resp, configs).await.unwrap();
+
+    // Synthetic coinbase-only blocks have Input::Gen, not Input::ToKey,
+    // so spent_key_images should be empty (shared, not per-wallet).
+    for r in &results {
+        assert!(
+            r.spent_key_images.is_empty(),
+            "coinbase-only blocks should have no spent key images, got {} at height {}",
+            r.spent_key_images.len(),
+            r.block_height
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_multi_wallet_single_wallet_matches_single_batch() {
+    let resp_single = make_response(100, 5, 105);
+    let resp_multi = make_response(100, 5, 105);
+
+    let single_results = process_batch_response(resp_single, STAGENET_SEED, "stagenet", lookahead())
+        .await
+        .unwrap();
+
+    let configs = vec![WalletScanConfig {
+        mnemonic: STAGENET_SEED.to_string(),
+        network: "stagenet".to_string(),
+        lookahead: lookahead(),
+    }];
+    let multi_results = process_batch_multi_wallet_response(resp_multi, configs)
+        .await
+        .unwrap();
+
+    // Same number of block results
+    assert_eq!(single_results.len(), multi_results.len());
+
+    // Same block heights
+    let single_heights: Vec<u64> = single_results.iter().map(|r| r.block_height).collect();
+    let multi_heights: Vec<u64> = multi_results.iter().map(|r| r.block_height).collect();
+    assert_eq!(single_heights, multi_heights);
+
+    // Same number of outputs (should be 0 for synthetic blocks, but counts must match)
+    let addr = monero_rust::scanner::derive_address(STAGENET_SEED, "stagenet").unwrap();
+    for (s, m) in single_results.iter().zip(multi_results.iter()) {
+        let single_output_count = s.outputs.len();
+        let multi_output_count = m.wallet_results[&addr].outputs.len();
+        assert_eq!(
+            single_output_count, multi_output_count,
+            "output count mismatch at height {}",
+            s.block_height
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_multi_wallet_batch_three_wallets() {
+    let resp = make_response(500, 5, 505);
+    let configs = vec![
+        WalletScanConfig {
+            mnemonic: STAGENET_SEED.to_string(),
+            network: "stagenet".to_string(),
+            lookahead: lookahead(),
+        },
+        WalletScanConfig {
+            mnemonic: HONKED_BAGPIPE_SEED.to_string(),
+            network: "stagenet".to_string(),
+            lookahead: lookahead(),
+        },
+        WalletScanConfig {
+            mnemonic: HEMLOCK_SEED.to_string(),
+            network: "stagenet".to_string(),
+            lookahead: lookahead(),
+        },
+    ];
+
+    let results = process_batch_multi_wallet_response(resp, configs).await.unwrap();
+    assert_eq!(results.len(), 5);
+
+    for r in &results {
+        assert_eq!(
+            r.wallet_results.len(),
+            3,
+            "each block result should have exactly 3 wallet entries, got {} at height {}",
+            r.wallet_results.len(),
+            r.block_height
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_multi_wallet_batch_large_batch() {
+    let resp = make_response(1000, 100, 1100);
+    let configs = vec![
+        WalletScanConfig {
+            mnemonic: STAGENET_SEED.to_string(),
+            network: "stagenet".to_string(),
+            lookahead: lookahead(),
+        },
+        WalletScanConfig {
+            mnemonic: HONKED_BAGPIPE_SEED.to_string(),
+            network: "stagenet".to_string(),
+            lookahead: lookahead(),
+        },
+    ];
+
+    let results = process_batch_multi_wallet_response(resp, configs).await.unwrap();
+    assert_eq!(results.len(), 100, "should get exactly 100 block results");
+
+    for (i, r) in results.iter().enumerate() {
+        assert_eq!(
+            r.block_height,
+            1000 + i as u64,
+            "block height should be sequential"
+        );
+        assert_eq!(
+            r.wallet_results.len(),
+            2,
+            "each block should have 2 wallet entries, got {} at height {}",
+            r.wallet_results.len(),
+            r.block_height
+        );
+    }
 }
