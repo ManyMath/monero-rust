@@ -1,9 +1,9 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tuple/tuple.dart';
-import '../../lib/src/bindings/bindings.dart';
-import '../../lib/models/wallet_transaction.dart';
-import '../../lib/services/wallet_lifecycle_manager.dart';
-import '../../lib/services/wallet_persistence_service.dart';
+import 'package:monero_extension/src/bindings/bindings.dart';
+import 'package:monero_extension/models/wallet_transaction.dart';
+import 'package:monero_extension/services/wallet_lifecycle_manager.dart';
+import 'package:monero_extension/services/wallet_persistence_service.dart';
 import '../test_helpers.dart';
 import 'test_backends.dart';
 

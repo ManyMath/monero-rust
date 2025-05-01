@@ -1,6 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import '../../lib/src/bindings/bindings.dart';
-import '../../lib/utils/balance_utils.dart';
+import 'package:monero_extension/utils/balance_utils.dart';
 import '../test_helpers.dart';
 
 void main() {

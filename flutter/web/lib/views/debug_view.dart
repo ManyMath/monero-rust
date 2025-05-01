@@ -101,7 +101,7 @@ class _DebugViewState extends State<DebugView> {
     final activeWallet = _lifecycle.activeWallet;
     return activeWallet?.activeAccount ?? 0;
   }
-  Map<String, String> _subaddresses = {}; // "account,index" -> address
+  final Map<String, String> _subaddresses = {}; // "account,index" -> address
   final Set<String> _pendingSubaddresses = {}; // Track pending derivations
 
   // Get accounts from the active wallet
@@ -2078,7 +2078,6 @@ class _DebugViewState extends State<DebugView> {
     final loadedSelectedOutputs = loadResult.selectedOutputs!;
     final loadedAccounts = loadResult.accounts ?? [0];
     final loadedOutputsByAccount = loadResult.outputsByAccount ?? {0: loadedOutputs};
-    final loadedActiveAccount = loadResult.activeAccount ?? 0;
 
     // Restore wallet state (flag prevents _onSeedChanged from wiping data)
     _isRestoringWallet = true;

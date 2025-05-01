@@ -163,7 +163,6 @@ void main() {
     });
 
     test('Exclude spent outputs from balance', () {
-      final currentHeight = 1020;
       final outputs = [
         {'amount': 1000000000000, 'height': 1000, 'spent': true},  // Spent
         {'amount': 2000000000000, 'height': 1005, 'spent': false}, // Unspent

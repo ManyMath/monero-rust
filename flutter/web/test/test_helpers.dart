@@ -1,5 +1,5 @@
 import 'package:tuple/tuple.dart';
-import '../lib/src/bindings/bindings.dart';
+import 'package:monero_extension/src/bindings/bindings.dart';
 
 class TestHelpers {
   static OwnedOutput createMockOutput({

@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tuple/tuple.dart';
-import '../../lib/src/bindings/bindings.dart';
-import '../../lib/utils/output_utils.dart';
+import 'package:monero_extension/src/bindings/bindings.dart';
+import 'package:monero_extension/utils/output_utils.dart';
 import '../test_helpers.dart';
 
 ChangeOutput createMockChangeOutput({

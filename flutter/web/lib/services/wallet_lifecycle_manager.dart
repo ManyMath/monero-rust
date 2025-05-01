@@ -1,4 +1,3 @@
-import 'package:tuple/tuple.dart';
 import '../src/bindings/bindings.dart';
 import '../models/wallet_instance.dart';
 import '../models/wallet_transaction.dart';

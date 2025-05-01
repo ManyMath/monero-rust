@@ -1,5 +1,5 @@
-import '../../lib/services/wallet_storage_service.dart';
-import '../../lib/services/crypto_backend.dart';
+import 'package:monero_extension/services/wallet_storage_service.dart';
+import 'package:monero_extension/services/crypto_backend.dart';
 
 class InMemoryStorageBackend implements StorageBackend {
   final Map<String, String> _data = {};

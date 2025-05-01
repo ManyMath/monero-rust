@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fake_async/fake_async.dart';
-import '../../lib/services/wallet_polling_service.dart';
+import 'package:monero_extension/services/wallet_polling_service.dart';
 
 void main() {
   // Use a fresh instance for each test to avoid singleton state leaking

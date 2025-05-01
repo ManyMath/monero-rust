@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import '../src/bindings/bindings.dart';
 import '../utils/key_parser.dart';
 import '../utils/network_utils.dart';

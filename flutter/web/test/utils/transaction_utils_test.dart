@@ -1,8 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tuple/tuple.dart';
-import '../../lib/utils/transaction_utils.dart';
-import '../../lib/models/wallet_transaction.dart';
-import '../../lib/src/bindings/bindings.dart';
+import 'package:monero_extension/utils/transaction_utils.dart';
+import 'package:monero_extension/models/wallet_transaction.dart';
 import '../test_helpers.dart';
 
 void main() {

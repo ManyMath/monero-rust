@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tuple/tuple.dart';
-import '../../lib/src/bindings/bindings.dart';
-import '../../lib/models/wallet_transaction.dart';
+import 'package:monero_extension/src/bindings/bindings.dart';
+import 'package:monero_extension/models/wallet_transaction.dart';
 import '../test_helpers.dart';
 
 /// Filters outputs by account index, replicating the logic in DebugView._allOutputs.

@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'package:flutter/foundation.dart';
 import '../src/bindings/bindings.dart';
 import '../models/wallet_instance.dart';
 import '../models/wallet_transaction.dart';

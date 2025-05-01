@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:html' as html;
 import 'dart:js_util' as js_util;
-import 'package:flutter/foundation.dart';
 import '../src/bindings/bindings.dart';
 import '../models/wallet_transaction.dart';
 import 'wallet_persistence_service.dart';
@@ -135,7 +134,7 @@ class WalletPersistenceBrowser {
 
       if (!usedSaveAsDialog) {
         final url = html.Url.createObjectUrlFromBlob(blob);
-        final anchor = html.AnchorElement(href: url)
+        html.AnchorElement(href: url)
           ..setAttribute('download', filename)
           ..click();
         html.Url.revokeObjectUrl(url);
@@ -178,7 +177,7 @@ class WalletPersistenceBrowser {
             'Failed to decrypt file (wrong password or corrupted file)');
       }
 
-      final parsed = jsonDecode(jsonString) as Map<String, dynamic>;
+      jsonDecode(jsonString); // Validate JSON structure
 
       _defaultInstance.setRawData(walletId, encryptedData);
 
