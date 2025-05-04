@@ -20,6 +20,8 @@ pub struct WalletState {
     outputs: Vec<WalletOutput>,
     /// Maps key_image -> index in outputs vec for O(1) lookups
     key_image_index: HashMap<String, usize>,
+    /// Stable identity remains available before and after key-image import.
+    output_index: HashMap<String, usize>,
     pub current_height: u64,
     pub daemon_height: u64,
 }
@@ -29,28 +31,97 @@ impl WalletState {
         WalletState {
             outputs: Vec::new(),
             key_image_index: HashMap::new(),
+            output_index: HashMap::new(),
             current_height: 0,
             daemon_height: 0,
         }
     }
 
-    /// Extend outputs (used when scanning finds new outputs).
+    /// Extend outputs in blockchain scan order (transaction order within each
+    /// block, then output order within each transaction). Preserve this order
+    /// when persisting outputs.
+    ///
+    /// Merge by transaction hash and output position, including when no key
+    /// image is known. Preserve known key images and local spent state.
+    /// Confirmations replace pool entries in scan order. Distinct outputs with
+    /// an already known key image are not counted twice.
     pub fn add_outputs(&mut self, new_outputs: Vec<WalletOutput>) {
-        let base = self.outputs.len();
-        for (i, output) in new_outputs.into_iter().enumerate() {
+        let mut upgraded = HashSet::new();
+        for mut output in new_outputs {
             if output.block_height > self.current_height {
                 self.current_height = output.block_height;
             }
-            self.key_image_index
-                .insert(output.key_image.clone(), base + i);
-            self.outputs.push(output);
+            let identity = output.output_key();
+            if let Some(&existing_idx) = self.output_index.get(&identity) {
+                // Learning an image during a rescan must enforce the same
+                // uniqueness rule as adding an already identified output.
+                // Otherwise the duplicate remains counted with an empty image
+                // and cannot be marked spent when the shared image is observed.
+                if self.outputs[existing_idx].key_image.is_empty() && !output.key_image.is_empty() {
+                    if let Some(&other_idx) = self.key_image_index.get(&output.key_image) {
+                        let duplicate = &self.outputs[existing_idx];
+                        let spent = duplicate.spent || output.spent;
+                        let kept = &mut self.outputs[other_idx];
+                        kept.spent |= spent;
+                        upgraded.insert(existing_idx);
+                        self.output_index.remove(&identity);
+                        continue;
+                    }
+                }
+                let existing = &mut self.outputs[existing_idx];
+                if !existing.key_image.is_empty() {
+                    output.key_image = existing.key_image.clone();
+                } else if !output.key_image.is_empty() {
+                    existing.key_image = output.key_image.clone();
+                    self.key_image_index
+                        .insert(output.key_image.clone(), existing_idx);
+                }
+                existing.spent |= output.spent;
+                output.spent = existing.spent;
+                if self.outputs[existing_idx].block_height == 0 && output.block_height > 0 {
+                    // Mempool arrival order need not match block order. Append
+                    // confirmations in scan order and remove the old entries below.
+                    upgraded.insert(existing_idx);
+                    self.output_index.insert(identity, self.outputs.len());
+                    if !output.key_image.is_empty() {
+                        self.key_image_index
+                            .insert(output.key_image.clone(), self.outputs.len());
+                    }
+                    self.outputs.push(output);
+                }
+                // Otherwise skip duplicate
+            } else {
+                if !output.key_image.is_empty()
+                    && self.key_image_index.contains_key(&output.key_image)
+                {
+                    continue;
+                }
+                let idx = self.outputs.len();
+                self.output_index.insert(identity, idx);
+                if !output.key_image.is_empty() {
+                    self.key_image_index.insert(output.key_image.clone(), idx);
+                }
+                self.outputs.push(output);
+            }
+        }
+        if !upgraded.is_empty() {
+            let mut index = 0;
+            self.outputs.retain(|_| {
+                let keep = !upgraded.contains(&index);
+                index += 1;
+                keep
+            });
+            self.rebuild_key_image_index();
         }
     }
 
     /// Replace all outputs (used when restoring from persistence).
     pub fn replace_outputs(&mut self, outputs: Vec<WalletOutput>) {
-        self.outputs = outputs;
+        self.outputs.clear();
         self.rebuild_key_image_index();
+        let height = self.current_height;
+        self.add_outputs(outputs);
+        self.current_height = height;
     }
 
     /// Mark outputs as spent by matching key images.
@@ -148,9 +219,12 @@ impl WalletState {
 
     fn rebuild_key_image_index(&mut self) {
         self.key_image_index.clear();
+        self.output_index.clear();
         for (i, output) in self.outputs.iter().enumerate() {
-            self.key_image_index
-                .insert(output.key_image.clone(), i);
+            self.output_index.insert(output.output_key(), i);
+            if !output.key_image.is_empty() {
+                self.key_image_index.insert(output.key_image.clone(), i);
+            }
         }
     }
 }
@@ -471,5 +545,71 @@ mod tests {
 
         state.add_outputs(vec![make_output(1_000_000_000_000, 600, "ki3")]);
         assert_eq!(state.current_height, 600);
+    }
+
+    // ---- Deduplication tests ----
+
+    #[test]
+    fn test_add_outputs_deduplicates_by_key_image() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1_000_000_000_000, 100, "ki1")]);
+        state.add_outputs(vec![make_output(1_000_000_000_000, 100, "ki1")]); // duplicate
+        assert_eq!(state.outputs().len(), 1);
+
+        state.current_height = 200;
+        let bal = state.balance();
+        assert_eq!(bal.confirmed, 1_000_000_000_000); // not double-counted
+    }
+
+    fn output_without_key_image(identity: &str, height: u64) -> WalletOutput {
+        let mut output = make_output(1_000_000_000_000, height, identity);
+        output.key_image.clear();
+        output
+    }
+
+    #[test]
+    fn learned_shared_key_image_cannot_leave_a_phantom_balance() {
+        let first = output_without_key_image("first", 100);
+        let second = output_without_key_image("second", 101);
+        let mut state = WalletState::new();
+        state.add_outputs(vec![first.clone(), second.clone()]);
+        assert_eq!(state.outputs().len(), 2);
+        let mut first = first;
+        let mut second = second;
+        first.key_image = "shared".into();
+        second.key_image = "shared".into();
+        state.add_outputs(vec![first.clone(), second.clone()]);
+        assert_eq!(state.outputs().len(), 1);
+        assert_eq!(state.balance_at_height(200).confirmed, first.amount);
+        state.mark_spent_by_key_images(&["shared".into()]);
+        assert_eq!(state.balance_at_height(200).confirmed, 0);
+        state.add_outputs(vec![first, second]);
+        assert_eq!(state.outputs().len(), 1);
+        assert_eq!(state.balance_at_height(200).confirmed, 0);
+    }
+
+    #[test]
+    fn test_add_outputs_upgrades_mempool_to_confirmed() {
+        let mut state = WalletState::new();
+        // Add mempool output (height 0)
+        let mut mempool_output = make_output(1_000_000_000_000, 0, "ki1");
+        mempool_output.block_height = 0;
+        state.add_outputs(vec![mempool_output]);
+        assert_eq!(state.outputs()[0].block_height, 0);
+
+        // Add confirmed version
+        state.add_outputs(vec![make_output(1_000_000_000_000, 500, "ki1")]);
+        assert_eq!(state.outputs().len(), 1); // still only 1 output
+        assert_eq!(state.outputs()[0].block_height, 500); // upgraded to confirmed
+    }
+
+    #[test]
+    fn test_add_outputs_skips_confirmed_duplicate() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1_000_000_000_000, 100, "ki1")]);
+        state.add_outputs(vec![make_output(2_000_000_000_000, 200, "ki1")]); // different amount, same ki
+        assert_eq!(state.outputs().len(), 1);
+        assert_eq!(state.outputs()[0].block_height, 100); // original kept
+        assert_eq!(state.outputs()[0].amount, 1_000_000_000_000); // original amount
     }
 }
