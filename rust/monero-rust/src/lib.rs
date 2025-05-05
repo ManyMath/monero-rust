@@ -13,8 +13,10 @@ pub mod wallet_state;
 
 // Transaction building
 pub mod tx_builder;
+pub mod tx_prepare;
 pub mod tx_proof;
 pub use tx_builder::native;
+pub use tx_prepare::{prepare_send_inputs, prepare_sweep_inputs, PreparedInputs};
 
 // RPC
 pub mod rpc_serai;
