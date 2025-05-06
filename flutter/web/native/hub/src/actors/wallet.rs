@@ -937,18 +937,11 @@ impl Notifiable<ContinueScan> for WalletActor {
         self.scan_current_height = self.scan_target_height;
 
         wasm_bindgen_futures::spawn_local(async move {
-            let max_account = if let Some(ref accounts) = accounts_to_scan {
-                accounts.iter().max().copied().unwrap_or(0)
-            } else {
-                account_lookahead
-            };
+            let lookahead = monero_rust::compute_lookahead(
+                account_lookahead,
+                accounts_to_scan.as_deref(),
+            );
 
-            let lookahead = monero_rust::Lookahead {
-                account: max_account,
-                subaddress: monero_rust::DEFAULT_LOOKAHEAD.subaddress,
-            };
-
-            // Fetch and scan a batch of blocks (~1000) in one RPC call
             match monero_rust::scan_blocks_batch_with_url(
                 &node_url,
                 batch_start_height,
@@ -959,104 +952,67 @@ impl Notifiable<ContinueScan> for WalletActor {
             .await
             {
                 Ok(batch_results) => {
+                    let processed = monero_rust::process_single_wallet_batch(
+                        &batch_results,
+                        accounts_to_scan.as_deref(),
+                        target_height,
+                        batch_start_height,
+                    );
+
                     if batch_results.is_empty() {
                         let _ = self_addr.notify(StopScan).await;
                         return;
                     }
 
-                    let batch_end_height = batch_results
-                        .last()
-                        .map(|r| r.block_height + 1)
-                        .unwrap_or(batch_start_height);
-
-                    // Accumulate spent key images across the batch for a single update
-                    let mut all_spent_key_images = Vec::new();
-                    let mut all_stored_outputs = Vec::new();
-                    let mut last_daemon_height = 0u64;
-
-                    let accounts_set: Option<HashSet<u32>> = accounts_to_scan.as_ref().map(|a| a.iter().copied().collect());
-
-                    for result in &batch_results {
-                        last_daemon_height = result.daemon_height;
-
-                        // Collect spent key images
-                        all_spent_key_images.extend(result.spent_key_images.iter().cloned());
-
-                        // Filter and collect outputs
-                        let filtered_outputs: Vec<&monero_rust::WalletOutput> = result
-                            .outputs
-                            .iter()
-                            .filter(|o| {
-                                if let Some(ref accounts) = accounts_set {
-                                    if let Some((account, _)) = o.subaddress_index {
-                                        accounts.contains(&account)
-                                    } else {
-                                        accounts.contains(&0)
-                                    }
-                                } else {
-                                    true
-                                }
-                            })
-                            .collect();
-
-                        // Only send BlockScanResponse for blocks that have outputs
-                        if !filtered_outputs.is_empty() {
-                            let mut outputs: Vec<OwnedOutput> = Vec::with_capacity(filtered_outputs.len());
-                            for o in &filtered_outputs {
-                                outputs.push((*o).into());
-                                all_stored_outputs.push((*o).clone());
-                            }
-
-                            BlockScanResponse {
-                                success: true,
-                                error: None,
-                                block_height: result.block_height,
-                                block_hash: result.block_hash.clone(),
-                                block_timestamp: result.block_timestamp,
-                                tx_count: result.tx_count as u32,
-                                outputs,
-                                daemon_height: result.daemon_height,
-                                spent_key_images: result.spent_key_images.clone(),
-                            }
-                            .send_signal_to_dart();
+                    // Send BlockScanResponse for each block with outputs
+                    for block in &processed.blocks_with_outputs {
+                        let outputs: Vec<OwnedOutput> = block.outputs.iter().map(|o| o.into()).collect();
+                        BlockScanResponse {
+                            success: true,
+                            error: None,
+                            block_height: block.block_height,
+                            block_hash: block.block_hash.clone(),
+                            block_timestamp: block.block_timestamp,
+                            tx_count: block.tx_count as u32,
+                            outputs,
+                            daemon_height: block.daemon_height,
+                            spent_key_images: block.spent_key_images.clone(),
                         }
+                        .send_signal_to_dart();
                     }
 
-                    // Store all outputs from the batch in one message
-                    if !all_stored_outputs.is_empty() {
+                    if !processed.outputs_to_store.is_empty() {
                         let _ = self_addr
                             .notify(StoreOutputs {
                                 seed: seed.clone(),
                                 network: network.clone(),
-                                outputs: all_stored_outputs,
-                                daemon_height: last_daemon_height,
+                                outputs: processed.outputs_to_store,
+                                daemon_height: processed.daemon_height,
                             })
                             .await;
                     }
 
-                    // Update spent status once for the whole batch
-                    if !all_spent_key_images.is_empty() {
+                    if !processed.spent_key_images.is_empty() {
                         let _ = self_addr
                             .notify(UpdateSpentStatus {
-                                key_images: all_spent_key_images,
+                                key_images: processed.spent_key_images,
                             })
                             .await;
                     }
 
-                    // Send progress update for the whole batch
+                    let progress = monero_rust::sync_progress(processed.batch_end_height, target_height);
                     SyncProgressResponse {
-                        current_height: batch_end_height,
-                        daemon_height: target_height,
-                        is_synced: batch_end_height >= target_height,
-                        is_scanning: batch_end_height < target_height,
+                        current_height: progress.current_height,
+                        daemon_height: progress.target_height,
+                        is_synced: progress.is_synced,
+                        is_scanning: progress.is_scanning,
                     }
                     .send_signal_to_dart();
 
-                    // Update the actor's scan height and continue or stop
                     let _ = self_addr
                         .notify(UpdateScanState {
-                            is_scanning: batch_end_height < target_height,
-                            current_height: batch_end_height,
+                            is_scanning: processed.should_continue,
+                            current_height: processed.batch_end_height,
                             target_height,
                             node_url,
                             seed,
@@ -1066,7 +1022,7 @@ impl Notifiable<ContinueScan> for WalletActor {
                         })
                         .await;
 
-                    if batch_end_height < target_height {
+                    if processed.should_continue {
                         let _ = self_addr.notify(ContinueScan).await;
                     } else {
                         let _ = self_addr.notify(StopScan).await;
@@ -1139,24 +1095,16 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
         wasm_bindgen_futures::spawn_local(async move {
             let wallet_configs: Vec<monero_rust::WalletScanConfig> = wallets
                 .iter()
-                .map(|w| {
-                    let max_account = if let Some(ref accounts) = w.accounts_to_scan {
-                        accounts.iter().max().copied().unwrap_or(0)
-                    } else {
-                        w.account_lookahead
-                    };
-                    monero_rust::WalletScanConfig {
-                        mnemonic: w.seed.clone(),
-                        network: w.network.clone(),
-                        lookahead: monero_rust::Lookahead {
-                            account: max_account,
-                            subaddress: 20,
-                        },
-                    }
+                .map(|w| monero_rust::WalletScanConfig {
+                    mnemonic: w.seed.clone(),
+                    network: w.network.clone(),
+                    lookahead: monero_rust::compute_lookahead(
+                        w.account_lookahead,
+                        w.accounts_to_scan.as_deref(),
+                    ),
                 })
                 .collect();
 
-            // Batch-fetch and scan ~1000 blocks for all wallets at once
             match monero_rust::scan_blocks_batch_multi_wallet_with_url(
                 &node_url,
                 batch_start_height,
@@ -1181,7 +1129,6 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                         .collect();
 
                     for result in &batch_results {
-                        // Filter outputs per wallet and send signal for blocks with outputs
                         let wallet_results: Vec<WalletScanResult> = result
                             .wallet_results
                             .iter()
@@ -1190,22 +1137,11 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                                 let accounts_filter =
                                     wallet_accounts.get(idx).and_then(|a| a.as_ref());
 
-                                let outputs = wallet_data
-                                    .outputs
-                                    .iter()
-                                    .filter(|o| {
-                                        if let Some(accounts) = accounts_filter {
-                                            if let Some((account, _)) = o.subaddress_index {
-                                                accounts.contains(&account)
-                                            } else {
-                                                accounts.contains(&0)
-                                            }
-                                        } else {
-                                            true
-                                        }
-                                    })
-                                    .map(|o| o.into())
-                                    .collect();
+                                let filtered = monero_rust::filter_outputs_by_accounts(
+                                    wallet_data.outputs.iter(),
+                                    accounts_filter,
+                                );
+                                let outputs: Vec<OwnedOutput> = filtered.iter().map(|o| o.into()).collect();
 
                                 WalletScanResult {
                                     address: address.clone(),
@@ -1232,19 +1168,19 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                         }
                     }
 
-                    // Send progress for the whole batch
+                    let progress = monero_rust::sync_progress(batch_end_height, target_height);
                     SyncProgressResponse {
-                        current_height: batch_end_height,
-                        daemon_height: target_height,
-                        is_synced: batch_end_height >= target_height,
-                        is_scanning: batch_end_height < target_height,
+                        current_height: progress.current_height,
+                        daemon_height: progress.target_height,
+                        is_synced: progress.is_synced,
+                        is_scanning: progress.is_scanning,
                     }
                     .send_signal_to_dart();
 
-                    // Update scan state and continue
+                    let should_continue = batch_end_height < target_height;
                     let _ = self_addr
                         .notify(UpdateMultiWalletScanState {
-                            is_scanning: batch_end_height < target_height,
+                            is_scanning: should_continue,
                             current_height: batch_end_height,
                             target_height,
                             node_url,
@@ -1252,7 +1188,7 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                         })
                         .await;
 
-                    if batch_end_height < target_height {
+                    if should_continue {
                         let _ = self_addr.notify(ContinueMultiWalletScan).await;
                     } else {
                         let _ = self_addr.notify(StopScan).await;
