@@ -127,24 +127,15 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
 
             match (wallet_data_result, wallet_height_result) {
                 (Ok(wallet_data), Ok(wallet_height)) => {
-                    let spendable_outputs: Vec<_> = wallet_data
-                        .outputs
-                        .iter()
-                        .filter(|o| !o.spent && monero_rust::is_spendable(o, wallet_height.daemon_height))
-                        .cloned()
-                        .collect();
-
                     let total_send_amount: u64 = msg.recipients.iter().map(|(_, amt)| amt).sum();
 
-                    // Use core coin selection (handles both manual and auto selection)
-                    let selection_result = monero_rust::select_inputs(
-                        &spendable_outputs,
+                    let prepared = match monero_rust::prepare_send_inputs(
+                        &wallet_data.outputs,
+                        wallet_height.daemon_height,
                         total_send_amount,
                         msg.selected_outputs.as_deref(),
-                    );
-
-                    let spendable_outputs = match selection_result {
-                        Ok(result) => result.selected,
+                    ) {
+                        Ok(p) => p,
                         Err(error_msg) => {
                             TransactionCreatedResponse {
                                 success: false,
@@ -162,45 +153,56 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                         }
                     };
 
-                    // Collect output keys (txHash:outputIndex) of outputs that will be spent
-                    let spent_hashes: Vec<String> = spendable_outputs
-                        .iter()
-                        .map(|o| format!("{}:{}", o.tx_hash, o.output_index))
-                        .collect();
+                    let spent_hashes = prepared.spent_output_keys;
+                    let node_url = msg.node_url;
+                    let seed = msg.seed;
+                    let network = msg.network;
+                    let recipients = msg.recipients;
 
-                    // Spawn transaction building in local task to avoid Send requirements
-                    let wallet_data_filtered = WalletData {
-                        seed: wallet_data.seed,
-                        network: wallet_data.network,
-                        outputs: spendable_outputs,
-                    };
-                    let build_fut = self.build_transaction_impl_inner(msg, wallet_data_filtered);
                     wasm_bindgen_futures::spawn_local(async move {
-                        match build_fut.await {
-                            Ok((tx_id, fee, tx_blob, tx_key, tx_key_additional, change_outputs)) => {
-                                #[cfg(target_arch = "wasm32")]
-                                web_sys::console::log_1(&format!("Transaction created successfully! TX ID: {}, Fee: {}, Change outputs: {}", tx_id, fee, change_outputs.len()).into());
+                        match monero_rust::native::create_transaction(
+                            &node_url,
+                            &seed,
+                            &network,
+                            prepared.stored_outputs,
+                            &recipients,
+                        )
+                        .await
+                        {
+                            Ok(result) => {
+                                let change_outputs: Vec<ChangeOutput> = result.change_outputs
+                                    .into_iter()
+                                    .map(|c| ChangeOutput {
+                                        tx_hash: c.tx_hash,
+                                        output_index: c.output_index,
+                                        amount: c.amount,
+                                        amount_xmr: c.amount_xmr,
+                                        key: c.key,
+                                        key_offset: c.key_offset,
+                                        commitment_mask: c.commitment_mask,
+                                        subaddress_index: c.subaddress_index,
+                                        received_output_bytes: c.received_output_bytes,
+                                        key_image: c.key_image,
+                                    })
+                                    .collect();
 
                                 TransactionCreatedResponse {
                                     success: true,
                                     error: None,
-                                    tx_id,
-                                    fee,
-                                    tx_blob: Some(tx_blob),
-                                    tx_key: Some(tx_key),
-                                    tx_key_additional,
+                                    tx_id: result.tx_id,
+                                    fee: result.fee,
+                                    tx_blob: Some(result.tx_blob),
+                                    tx_key: Some(result.tx_key),
+                                    tx_key_additional: result.tx_key_additional,
                                     spent_output_hashes: spent_hashes,
                                     change_outputs,
                                 }
                                 .send_signal_to_dart();
                             }
                             Err(e) => {
-                                #[cfg(target_arch = "wasm32")]
-                                web_sys::console::error_1(&format!("Transaction creation failed: {}", e).into());
-
                                 TransactionCreatedResponse {
                                     success: false,
-                                    error: Some(e),
+                                    error: Some(format!("Transaction building failed: {}", e)),
                                     tx_id: String::new(),
                                     fee: 0,
                                     tx_blob: None,
@@ -256,47 +258,30 @@ impl Notifiable<SweepAll> for TxBuilderActor {
 
             match (wallet_data_result, wallet_height_result) {
                 (Ok(wallet_data), Ok(wallet_height)) => {
-                    let mut spendable_outputs: Vec<_> = wallet_data
-                        .outputs
-                        .iter()
-                        .filter(|o| !o.spent && monero_rust::is_spendable(o, wallet_height.daemon_height))
-                        .cloned()
-                        .collect();
-
-                    // Apply manual output selection if provided (for account filtering)
-                    if let Some(ref selected) = msg.selected_outputs {
-                        spendable_outputs.retain(|o| selected.contains(&o.output_key()));
-                    }
-
-                    if spendable_outputs.is_empty() {
-                        TransactionCreatedResponse {
-                            success: false,
-                            error: Some("No spendable outputs available for sweep".to_string()),
-                            tx_id: String::new(),
-                            fee: 0,
-                            tx_blob: None,
-                            tx_key: None,
-                            tx_key_additional: Vec::new(),
-                            spent_output_hashes: Vec::new(),
-                            change_outputs: Vec::new(),
+                    let prepared = match monero_rust::prepare_sweep_inputs(
+                        &wallet_data.outputs,
+                        wallet_height.daemon_height,
+                        msg.selected_outputs.as_deref(),
+                    ) {
+                        Ok(p) => p,
+                        Err(error_msg) => {
+                            TransactionCreatedResponse {
+                                success: false,
+                                error: Some(error_msg),
+                                tx_id: String::new(),
+                                fee: 0,
+                                tx_blob: None,
+                                tx_key: None,
+                                tx_key_additional: Vec::new(),
+                                spent_output_hashes: Vec::new(),
+                                change_outputs: Vec::new(),
+                            }
+                            .send_signal_to_dart();
+                            return;
                         }
-                        .send_signal_to_dart();
-                        return;
-                    }
+                    };
 
-                    // Collect spent output hashes
-                    let spent_output_hashes: Vec<String> = spendable_outputs
-                        .iter()
-                        .map(|o| format!("{}:{}", o.tx_hash, o.output_index))
-                        .collect();
-
-                    let stored_outputs: Vec<monero_rust::tx_builder::native::StoredOutputData> =
-                        spendable_outputs
-                            .into_iter()
-                            .map(|o| o.into())
-                            .collect();
-
-                    // Spawn sweep operation in local task to avoid Send requirements
+                    let spent_output_hashes = prepared.spent_output_keys;
                     let node_url = msg.node_url.clone();
                     let seed = msg.seed.clone();
                     let network = msg.network.clone();
@@ -307,13 +292,12 @@ impl Notifiable<SweepAll> for TxBuilderActor {
                             &node_url,
                             &seed,
                             &network,
-                            stored_outputs,
+                            prepared.stored_outputs,
                             &destination,
                         )
                         .await
                         {
                             Ok(result) => {
-                                // Convert change outputs (should be empty for sweep_all)
                                 let change_outputs: Vec<crate::signals::ChangeOutput> = result
                                     .change_outputs
                                     .into_iter()
@@ -390,52 +374,6 @@ impl Notifiable<SweepAll> for TxBuilderActor {
             }
             .send_signal_to_dart();
         }
-    }
-}
-
-impl TxBuilderActor {
-    fn build_transaction_impl_inner(
-        &self,
-        msg: BuildTransaction,
-        wallet_data: WalletData,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(String, u64, String, String, Vec<String>, Vec<ChangeOutput>), String>>>> {
-        use monero_rust::native::{create_transaction, TransactionResult};
-
-        let outputs_vec: Vec<monero_rust::native::StoredOutputData> = wallet_data
-            .outputs
-            .into_iter()
-            .map(|o| o.into())
-            .collect();
-
-        Box::pin(async move {
-            let result: TransactionResult = create_transaction(
-                &msg.node_url,
-                &msg.seed,
-                &msg.network,
-                outputs_vec,
-                &msg.recipients,
-            )
-            .await
-            .map_err(|e| format!("Transaction building failed: {}", e))?;
-
-            let change_outputs: Vec<ChangeOutput> = result.change_outputs
-                .into_iter()
-                .map(|c| ChangeOutput {
-                    tx_hash: c.tx_hash,
-                    output_index: c.output_index,
-                    amount: c.amount,
-                    amount_xmr: c.amount_xmr,
-                    key: c.key,
-                    key_offset: c.key_offset,
-                    commitment_mask: c.commitment_mask,
-                    subaddress_index: c.subaddress_index,
-                    received_output_bytes: c.received_output_bytes,
-                    key_image: c.key_image,
-                })
-                .collect();
-
-            Ok((result.tx_id, result.fee, result.tx_blob, result.tx_key, result.tx_key_additional, change_outputs))
-        })
     }
 }
 

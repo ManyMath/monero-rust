@@ -35,7 +35,9 @@ pub struct GetWalletData;
 
 #[derive(Debug, Clone)]
 pub struct WalletData {
+    #[allow(dead_code)]
     pub seed: Option<String>,
+    #[allow(dead_code)]
     pub network: Option<String>,
     pub outputs: Vec<monero_rust::WalletOutput>,
 }
