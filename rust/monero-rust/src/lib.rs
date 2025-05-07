@@ -7,6 +7,7 @@
 pub mod abstractions;
 pub mod coin_selection;
 pub mod encryption;
+pub mod scan_coordinator;
 pub mod scanner;
 pub mod wallet_output;
 pub mod wallet_state;
@@ -27,6 +28,12 @@ pub use wallet_state::{WalletState, Balance, is_spendable};
 
 // -- Coin selection --
 pub use coin_selection::{select_inputs, find_best_combination, CoinSelectionResult};
+
+// -- Scan coordination --
+pub use scan_coordinator::{
+    compute_lookahead, filter_outputs_by_accounts, process_single_wallet_batch,
+    sync_progress, BlockOutputSummary, ProcessedBatch, SyncProgress,
+};
 
 // -- Encryption --
 pub use encryption::{encrypt, decrypt, EncryptionError};
