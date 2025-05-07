@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../src/bindings/bindings.dart';
+import '../utils/output_lock_utils.dart';
 import 'common_widgets.dart';
 
 /// Widget that displays UTXO/coin management interface.
@@ -137,8 +138,8 @@ class OutputsPanel extends StatelessWidget {
             final confirmations = outputHeight > 0
                 ? currentHeight - outputHeight
                 : 0;
-            final requiredConfirmations = output.isCoinbase ? 60 : 10;
-            final isSpendable = confirmations >= requiredConfirmations && !output.spent;
+            final isSpendable = OutputLockUtils.isOutputSpendable(output: output, currentHeight: currentHeight);
+            final requiredConfirmations = OutputLockUtils.getRequiredConfirmations(output);
             final statusColor = output.spent
                 ? Colors.grey
                 : isSpendable
