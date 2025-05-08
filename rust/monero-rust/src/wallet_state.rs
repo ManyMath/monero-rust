@@ -604,6 +604,31 @@ mod tests {
     }
 
     #[test]
+    fn test_spendability_boundary_exact() {
+        // daemon_height = block count = top_block_height + 1.
+        // Rust formula: confirmations = daemon_height - block_height.
+        // At the exact boundary (10 confs required for normal outputs):
+        let output = make_output(1_000_000_000_000, 100, "ki1");
+
+        // daemon_height 109: 109 - 100 = 9 confirmations -> NOT spendable
+        assert!(!is_spendable(&output, 109));
+
+        // daemon_height 110: 110 - 100 = 10 confirmations -> spendable
+        assert!(is_spendable(&output, 110));
+    }
+
+    #[test]
+    fn test_coinbase_spendability_boundary_exact() {
+        let output = make_coinbase_output(5_000_000_000_000, 100, "ki1");
+
+        // daemon_height 159: 159 - 100 = 59 confirmations -> NOT spendable
+        assert!(!is_spendable(&output, 159));
+
+        // daemon_height 160: 160 - 100 = 60 confirmations -> spendable
+        assert!(is_spendable(&output, 160));
+    }
+
+    #[test]
     fn test_add_outputs_skips_confirmed_duplicate() {
         let mut state = WalletState::new();
         state.add_outputs(vec![make_output(1_000_000_000_000, 100, "ki1")]);

@@ -25,7 +25,7 @@ class OutputLockUtils {
     }
 
     final confirmations = currentHeight > outputHeight
-        ? currentHeight - outputHeight + 1
+        ? currentHeight - outputHeight
         : 0;
 
     final requiredConfirmations = getRequiredConfirmations(output);
@@ -54,7 +54,7 @@ class OutputLockUtils {
     }
 
     final confirmations = currentHeight > outputHeight
-        ? currentHeight - outputHeight + 1
+        ? currentHeight - outputHeight
         : 0;
 
     final requiredConfirmations = getRequiredConfirmations(output);
@@ -81,7 +81,7 @@ class OutputLockUtils {
     }
 
     final confirmations = currentHeight > outputHeight
-        ? currentHeight - outputHeight + 1
+        ? currentHeight - outputHeight
         : 0;
 
     final requiredConfirmations = getRequiredConfirmations(output);
