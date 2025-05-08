@@ -981,16 +981,16 @@ impl Notifiable<ContinueScan> for WalletActor {
                         .send_signal_to_dart();
                     }
 
-                    if !processed.outputs_to_store.is_empty() {
-                        let _ = self_addr
-                            .notify(StoreOutputs {
-                                seed: seed.clone(),
-                                network: network.clone(),
-                                outputs: processed.outputs_to_store,
-                                daemon_height: processed.daemon_height,
-                            })
-                            .await;
-                    }
+                    // Always update daemon_height so spendability checks
+                    // stay current even when a batch has no new outputs.
+                    let _ = self_addr
+                        .notify(StoreOutputs {
+                            seed: seed.clone(),
+                            network: network.clone(),
+                            outputs: processed.outputs_to_store,
+                            daemon_height: processed.daemon_height,
+                        })
+                        .await;
 
                     if !processed.spent_key_images.is_empty() {
                         let _ = self_addr

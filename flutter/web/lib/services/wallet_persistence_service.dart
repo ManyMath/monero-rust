@@ -185,7 +185,7 @@ class WalletPersistenceService {
         address: result.address ?? '',
         outputs: result.outputs!,
         currentHeight: result.continuousScanCurrentHeight!,
-        daemonHeight: 0,
+        daemonHeight: result.continuousScanCurrentHeight!,
         isScanning: false,
         isClosed: false,
         activeAccount: result.activeAccount!,

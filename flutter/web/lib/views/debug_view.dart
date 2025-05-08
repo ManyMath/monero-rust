@@ -2089,7 +2089,7 @@ class _DebugViewState extends State<DebugView> {
       _continuousScanCurrentHeight = loadedHeight;
       _continuousScanTargetHeight = 0;
       _isSynced = false;
-      _daemonHeight = null;
+      _daemonHeight = loadedHeight > 0 ? loadedHeight : null;
       _isContinuousScanning = false;
       _isContinuousPaused = loadedHeight > 0;
 
