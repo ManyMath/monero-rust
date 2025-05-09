@@ -3,10 +3,71 @@ use crate::signals::*;
 use async_trait::async_trait;
 use messages::prelude::{Actor, Address, Context, Handler, Notifiable};
 use rinf::{DartSignal, RustSignal};
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use tokio::task::JoinSet;
 use tokio_with_wasm::alias as tokio;
 use wasm_bindgen_futures;
+
+// ---------------------------------------------------------------------------
+// Double-buffered prefetch infrastructure
+// ---------------------------------------------------------------------------
+
+struct PrefetchSlot {
+    generation: u64,
+    height: u64,
+    data: monero_rust::FetchedBlocks,
+}
+
+thread_local! {
+    static PREFETCH_SLOT: RefCell<Option<PrefetchSlot>> = RefCell::new(None);
+    static PREFETCH_GENERATION: Cell<u64> = Cell::new(0);
+}
+
+/// Increment the generation counter and clear any buffered prefetch.
+/// Returns the new generation value.
+fn bump_generation() -> u64 {
+    PREFETCH_GENERATION.with(|g| {
+        let next = g.get() + 1;
+        g.set(next);
+        next
+    });
+    PREFETCH_SLOT.with(|s| { s.borrow_mut().take(); });
+    PREFETCH_GENERATION.with(|g| g.get())
+}
+
+/// Take prefetched data if it matches the current generation and expected height.
+fn take_prefetch(generation: u64, height: u64) -> Option<monero_rust::FetchedBlocks> {
+    PREFETCH_SLOT.with(|s| {
+        let matches = {
+            let slot = s.borrow();
+            matches!(&*slot, Some(ps) if ps.generation == generation && ps.height == height)
+        };
+        if matches {
+            s.borrow_mut().take().map(|ps| ps.data)
+        } else {
+            None
+        }
+    })
+}
+
+/// Store prefetched data, but only if the generation hasn't been bumped since
+/// the fetch was launched.
+fn store_prefetch(generation: u64, height: u64, data: monero_rust::FetchedBlocks) {
+    PREFETCH_GENERATION.with(|g| {
+        if g.get() == generation {
+            PREFETCH_SLOT.with(|s| {
+                *s.borrow_mut() = Some(PrefetchSlot {
+                    generation,
+                    height,
+                    data,
+                });
+            });
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScanType {
@@ -619,6 +680,8 @@ impl WalletActor {
 
             // Spawn task to get daemon height and start scanning
             wasm_bindgen_futures::spawn_local(async move {
+                bump_generation();
+
                 match monero_rust::get_daemon_height(&node_url).await {
                     Ok(daemon_height) => {
                         // Initialize multi-wallet scanning state
@@ -826,6 +889,8 @@ impl Notifiable<StartContinuousScan> for WalletActor {
         let mut self_addr = ctx.address();
 
         wasm_bindgen_futures::spawn_local(async move {
+            bump_generation();
+
             match monero_rust::get_daemon_height(&node_url).await {
                 Ok(daemon_height) => {
                     // Initialize scanning state
@@ -879,6 +944,7 @@ impl Notifiable<StartContinuousScan> for WalletActor {
 #[async_trait]
 impl Notifiable<StopScan> for WalletActor {
     async fn notify(&mut self, _msg: StopScan, _ctx: &Context<Self>) {
+        bump_generation();
         self.is_scanning = false;
 
         if self.active_scan_type == ScanType::None {
@@ -936,21 +1002,85 @@ impl Notifiable<ContinueScan> for WalletActor {
         // will update it via UpdateScanState or direct notify.
         self.scan_current_height = self.scan_target_height;
 
+        let scan_gen = PREFETCH_GENERATION.with(|g| g.get());
+
         wasm_bindgen_futures::spawn_local(async move {
             let lookahead = monero_rust::compute_lookahead(
                 account_lookahead,
                 accounts_to_scan.as_deref(),
             );
 
-            match monero_rust::scan_blocks_batch_with_url(
-                &node_url,
-                batch_start_height,
+            // 1. Take from prefetch slot or fetch fresh
+            let fetched = match take_prefetch(scan_gen, batch_start_height) {
+                Some(data) => data,
+                None => match monero_rust::fetch_blocks_batch_with_url(
+                    &node_url,
+                    batch_start_height,
+                ).await {
+                    Ok(data) => data,
+                    Err(e) => {
+                        #[cfg(target_arch = "wasm32")]
+                        web_sys::console::error_1(
+                            &format!(
+                                "[ContinueScan] Batch fetch error at height {}: {}",
+                                batch_start_height, e
+                            )
+                            .into(),
+                        );
+
+                        BlockScanResponse {
+                            success: false,
+                            error: Some(e),
+                            block_height: batch_start_height,
+                            block_hash: String::new(),
+                            block_timestamp: 0,
+                            tx_count: 0,
+                            outputs: Vec::new(),
+                            daemon_height: 0,
+                            spent_key_images: Vec::new(),
+                        }
+                        .send_signal_to_dart();
+
+                        SyncProgressResponse {
+                            current_height: batch_start_height,
+                            daemon_height: target_height,
+                            is_synced: false,
+                            is_scanning: false,
+                        }
+                        .send_signal_to_dart();
+
+                        let _ = self_addr.notify(StopScan).await;
+                        return;
+                    }
+                },
+            };
+
+            if fetched.is_empty() {
+                let _ = self_addr.notify(StopScan).await;
+                return;
+            }
+
+            // 2. Spawn prefetch for next batch while we process this one
+            let next_height = batch_start_height + fetched.block_count() as u64;
+            if next_height < target_height {
+                let prefetch_url = node_url.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    if let Ok(data) = monero_rust::fetch_blocks_batch_with_url(
+                        &prefetch_url,
+                        next_height,
+                    ).await {
+                        store_prefetch(scan_gen, next_height, data);
+                    }
+                });
+            }
+
+            // 3. Process current batch
+            match monero_rust::process_fetched_batch(
+                fetched,
                 &seed,
                 &network,
                 lookahead,
-            )
-            .await
-            {
+            ).await {
                 Ok(batch_results) => {
                     let processed = monero_rust::process_single_wallet_batch(
                         &batch_results,
@@ -1092,6 +1222,8 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
         // Prevent re-entry while batch is in flight
         self.multi_wallet_scan_current_height = self.multi_wallet_scan_target_height;
 
+        let scan_gen = PREFETCH_GENERATION.with(|g| g.get());
+
         wasm_bindgen_futures::spawn_local(async move {
             let wallet_configs: Vec<monero_rust::WalletScanConfig> = wallets
                 .iter()
@@ -1105,13 +1237,58 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                 })
                 .collect();
 
-            match monero_rust::scan_blocks_batch_multi_wallet_with_url(
-                &node_url,
-                batch_start_height,
+            // 1. Take from prefetch slot or fetch fresh
+            let fetched = match take_prefetch(scan_gen, batch_start_height) {
+                Some(data) => data,
+                None => match monero_rust::fetch_blocks_batch_with_url(
+                    &node_url,
+                    batch_start_height,
+                ).await {
+                    Ok(data) => data,
+                    Err(e) => {
+                        MultiWalletScanResponse {
+                            success: false,
+                            error: Some(e),
+                            block_height: batch_start_height,
+                            block_hash: String::new(),
+                            block_timestamp: 0,
+                            tx_count: 0,
+                            daemon_height: 0,
+                            spent_key_images: Vec::new(),
+                            wallet_results: Vec::new(),
+                        }
+                        .send_signal_to_dart();
+
+                        let _ = self_addr.notify(StopScan).await;
+                        return;
+                    }
+                },
+            };
+
+            if fetched.is_empty() {
+                let _ = self_addr.notify(StopScan).await;
+                return;
+            }
+
+            // 2. Spawn prefetch for next batch while we process this one
+            let next_height = batch_start_height + fetched.block_count() as u64;
+            if next_height < target_height {
+                let prefetch_url = node_url.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    if let Ok(data) = monero_rust::fetch_blocks_batch_with_url(
+                        &prefetch_url,
+                        next_height,
+                    ).await {
+                        store_prefetch(scan_gen, next_height, data);
+                    }
+                });
+            }
+
+            // 3. Process current batch
+            match monero_rust::process_fetched_batch_multi_wallet(
+                fetched,
                 wallet_configs,
-            )
-            .await
-            {
+            ).await {
                 Ok(batch_results) => {
                     if batch_results.is_empty() {
                         let _ = self_addr.notify(StopScan).await;

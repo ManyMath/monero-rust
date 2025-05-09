@@ -1012,6 +1012,82 @@ pub async fn scan_blocks_batch_multi_wallet_with_url(
     }
 }
 
+/// Opaque wrapper around `GetBlocksFastResponse` for double-buffered pipelining.
+///
+/// The hub crate depends on `monero-rust` but not `monero-serai`, so it cannot
+/// use `GetBlocksFastResponse` directly.
+pub struct FetchedBlocks {
+    response: GetBlocksFastResponse,
+}
+
+impl FetchedBlocks {
+    pub fn block_count(&self) -> usize {
+        self.response.blocks.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.response.blocks.is_empty()
+    }
+}
+
+/// Fetch a batch of blocks without scanning them.
+///
+/// This is the fetch-only half of `scan_blocks_batch_with_url`, designed for
+/// double-buffered pipelining: fetch the next batch while processing the current one.
+pub async fn fetch_blocks_batch_with_url(
+    node_url: &str,
+    start_height: u64,
+) -> Result<FetchedBlocks, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use monero_serai::rpc::HttpRpc;
+        let rpc = HttpRpc::new(node_url.to_string())
+            .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
+        let known_hash = rpc
+            .get_block_hash(start_height as usize)
+            .await
+            .map_err(|e| format!("Failed to get block hash at {}: {:?}", start_height, e))?;
+        let response = rpc
+            .get_blocks_fast(&[known_hash], start_height)
+            .await
+            .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
+        Ok(FetchedBlocks { response })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        use crate::rpc_serai::WasmRpcConnection;
+        let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
+        let known_hash = rpc
+            .get_block_hash(start_height as usize)
+            .await
+            .map_err(|e| format!("Failed to get block hash at {}: {:?}", start_height, e))?;
+        let response = rpc
+            .get_blocks_fast(&[known_hash], start_height)
+            .await
+            .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
+        Ok(FetchedBlocks { response })
+    }
+}
+
+/// Process a previously fetched batch for a single wallet.
+pub async fn process_fetched_batch(
+    fetched: FetchedBlocks,
+    mnemonic: &str,
+    network_str: &str,
+    lookahead: Lookahead,
+) -> Result<Vec<BlockScanResult>, String> {
+    process_batch_response(fetched.response, mnemonic, network_str, lookahead).await
+}
+
+/// Process a previously fetched batch for multiple wallets.
+pub async fn process_fetched_batch_multi_wallet(
+    fetched: FetchedBlocks,
+    wallet_configs: Vec<WalletScanConfig>,
+) -> Result<Vec<MultiWalletScanResult>, String> {
+    process_batch_multi_wallet_response(fetched.response, wallet_configs).await
+}
+
 /// Scan a single block for outputs belonging to multiple wallets simultaneously.
 /// This is more efficient than scanning each wallet separately as it fetches
 /// block data only once and processes all wallets in parallel.

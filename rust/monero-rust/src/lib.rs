@@ -57,6 +57,9 @@ pub use scanner::{
     // Batch scanning
     scan_blocks_batch_with_url, scan_blocks_batch_multi_wallet_with_url,
     process_batch_response, process_batch_multi_wallet_response,
+    // Double-buffered pipelining
+    FetchedBlocks, fetch_blocks_batch_with_url,
+    process_fetched_batch, process_fetched_batch_multi_wallet,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
