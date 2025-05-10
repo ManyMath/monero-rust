@@ -1134,6 +1134,19 @@ class _DebugViewState extends State<DebugView> {
     return null;
   }
 
+  /// Ensure the Rust WalletActor has the current outputs before a transaction.
+  void _hydrateRustWalletActor() {
+    final seed = _controller.text.trim();
+    if (seed.isEmpty) return;
+    RestoreWalletDataRequest(
+      seed: seed,
+      network: _network,
+      outputs: _allOutputsAllAccounts,
+      daemonHeight: Uint64(BigInt.from(_daemonHeight ?? 0)),
+      currentHeight: Uint64(BigInt.from(_continuousScanCurrentHeight)),
+    ).sendSignalToRust();
+  }
+
   void _createTransaction() {
     final recipientInputs = List.generate(
       _destinationControllers.length,
@@ -1200,6 +1213,8 @@ class _DebugViewState extends State<DebugView> {
         _broadcastError = null;
       });
 
+      _hydrateRustWalletActor();
+
       // Execute sweep
       TransactionService.sweepAll(
         seed: validation.normalizedSeed!,
@@ -1231,6 +1246,8 @@ class _DebugViewState extends State<DebugView> {
         _txResult = null;
         _txError = null;
       });
+
+      _hydrateRustWalletActor();
 
       // Execute transaction creation
       TransactionService.createTransaction(
@@ -2131,15 +2148,13 @@ class _DebugViewState extends State<DebugView> {
     });
     
     // Hydrate Rust WalletActor with restored outputs so transactions work
-    if (loadedOutputs.isNotEmpty) {
-      RestoreWalletDataRequest(
-        seed: seed,
-        network: network,
-        outputs: loadedOutputs,
-        daemonHeight: Uint64(BigInt.from(_daemonHeight ?? 0)),
-        currentHeight: Uint64(BigInt.from(loadedHeight)),
-      ).sendSignalToRust();
-    }
+    RestoreWalletDataRequest(
+      seed: seed,
+      network: network,
+      outputs: loadedOutputs,
+      daemonHeight: Uint64(BigInt.from(_daemonHeight ?? 0)),
+      currentHeight: Uint64(BigInt.from(loadedHeight)),
+    ).sendSignalToRust();
 
     // Derive address to populate keys
     _deriveAddress();

@@ -124,3 +124,8 @@ pub struct UpdateSpentStatus {
     pub key_images: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct SetDaemonHeight {
+    pub height: u64,
+}
+

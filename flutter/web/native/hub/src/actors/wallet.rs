@@ -495,13 +495,15 @@ impl WalletActor {
         }
     }
 
-    async fn listen_to_query_daemon_height(_self_addr: Address<Self>) {
+    async fn listen_to_query_daemon_height(mut self_addr: Address<Self>) {
         let receiver = QueryDaemonHeightRequest::get_dart_signal_receiver();
         while let Some(signal_pack) = receiver.recv().await {
             let request = signal_pack.message;
 
             match monero_rust::get_daemon_height(&request.node_url).await {
                 Ok(height) => {
+                    let _ = self_addr.notify(SetDaemonHeight { height }).await;
+
                     DaemonHeightResponse {
                         success: true,
                         error: None,
@@ -754,6 +756,11 @@ struct RestoreOutputs {
 #[async_trait]
 impl Notifiable<RestoreOutputs> for WalletActor {
     async fn notify(&mut self, msg: RestoreOutputs, _ctx: &Context<Self>) {
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::log_1(&format!(
+            "[RestoreOutputs] outputs={}, daemon_height={}, current_height={}",
+            msg.outputs.len(), msg.daemon_height, msg.current_height
+        ).into());
         self.seed = Some(msg.seed);
         self.network = Some(msg.network);
         self.core_state.daemon_height = msg.daemon_height;
@@ -794,6 +801,12 @@ impl Notifiable<GetBalanceRequest> for WalletActor {
 #[async_trait]
 impl Notifiable<StoreOutputs> for WalletActor {
     async fn notify(&mut self, msg: StoreOutputs, _ctx: &Context<Self>) {
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::log_1(&format!(
+            "[StoreOutputs] new_outputs={}, daemon_height={}, total_after={}",
+            msg.outputs.len(), msg.daemon_height,
+            self.core_state.outputs().len() + msg.outputs.len()
+        ).into());
         self.seed = Some(msg.seed);
         self.network = Some(msg.network);
         self.core_state.daemon_height = msg.daemon_height;
@@ -875,6 +888,9 @@ impl Notifiable<UpdateMultiWalletScanState> for WalletActor {
         self.multi_wallet_scan_target_height = msg.target_height;
         self.multi_wallet_scan_node_url = msg.node_url;
         self.multi_wallet_scan_wallets = msg.wallets;
+        if msg.target_height > self.core_state.daemon_height {
+            self.core_state.daemon_height = msg.target_height;
+        }
     }
 }
 
@@ -1389,6 +1405,15 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                 }
             }
         });
+    }
+}
+
+#[async_trait]
+impl Notifiable<SetDaemonHeight> for WalletActor {
+    async fn notify(&mut self, msg: SetDaemonHeight, _ctx: &Context<Self>) {
+        if msg.height > self.core_state.daemon_height {
+            self.core_state.daemon_height = msg.height;
+        }
     }
 }
 

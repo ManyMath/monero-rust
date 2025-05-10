@@ -127,39 +127,73 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
 
             match (wallet_data_result, wallet_height_result) {
                 (Ok(wallet_data), Ok(wallet_height)) => {
-                    let total_send_amount: u64 = msg.recipients.iter().map(|(_, amt)| amt).sum();
-
-                    let prepared = match monero_rust::prepare_send_inputs(
-                        &wallet_data.outputs,
-                        wallet_height.daemon_height,
-                        total_send_amount,
-                        msg.selected_outputs.as_deref(),
-                    ) {
-                        Ok(p) => p,
-                        Err(error_msg) => {
-                            TransactionCreatedResponse {
-                                success: false,
-                                error: Some(error_msg),
-                                tx_id: String::new(),
-                                fee: 0,
-                                tx_blob: None,
-                                tx_key: None,
-                                tx_key_additional: Vec::new(),
-                                spent_output_hashes: Vec::new(),
-                                change_outputs: Vec::new(),
-                            }
-                            .send_signal_to_dart();
-                            return;
-                        }
-                    };
-
-                    let spent_hashes = prepared.spent_output_keys;
+                    let stored_daemon_height = wallet_height.daemon_height;
                     let node_url = msg.node_url;
                     let seed = msg.seed;
                     let network = msg.network;
                     let recipients = msg.recipients;
+                    let selected_outputs = msg.selected_outputs;
 
                     wasm_bindgen_futures::spawn_local(async move {
+                        // Query fresh daemon height to avoid stale core_state
+                        let daemon_height = match monero_rust::get_daemon_height(&node_url).await {
+                            Ok(h) => {
+                                #[cfg(target_arch = "wasm32")]
+                                web_sys::console::log_1(&format!(
+                                    "[BuildTx] Fresh daemon height: {}, stored: {}",
+                                    h, stored_daemon_height
+                                ).into());
+                                h.max(stored_daemon_height)
+                            }
+                            Err(e) => {
+                                #[cfg(target_arch = "wasm32")]
+                                web_sys::console::warn_1(&format!(
+                                    "[BuildTx] Failed to get daemon height: {}, using stored: {}",
+                                    e, stored_daemon_height
+                                ).into());
+                                stored_daemon_height
+                            }
+                        };
+
+                        let num_outputs = wallet_data.outputs.len();
+                        let num_spent = wallet_data.outputs.iter().filter(|o| o.spent).count();
+                        let num_spendable = wallet_data.outputs.iter()
+                            .filter(|o| monero_rust::is_spendable(o, daemon_height))
+                            .count();
+                        #[cfg(target_arch = "wasm32")]
+                        web_sys::console::log_1(&format!(
+                            "[BuildTx] outputs={}, spent={}, spendable={}, daemon_height={}",
+                            num_outputs, num_spent, num_spendable, daemon_height
+                        ).into());
+
+                        let total_send_amount: u64 = recipients.iter().map(|(_, amt)| amt).sum();
+
+                        let prepared = match monero_rust::prepare_send_inputs(
+                            &wallet_data.outputs,
+                            daemon_height,
+                            total_send_amount,
+                            selected_outputs.as_deref(),
+                        ) {
+                            Ok(p) => p,
+                            Err(error_msg) => {
+                                TransactionCreatedResponse {
+                                    success: false,
+                                    error: Some(error_msg),
+                                    tx_id: String::new(),
+                                    fee: 0,
+                                    tx_blob: None,
+                                    tx_key: None,
+                                    tx_key_additional: Vec::new(),
+                                    spent_output_hashes: Vec::new(),
+                                    change_outputs: Vec::new(),
+                                }
+                                .send_signal_to_dart();
+                                return;
+                            }
+                        };
+
+                        let spent_hashes = prepared.spent_output_keys;
+
                         match monero_rust::native::create_transaction(
                             &node_url,
                             &seed,
@@ -258,36 +292,45 @@ impl Notifiable<SweepAll> for TxBuilderActor {
 
             match (wallet_data_result, wallet_height_result) {
                 (Ok(wallet_data), Ok(wallet_height)) => {
-                    let prepared = match monero_rust::prepare_sweep_inputs(
-                        &wallet_data.outputs,
-                        wallet_height.daemon_height,
-                        msg.selected_outputs.as_deref(),
-                    ) {
-                        Ok(p) => p,
-                        Err(error_msg) => {
-                            TransactionCreatedResponse {
-                                success: false,
-                                error: Some(error_msg),
-                                tx_id: String::new(),
-                                fee: 0,
-                                tx_blob: None,
-                                tx_key: None,
-                                tx_key_additional: Vec::new(),
-                                spent_output_hashes: Vec::new(),
-                                change_outputs: Vec::new(),
-                            }
-                            .send_signal_to_dart();
-                            return;
-                        }
-                    };
-
-                    let spent_output_hashes = prepared.spent_output_keys;
-                    let node_url = msg.node_url.clone();
-                    let seed = msg.seed.clone();
-                    let network = msg.network.clone();
-                    let destination = msg.destination_address.clone();
+                    let stored_daemon_height = wallet_height.daemon_height;
+                    let node_url = msg.node_url;
+                    let seed = msg.seed;
+                    let network = msg.network;
+                    let destination = msg.destination_address;
+                    let selected_outputs = msg.selected_outputs;
 
                     wasm_bindgen_futures::spawn_local(async move {
+                        // Query fresh daemon height to avoid stale core_state
+                        let daemon_height = match monero_rust::get_daemon_height(&node_url).await {
+                            Ok(h) => h.max(stored_daemon_height),
+                            Err(_) => stored_daemon_height,
+                        };
+
+                        let prepared = match monero_rust::prepare_sweep_inputs(
+                            &wallet_data.outputs,
+                            daemon_height,
+                            selected_outputs.as_deref(),
+                        ) {
+                            Ok(p) => p,
+                            Err(error_msg) => {
+                                TransactionCreatedResponse {
+                                    success: false,
+                                    error: Some(error_msg),
+                                    tx_id: String::new(),
+                                    fee: 0,
+                                    tx_blob: None,
+                                    tx_key: None,
+                                    tx_key_additional: Vec::new(),
+                                    spent_output_hashes: Vec::new(),
+                                    change_outputs: Vec::new(),
+                                }
+                                .send_signal_to_dart();
+                                return;
+                            }
+                        };
+
+                        let spent_output_hashes = prepared.spent_output_keys;
+
                         match monero_rust::tx_builder::native::sweep_all(
                             &node_url,
                             &seed,
