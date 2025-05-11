@@ -20,8 +20,9 @@ class OutputLockUtils {
 
     final outputHeight = output.blockHeight.toInt();
 
+    // Unconfirmed outputs (mempool or pending change) are not spendable
     if (outputHeight == 0) {
-      return true;
+      return false;
     }
 
     final confirmations = currentHeight > outputHeight
@@ -50,7 +51,7 @@ class OutputLockUtils {
     final outputHeight = output.blockHeight.toInt();
 
     if (outputHeight == 0) {
-      return 0;
+      return getRequiredConfirmations(output);
     }
 
     final confirmations = currentHeight > outputHeight
