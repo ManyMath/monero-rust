@@ -84,17 +84,25 @@ class OutputUtils {
   }
 
   /// Add outputs not already present (by txHash+outputIndex) in-place.
+  /// If an existing output has blockHeight=0 and the incoming one has a
+  /// non-zero blockHeight, update the existing entry (mempool→confirmed).
   static void addIfAbsent(
     List<OwnedOutput> existing,
     List<OwnedOutput> incoming,
   ) {
-    final existingKeys = <String>{
-      for (var o in existing) '${o.txHash}:${o.outputIndex}',
-    };
+    final indexMap = <String, int>{};
+    for (int i = 0; i < existing.length; i++) {
+      indexMap['${existing[i].txHash}:${existing[i].outputIndex}'] = i;
+    }
     for (var output in incoming) {
       final key = '${output.txHash}:${output.outputIndex}';
-      if (existingKeys.add(key)) {
+      final idx = indexMap[key];
+      if (idx == null) {
+        indexMap[key] = existing.length;
         existing.add(output);
+      } else if (existing[idx].blockHeight.toInt() == 0 &&
+          output.blockHeight.toInt() != 0) {
+        existing[idx] = output;
       }
     }
   }
