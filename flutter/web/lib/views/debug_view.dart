@@ -228,6 +228,7 @@ class _DebugViewState extends State<DebugView> {
   // Continuous scan state
   bool _isContinuousScanning = false;
   bool _isContinuousPaused = false;
+  bool _isChangingSeed = false;
   int get _continuousScanCurrentHeight => _lifecycle.continuousScanCurrentHeight;
   set _continuousScanCurrentHeight(int v) => _lifecycle.continuousScanCurrentHeight = v;
   int _continuousScanTargetHeight = 0;
@@ -429,6 +430,7 @@ class _DebugViewState extends State<DebugView> {
     });
 
     _blockScanSubscription = BlockScanResponse.rustSignalStream.listen((signal) {
+      if (_isChangingSeed) return;
       setState(() {
         _isScanning = false;
         if (signal.message.success) {
@@ -494,6 +496,16 @@ class _DebugViewState extends State<DebugView> {
     });
 
     _syncProgressSubscription = SyncProgressResponse.rustSignalStream.listen((signal) {
+      // If we're changing seeds, wait for scan to stop then clear state
+      if (_isChangingSeed) {
+        if (!signal.message.isScanning) {
+          _isChangingSeed = false;
+          _isContinuousScanning = false;
+          _clearWalletState();
+        }
+        return;
+      }
+
       final wasSynced = _isSynced;
       final wasScanning = _isContinuousScanning;
       setState(() {
@@ -538,6 +550,7 @@ class _DebugViewState extends State<DebugView> {
     });
 
     _mempoolScanSubscription = MempoolScanResponse.rustSignalStream.listen((signal) {
+      if (_isChangingSeed) return;
       setState(() {
         _isScanningMempool = false;
         if (signal.message.success) {
@@ -550,6 +563,7 @@ class _DebugViewState extends State<DebugView> {
     });
 
     _multiWalletScanSubscription = MultiWalletScanResponse.rustSignalStream.listen((signalPack) {
+      if (_isChangingSeed) return;
       final response = signalPack.message;
 
       if (!response.success) {
@@ -680,8 +694,20 @@ class _DebugViewState extends State<DebugView> {
     _debounceTimer?.cancel();
 
     if (_isContinuousScanning) {
+      _isChangingSeed = true;
       StopScanRequest().sendSignalToRust();
+      // State will be cleared in the SyncProgressResponse handler
+      // when is_scanning becomes false.
+    } else {
+      _clearWalletState();
     }
+
+    _debounceTimer = Timer(const Duration(milliseconds: 800), () {
+      _deriveAddress();
+    });
+  }
+
+  void _clearWalletState() {
     setState(() {
       _continuousScanCurrentHeight = 0;
       _continuousScanTargetHeight = 0;
@@ -693,10 +719,6 @@ class _DebugViewState extends State<DebugView> {
       _daemonHeight = null;
       _scanResult = null;
       _polyseedRestoreHeight = null;
-    });
-
-    _debounceTimer = Timer(const Duration(milliseconds: 800), () {
-      _deriveAddress();
     });
   }
 
