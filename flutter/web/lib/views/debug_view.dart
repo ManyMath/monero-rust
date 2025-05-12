@@ -722,6 +722,19 @@ class _DebugViewState extends State<DebugView> {
     });
   }
 
+  /// Reconstruct outputsByAccount from outputs' subaddressIndex fields.
+  Map<int, List<OwnedOutput>> _reconstructOutputsByAccount(List<OwnedOutput> outputs) {
+    final map = <int, List<OwnedOutput>>{};
+    for (final output in outputs) {
+      final account = output.subaddressIndex?.item1 ?? 0;
+      (map[account] ??= []).add(output);
+    }
+    if (map.isEmpty) {
+      map[0] = outputs;
+    }
+    return map;
+  }
+
   void _onBlockHeightChanged() {
     if (_blockHeightFocusNode.hasFocus) {
       _blockHeightUserEdited = true;
@@ -2116,7 +2129,7 @@ class _DebugViewState extends State<DebugView> {
     final loadedHeight = loadResult.continuousScanCurrentHeight!;
     final loadedSelectedOutputs = loadResult.selectedOutputs!;
     final loadedAccounts = loadResult.accounts ?? [0];
-    final loadedOutputsByAccount = loadResult.outputsByAccount ?? {0: loadedOutputs};
+    final loadedOutputsByAccount = loadResult.outputsByAccount ?? _reconstructOutputsByAccount(loadedOutputs);
 
     // Restore wallet state (flag prevents _onSeedChanged from wiping data)
     _isRestoringWallet = true;
