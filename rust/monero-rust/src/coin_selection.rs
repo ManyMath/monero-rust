@@ -108,8 +108,12 @@ pub fn select_inputs(
     }
 }
 
+/// Maximum number of combinations to evaluate before giving up on exact search.
+const MAX_COMBINATIONS: u64 = 100_000;
+
 /// Find the best combination of exactly `target_count` outputs summing to >= `needed_total`.
 /// Among valid combinations, picks the one with smallest excess (minimizes locked change).
+/// Falls back to a greedy selection if the search space exceeds MAX_COMBINATIONS.
 pub fn find_best_combination(
     outputs: &[WalletOutput],
     needed_total: u64,
@@ -117,6 +121,18 @@ pub fn find_best_combination(
 ) -> Option<(Vec<WalletOutput>, u64)> {
     if target_count == 0 || target_count > outputs.len() {
         return None;
+    }
+
+    // Check if search space is tractable: C(n, k) <= MAX_COMBINATIONS
+    if combinations_exceed(outputs.len(), target_count, MAX_COMBINATIONS) {
+        // Greedy: pick the largest `target_count` outputs (already sorted descending)
+        let selected: Vec<WalletOutput> = outputs.iter().take(target_count).cloned().collect();
+        let total: u64 = selected.iter().map(|o| o.amount).sum();
+        return if total >= needed_total {
+            Some((selected, total))
+        } else {
+            None
+        };
     }
 
     fn search(
@@ -177,6 +193,22 @@ pub fn find_best_combination(
         &mut best,
     );
     best
+}
+
+/// Check if C(n, k) exceeds `limit` without overflowing.
+fn combinations_exceed(n: usize, k: usize, limit: u64) -> bool {
+    let k = k.min(n - k);
+    let mut c: u64 = 1;
+    for i in 0..k {
+        c = match c.checked_mul((n - i) as u64) {
+            Some(v) => v / (i as u64 + 1),
+            None => return true,
+        };
+        if c > limit {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
