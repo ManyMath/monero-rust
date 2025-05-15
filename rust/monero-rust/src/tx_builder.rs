@@ -443,7 +443,7 @@ pub mod native {
             dest_addrs.push(dest_addr);
         }
 
-        let change = Change::new(&view_pair, false);
+        let change = Change::new(&view_pair, true);
         let mut spendable_outputs = Vec::new();
 
         use std::io::Cursor;
