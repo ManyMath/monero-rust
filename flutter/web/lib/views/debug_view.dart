@@ -627,8 +627,8 @@ class _DebugViewState extends State<DebugView> {
       ).sendSignalToRust();
     } else {
       final wallet = walletsToScan.first;
-      // Get the highest account index for this wallet
-      final highestAccount = _accounts.isEmpty ? 0 : _accounts.reduce((a, b) => a > b ? a : b);
+      final walletAccounts = wallet.accounts;
+      final highestAccount = walletAccounts.isEmpty ? 0 : walletAccounts.reduce((a, b) => a > b ? a : b);
       StartContinuousScanRequest(
         nodeUrl: nodeUrl,
         startHeight: Uint64(BigInt.from(_continuousScanCurrentHeight)),
@@ -1045,7 +1045,14 @@ class _DebugViewState extends State<DebugView> {
       });
 
       final result = walletsToScan.isEmpty ? KeyParser.parse(_controller.text) : null;
-      final highestAccount = _accounts.isEmpty ? 0 : _accounts.reduce((a, b) => a > b ? a : b);
+      int highestAccount = 0;
+      final accountSources = walletsToScan.isEmpty ? [_accounts] : walletsToScan.map((w) => w.accounts);
+      for (final accts in accountSources) {
+        if (accts.isNotEmpty) {
+          final max = accts.reduce((a, b) => a > b ? a : b);
+          if (max > highestAccount) highestAccount = max;
+        }
+      }
       WalletScanService.startContinuousScan(
         nodeUrl: validation.nodeUrl!,
         startHeight: validation.startHeight!,
