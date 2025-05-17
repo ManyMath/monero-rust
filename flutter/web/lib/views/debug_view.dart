@@ -229,6 +229,7 @@ class _DebugViewState extends State<DebugView> {
   bool _isContinuousScanning = false;
   bool _isContinuousPaused = false;
   bool _isChangingSeed = false;
+  VoidCallback? _onScanStopped;
   int get _continuousScanCurrentHeight => _lifecycle.continuousScanCurrentHeight;
   set _continuousScanCurrentHeight(int v) => _lifecycle.continuousScanCurrentHeight = v;
   int _continuousScanTargetHeight = 0;
@@ -536,6 +537,13 @@ class _DebugViewState extends State<DebugView> {
       // - We're synced and not actively scanning
       if (!_isContinuousScanning && (wasScanning || (_isSynced && !wasSynced))) {
         _startPollingTimers();
+      }
+
+      // Fire pending scan-stopped callback (used by pause/resume)
+      if (!signal.message.isScanning && _onScanStopped != null) {
+        final cb = _onScanStopped!;
+        _onScanStopped = null;
+        cb();
       }
     });
 
@@ -1063,9 +1071,9 @@ class _DebugViewState extends State<DebugView> {
       );
     }
 
-    // If we stopped a previous scan, wait for Rust to process the stop
+    // If we stopped a previous scan, wait for Rust to confirm stop
     if (wasScanning) {
-      Future.delayed(const Duration(milliseconds: 200), doStartScan);
+      _onScanStopped = doStartScan;
     } else {
       doStartScan();
     }
