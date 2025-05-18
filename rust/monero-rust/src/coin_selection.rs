@@ -229,6 +229,7 @@ mod tests {
             received_output_bytes: "".into(),
             block_height: 100,
             spent: false,
+            spent_height: None,
             key_image: format!("ki_{}", tx_hash),
             is_coinbase: false,
         }

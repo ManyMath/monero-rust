@@ -61,8 +61,10 @@ impl WalletState {
                     if let Some(&other_idx) = self.key_image_index.get(&output.key_image) {
                         let duplicate = &self.outputs[existing_idx];
                         let spent = duplicate.spent || output.spent;
+                        let spent_height = duplicate.spent_height.or(output.spent_height);
                         let kept = &mut self.outputs[other_idx];
                         kept.spent |= spent;
+                        kept.spent_height = kept.spent_height.or(spent_height);
                         upgraded.insert(existing_idx);
                         self.output_index.remove(&identity);
                         continue;
@@ -77,7 +79,9 @@ impl WalletState {
                         .insert(output.key_image.clone(), existing_idx);
                 }
                 existing.spent |= output.spent;
+                existing.spent_height = existing.spent_height.or(output.spent_height);
                 output.spent = existing.spent;
+                output.spent_height = existing.spent_height;
                 if self.outputs[existing_idx].block_height == 0 && output.block_height > 0 {
                     // Mempool arrival order need not match block order. Append
                     // confirmations in scan order and remove the old entries below.
@@ -261,6 +265,7 @@ mod tests {
             received_output_bytes: "".into(),
             block_height: height,
             spent: false,
+            spent_height: None,
             key_image: key_image.into(),
             is_coinbase: false,
         }

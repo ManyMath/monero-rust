@@ -542,6 +542,7 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
                 received_output_bytes,
                 block_height,
                 spent: false,
+                spent_height: None,
                 key_image,
                 is_coinbase,
             });
@@ -718,6 +719,7 @@ pub async fn process_batch_response(
                     received_output_bytes,
                     block_height,
                     spent: false,
+                    spent_height: None,
                     key_image,
                     is_coinbase,
                 });
@@ -958,6 +960,7 @@ pub async fn process_batch_multi_wallet_response(
                         received_output_bytes,
                         block_height,
                         spent: false,
+                        spent_height: None,
                         key_image,
                         is_coinbase,
                     });
@@ -1224,6 +1227,7 @@ pub async fn scan_block_multi_wallet<R: RpcConnection + Send + Sync + Clone + 's
                         received_output_bytes,
                         block_height,
                         spent: false,
+                        spent_height: None,
                         key_image,
                         is_coinbase,
                     });
@@ -1392,6 +1396,7 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
                     received_output_bytes,
                     block_height,
                     spent: false,
+                    spent_height: None,
                     key_image,
                     is_coinbase,
                 });
@@ -1545,6 +1550,7 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
                 received_output_bytes,
                 block_height: 0, // Unconfirmed - in mempool
                 spent: false,
+                spent_height: None,
                 key_image,
                 is_coinbase,
             });
@@ -1941,6 +1947,7 @@ mod tests {
             received_output_bytes: "bytes".to_string(),
             block_height: 100,
             spent: false,
+            spent_height: None,
             key_image: "keyimage".to_string(),
             is_coinbase: false,
         };

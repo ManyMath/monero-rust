@@ -20,6 +20,9 @@ pub struct WalletOutput {
     pub received_output_bytes: String,
     pub block_height: u64,
     pub spent: bool,
+    /// Height at which this output was spent. None if unspent or unknown.
+    #[serde(default)]
+    pub spent_height: Option<u64>,
     pub key_image: String,
     pub is_coinbase: bool,
 }
@@ -81,6 +84,7 @@ mod tests {
             received_output_bytes: "bytes".into(),
             block_height: 100,
             spent: false,
+            spent_height: None,
             key_image: "ki_abc".into(),
             is_coinbase: false,
         }
@@ -112,5 +116,29 @@ mod tests {
         assert_eq!(deserialized.subaddress_index, o.subaddress_index);
         assert_eq!(deserialized.key_image, o.key_image);
         assert_eq!(deserialized.is_coinbase, o.is_coinbase);
+        assert_eq!(deserialized.spent_height, None);
+    }
+
+    #[test]
+    fn test_spent_height_serialization_roundtrip() {
+        let mut o = sample_output();
+        o.spent_height = Some(500);
+        let json = serde_json::to_string(&o).unwrap();
+        let deserialized: WalletOutput = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.spent_height, Some(500));
+    }
+
+    #[test]
+    fn test_spent_height_backward_compat() {
+        // JSON without spent_height should deserialize to None
+        let json = r#"{
+            "tx_hash":"abc123","output_index":0,"amount":1000000000000,
+            "amount_xmr":"1.000000000000","key":"key","key_offset":"offset",
+            "commitment_mask":"mask","subaddress_index":[0,1],"payment_id":null,
+            "received_output_bytes":"bytes","block_height":100,"spent":false,
+            "key_image":"ki_abc","is_coinbase":false
+        }"#;
+        let deserialized: WalletOutput = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized.spent_height, None);
     }
 }
