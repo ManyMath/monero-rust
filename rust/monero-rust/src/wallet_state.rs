@@ -156,6 +156,15 @@ impl BlockHashChain {
     }
 }
 
+/// Result of rolling back wallet state after a reorg.
+#[derive(Debug, Clone)]
+pub struct RollbackResult {
+    pub removed_outputs: Vec<WalletOutput>,
+    pub removed_key_images: Vec<String>,
+    pub unspent_key_images: Vec<String>,
+    pub outputs_unspent: usize,
+}
+
 /// Core wallet state manager.
 ///
 /// Holds outputs, tracks heights, and provides balance/spendability queries.
@@ -365,6 +374,79 @@ impl WalletState {
     /// Get mutable access to outputs.
     pub fn outputs_mut(&mut self) -> &mut Vec<WalletOutput> {
         &mut self.outputs
+    }
+
+    /// Mark outputs as spent, recording the height at which the spend occurred.
+    /// Returns the number of outputs newly marked as spent.
+    pub fn mark_spent_by_key_images_at_height(&mut self, key_images: &[String], height: u64) -> usize {
+        let mut count = 0;
+        for ki in key_images {
+            if let Some(&idx) = self.key_image_index.get(ki) {
+                if !self.outputs[idx].spent {
+                    self.outputs[idx].spent = true;
+                    self.outputs[idx].spent_height = Some(height);
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    /// Roll back wallet state to just before `split_height`.
+    ///
+    /// 1. Un-spend outputs with spent_height >= split_height
+    /// 2. Remove outputs with block_height >= split_height
+    /// 3. Rebuild key_image_index
+    /// 4. Roll back block_hashes
+    /// 5. Update current_height
+    pub fn rollback_to_height(&mut self, split_height: u64) -> RollbackResult {
+        let mut unspent_key_images = Vec::new();
+        let mut outputs_unspent = 0usize;
+
+        // Un-spend outputs whose spend was in the reorged range
+        for output in &mut self.outputs {
+            if output.spent {
+                if let Some(sh) = output.spent_height {
+                    if sh >= split_height {
+                        output.spent = false;
+                        output.spent_height = None;
+                        unspent_key_images.push(output.key_image.clone());
+                        outputs_unspent += 1;
+                    }
+                }
+                // Outputs with spent_height: None are NOT reverted (conservative)
+            }
+        }
+
+        // Remove outputs received in the reorged range
+        let mut removed_outputs = Vec::new();
+        let mut removed_key_images = Vec::new();
+        let mut kept = Vec::new();
+        for output in self.outputs.drain(..) {
+            if output.block_height >= split_height {
+                removed_key_images.push(output.key_image.clone());
+                removed_outputs.push(output);
+            } else {
+                kept.push(output);
+            }
+        }
+        self.outputs = kept;
+
+        self.rebuild_key_image_index();
+        self.block_hashes.rollback_to(split_height);
+
+        if split_height > 0 {
+            self.current_height = split_height - 1;
+        } else {
+            self.current_height = 0;
+        }
+
+        RollbackResult {
+            removed_outputs,
+            removed_key_images,
+            unspent_key_images,
+            outputs_unspent,
+        }
     }
 
     pub fn record_block_hash(&mut self, height: u64, hash: String) {
@@ -740,7 +822,7 @@ mod tests {
         state.add_outputs(vec![first.clone(), second.clone()]);
         assert_eq!(state.outputs().len(), 1);
         assert_eq!(state.balance_at_height(200).confirmed, first.amount);
-        state.mark_spent_by_key_images(&["shared".into()]);
+        state.mark_spent_by_key_images_at_height(&["shared".into()], 150);
         assert_eq!(state.balance_at_height(200).confirmed, 0);
         state.add_outputs(vec![first, second]);
         assert_eq!(state.outputs().len(), 1);
@@ -887,6 +969,125 @@ mod tests {
         let history = chain.get_short_chain_history();
         assert_eq!(history.len(), 1);
         assert_eq!(history[0], (0, "genesis".into()));
+    }
+
+    // ---- mark_spent_by_key_images_at_height tests ----
+
+    #[test]
+    fn test_mark_spent_at_height() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![
+            make_output(1_000_000_000_000, 100, "ki1"),
+            make_output(2_000_000_000_000, 100, "ki2"),
+        ]);
+
+        let count = state.mark_spent_by_key_images_at_height(&["ki1".to_string()], 150);
+        assert_eq!(count, 1);
+        assert!(state.outputs[0].spent);
+        assert_eq!(state.outputs[0].spent_height, Some(150));
+        assert!(!state.outputs[1].spent);
+        assert_eq!(state.outputs[1].spent_height, None);
+    }
+
+    // ---- Rollback tests ----
+
+    #[test]
+    fn test_rollback_removes_outputs_at_and_above_split() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![
+            make_output(1_000_000_000_000, 90, "ki1"),
+            make_output(2_000_000_000_000, 100, "ki2"),
+            make_output(3_000_000_000_000, 110, "ki3"),
+        ]);
+
+        let result = state.rollback_to_height(100);
+        assert_eq!(result.removed_outputs.len(), 2);
+        assert_eq!(state.outputs().len(), 1);
+        assert_eq!(state.outputs()[0].key_image, "ki1");
+    }
+
+    #[test]
+    fn test_rollback_unspends_outputs_spent_in_reorg_range() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![
+            make_output(1_000_000_000_000, 50, "ki1"),
+            make_output(2_000_000_000_000, 60, "ki2"),
+        ]);
+
+        state.mark_spent_by_key_images_at_height(&["ki1".to_string()], 100);
+        state.mark_spent_by_key_images_at_height(&["ki2".to_string()], 80);
+
+        let result = state.rollback_to_height(90);
+        assert_eq!(result.outputs_unspent, 1);
+        assert_eq!(result.unspent_key_images, vec!["ki1".to_string()]);
+        assert!(!state.outputs[0].spent);
+        assert!(state.outputs[1].spent);
+    }
+
+    #[test]
+    fn test_rollback_conservative_with_none_spent_height() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1_000_000_000_000, 50, "ki1")]);
+
+        state.mark_spent_by_key_images(&["ki1".to_string()]);
+        assert_eq!(state.outputs[0].spent_height, None);
+
+        let result = state.rollback_to_height(60);
+        assert_eq!(result.outputs_unspent, 0);
+        assert!(state.outputs[0].spent);
+    }
+
+    #[test]
+    fn test_rollback_rebuilds_key_image_index() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![
+            make_output(1_000_000_000_000, 50, "ki1"),
+            make_output(2_000_000_000_000, 100, "ki2"),
+        ]);
+
+        state.rollback_to_height(100);
+        assert_eq!(state.outputs().len(), 1);
+
+        let count = state.mark_spent_by_key_images(&["ki1".to_string()]);
+        assert_eq!(count, 1);
+        let count = state.mark_spent_by_key_images(&["ki2".to_string()]);
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_rollback_updates_current_height() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1_000_000_000_000, 200, "ki1")]);
+        state.current_height = 200;
+
+        state.rollback_to_height(150);
+        assert_eq!(state.current_height, 149);
+    }
+
+    #[test]
+    fn test_rollback_rolls_back_block_hashes() {
+        let mut state = WalletState::new();
+        for h in 90..=100 {
+            state.record_block_hash(h, format!("hash_{}", h));
+        }
+
+        state.rollback_to_height(95);
+        assert!(state.block_hashes.get_hash(95).is_none());
+        assert_eq!(state.block_hashes.get_hash(94), Some("hash_94"));
+    }
+
+    #[test]
+    fn test_rollback_below_all_outputs() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![
+            make_output(1_000_000_000_000, 100, "ki1"),
+            make_output(2_000_000_000_000, 200, "ki2"),
+        ]);
+
+        let result = state.rollback_to_height(50);
+        assert_eq!(result.removed_outputs.len(), 2);
+        assert!(state.outputs().is_empty());
+        assert_eq!(state.current_height, 49);
     }
 
     #[test]
