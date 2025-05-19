@@ -1,15 +1,159 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+
+use serde::{Deserialize, Serialize};
 
 use crate::wallet_output::WalletOutput;
 
 const CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE: u64 = 10;
 const CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW: u64 = 60;
 
+/// Number of recent block hashes kept densely (every height).
+const DENSE_HASH_WINDOW: u64 = 100;
+
+/// Maximum reorg depth we'll handle. Deeper reorgs are treated as errors.
+pub const MAX_REORG_DEPTH: u64 = 1000;
+
 /// Balance breakdown for a wallet or account.
 #[derive(Debug, Clone, Default)]
 pub struct Balance {
     pub confirmed: u64,
     pub unconfirmed: u64,
+}
+
+/// Sparse chain of block hashes for fork-point detection.
+///
+/// Stores a compact set of block hashes: dense for recent blocks, exponentially
+/// spaced for older ones. Mirrors wallet2's `get_short_chain_history()`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BlockHashChain {
+    hashes: BTreeMap<u64, String>,
+    genesis_hash: Option<String>,
+}
+
+impl BlockHashChain {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn record_block(&mut self, height: u64, hash: String) {
+        if height == 0 {
+            self.genesis_hash = Some(hash.clone());
+        }
+        self.hashes.insert(height, hash);
+    }
+
+    pub fn get_hash(&self, height: u64) -> Option<&str> {
+        self.hashes.get(&height).map(|s| s.as_str())
+    }
+
+    pub fn tip_height(&self) -> Option<u64> {
+        self.hashes.keys().next_back().copied()
+    }
+
+    /// Remove all hashes at heights >= split_height.
+    pub fn rollback_to(&mut self, split_height: u64) {
+        // BTreeMap::split_off returns everything >= key
+        let removed = self.hashes.split_off(&split_height);
+        // If genesis was in the removed range, keep it
+        if let Some(genesis) = &self.genesis_hash {
+            if removed.get(&0).map(|h| h == genesis).unwrap_or(false) {
+                self.hashes.insert(0, genesis.clone());
+            }
+        }
+    }
+
+    /// Prune to keep last DENSE_HASH_WINDOW dense + exponential anchors + genesis.
+    pub fn compact(&mut self) {
+        let tip = match self.tip_height() {
+            Some(t) => t,
+            None => return,
+        };
+
+        let dense_start = tip.saturating_sub(DENSE_HASH_WINDOW - 1);
+        let mut keep = HashSet::new();
+
+        // Keep dense window
+        for h in dense_start..=tip {
+            keep.insert(h);
+        }
+
+        // Keep exponential anchors below dense window
+        if dense_start > 0 {
+            let mut step = 1u64;
+            let mut h = dense_start - 1;
+            loop {
+                keep.insert(h);
+                step *= 2;
+                if h < step {
+                    break;
+                }
+                h -= step;
+            }
+        }
+
+        // Always keep genesis
+        keep.insert(0);
+
+        self.hashes.retain(|h, _| keep.contains(h));
+    }
+
+    /// Build block_ids list for `/getblocks.bin`, matching wallet2's algorithm.
+    ///
+    /// Returns (height, hash_hex) pairs ordered from highest to lowest.
+    pub fn get_short_chain_history(&self) -> Vec<(u64, String)> {
+        let tip = match self.tip_height() {
+            Some(t) => t,
+            None => {
+                // Only genesis available
+                if let Some(g) = &self.genesis_hash {
+                    return vec![(0, g.clone())];
+                }
+                return vec![];
+            }
+        };
+
+        let mut result = Vec::new();
+        let mut current = tip;
+        let mut step = 1u64;
+        let mut count = 0u64;
+
+        loop {
+            if let Some(hash) = self.hashes.get(&current) {
+                result.push((current, hash.clone()));
+            }
+
+            if current == 0 {
+                break;
+            }
+
+            // First 10 are dense (step=1), then exponential
+            count += 1;
+            if count >= 10 {
+                step *= 2;
+            }
+
+            if current < step {
+                // Jump to genesis
+                if current != 0 {
+                    if let Some(hash) = self.hashes.get(&0).or(self.genesis_hash.as_ref()) {
+                        result.push((0, hash.clone()));
+                    }
+                }
+                break;
+            }
+            current -= step;
+        }
+
+        result
+    }
+
+    pub fn len(&self) -> usize {
+        self.hashes.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.hashes.is_empty()
+    }
 }
 
 /// Core wallet state manager.
@@ -24,6 +168,7 @@ pub struct WalletState {
     output_index: HashMap<String, usize>,
     pub current_height: u64,
     pub daemon_height: u64,
+    pub block_hashes: BlockHashChain,
 }
 
 impl WalletState {
@@ -34,6 +179,7 @@ impl WalletState {
             output_index: HashMap::new(),
             current_height: 0,
             daemon_height: 0,
+            block_hashes: BlockHashChain::new(),
         }
     }
 
@@ -219,6 +365,14 @@ impl WalletState {
     /// Get mutable access to outputs.
     pub fn outputs_mut(&mut self) -> &mut Vec<WalletOutput> {
         &mut self.outputs
+    }
+
+    pub fn record_block_hash(&mut self, height: u64, hash: String) {
+        self.block_hashes.record_block(height, hash);
+    }
+
+    pub fn get_short_chain_history(&self) -> Vec<(u64, String)> {
+        self.block_hashes.get_short_chain_history()
     }
 
     fn rebuild_key_image_index(&mut self) {
@@ -641,5 +795,112 @@ mod tests {
         assert_eq!(state.outputs().len(), 1);
         assert_eq!(state.outputs()[0].block_height, 100); // original kept
         assert_eq!(state.outputs()[0].amount, 1_000_000_000_000); // original amount
+    }
+
+    // ---- BlockHashChain tests ----
+
+    #[test]
+    fn test_block_hash_chain_basics() {
+        let mut chain = BlockHashChain::new();
+        assert!(chain.is_empty());
+        assert_eq!(chain.tip_height(), None);
+
+        chain.record_block(100, "hash100".into());
+        chain.record_block(101, "hash101".into());
+        chain.record_block(102, "hash102".into());
+
+        assert_eq!(chain.len(), 3);
+        assert_eq!(chain.tip_height(), Some(102));
+        assert_eq!(chain.get_hash(100), Some("hash100"));
+        assert_eq!(chain.get_hash(101), Some("hash101"));
+        assert_eq!(chain.get_hash(99), None);
+    }
+
+    #[test]
+    fn test_block_hash_chain_rollback() {
+        let mut chain = BlockHashChain::new();
+        for h in 90..=100 {
+            chain.record_block(h, format!("hash_{}", h));
+        }
+        assert_eq!(chain.tip_height(), Some(100));
+
+        chain.rollback_to(98);
+        assert_eq!(chain.tip_height(), Some(97));
+        assert!(chain.get_hash(98).is_none());
+        assert!(chain.get_hash(99).is_none());
+        assert!(chain.get_hash(100).is_none());
+        assert_eq!(chain.get_hash(97), Some("hash_97"));
+    }
+
+    #[test]
+    fn test_block_hash_chain_rollback_preserves_genesis() {
+        let mut chain = BlockHashChain::new();
+        chain.record_block(0, "genesis".into());
+        chain.record_block(1, "hash1".into());
+        chain.record_block(2, "hash2".into());
+
+        chain.rollback_to(1);
+        assert_eq!(chain.get_hash(0), Some("genesis"));
+        assert!(chain.get_hash(1).is_none());
+    }
+
+    #[test]
+    fn test_short_chain_history_dense() {
+        let mut chain = BlockHashChain::new();
+        for h in 0..=5 {
+            chain.record_block(h, format!("hash_{}", h));
+        }
+
+        let history = chain.get_short_chain_history();
+        assert!(!history.is_empty());
+        assert_eq!(history[0].0, 5);
+        assert_eq!(history.last().unwrap().0, 0);
+    }
+
+    #[test]
+    fn test_short_chain_history_exponential_spacing() {
+        let mut chain = BlockHashChain::new();
+        for h in 0..=200 {
+            chain.record_block(h, format!("hash_{}", h));
+        }
+
+        let history = chain.get_short_chain_history();
+        assert_eq!(history[0].0, 200);
+        assert!(history.len() < 30);
+        assert_eq!(history.last().unwrap().0, 0);
+        for i in 0..10 {
+            assert_eq!(history[i].0, 200 - i as u64);
+        }
+    }
+
+    #[test]
+    fn test_short_chain_history_empty() {
+        let chain = BlockHashChain::new();
+        let history = chain.get_short_chain_history();
+        assert!(history.is_empty());
+    }
+
+    #[test]
+    fn test_short_chain_history_genesis_only() {
+        let mut chain = BlockHashChain::new();
+        chain.record_block(0, "genesis".into());
+        let history = chain.get_short_chain_history();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0], (0, "genesis".into()));
+    }
+
+    #[test]
+    fn test_compact_keeps_dense_and_sparse() {
+        let mut chain = BlockHashChain::new();
+        for h in 0..=500 {
+            chain.record_block(h, format!("hash_{}", h));
+        }
+        assert_eq!(chain.len(), 501);
+
+        chain.compact();
+        assert!(chain.len() < 150);
+        assert_eq!(chain.get_hash(500), Some("hash_500"));
+        assert_eq!(chain.get_hash(0), Some("hash_0"));
+        assert_eq!(chain.get_hash(401), Some("hash_401"));
     }
 }
