@@ -1083,6 +1083,140 @@ pub async fn process_fetched_batch(
     process_batch_response(fetched.response, mnemonic, network_str, lookahead).await
 }
 
+fn hex_to_hash(hex_str: &str) -> Result<[u8; 32], String> {
+    let bytes = hex::decode(hex_str)
+        .map_err(|e| format!("Invalid hex hash '{}': {}", hex_str, e))?;
+    if bytes.len() != 32 {
+        return Err(format!("Hash hex must be 32 bytes, got {}", bytes.len()));
+    }
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&bytes);
+    Ok(arr)
+}
+
+/// Scan a batch of blocks using a history of known hashes for fork-point detection.
+///
+/// Unlike `scan_blocks_batch` which sends only one hash, this sends a sparse
+/// exponential history of hashes (matching wallet2's algorithm) so the daemon
+/// can detect forks further back in the chain.
+///
+/// Returns `(results, actual_start_height)` — the daemon may return blocks
+/// starting earlier than `start_height` if a fork was detected.
+pub async fn scan_blocks_batch_with_history<R: RpcConnection>(
+    rpc: &Rpc<R>,
+    start_height: u64,
+    known_hashes: &[(u64, String)],
+    mnemonic: &str,
+    network_str: &str,
+    lookahead: Lookahead,
+) -> Result<(Vec<BlockScanResult>, u64), String> {
+    let block_ids: Vec<[u8; 32]> = if known_hashes.is_empty() {
+        // Fallback: single hash like the old behavior
+        let hash = rpc
+            .get_block_hash(start_height as usize)
+            .await
+            .map_err(|e| format!("Failed to get block hash at {}: {:?}", start_height, e))?;
+        vec![hash]
+    } else {
+        known_hashes
+            .iter()
+            .map(|(_, h)| hex_to_hash(h))
+            .collect::<Result<Vec<_>, _>>()?
+    };
+
+    let response = rpc
+        .get_blocks_fast(&block_ids, start_height)
+        .await
+        .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
+
+    let actual_start = response.start_height;
+    let results = process_batch_response(response, mnemonic, network_str, lookahead).await?;
+    Ok((results, actual_start))
+}
+
+/// Convenience wrapper for history-aware batch scanning with URL-based RPC.
+pub async fn scan_blocks_batch_with_history_url(
+    node_url: &str,
+    start_height: u64,
+    known_hashes: &[(u64, String)],
+    mnemonic: &str,
+    network_str: &str,
+    lookahead: Lookahead,
+) -> Result<(Vec<BlockScanResult>, u64), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use monero_serai::rpc::HttpRpc;
+        let rpc = HttpRpc::new(node_url.to_string())
+            .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
+        scan_blocks_batch_with_history(&rpc, start_height, known_hashes, mnemonic, network_str, lookahead).await
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        use crate::rpc_serai::WasmRpcConnection;
+        let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
+        scan_blocks_batch_with_history(&rpc, start_height, known_hashes, mnemonic, network_str, lookahead).await
+    }
+}
+
+/// Fetch a batch of blocks using known hash history, without scanning.
+///
+/// This is the fetch-only half for double-buffered pipelining with reorg awareness.
+pub async fn fetch_blocks_batch_with_history_url(
+    node_url: &str,
+    start_height: u64,
+    known_hashes: &[(u64, String)],
+) -> Result<(FetchedBlocks, u64), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use monero_serai::rpc::HttpRpc;
+        let rpc = HttpRpc::new(node_url.to_string())
+            .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
+        let block_ids: Vec<[u8; 32]> = if known_hashes.is_empty() {
+            let hash = rpc
+                .get_block_hash(start_height as usize)
+                .await
+                .map_err(|e| format!("Failed to get block hash at {}: {:?}", start_height, e))?;
+            vec![hash]
+        } else {
+            known_hashes
+                .iter()
+                .map(|(_, h)| hex_to_hash(h))
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let response = rpc
+            .get_blocks_fast(&block_ids, start_height)
+            .await
+            .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
+        let actual_start = response.start_height;
+        Ok((FetchedBlocks { response }, actual_start))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        use crate::rpc_serai::WasmRpcConnection;
+        let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
+        let block_ids: Vec<[u8; 32]> = if known_hashes.is_empty() {
+            let hash = rpc
+                .get_block_hash(start_height as usize)
+                .await
+                .map_err(|e| format!("Failed to get block hash at {}: {:?}", start_height, e))?;
+            vec![hash]
+        } else {
+            known_hashes
+                .iter()
+                .map(|(_, h)| hex_to_hash(h))
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let response = rpc
+            .get_blocks_fast(&block_ids, start_height)
+            .await
+            .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
+        let actual_start = response.start_height;
+        Ok((FetchedBlocks { response }, actual_start))
+    }
+}
+
 /// Process a previously fetched batch for multiple wallets.
 pub async fn process_fetched_batch_multi_wallet(
     fetched: FetchedBlocks,
@@ -2020,5 +2154,25 @@ mod tests {
 
         assert_eq!(lookahead1, lookahead2);
         assert_ne!(lookahead1, lookahead3);
+    }
+
+    #[test]
+    fn test_hex_to_hash_valid() {
+        let hex = "0000000000000000000000000000000000000000000000000000000000000001";
+        let result = hex_to_hash(hex).unwrap();
+        assert_eq!(result[31], 1);
+        assert_eq!(result[0], 0);
+    }
+
+    #[test]
+    fn test_hex_to_hash_invalid_hex() {
+        let result = hex_to_hash("not_hex");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_hex_to_hash_wrong_length() {
+        let result = hex_to_hash("0011");
+        assert!(result.is_err());
     }
 }
