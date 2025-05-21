@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use crate::scanner::{BlockScanResult, Lookahead, DEFAULT_LOOKAHEAD};
 use crate::wallet_output::WalletOutput;
+use crate::wallet_state::{WalletState, MAX_REORG_DEPTH};
 
 /// Sync progress information.
 #[derive(Debug, Clone)]
@@ -44,6 +45,7 @@ pub struct ProcessedBatch {
     pub should_continue: bool,
     pub blocks_with_outputs: Vec<BlockOutputSummary>,
     pub daemon_height: u64,
+    pub block_hashes: Vec<(u64, String)>,
 }
 
 /// Compute the lookahead needed for a scan.
@@ -104,6 +106,7 @@ pub fn process_single_wallet_batch(
             should_continue: false,
             blocks_with_outputs: Vec::new(),
             daemon_height: 0,
+            block_hashes: Vec::new(),
         };
     }
 
@@ -118,10 +121,12 @@ pub fn process_single_wallet_batch(
     let mut all_outputs = Vec::new();
     let mut all_spent_key_images = Vec::new();
     let mut blocks_with_outputs = Vec::new();
+    let mut all_block_hashes = Vec::new();
     let mut last_daemon_height = 0u64;
 
     for result in batch_results {
         last_daemon_height = result.daemon_height;
+        all_block_hashes.push((result.block_height, result.block_hash.clone()));
 
         all_spent_key_images.extend(result.spent_key_images.iter().cloned());
 
@@ -152,7 +157,73 @@ pub fn process_single_wallet_batch(
         should_continue: batch_end_height < target_height,
         blocks_with_outputs,
         daemon_height: last_daemon_height,
+        block_hashes: all_block_hashes,
     }
+}
+
+/// Outcome of a batch scan with reorg detection.
+#[derive(Debug, Clone)]
+pub enum ScanBatchOutcome {
+    Normal(ProcessedBatch),
+    Reorg(ReorgInfo),
+}
+
+/// Information about a detected blockchain reorganization.
+#[derive(Debug, Clone)]
+pub struct ReorgInfo {
+    pub split_height: u64,
+    pub blocks_detached: u64,
+    pub outputs_removed: usize,
+    pub outputs_unspent: usize,
+    pub removed_key_images: Vec<String>,
+    pub unspent_key_images: Vec<String>,
+}
+
+/// Process a batch with reorg detection.
+///
+/// Compares block hashes in the batch against known hashes in wallet state.
+/// If a mismatch is found, rolls back the wallet state and returns `Reorg`.
+/// Otherwise delegates to `process_single_wallet_batch` and returns `Normal`.
+pub fn process_batch_with_reorg_detection(
+    batch_results: &[BlockScanResult],
+    wallet_state: &mut WalletState,
+    accounts_to_scan: Option<&[u32]>,
+    target_height: u64,
+    batch_start_height: u64,
+) -> Result<ScanBatchOutcome, String> {
+    // Check for reorg: compare batch block hashes against known hashes
+    for result in batch_results {
+        if let Some(known_hash) = wallet_state.block_hashes.get_hash(result.block_height) {
+            if known_hash != result.block_hash {
+                let split_height = result.block_height;
+                let current = wallet_state.current_height;
+                if current >= split_height && current - split_height > MAX_REORG_DEPTH {
+                    return Err(format!(
+                        "Reorg depth {} exceeds maximum {}",
+                        current - split_height,
+                        MAX_REORG_DEPTH
+                    ));
+                }
+                let rollback = wallet_state.rollback_to_height(split_height);
+                return Ok(ScanBatchOutcome::Reorg(ReorgInfo {
+                    split_height,
+                    blocks_detached: current.saturating_sub(split_height) + 1,
+                    outputs_removed: rollback.removed_outputs.len(),
+                    outputs_unspent: rollback.outputs_unspent,
+                    removed_key_images: rollback.removed_key_images,
+                    unspent_key_images: rollback.unspent_key_images,
+                }));
+            }
+        }
+    }
+
+    let batch = process_single_wallet_batch(
+        batch_results,
+        accounts_to_scan,
+        target_height,
+        batch_start_height,
+    );
+    Ok(ScanBatchOutcome::Normal(batch))
 }
 
 #[cfg(test)]
@@ -397,5 +468,107 @@ mod tests {
         assert_eq!(batch.outputs_to_store.len(), 0);
         assert_eq!(batch.spent_key_images.len(), 1);
         assert_eq!(batch.spent_key_images[0], "ki_from_any_tx");
+    }
+
+    // ---- process_single_wallet_batch block_hashes ----
+
+    #[test]
+    fn batch_includes_block_hashes() {
+        let results = vec![
+            make_block_result(100, vec![], vec![]),
+            make_block_result(101, vec![], vec![]),
+            make_block_result(102, vec![], vec![]),
+        ];
+        let batch = process_single_wallet_batch(&results, None, 1000, 100);
+        assert_eq!(batch.block_hashes.len(), 3);
+        assert_eq!(batch.block_hashes[0], (100, "hash_100".to_string()));
+        assert_eq!(batch.block_hashes[1], (101, "hash_101".to_string()));
+        assert_eq!(batch.block_hashes[2], (102, "hash_102".to_string()));
+    }
+
+    // ---- process_batch_with_reorg_detection ----
+
+    #[test]
+    fn reorg_detection_normal_all_beyond_tip() {
+        let mut state = WalletState::new();
+        state.current_height = 99;
+        let results = vec![
+            make_block_result(100, vec![], vec![]),
+            make_block_result(101, vec![], vec![]),
+        ];
+        let outcome = process_batch_with_reorg_detection(
+            &results, &mut state, None, 1000, 100,
+        ).unwrap();
+        assert!(matches!(outcome, ScanBatchOutcome::Normal(_)));
+    }
+
+    #[test]
+    fn reorg_detection_normal_matching_hashes() {
+        let mut state = WalletState::new();
+        state.current_height = 101;
+        state.record_block_hash(100, "hash_100".to_string());
+        state.record_block_hash(101, "hash_101".to_string());
+        let results = vec![
+            make_block_result(100, vec![], vec![]),
+            make_block_result(101, vec![], vec![]),
+            make_block_result(102, vec![], vec![]),
+        ];
+        let outcome = process_batch_with_reorg_detection(
+            &results, &mut state, None, 1000, 100,
+        ).unwrap();
+        assert!(matches!(outcome, ScanBatchOutcome::Normal(_)));
+    }
+
+    #[test]
+    fn reorg_detection_detects_different_hash() {
+        let mut state = WalletState::new();
+        state.current_height = 102;
+        state.record_block_hash(100, "hash_100".to_string());
+        state.record_block_hash(101, "old_hash_101".to_string()); // differs from "hash_101"
+        state.record_block_hash(102, "hash_102".to_string());
+        let results = vec![
+            make_block_result(100, vec![], vec![]),
+            make_block_result(101, vec![], vec![]),
+            make_block_result(102, vec![], vec![]),
+        ];
+        let outcome = process_batch_with_reorg_detection(
+            &results, &mut state, None, 1000, 100,
+        ).unwrap();
+        match outcome {
+            ScanBatchOutcome::Reorg(info) => {
+                assert_eq!(info.split_height, 101);
+            }
+            _ => panic!("Expected Reorg"),
+        }
+    }
+
+    #[test]
+    fn reorg_detection_too_deep() {
+        let mut state = WalletState::new();
+        state.current_height = 2000;
+        state.record_block_hash(100, "old_hash".to_string());
+        let results = vec![
+            make_block_result(100, vec![], vec![]),
+        ];
+        let result = process_batch_with_reorg_detection(
+            &results, &mut state, None, 3000, 100,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("exceeds maximum"));
+    }
+
+    #[test]
+    fn reorg_detection_no_known_hash_for_height() {
+        let mut state = WalletState::new();
+        state.current_height = 102;
+        // No hashes recorded — no reorg can be detected
+        let results = vec![
+            make_block_result(100, vec![], vec![]),
+            make_block_result(101, vec![], vec![]),
+        ];
+        let outcome = process_batch_with_reorg_detection(
+            &results, &mut state, None, 1000, 100,
+        ).unwrap();
+        assert!(matches!(outcome, ScanBatchOutcome::Normal(_)));
     }
 }
