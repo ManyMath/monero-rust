@@ -24,7 +24,7 @@ pub mod rpc_serai;
 
 // -- Wallet state & output types --
 pub use wallet_output::WalletOutput;
-pub use wallet_state::{WalletState, Balance, is_spendable};
+pub use wallet_state::{WalletState, Balance, BlockHashChain, RollbackResult, is_spendable, MAX_REORG_DEPTH};
 
 // -- Coin selection --
 pub use coin_selection::{select_inputs, find_best_combination, CoinSelectionResult};
@@ -32,7 +32,8 @@ pub use coin_selection::{select_inputs, find_best_combination, CoinSelectionResu
 // -- Scan coordination --
 pub use scan_coordinator::{
     compute_lookahead, filter_outputs_by_accounts, process_single_wallet_batch,
-    sync_progress, BlockOutputSummary, ProcessedBatch, SyncProgress,
+    process_batch_with_reorg_detection,
+    sync_progress, BlockOutputSummary, ProcessedBatch, ReorgInfo, ScanBatchOutcome, SyncProgress,
 };
 
 // -- Encryption --
@@ -60,6 +61,8 @@ pub use scanner::{
     // Double-buffered pipelining
     FetchedBlocks, fetch_blocks_batch_with_url,
     process_fetched_batch, process_fetched_batch_multi_wallet,
+    // History-aware scanning
+    scan_blocks_batch_with_history_url, fetch_blocks_batch_with_history_url,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
