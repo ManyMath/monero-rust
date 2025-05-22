@@ -1104,4 +1104,192 @@ mod tests {
         assert_eq!(chain.get_hash(0), Some("hash_0"));
         assert_eq!(chain.get_hash(401), Some("hash_401"));
     }
+
+    // ---- Complex rollback scenarios ----
+
+    #[test]
+    fn test_rollback_mixed_removals_and_unspends() {
+        let mut state = WalletState::new();
+        // Output below split: received early, spent in reorg range
+        state.add_outputs(vec![make_output(1_000_000_000_000, 50, "ki_below")]);
+        // Output at split: should be removed
+        state.add_outputs(vec![make_output(2_000_000_000_000, 100, "ki_at")]);
+        // Output above split: should be removed
+        state.add_outputs(vec![make_output(3_000_000_000_000, 150, "ki_above")]);
+
+        // Spend the below-split output at height 120 (in reorg range)
+        state.mark_spent_by_key_images_at_height(&["ki_below".to_string()], 120);
+        // Spend the at-split output at height 80 (below reorg range, stays spent)
+        state.mark_spent_by_key_images_at_height(&["ki_at".to_string()], 80);
+
+        let result = state.rollback_to_height(100);
+
+        // ki_at and ki_above removed (block_height >= 100)
+        assert_eq!(result.removed_outputs.len(), 2);
+        // ki_below unspent (spent_height 120 >= 100), ki_at spent_height 80 < 100 not unspent
+        assert_eq!(result.outputs_unspent, 1);
+        assert_eq!(result.unspent_key_images, vec!["ki_below".to_string()]);
+
+        // Only ki_below remains, now unspent
+        assert_eq!(state.outputs().len(), 1);
+        assert_eq!(state.outputs()[0].key_image, "ki_below");
+        assert!(!state.outputs()[0].spent);
+        assert_eq!(state.outputs()[0].spent_height, None);
+
+        // Balance should reflect the unspent output
+        state.current_height = 99;
+        state.daemon_height = 200;
+        let bal = state.balance_at_height(200);
+        assert_eq!(bal.confirmed, 1_000_000_000_000);
+    }
+
+    #[test]
+    fn test_rollback_multi_account_outputs() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![
+            make_account_output(1_000_000_000_000, 50, "ki_a0", 0),
+            make_account_output(2_000_000_000_000, 50, "ki_a1", 1),
+            make_account_output(3_000_000_000_000, 100, "ki_a0_high", 0),
+            make_account_output(4_000_000_000_000, 100, "ki_a2_high", 2),
+        ]);
+
+        let result = state.rollback_to_height(100);
+        assert_eq!(result.removed_outputs.len(), 2);
+        assert_eq!(state.outputs().len(), 2);
+
+        // Remaining: account 0 and account 1 outputs below split
+        let accounts: Vec<u32> = state.outputs().iter()
+            .map(|o| o.subaddress_index.unwrap().0)
+            .collect();
+        assert!(accounts.contains(&0));
+        assert!(accounts.contains(&1));
+    }
+
+    #[test]
+    fn test_consecutive_rollbacks() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![
+            make_output(1_000_000_000_000, 50, "ki1"),
+            make_output(2_000_000_000_000, 80, "ki2"),
+            make_output(3_000_000_000_000, 100, "ki3"),
+            make_output(4_000_000_000_000, 120, "ki4"),
+        ]);
+        for h in 50..=120 {
+            state.record_block_hash(h, format!("hash_{}", h));
+        }
+
+        // First rollback: remove ki4
+        let r1 = state.rollback_to_height(110);
+        assert_eq!(r1.removed_outputs.len(), 1);
+        assert_eq!(state.outputs().len(), 3);
+        assert_eq!(state.current_height, 109);
+
+        // Second rollback: remove ki3
+        let r2 = state.rollback_to_height(90);
+        assert_eq!(r2.removed_outputs.len(), 1);
+        assert_eq!(state.outputs().len(), 2);
+        assert_eq!(state.current_height, 89);
+
+        // Third rollback: remove ki2
+        let r3 = state.rollback_to_height(60);
+        assert_eq!(r3.removed_outputs.len(), 1);
+        assert_eq!(state.outputs().len(), 1);
+        assert_eq!(state.outputs()[0].key_image, "ki1");
+
+        // Key image index still works
+        let count = state.mark_spent_by_key_images(&["ki1".to_string()]);
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_rollback_then_add_new_outputs() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![
+            make_output(1_000_000_000_000, 50, "ki1"),
+            make_output(2_000_000_000_000, 100, "ki2"),
+        ]);
+
+        state.rollback_to_height(100);
+        assert_eq!(state.outputs().len(), 1);
+
+        // Add new outputs from the new chain fork
+        state.add_outputs(vec![
+            make_output(5_000_000_000_000, 100, "ki_new"),
+        ]);
+        assert_eq!(state.outputs().len(), 2);
+        assert_eq!(state.current_height, 100);
+
+        // Both old (kept) and new outputs accessible via key image
+        let c1 = state.mark_spent_by_key_images(&["ki1".to_string()]);
+        assert_eq!(c1, 1);
+        let c2 = state.mark_spent_by_key_images(&["ki_new".to_string()]);
+        assert_eq!(c2, 1);
+    }
+
+    #[test]
+    fn test_compact_then_rollback() {
+        let mut chain = BlockHashChain::new();
+        for h in 0..=500 {
+            chain.record_block(h, format!("hash_{}", h));
+        }
+        chain.compact();
+
+        // Rollback into the dense window should work fine
+        chain.rollback_to(450);
+        assert!(chain.get_hash(449).is_some());
+        assert!(chain.get_hash(450).is_none());
+        assert!(chain.get_hash(500).is_none());
+        // Genesis preserved
+        assert_eq!(chain.get_hash(0), Some("hash_0"));
+    }
+
+    #[test]
+    fn test_rollback_to_height_zero() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![
+            make_output(1_000_000_000_000, 0, "ki_genesis"),
+            make_output(2_000_000_000_000, 50, "ki1"),
+        ]);
+        state.record_block_hash(0, "genesis".into());
+
+        let result = state.rollback_to_height(0);
+        assert_eq!(result.removed_outputs.len(), 2);
+        assert!(state.outputs().is_empty());
+        assert_eq!(state.current_height, 0);
+    }
+
+    #[test]
+    fn test_rollback_preserves_spent_below_split() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![
+            make_output(1_000_000_000_000, 50, "ki1"),
+            make_output(2_000_000_000_000, 60, "ki2"),
+        ]);
+
+        // Spend ki1 at height 70, ki2 at height 80
+        state.mark_spent_by_key_images_at_height(&["ki1".to_string()], 70);
+        state.mark_spent_by_key_images_at_height(&["ki2".to_string()], 80);
+
+        // Rollback to 90: both spends are below split, should stay spent
+        let result = state.rollback_to_height(90);
+        assert_eq!(result.outputs_unspent, 0);
+        assert!(state.outputs()[0].spent);
+        assert!(state.outputs()[1].spent);
+    }
+
+    #[test]
+    fn test_mark_spent_at_height_idempotent() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1_000_000_000_000, 50, "ki1")]);
+
+        let c1 = state.mark_spent_by_key_images_at_height(&["ki1".to_string()], 100);
+        assert_eq!(c1, 1);
+        assert_eq!(state.outputs()[0].spent_height, Some(100));
+
+        // Marking again should return 0
+        let c2 = state.mark_spent_by_key_images_at_height(&["ki1".to_string()], 200);
+        assert_eq!(c2, 0);
+        // Original spent_height preserved
+        assert_eq!(state.outputs()[0].spent_height, Some(100));
+    }
 }

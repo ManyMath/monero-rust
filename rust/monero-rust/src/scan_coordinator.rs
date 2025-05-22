@@ -571,4 +571,142 @@ mod tests {
         ).unwrap();
         assert!(matches!(outcome, ScanBatchOutcome::Normal(_)));
     }
+
+    #[test]
+    fn reorg_removes_outputs_and_unspends() {
+        let mut state = WalletState::new();
+        // Output below fork survives, output at fork removed
+        state.add_outputs(vec![
+            make_output(1000, 50, "tx_keep", 0),
+            make_output(2000, 101, "tx_remove", 0),
+        ]);
+        state.mark_spent_by_key_images_at_height(
+            &["ki_tx_keep".to_string()], 105,
+        );
+        state.current_height = 105;
+        state.record_block_hash(100, "hash_100".to_string());
+        state.record_block_hash(101, "old_hash_101".to_string());
+
+        let results = vec![
+            make_block_result(100, vec![], vec![]),
+            make_block_result(101, vec![], vec![]),
+        ];
+        let outcome = process_batch_with_reorg_detection(
+            &results, &mut state, None, 1000, 100,
+        ).unwrap();
+
+        match outcome {
+            ScanBatchOutcome::Reorg(info) => {
+                assert_eq!(info.split_height, 101);
+                assert_eq!(info.outputs_removed, 1); // tx_remove
+                assert_eq!(info.outputs_unspent, 1); // tx_keep unspent
+                assert_eq!(info.blocks_detached, 5); // 105 - 101 + 1
+                assert_eq!(info.unspent_key_images, vec!["ki_tx_keep".to_string()]);
+            }
+            _ => panic!("Expected Reorg"),
+        }
+
+        // State rolled back
+        assert_eq!(state.outputs().len(), 1);
+        assert_eq!(state.outputs()[0].tx_hash, "tx_keep");
+        assert!(!state.outputs()[0].spent);
+        assert_eq!(state.current_height, 100);
+    }
+
+    #[test]
+    fn reorg_detection_with_account_filter() {
+        let mut state = WalletState::new();
+        state.current_height = 99;
+        // No known hashes = normal path, but test account filtering is preserved
+        let results = vec![
+            make_block_result(
+                100,
+                vec![
+                    make_output(1000, 100, "tx1", 0),
+                    make_output(2000, 100, "tx2", 1),
+                ],
+                vec![],
+            ),
+        ];
+        let outcome = process_batch_with_reorg_detection(
+            &results, &mut state, Some(&[0]), 1000, 100,
+        ).unwrap();
+        match outcome {
+            ScanBatchOutcome::Normal(batch) => {
+                assert_eq!(batch.outputs_to_store.len(), 1);
+                assert_eq!(batch.outputs_to_store[0].tx_hash, "tx1");
+            }
+            _ => panic!("Expected Normal"),
+        }
+    }
+
+    #[test]
+    fn reorg_at_max_depth_boundary() {
+        let mut state = WalletState::new();
+        let results = vec![make_block_result(100, vec![], vec![])];
+
+        // Depth = MAX_REORG_DEPTH + 1: should fail
+        state.current_height = 100 + MAX_REORG_DEPTH + 1;
+        state.record_block_hash(100, "old_hash".to_string());
+        let result = process_batch_with_reorg_detection(
+            &results, &mut state, None, 3000, 100,
+        );
+        assert!(result.is_err());
+
+        // Depth = MAX_REORG_DEPTH exactly: should succeed (> not >=)
+        state.current_height = 100 + MAX_REORG_DEPTH;
+        state.record_block_hash(100, "old_hash".to_string());
+        let result = process_batch_with_reorg_detection(
+            &results, &mut state, None, 3000, 100,
+        );
+        assert!(result.is_ok());
+        assert!(matches!(result.unwrap(), ScanBatchOutcome::Reorg(_)));
+    }
+
+    #[test]
+    fn normal_batch_populates_block_hashes_for_recording() {
+        let mut state = WalletState::new();
+        state.current_height = 99;
+        let results = vec![
+            make_block_result(100, vec![], vec![]),
+            make_block_result(101, vec![], vec![]),
+        ];
+        let outcome = process_batch_with_reorg_detection(
+            &results, &mut state, None, 1000, 100,
+        ).unwrap();
+        match outcome {
+            ScanBatchOutcome::Normal(batch) => {
+                assert_eq!(batch.block_hashes.len(), 2);
+                // Caller can record these into state
+                for (h, hash) in &batch.block_hashes {
+                    state.record_block_hash(*h, hash.clone());
+                }
+                assert_eq!(state.block_hashes.get_hash(100), Some("hash_100"));
+                assert_eq!(state.block_hashes.get_hash(101), Some("hash_101"));
+            }
+            _ => panic!("Expected Normal"),
+        }
+    }
+
+    #[test]
+    fn reorg_first_block_in_batch() {
+        // Reorg at the very first block of the batch
+        let mut state = WalletState::new();
+        state.current_height = 100;
+        state.record_block_hash(100, "old_hash_100".to_string());
+
+        let results = vec![
+            make_block_result(100, vec![], vec![]),
+            make_block_result(101, vec![], vec![]),
+        ];
+        let outcome = process_batch_with_reorg_detection(
+            &results, &mut state, None, 1000, 100,
+        ).unwrap();
+        match outcome {
+            ScanBatchOutcome::Reorg(info) => {
+                assert_eq!(info.split_height, 100);
+            }
+            _ => panic!("Expected Reorg"),
+        }
+    }
 }

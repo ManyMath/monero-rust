@@ -1,8 +1,10 @@
 use monero_rust::{
     is_spendable, prepare_send_inputs, prepare_sweep_inputs,
     WalletOutput, WalletState,
-    process_single_wallet_batch, compute_lookahead, sync_progress,
+    process_single_wallet_batch, process_batch_with_reorg_detection,
+    compute_lookahead, sync_progress,
     filter_outputs_by_accounts, BlockScanResult,
+    ScanBatchOutcome, MAX_REORG_DEPTH,
 };
 use std::collections::HashSet;
 
@@ -468,4 +470,459 @@ fn lifecycle_spendable_output_queries() {
     // Spendable for accounts 0 + 1
     let spendable_both = state.spendable_outputs_for_accounts(&[0, 1]);
     assert_eq!(spendable_both.len(), 2); // tx1 + tx2
+}
+
+// ==== Reorg handling integration tests ====
+
+/// Helper: run a normal batch through the reorg-aware pipeline, recording hashes.
+fn apply_normal_batch(
+    state: &mut WalletState,
+    batch_results: &[BlockScanResult],
+    accounts: Option<&[u32]>,
+    target_height: u64,
+    start_height: u64,
+) -> monero_rust::ProcessedBatch {
+    let outcome = process_batch_with_reorg_detection(
+        batch_results, state, accounts, target_height, start_height,
+    ).unwrap();
+    match outcome {
+        ScanBatchOutcome::Normal(batch) => {
+            state.add_outputs(batch.outputs_to_store.clone());
+            state.mark_spent_by_key_images_at_height(
+                &batch.spent_key_images, batch.batch_end_height,
+            );
+            for (h, hash) in &batch.block_hashes {
+                state.record_block_hash(*h, hash.clone());
+            }
+            batch
+        }
+        ScanBatchOutcome::Reorg(_) => panic!("Expected Normal, got Reorg"),
+    }
+}
+
+#[test]
+fn reorg_basic_detection_and_rollback() {
+    let mut state = WalletState::new();
+    state.daemon_height = 5000;
+
+    // Scan blocks 100-102 normally
+    let batch1 = vec![
+        make_block_result(100, vec![make_output(1_000_000_000_000, 100, "tx1", 0)], vec![]),
+        make_block_result(101, vec![], vec![]),
+        make_block_result(102, vec![make_output(2_000_000_000_000, 102, "tx2", 0)], vec![]),
+    ];
+    apply_normal_batch(&mut state, &batch1, None, 5000, 100);
+
+    assert_eq!(state.outputs().len(), 2);
+    assert_eq!(state.current_height, 102);
+
+    // Now a reorg: block 101 has a different hash
+    let reorg_batch = vec![
+        make_block_result(100, vec![], vec![]), // hash matches
+        // block 101: make_block_result produces "hash_101" but we recorded "hash_101" — same.
+        // To trigger reorg, we need a block with a different hash at a known height.
+    ];
+    // Simulate reorg by creating a block 101 with a custom hash
+    let mut reorg_block_101 = make_block_result(101, vec![], vec![]);
+    reorg_block_101.block_hash = "reorged_hash_101".to_string();
+    let reorg_batch = vec![
+        make_block_result(100, vec![], vec![]),
+        reorg_block_101,
+    ];
+
+    let outcome = process_batch_with_reorg_detection(
+        &reorg_batch, &mut state, None, 5000, 100,
+    ).unwrap();
+
+    match outcome {
+        ScanBatchOutcome::Reorg(info) => {
+            assert_eq!(info.split_height, 101);
+            // tx2 at height 102 was removed
+            assert_eq!(info.outputs_removed, 1);
+        }
+        _ => panic!("Expected Reorg"),
+    }
+
+    // State rolled back: only tx1 (height 100) remains
+    assert_eq!(state.outputs().len(), 1);
+    assert_eq!(state.outputs()[0].tx_hash, "tx1");
+    assert_eq!(state.current_height, 100);
+}
+
+#[test]
+fn reorg_removes_outputs_in_fork_zone() {
+    let mut state = WalletState::new();
+    state.daemon_height = 5000;
+
+    // Scan blocks 100-104 with outputs at various heights
+    let batch = vec![
+        make_block_result(100, vec![make_output(1_000_000_000_000, 100, "tx_100", 0)], vec![]),
+        make_block_result(101, vec![make_output(2_000_000_000_000, 101, "tx_101", 0)], vec![]),
+        make_block_result(102, vec![make_output(3_000_000_000_000, 102, "tx_102", 0)], vec![]),
+        make_block_result(103, vec![], vec![]),
+        make_block_result(104, vec![make_output(4_000_000_000_000, 104, "tx_104", 0)], vec![]),
+    ];
+    apply_normal_batch(&mut state, &batch, None, 5000, 100);
+    assert_eq!(state.outputs().len(), 4);
+
+    // Reorg at height 102
+    let mut reorg_block = make_block_result(102, vec![], vec![]);
+    reorg_block.block_hash = "new_chain_102".to_string();
+    let reorg_batch = vec![
+        make_block_result(101, vec![], vec![]), // matches
+        reorg_block,
+    ];
+
+    let outcome = process_batch_with_reorg_detection(
+        &reorg_batch, &mut state, None, 5000, 101,
+    ).unwrap();
+
+    match outcome {
+        ScanBatchOutcome::Reorg(info) => {
+            assert_eq!(info.split_height, 102);
+            // tx_102 and tx_104 removed (heights 102, 104)
+            assert_eq!(info.outputs_removed, 2);
+        }
+        _ => panic!("Expected Reorg"),
+    }
+
+    assert_eq!(state.outputs().len(), 2);
+    let remaining_txs: Vec<&str> = state.outputs().iter().map(|o| o.tx_hash.as_str()).collect();
+    assert!(remaining_txs.contains(&"tx_100"));
+    assert!(remaining_txs.contains(&"tx_101"));
+}
+
+#[test]
+fn reorg_unspends_outputs_spent_in_fork_zone() {
+    let mut state = WalletState::new();
+    state.daemon_height = 5000;
+
+    // Receive output at height 50 (well before the fork)
+    let batch1 = vec![
+        make_block_result(50, vec![make_output(5_000_000_000_000, 50, "tx_early", 0)], vec![]),
+    ];
+    apply_normal_batch(&mut state, &batch1, None, 5000, 50);
+
+    // In a later batch, the output is spent at height 100
+    let batch2 = vec![
+        make_block_result(100, vec![], vec!["ki_tx_early".into()]),
+        make_block_result(101, vec![], vec![]),
+    ];
+    apply_normal_batch(&mut state, &batch2, None, 5000, 100);
+
+    assert!(state.outputs()[0].spent);
+    assert_eq!(state.outputs()[0].spent_height, Some(102)); // batch_end_height
+
+    // Balance: 0 confirmed (output is spent)
+    let bal = state.balance_at_height(5000);
+    assert_eq!(bal.confirmed, 0);
+
+    // Reorg at height 100: the spend is undone
+    let mut reorg_block = make_block_result(100, vec![], vec![]);
+    reorg_block.block_hash = "forked_100".to_string();
+    let reorg_batch = vec![reorg_block];
+
+    let outcome = process_batch_with_reorg_detection(
+        &reorg_batch, &mut state, None, 5000, 100,
+    ).unwrap();
+
+    match outcome {
+        ScanBatchOutcome::Reorg(info) => {
+            assert_eq!(info.split_height, 100);
+            assert_eq!(info.outputs_unspent, 1);
+            assert_eq!(info.unspent_key_images, vec!["ki_tx_early".to_string()]);
+        }
+        _ => panic!("Expected Reorg"),
+    }
+
+    // Output is now unspent again
+    assert!(!state.outputs()[0].spent);
+    assert_eq!(state.outputs()[0].spent_height, None);
+
+    // Balance restored
+    let bal = state.balance_at_height(5000);
+    assert_eq!(bal.confirmed, 5_000_000_000_000);
+}
+
+#[test]
+fn reorg_then_rescan_new_chain() {
+    let mut state = WalletState::new();
+    state.daemon_height = 5000;
+
+    // Original chain: blocks 100-102
+    let original = vec![
+        make_block_result(100, vec![make_output(1_000_000_000_000, 100, "tx_orig", 0)], vec![]),
+        make_block_result(101, vec![], vec![]),
+        make_block_result(102, vec![make_output(2_000_000_000_000, 102, "tx_gone", 0)], vec![]),
+    ];
+    apply_normal_batch(&mut state, &original, None, 5000, 100);
+    assert_eq!(state.outputs().len(), 2);
+
+    // Reorg at 101 detected
+    let mut forked_101 = make_block_result(101, vec![], vec![]);
+    forked_101.block_hash = "fork_101".to_string();
+    let reorg_batch = vec![
+        make_block_result(100, vec![], vec![]),
+        forked_101,
+        make_block_result(102, vec![make_output(9_000_000_000_000, 102, "tx_new", 0)], vec![]),
+    ];
+
+    let outcome = process_batch_with_reorg_detection(
+        &reorg_batch, &mut state, None, 5000, 100,
+    ).unwrap();
+
+    match &outcome {
+        ScanBatchOutcome::Reorg(info) => {
+            assert_eq!(info.split_height, 101);
+        }
+        _ => panic!("Expected Reorg"),
+    }
+
+    // Now process the new chain blocks (101+)
+    let new_chain_blocks: Vec<BlockScanResult> = reorg_batch.into_iter()
+        .filter(|r| r.block_height >= 101)
+        .collect();
+    let batch = process_single_wallet_batch(&new_chain_blocks, None, 5000, 101);
+    state.add_outputs(batch.outputs_to_store);
+    for (h, hash) in &batch.block_hashes {
+        state.record_block_hash(*h, hash.clone());
+    }
+
+    // tx_orig kept, tx_gone removed, tx_new added
+    assert_eq!(state.outputs().len(), 2);
+    let txs: Vec<&str> = state.outputs().iter().map(|o| o.tx_hash.as_str()).collect();
+    assert!(txs.contains(&"tx_orig"));
+    assert!(txs.contains(&"tx_new"));
+
+    let bal = state.balance_at_height(5000);
+    assert_eq!(bal.confirmed, 10_000_000_000_000); // 1 + 9 XMR
+}
+
+#[test]
+fn reorg_multi_account_balance_recalculation() {
+    let mut state = WalletState::new();
+    state.daemon_height = 200;
+
+    // Multi-account outputs
+    let batch = vec![
+        make_block_result(100, vec![
+            make_output(1_000_000_000_000, 100, "tx_a0", 0),
+            make_output(2_000_000_000_000, 100, "tx_a1", 1),
+        ], vec![]),
+        make_block_result(101, vec![
+            make_output(3_000_000_000_000, 101, "tx_a0_later", 0),
+        ], vec![]),
+    ];
+    apply_normal_batch(&mut state, &batch, None, 200, 100);
+
+    let bal = state.balance_at_height(200);
+    assert_eq!(bal.confirmed, 6_000_000_000_000);
+
+    // Reorg at 101: only tx_a0_later removed
+    let mut forked = make_block_result(101, vec![], vec![]);
+    forked.block_hash = "fork_101".to_string();
+
+    let outcome = process_batch_with_reorg_detection(
+        &[make_block_result(100, vec![], vec![]), forked],
+        &mut state, None, 200, 100,
+    ).unwrap();
+
+    assert!(matches!(outcome, ScanBatchOutcome::Reorg(_)));
+    assert_eq!(state.outputs().len(), 2);
+
+    let bal = state.balance_at_height(200);
+    assert_eq!(bal.confirmed, 3_000_000_000_000); // tx_a0 + tx_a1
+
+    // Per-account balance via spendable queries
+    state.daemon_height = 200;
+    let a0 = state.spendable_outputs_for_accounts(&[0]);
+    assert_eq!(a0.len(), 1);
+    assert_eq!(a0[0].amount, 1_000_000_000_000);
+
+    let a1 = state.spendable_outputs_for_accounts(&[1]);
+    assert_eq!(a1.len(), 1);
+    assert_eq!(a1[0].amount, 2_000_000_000_000);
+}
+
+#[test]
+fn sequential_batches_with_block_hash_continuity() {
+    let mut state = WalletState::new();
+    state.daemon_height = 5000;
+
+    // Batch 1: blocks 100-102
+    let batch1 = vec![
+        make_block_result(100, vec![], vec![]),
+        make_block_result(101, vec![], vec![]),
+        make_block_result(102, vec![], vec![]),
+    ];
+    apply_normal_batch(&mut state, &batch1, None, 5000, 100);
+
+    // Verify hashes recorded
+    assert_eq!(state.block_hashes.get_hash(100), Some("hash_100"));
+    assert_eq!(state.block_hashes.get_hash(102), Some("hash_102"));
+
+    // Batch 2: blocks 103-105, should continue normally
+    let batch2 = vec![
+        make_block_result(103, vec![], vec![]),
+        make_block_result(104, vec![], vec![]),
+        make_block_result(105, vec![], vec![]),
+    ];
+    apply_normal_batch(&mut state, &batch2, None, 5000, 103);
+
+    // All hashes recorded
+    for h in 100..=105 {
+        assert!(state.block_hashes.get_hash(h).is_some());
+    }
+
+    // Batch 3: overlaps with previous, should detect no reorg (matching hashes)
+    let batch3 = vec![
+        make_block_result(104, vec![], vec![]),
+        make_block_result(105, vec![], vec![]),
+        make_block_result(106, vec![make_output(1_000_000_000_000, 106, "tx_new", 0)], vec![]),
+    ];
+    apply_normal_batch(&mut state, &batch3, None, 5000, 104);
+    assert_eq!(state.outputs().len(), 1);
+}
+
+#[test]
+fn reorg_max_depth_boundary_integration() {
+    let mut state = WalletState::new();
+    state.daemon_height = 5000;
+
+    // Record a hash far back
+    state.record_block_hash(100, "old_hash_100".to_string());
+
+    // Set current height to MAX_REORG_DEPTH + 1 away (exceeds limit)
+    state.current_height = 100 + MAX_REORG_DEPTH + 1;
+
+    let results = vec![make_block_result(100, vec![], vec![])];
+    let result = process_batch_with_reorg_detection(
+        &results, &mut state, None, 5000, 100,
+    );
+    assert!(result.is_err());
+
+    // Exactly MAX_REORG_DEPTH: should succeed (> not >=)
+    state.current_height = 100 + MAX_REORG_DEPTH;
+    state.record_block_hash(100, "old_hash_100".to_string());
+    let result = process_batch_with_reorg_detection(
+        &results, &mut state, None, 5000, 100,
+    );
+    assert!(result.is_ok());
+}
+
+#[test]
+fn block_hash_compact_during_scan_pipeline() {
+    let mut state = WalletState::new();
+    state.daemon_height = 5000;
+
+    // Simulate scanning 600 blocks in batches of 100
+    for batch_start in (0..600).step_by(100) {
+        let batch: Vec<BlockScanResult> = (batch_start..batch_start + 100)
+            .map(|h| make_block_result(h, vec![], vec![]))
+            .collect();
+        apply_normal_batch(&mut state, &batch, None, 5000, batch_start);
+        state.block_hashes.compact();
+    }
+
+    // After compaction, we should have far fewer than 600 hashes
+    assert!(state.block_hashes.len() < 150);
+    // But still have the tip and genesis-area
+    assert!(state.block_hashes.get_hash(599).is_some());
+    assert!(state.block_hashes.get_hash(0).is_some());
+
+    // Short chain history should work for fork detection
+    let history = state.get_short_chain_history();
+    assert!(!history.is_empty());
+    assert_eq!(history[0].0, 599); // tip
+}
+
+#[test]
+fn lifecycle_scan_reorg_spend_balance() {
+    let mut state = WalletState::new();
+    state.daemon_height = 200;
+
+    // Phase 1: Scan and accumulate outputs
+    let batch1 = vec![
+        make_block_result(100, vec![
+            make_output(5_000_000_000_000, 100, "tx_big", 0),
+        ], vec![]),
+        make_block_result(101, vec![
+            make_output(2_000_000_000_000, 101, "tx_med", 0),
+        ], vec![]),
+        make_block_result(102, vec![
+            make_output(1_000_000_000_000, 102, "tx_small", 0),
+        ], vec![]),
+    ];
+    apply_normal_batch(&mut state, &batch1, None, 200, 100);
+
+    let bal = state.balance_at_height(200);
+    assert_eq!(bal.confirmed, 8_000_000_000_000);
+
+    // Phase 2: Spend tx_med (prepare and mark spent)
+    let send = prepare_send_inputs(state.outputs(), 200, 1_000_000_000_000, None).unwrap();
+    state.mark_spent_by_output_keys(&send.spent_output_keys);
+
+    let bal = state.balance_at_height(200);
+    assert_eq!(bal.confirmed, 8_000_000_000_000 - send.stored_outputs[0].amount);
+
+    // Phase 3: Reorg at height 102 — tx_small removed
+    let mut forked = make_block_result(102, vec![], vec![]);
+    forked.block_hash = "fork_102".to_string();
+    let reorg_batch = vec![
+        make_block_result(101, vec![], vec![]),
+        forked,
+    ];
+
+    let outcome = process_batch_with_reorg_detection(
+        &reorg_batch, &mut state, None, 200, 101,
+    ).unwrap();
+
+    match outcome {
+        ScanBatchOutcome::Reorg(info) => {
+            assert_eq!(info.split_height, 102);
+            assert_eq!(info.outputs_removed, 1); // tx_small
+        }
+        _ => panic!("Expected Reorg"),
+    }
+
+    // tx_big and tx_med remain (one spent via mark_spent_by_output_keys — spent_height=None,
+    // so conservative rollback does NOT unspend it)
+    assert_eq!(state.outputs().len(), 2);
+}
+
+#[test]
+fn reorg_conservative_no_unspend_without_height() {
+    let mut state = WalletState::new();
+    state.daemon_height = 5000;
+
+    let batch = vec![
+        make_block_result(100, vec![make_output(3_000_000_000_000, 100, "tx1", 0)], vec![]),
+    ];
+    apply_normal_batch(&mut state, &batch, None, 5000, 100);
+
+    // Mark spent via output keys (no height tracked — old API)
+    state.mark_spent_by_output_keys(&["tx1:0".to_string()]);
+    assert!(state.outputs()[0].spent);
+    assert_eq!(state.outputs()[0].spent_height, None);
+
+    // Reorg at 50 — output is below split, but spent_height is None
+    state.record_block_hash(50, "old_50".to_string());
+    state.current_height = 100;
+
+    let mut forked = make_block_result(50, vec![], vec![]);
+    forked.block_hash = "new_50".to_string();
+    let reorg_batch = vec![forked];
+
+    let outcome = process_batch_with_reorg_detection(
+        &reorg_batch, &mut state, None, 5000, 50,
+    ).unwrap();
+
+    match outcome {
+        ScanBatchOutcome::Reorg(info) => {
+            assert_eq!(info.outputs_unspent, 0); // Conservative: no unspend
+            // Output at height 100 was removed though
+            assert_eq!(info.outputs_removed, 1);
+        }
+        _ => panic!("Expected Reorg"),
+    }
 }
