@@ -281,6 +281,7 @@ class _DebugViewState extends State<DebugView> {
   StreamSubscription? _spentStatusUpdatedSubscription;
   StreamSubscription? _mempoolScanSubscription;
   StreamSubscription? _multiWalletScanSubscription;
+  StreamSubscription? _reorgDetectedSubscription;
 
   @override
   void initState() {
@@ -594,6 +595,21 @@ class _DebugViewState extends State<DebugView> {
       _updateBlockHeightFromWallets();
     });
 
+    _reorgDetectedSubscription = ReorgDetectedResponse.rustSignalStream.listen((signal) {
+      final msg = signal.message;
+      setState(() {
+        _lifecycle.handleReorgDetected(
+          splitHeight: msg.splitHeight.toInt(),
+          removedKeyImages: msg.removedKeyImages,
+          unspentKeyImages: msg.unspentKeyImages,
+        );
+        if (_lifecycle.activeWallet != null) {
+          _allOutputsAllAccounts = List.from(_lifecycle.activeWallet!.outputs);
+          _allTransactionsAllAccounts = List.from(_lifecycle.activeWallet!.transactions);
+        }
+      });
+    });
+
     // Load available wallets from localStorage
     _refreshAvailableWallets();
   }
@@ -679,6 +695,7 @@ class _DebugViewState extends State<DebugView> {
     _spentStatusUpdatedSubscription?.cancel();
     _mempoolScanSubscription?.cancel();
     _multiWalletScanSubscription?.cancel();
+    _reorgDetectedSubscription?.cancel();
 
     _stopPollingTimers();
     _debounceTimer?.cancel();

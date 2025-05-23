@@ -261,6 +261,7 @@ impl From<OwnedOutput> for monero_rust::WalletOutput {
             received_output_bytes: o.received_output_bytes,
             block_height: o.block_height,
             spent: o.spent,
+            spent_height: None,
             key_image: o.key_image,
             is_coinbase: o.is_coinbase,
         }
@@ -441,4 +442,14 @@ pub struct RestoreWalletDataRequest {
     pub outputs: Vec<OwnedOutput>,
     pub daemon_height: u64,
     pub current_height: u64,
+}
+
+#[derive(Serialize, RustSignal)]
+pub struct ReorgDetectedResponse {
+    pub split_height: u64,
+    pub blocks_detached: u64,
+    pub outputs_removed: u64,
+    pub outputs_unspent: u64,
+    pub removed_key_images: Vec<String>,
+    pub unspent_key_images: Vec<String>,
 }

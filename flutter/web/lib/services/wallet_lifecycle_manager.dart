@@ -347,6 +347,54 @@ class WalletLifecycleManager {
     allTransactions = List<WalletTransaction>.from(activeWallet!.transactions);
   }
 
+  void handleReorgDetected({
+    required int splitHeight,
+    required List<String> removedKeyImages,
+    required List<String> unspentKeyImages,
+  }) {
+    if (activeWalletId == null || activeWallet == null) return;
+
+    final wallet = activeWallet!;
+
+    // Remove outputs whose key images were removed (they were in orphaned blocks)
+    if (removedKeyImages.isNotEmpty) {
+      final removedSet = removedKeyImages.toSet();
+      wallet.outputs.removeWhere((o) => removedSet.contains(o.keyImage));
+    }
+
+    // Un-spend outputs whose key images were unspent (their spend was in orphaned blocks)
+    if (unspentKeyImages.isNotEmpty) {
+      final unspentSet = unspentKeyImages.toSet();
+      for (int i = 0; i < wallet.outputs.length; i++) {
+        if (unspentSet.contains(wallet.outputs[i].keyImage)) {
+          wallet.outputs[i] = wallet.outputs[i].copyWith(spent: false);
+        }
+      }
+    }
+
+    // Update wallet height
+    if (splitHeight > 0) {
+      wallet.currentHeight = splitHeight - 1;
+    }
+
+    // Rebuild transactions from remaining outputs
+    final outputsByTx = <String, List<OwnedOutput>>{};
+    for (var o in wallet.outputs) {
+      outputsByTx.putIfAbsent(o.txHash, () => []).add(o);
+    }
+    wallet.transactions = outputsByTx.entries.map((e) => WalletTransaction(
+      txHash: e.key,
+      blockHeight: e.value.first.blockHeight.toInt(),
+      blockTimestamp: 0,
+      receivedOutputs: e.value,
+      spentKeyImages: [],
+    )).toList();
+
+    // Refresh public state
+    allOutputs = List.from(wallet.outputs);
+    allTransactions = List.from(wallet.transactions);
+  }
+
   /// Ensures wallet accounts exist for all subaddress indices in the given outputs.
   /// Returns the same instance if no changes, or a new instance with accounts added.
   WalletInstance _ensureAccountsExist(WalletInstance wallet, Iterable<OwnedOutput> outputs) {

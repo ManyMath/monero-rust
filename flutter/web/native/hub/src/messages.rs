@@ -55,6 +55,7 @@ pub struct StoreOutputs {
     pub network: String,
     pub outputs: Vec<monero_rust::WalletOutput>,
     pub daemon_height: u64,
+    pub block_hashes: Vec<(u64, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -122,6 +123,19 @@ pub struct UpdateMultiWalletScanState {
 #[derive(Debug, Clone)]
 pub struct UpdateSpentStatus {
     pub key_images: Vec<String>,
+    pub height: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct HandleReorg {
+    pub batch_results: Vec<monero_rust::BlockScanResult>,
+    pub accounts_to_scan: Option<Vec<u32>>,
+    pub target_height: u64,
+    pub batch_start_height: u64,
+    pub node_url: String,
+    pub seed: String,
+    pub network: String,
+    pub account_lookahead: u32,
 }
 
 #[derive(Debug, Clone)]

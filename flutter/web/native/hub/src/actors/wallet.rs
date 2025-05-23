@@ -455,12 +455,14 @@ impl WalletActor {
                             network,
                             outputs: result.outputs.clone(),
                             daemon_height: result.daemon_height,
+                            block_hashes: vec![(result.block_height, result.block_hash.clone())],
                         })
                         .await;
 
                     if !result.spent_key_images.is_empty() {
                         let _ = self_addr.notify(UpdateSpentStatus {
                             key_images: result.spent_key_images.clone(),
+                            height: result.block_height,
                         }).await;
                     }
 
@@ -803,14 +805,19 @@ impl Notifiable<StoreOutputs> for WalletActor {
     async fn notify(&mut self, msg: StoreOutputs, _ctx: &Context<Self>) {
         #[cfg(target_arch = "wasm32")]
         web_sys::console::log_1(&format!(
-            "[StoreOutputs] new_outputs={}, daemon_height={}, total_after={}",
+            "[StoreOutputs] new_outputs={}, daemon_height={}, total_after={}, block_hashes={}",
             msg.outputs.len(), msg.daemon_height,
-            self.core_state.outputs().len() + msg.outputs.len()
+            self.core_state.outputs().len() + msg.outputs.len(),
+            msg.block_hashes.len()
         ).into());
         self.seed = Some(msg.seed);
         self.network = Some(msg.network);
         self.core_state.daemon_height = msg.daemon_height;
         self.core_state.add_outputs(msg.outputs);
+        for (height, hash) in msg.block_hashes {
+            self.core_state.record_block_hash(height, hash);
+        }
+        self.core_state.block_hashes.compact();
     }
 }
 
@@ -1011,6 +1018,7 @@ impl Notifiable<ContinueScan> for WalletActor {
         let accounts_to_scan = self.scan_accounts_to_scan.clone();
         let target_height = self.scan_target_height;
         let mut self_addr = ctx.address();
+        let block_hash_history = self.core_state.get_short_chain_history();
 
         // For batch scanning, we don't increment by 1 here.
         // The batch result will tell us how many blocks were fetched.
@@ -1026,14 +1034,15 @@ impl Notifiable<ContinueScan> for WalletActor {
                 accounts_to_scan.as_deref(),
             );
 
-            // 1. Take from prefetch slot or fetch fresh
+            // 1. Take from prefetch slot or fetch fresh (with history for reorg detection)
             let fetched = match take_prefetch(scan_gen, batch_start_height) {
                 Some(data) => data,
-                None => match monero_rust::fetch_blocks_batch_with_url(
+                None => match monero_rust::fetch_blocks_batch_with_history_url(
                     &node_url,
                     batch_start_height,
+                    &block_hash_history,
                 ).await {
-                    Ok(data) => data,
+                    Ok((data, _actual_start)) => data,
                     Err(e) => {
                         #[cfg(target_arch = "wasm32")]
                         web_sys::console::error_1(
@@ -1098,17 +1107,52 @@ impl Notifiable<ContinueScan> for WalletActor {
                 lookahead,
             ).await {
                 Ok(batch_results) => {
+                    if batch_results.is_empty() {
+                        let _ = self_addr.notify(StopScan).await;
+                        return;
+                    }
+
+                    // Check for reorg: compare block hashes from batch against known hashes
+                    let mut reorg_detected = false;
+                    for result in &batch_results {
+                        for (known_height, known_hash) in &block_hash_history {
+                            if result.block_height == *known_height
+                                && result.block_hash != *known_hash
+                            {
+                                reorg_detected = true;
+                                break;
+                            }
+                        }
+                        if reorg_detected { break; }
+                    }
+
+                    if reorg_detected {
+                        #[cfg(target_arch = "wasm32")]
+                        web_sys::console::log_1(
+                            &format!(
+                                "[ContinueScan] Reorg detected at batch starting {}",
+                                batch_start_height
+                            ).into(),
+                        );
+                        let _ = self_addr.notify(HandleReorg {
+                            batch_results,
+                            accounts_to_scan,
+                            target_height,
+                            batch_start_height,
+                            node_url,
+                            seed,
+                            network,
+                            account_lookahead,
+                        }).await;
+                        return;
+                    }
+
                     let processed = monero_rust::process_single_wallet_batch(
                         &batch_results,
                         accounts_to_scan.as_deref(),
                         target_height,
                         batch_start_height,
                     );
-
-                    if batch_results.is_empty() {
-                        let _ = self_addr.notify(StopScan).await;
-                        return;
-                    }
 
                     // Send BlockScanResponse for each block with outputs
                     for block in &processed.blocks_with_outputs {
@@ -1135,6 +1179,7 @@ impl Notifiable<ContinueScan> for WalletActor {
                             network: network.clone(),
                             outputs: processed.outputs_to_store,
                             daemon_height: processed.daemon_height,
+                            block_hashes: processed.block_hashes.clone(),
                         })
                         .await;
 
@@ -1142,6 +1187,7 @@ impl Notifiable<ContinueScan> for WalletActor {
                         let _ = self_addr
                             .notify(UpdateSpentStatus {
                                 key_images: processed.spent_key_images,
+                                height: processed.batch_end_height,
                             })
                             .await;
                     }
@@ -1420,7 +1466,9 @@ impl Notifiable<SetDaemonHeight> for WalletActor {
 #[async_trait]
 impl Notifiable<UpdateSpentStatus> for WalletActor {
     async fn notify(&mut self, msg: UpdateSpentStatus, _ctx: &Context<Self>) {
-        let updated_count = self.core_state.mark_spent_by_key_images(&msg.key_images);
+        let updated_count = self.core_state.mark_spent_by_key_images_at_height(
+            &msg.key_images, msg.height
+        );
 
         if updated_count > 0 {
             let balance = self.core_state.balance();
@@ -1435,6 +1483,100 @@ impl Notifiable<UpdateSpentStatus> for WalletActor {
                 spent_key_images: msg.key_images.clone(),
             }
             .send_signal_to_dart();
+        }
+    }
+}
+
+#[async_trait]
+impl Notifiable<HandleReorg> for WalletActor {
+    async fn notify(&mut self, msg: HandleReorg, ctx: &Context<Self>) {
+        let outcome = monero_rust::process_batch_with_reorg_detection(
+            &msg.batch_results,
+            &mut self.core_state,
+            msg.accounts_to_scan.as_deref(),
+            msg.target_height,
+            msg.batch_start_height,
+        );
+
+        match outcome {
+            Ok(monero_rust::ScanBatchOutcome::Reorg(info)) => {
+                #[cfg(target_arch = "wasm32")]
+                web_sys::console::log_1(
+                    &format!(
+                        "[HandleReorg] Reorg at height {}: {} blocks detached, {} outputs removed, {} outputs unspent",
+                        info.split_height, info.blocks_detached,
+                        info.outputs_removed, info.outputs_unspent
+                    ).into(),
+                );
+
+                ReorgDetectedResponse {
+                    split_height: info.split_height,
+                    blocks_detached: info.blocks_detached,
+                    outputs_removed: info.outputs_removed as u64,
+                    outputs_unspent: info.outputs_unspent as u64,
+                    removed_key_images: info.removed_key_images.clone(),
+                    unspent_key_images: info.unspent_key_images.clone(),
+                }.send_signal_to_dart();
+
+                // Process new-chain blocks from same batch
+                let new_blocks: Vec<_> = msg.batch_results.iter()
+                    .filter(|r| r.block_height >= info.split_height)
+                    .cloned().collect();
+                let processed = monero_rust::process_single_wallet_batch(
+                    &new_blocks,
+                    msg.accounts_to_scan.as_deref(),
+                    msg.target_height,
+                    info.split_height,
+                );
+
+                self.core_state.add_outputs(processed.outputs_to_store);
+                for (h, hash) in &processed.block_hashes {
+                    self.core_state.record_block_hash(*h, hash.clone());
+                }
+                self.core_state.block_hashes.compact();
+                if !processed.spent_key_images.is_empty() {
+                    self.core_state.mark_spent_by_key_images_at_height(
+                        &processed.spent_key_images, processed.batch_end_height
+                    );
+                }
+
+                let balance = self.core_state.balance();
+                BalanceResponse {
+                    confirmed: balance.confirmed,
+                    unconfirmed: balance.unconfirmed,
+                }.send_signal_to_dart();
+
+                // Continue scanning from where the batch left off
+                let mut self_addr = ctx.address();
+                let _ = self_addr.notify(UpdateScanState {
+                    is_scanning: processed.should_continue,
+                    current_height: processed.batch_end_height,
+                    target_height: msg.target_height,
+                    node_url: msg.node_url,
+                    seed: msg.seed,
+                    network: msg.network,
+                    account_lookahead: msg.account_lookahead,
+                    accounts_to_scan: msg.accounts_to_scan,
+                }).await;
+
+                if processed.should_continue {
+                    let _ = self_addr.notify(ContinueScan).await;
+                }
+            }
+            Ok(monero_rust::ScanBatchOutcome::Normal(_)) => {
+                // False alarm — hash comparison in spawn_local was wrong.
+                // Continue scanning normally.
+                let mut self_addr = ctx.address();
+                let _ = self_addr.notify(ContinueScan).await;
+            }
+            Err(e) => {
+                #[cfg(target_arch = "wasm32")]
+                web_sys::console::error_1(
+                    &format!("[HandleReorg] Error: {}", e).into(),
+                );
+                let mut self_addr = ctx.address();
+                let _ = self_addr.notify(StopScan).await;
+            }
         }
     }
 }
