@@ -122,6 +122,7 @@ impl WalletActor {
         _owned_tasks.spawn(Self::listen_to_scan_block_multi_wallet());
         _owned_tasks.spawn(Self::listen_to_start_multi_wallet_scan(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_restore_wallet_data(self_addr.clone()));
+        _owned_tasks.spawn(Self::listen_to_get_block_hashes(self_addr.clone()));
 
         WalletActor {
             core_state: monero_rust::WalletState::new(),
@@ -741,7 +742,15 @@ impl WalletActor {
                 outputs,
                 daemon_height: msg.daemon_height,
                 current_height: msg.current_height,
+                block_hashes_json: msg.block_hashes_json,
             }).await;
+        }
+    }
+
+    async fn listen_to_get_block_hashes(mut self_addr: Address<Self>) {
+        let receiver = GetBlockHashesRequest::get_dart_signal_receiver();
+        while let Some(_signal_pack) = receiver.recv().await {
+            let _ = self_addr.notify(GetBlockHashesMsg).await;
         }
     }
 }
@@ -753,21 +762,68 @@ struct RestoreOutputs {
     outputs: Vec<monero_rust::WalletOutput>,
     daemon_height: u64,
     current_height: u64,
+    block_hashes_json: Option<String>,
 }
+
+#[derive(Debug, Clone)]
+struct GetBlockHashesMsg;
 
 #[async_trait]
 impl Notifiable<RestoreOutputs> for WalletActor {
     async fn notify(&mut self, msg: RestoreOutputs, _ctx: &Context<Self>) {
         #[cfg(target_arch = "wasm32")]
         web_sys::console::log_1(&format!(
-            "[RestoreOutputs] outputs={}, daemon_height={}, current_height={}",
-            msg.outputs.len(), msg.daemon_height, msg.current_height
+            "[RestoreOutputs] outputs={}, daemon_height={}, current_height={}, has_block_hashes={}",
+            msg.outputs.len(), msg.daemon_height, msg.current_height, msg.block_hashes_json.is_some()
         ).into());
         self.seed = Some(msg.seed);
         self.network = Some(msg.network);
         self.core_state.daemon_height = msg.daemon_height;
         self.core_state.current_height = msg.current_height;
         self.core_state.replace_outputs(msg.outputs);
+
+        if let Some(json) = msg.block_hashes_json {
+            match serde_json::from_str::<monero_rust::BlockHashChain>(&json) {
+                Ok(chain) => {
+                    self.core_state.block_hashes = chain;
+                    #[cfg(target_arch = "wasm32")]
+                    web_sys::console::log_1(
+                        &"[RestoreOutputs] Block hash chain restored".into(),
+                    );
+                }
+                Err(e) => {
+                    #[cfg(target_arch = "wasm32")]
+                    web_sys::console::error_1(
+                        &format!("[RestoreOutputs] Failed to deserialize block hashes: {}", e).into(),
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl Notifiable<GetBlockHashesMsg> for WalletActor {
+    async fn notify(&mut self, _msg: GetBlockHashesMsg, _ctx: &Context<Self>) {
+        let json_result = serde_json::to_string(&self.core_state.block_hashes);
+        match json_result {
+            Ok(json) => {
+                BlockHashesResponse {
+                    success: true,
+                    error: None,
+                    block_hashes_json: Some(json),
+                }
+                .send_signal_to_dart();
+            }
+            Err(e) => {
+                BlockHashesResponse {
+                    success: false,
+                    error: Some(format!("Failed to serialize block hashes: {}", e)),
+                    block_hashes_json: None,
+                }
+                .send_signal_to_dart();
+            }
+        }
     }
 }
 

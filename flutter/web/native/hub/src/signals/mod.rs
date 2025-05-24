@@ -442,6 +442,18 @@ pub struct RestoreWalletDataRequest {
     pub outputs: Vec<OwnedOutput>,
     pub daemon_height: u64,
     pub current_height: u64,
+    #[serde(default)]
+    pub block_hashes_json: Option<String>,
+}
+
+#[derive(Deserialize, DartSignal)]
+pub struct GetBlockHashesRequest {}
+
+#[derive(Serialize, RustSignal)]
+pub struct BlockHashesResponse {
+    pub success: bool,
+    pub error: Option<String>,
+    pub block_hashes_json: Option<String>,
 }
 
 #[derive(Serialize, RustSignal)]
