@@ -19,6 +19,15 @@ final assignRustSignal = <String, void Function(Uint8List, Uint8List)>{
     _balanceResponseStreamController.add(rustSignal);
     BalanceResponse.latestRustSignal = rustSignal;
   },
+  'BlockHashesResponse': (Uint8List messageBytes, Uint8List binary) {
+    final message = BlockHashesResponse.bincodeDeserialize(messageBytes);
+    final rustSignal = RustSignalPack(
+      message,
+      binary,
+    );
+    _blockHashesResponseStreamController.add(rustSignal);
+    BlockHashesResponse.latestRustSignal = rustSignal;
+  },
   'BlockHeightFromTimestampResponse': (Uint8List messageBytes, Uint8List binary) {
     final message = BlockHeightFromTimestampResponse.bincodeDeserialize(messageBytes);
     final rustSignal = RustSignalPack(
