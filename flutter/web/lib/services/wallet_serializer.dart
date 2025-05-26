@@ -23,6 +23,7 @@ class WalletSerializer {
     required List<int> accounts,
     required int activeAccount,
     required Set<int> scanningAccounts,
+    String? blockHashesJson,
   }) {
     return {
       'version': currentVersion,
@@ -66,6 +67,7 @@ class WalletSerializer {
       'accounts': accounts,
       'activeAccount': activeAccount,
       'scanningAccounts': scanningAccounts.toList(),
+      if (blockHashesJson != null) 'blockHashesJson': blockHashesJson,
     };
   }
 
@@ -98,6 +100,7 @@ class WalletSerializer {
     Map<int, List<OwnedOutput>> outputsByAccount,
     int activeAccount,
     Set<int> scanningAccounts,
+    String? blockHashesJson,
   }) deserialize(Map<String, dynamic> walletData) {
     // Check version compatibility
     final version = walletData['version'] as int?;
@@ -179,6 +182,8 @@ class WalletSerializer {
       outputsByAccount.putIfAbsent(account, () => []).add(output);
     }
 
+    final blockHashesJson = walletData['blockHashesJson'] as String?;
+
     return (
       seed: walletData['seed'] as String,
       network: walletData['network'] as String,
@@ -193,6 +198,7 @@ class WalletSerializer {
       outputsByAccount: outputsByAccount,
       activeAccount: activeAccount,
       scanningAccounts: scanningAccounts,
+      blockHashesJson: blockHashesJson,
     );
   }
 

@@ -33,6 +33,7 @@ class WalletPersistenceService {
     required List<int> accounts,
     required int activeAccount,
     required Set<int> scanningAccounts,
+    String? blockHashesJson,
   }) async {
     try {
       final storageKey = getStorageKey(walletId);
@@ -48,6 +49,7 @@ class WalletPersistenceService {
         accounts: accounts,
         activeAccount: activeAccount,
         scanningAccounts: scanningAccounts,
+        blockHashesJson: blockHashesJson,
       );
 
       final jsonString = jsonEncode(walletData);
@@ -99,6 +101,7 @@ class WalletPersistenceService {
         outputsByAccount: parsed.outputsByAccount,
         activeAccount: parsed.activeAccount,
         scanningAccounts: parsed.scanningAccounts,
+        blockHashesJson: parsed.blockHashesJson,
       );
     } catch (e) {
       return LoadWalletResult.error('Failed to parse wallet data: $e');
@@ -147,6 +150,7 @@ class WalletPersistenceService {
     required String nodeUrl,
     required List<WalletTransaction> transactions,
     required Set<String> selectedOutputs,
+    String? blockHashesJson,
   }) async {
     return save(
       walletId: wallet.walletId,
@@ -162,6 +166,7 @@ class WalletPersistenceService {
       accounts: wallet.accounts,
       activeAccount: wallet.activeAccount,
       scanningAccounts: wallet.scanningAccounts,
+      blockHashesJson: blockHashesJson,
     );
   }
 
@@ -199,6 +204,7 @@ class WalletPersistenceService {
         nodeUrl: result.nodeUrl!,
         transactions: result.transactions!,
         selectedOutputs: result.selectedOutputs!,
+        blockHashesJson: result.blockHashesJson,
       );
     } catch (e) {
       return LoadWalletInstanceResult.error('Failed to create wallet instance: $e');
@@ -234,6 +240,7 @@ class LoadWalletResult {
   final Map<int, List<OwnedOutput>>? outputsByAccount;
   final int? activeAccount;
   final Set<int>? scanningAccounts;
+  final String? blockHashesJson;
 
   LoadWalletResult._({
     required this.success,
@@ -250,6 +257,7 @@ class LoadWalletResult {
     this.outputsByAccount,
     this.activeAccount,
     this.scanningAccounts,
+    this.blockHashesJson,
   });
 
   factory LoadWalletResult.success({
@@ -265,6 +273,7 @@ class LoadWalletResult {
     required Map<int, List<OwnedOutput>> outputsByAccount,
     required int activeAccount,
     required Set<int> scanningAccounts,
+    String? blockHashesJson,
   }) =>
       LoadWalletResult._(
         success: true,
@@ -280,6 +289,7 @@ class LoadWalletResult {
         outputsByAccount: outputsByAccount,
         activeAccount: activeAccount,
         scanningAccounts: scanningAccounts,
+        blockHashesJson: blockHashesJson,
       );
 
   factory LoadWalletResult.error(String error) =>
@@ -352,6 +362,7 @@ class LoadWalletInstanceResult {
   final String? nodeUrl;
   final List<WalletTransaction>? transactions;
   final Set<String>? selectedOutputs;
+  final String? blockHashesJson;
 
   LoadWalletInstanceResult._({
     required this.success,
@@ -360,6 +371,7 @@ class LoadWalletInstanceResult {
     this.nodeUrl,
     this.transactions,
     this.selectedOutputs,
+    this.blockHashesJson,
   });
 
   factory LoadWalletInstanceResult.success({
@@ -367,6 +379,7 @@ class LoadWalletInstanceResult {
     required String nodeUrl,
     required List<WalletTransaction> transactions,
     required Set<String> selectedOutputs,
+    String? blockHashesJson,
   }) =>
       LoadWalletInstanceResult._(
         success: true,
@@ -374,6 +387,7 @@ class LoadWalletInstanceResult {
         nodeUrl: nodeUrl,
         transactions: transactions,
         selectedOutputs: selectedOutputs,
+        blockHashesJson: blockHashesJson,
       );
 
   factory LoadWalletInstanceResult.error(String error) =>
