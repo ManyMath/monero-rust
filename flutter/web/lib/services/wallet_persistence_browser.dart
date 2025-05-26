@@ -37,6 +37,7 @@ class WalletPersistenceBrowser {
     required List<int> accounts,
     required int activeAccount,
     required Set<int> scanningAccounts,
+    String? blockHashesJson,
   }) =>
       _defaultInstance.save(
         walletId: walletId,
@@ -52,6 +53,7 @@ class WalletPersistenceBrowser {
         accounts: accounts,
         activeAccount: activeAccount,
         scanningAccounts: scanningAccounts,
+        blockHashesJson: blockHashesJson,
       );
 
   static Future<LoadWalletResult> loadWalletData({

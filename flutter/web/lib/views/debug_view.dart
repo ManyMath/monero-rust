@@ -1886,6 +1886,26 @@ class _DebugViewState extends State<DebugView> {
     final activeAccount = activeWallet?.activeAccount ?? _activeAccount;
     final scanningAccounts = activeWallet?.scanningAccounts ?? derivedAccounts;
 
+    // Request block hashes from Rust before saving
+    String? blockHashesJson;
+    try {
+      final completer = Completer<String?>();
+      final sub = BlockHashesResponse.rustSignalStream.listen((signal) {
+        if (!completer.isCompleted) {
+          final msg = signal.message;
+          completer.complete(msg.success ? msg.blockHashesJson : null);
+        }
+      });
+      const GetBlockHashesRequest().sendSignalToRust();
+      blockHashesJson = await completer.future.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => null,
+      );
+      await sub.cancel();
+    } catch (_) {
+      // Non-fatal: save without block hashes
+    }
+
     final saveResult = await WalletPersistenceBrowser.saveWalletData(
       walletId: walletId,
       password: password,
@@ -1900,6 +1920,7 @@ class _DebugViewState extends State<DebugView> {
       accounts: accounts,
       activeAccount: activeAccount,
       scanningAccounts: scanningAccounts,
+      blockHashesJson: blockHashesJson,
     );
 
     final success = saveResult.success;
@@ -2214,13 +2235,14 @@ class _DebugViewState extends State<DebugView> {
       );
     });
     
-    // Hydrate Rust WalletActor with restored outputs so transactions work
+    // Hydrate Rust WalletActor with restored outputs and block hashes
     RestoreWalletDataRequest(
       seed: seed,
       network: network,
       outputs: loadedOutputs,
       daemonHeight: Uint64(BigInt.from(_daemonHeight ?? 0)),
       currentHeight: Uint64(BigInt.from(loadedHeight)),
+      blockHashesJson: loadResult.blockHashesJson,
     ).sendSignalToRust();
 
     // Derive address to populate keys
