@@ -1204,4 +1204,110 @@ void main() {
       expect(spendTx.blockHeight, 150);
     });
   });
+
+  group('handleReorgDetected', () {
+    test('removes outputs with removed key images', () {
+      final mgr = createManager();
+      mgr.openWallet('w1', 'seed1', 'stagenet', 'addr1');
+      final wallet = mgr.activeWallet!;
+      wallet.outputs = [
+        TestHelpers.createMockOutput(
+          txHash: 'tx1', outputIndex: 0, amountXmr: '1.0',
+          blockHeight: 100, keyImage: 'ki_1',
+        ),
+        TestHelpers.createMockOutput(
+          txHash: 'tx2', outputIndex: 0, amountXmr: '2.0',
+          blockHeight: 200, keyImage: 'ki_2',
+        ),
+      ];
+      wallet.currentHeight = 200;
+
+      mgr.handleReorgDetected(
+        splitHeight: 150,
+        removedKeyImages: ['ki_2'],
+        unspentKeyImages: [],
+      );
+
+      expect(wallet.outputs, hasLength(1));
+      expect(wallet.outputs[0].keyImage, 'ki_1');
+      expect(wallet.currentHeight, 149);
+      expect(mgr.allOutputs, hasLength(1));
+    });
+
+    test('un-spends outputs with unspent key images', () {
+      final mgr = createManager();
+      mgr.openWallet('w1', 'seed1', 'stagenet', 'addr1');
+      final wallet = mgr.activeWallet!;
+      wallet.outputs = [
+        TestHelpers.createMockOutput(
+          txHash: 'tx1', outputIndex: 0, amountXmr: '1.0',
+          blockHeight: 100, keyImage: 'ki_1', spent: true,
+        ),
+        TestHelpers.createMockOutput(
+          txHash: 'tx2', outputIndex: 0, amountXmr: '2.0',
+          blockHeight: 100, keyImage: 'ki_2', spent: false,
+        ),
+      ];
+      wallet.currentHeight = 200;
+
+      mgr.handleReorgDetected(
+        splitHeight: 150,
+        removedKeyImages: [],
+        unspentKeyImages: ['ki_1'],
+      );
+
+      expect(wallet.outputs[0].spent, false);
+      expect(wallet.outputs[1].spent, false);
+      expect(wallet.currentHeight, 149);
+    });
+
+    test('rebuilds transactions from remaining outputs', () {
+      final mgr = createManager();
+      mgr.openWallet('w1', 'seed1', 'stagenet', 'addr1');
+      final wallet = mgr.activeWallet!;
+      wallet.outputs = [
+        TestHelpers.createMockOutput(
+          txHash: 'tx1', outputIndex: 0, amountXmr: '1.0',
+          blockHeight: 100, keyImage: 'ki_1',
+        ),
+        TestHelpers.createMockOutput(
+          txHash: 'tx1', outputIndex: 1, amountXmr: '0.5',
+          blockHeight: 100, keyImage: 'ki_1b',
+        ),
+        TestHelpers.createMockOutput(
+          txHash: 'tx2', outputIndex: 0, amountXmr: '2.0',
+          blockHeight: 200, keyImage: 'ki_2',
+        ),
+      ];
+      wallet.currentHeight = 200;
+
+      // Remove tx2, keep tx1 (both outputs)
+      mgr.handleReorgDetected(
+        splitHeight: 150,
+        removedKeyImages: ['ki_2'],
+        unspentKeyImages: [],
+      );
+
+      expect(wallet.outputs, hasLength(2));
+      expect(wallet.transactions, hasLength(1));
+      expect(wallet.transactions[0].txHash, 'tx1');
+      expect(wallet.transactions[0].receivedOutputs, hasLength(2));
+      expect(mgr.allTransactions, hasLength(1));
+    });
+
+    test('does nothing when no active wallet', () {
+      final mgr = createManager();
+      // No wallet opened
+
+      mgr.handleReorgDetected(
+        splitHeight: 150,
+        removedKeyImages: ['ki_1'],
+        unspentKeyImages: ['ki_2'],
+      );
+
+      // Should not throw, just no-op
+      expect(mgr.allOutputs, isEmpty);
+      expect(mgr.allTransactions, isEmpty);
+    });
+  });
 }

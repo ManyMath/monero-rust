@@ -437,6 +437,74 @@ void main() {
     });
   });
 
+  group('blockHashesJson persistence', () {
+    test('serialize and deserialize preserves blockHashesJson', () {
+      final blockHashes = '{"hashes":{"100":"abc123","200":"def456"},"genesis_hash":"000000"}';
+
+      final serialized = WalletSerializer.serialize(
+        seed: 'test seed',
+        network: 'stagenet',
+        address: '5addr...',
+        nodeUrl: 'http://node:38081',
+        outputs: [],
+        transactions: [],
+        continuousScanCurrentHeight: 300,
+        selectedOutputs: {},
+        accounts: [0],
+        activeAccount: 0,
+        scanningAccounts: {0},
+        blockHashesJson: blockHashes,
+      );
+
+      expect(serialized['blockHashesJson'], blockHashes);
+
+      final deserialized = WalletSerializer.deserialize(serialized);
+      expect(deserialized.blockHashesJson, blockHashes);
+    });
+
+    test('serialize omits blockHashesJson when null', () {
+      final serialized = WalletSerializer.serialize(
+        seed: 'test seed',
+        network: 'stagenet',
+        address: '5addr...',
+        nodeUrl: 'http://node:38081',
+        outputs: [],
+        transactions: [],
+        continuousScanCurrentHeight: 300,
+        selectedOutputs: {},
+        accounts: [0],
+        activeAccount: 0,
+        scanningAccounts: {0},
+      );
+
+      expect(serialized.containsKey('blockHashesJson'), false);
+
+      final deserialized = WalletSerializer.deserialize(serialized);
+      expect(deserialized.blockHashesJson, isNull);
+    });
+
+    test('backward compat: missing blockHashesJson returns null', () {
+      final serialized = {
+        'version': 1,
+        'seed': 'test seed',
+        'network': 'stagenet',
+        'address': '5addr...',
+        'nodeUrl': 'http://node:38081',
+        'outputs': [],
+        'transactions': [],
+        'scanState': {'continuousScanCurrentHeight': 200},
+        'selectedOutputs': [],
+        'accounts': [0],
+        'activeAccount': 0,
+        'scanningAccounts': [0],
+        // blockHashesJson intentionally absent
+      };
+
+      final deserialized = WalletSerializer.deserialize(serialized);
+      expect(deserialized.blockHashesJson, isNull);
+    });
+  });
+
   group('spent and isCoinbase backward compatibility', () {
     test('deserialize handles missing spent field', () {
       // Manually construct serialized data with outputs missing the 'spent' key
