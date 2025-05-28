@@ -10,7 +10,7 @@ class ReorgDetectedResponse {
   /// such as when a widget is disposed.
   static final rustSignalStream =
       _reorgDetectedResponseStreamController.stream.asBroadcastStream();
-
+        
   /// The latest signal value received from Rust.
   /// This is updated every time a new signal is received.
   /// It can be null if no signals have been received yet.
@@ -106,13 +106,13 @@ class ReorgDetectedResponse {
 
   @override
   int get hashCode => Object.hash(
-    splitHeight,
-    blocksDetached,
-    outputsRemoved,
-    outputsUnspent,
-    removedKeyImages.hashCode,
-    unspentKeyImages.hashCode,
-  );
+        splitHeight,
+        blocksDetached,
+        outputsRemoved,
+        outputsUnspent,
+        removedKeyImages,
+        unspentKeyImages,
+      );
 
   @override
   String toString() {

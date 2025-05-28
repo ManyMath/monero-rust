@@ -61,6 +61,9 @@ class GetBlockHashesRequest {
 }
 
 extension GetBlockHashesRequestDartSignalExt on GetBlockHashesRequest {
+  /// Sends the signal to Rust.
+  /// Passing data from Rust to Dart involves a memory copy
+  /// because Rust cannot own data managed by Dart's garbage collector.
   void sendSignalToRust() {
     final messageBytes = bincodeSerialize();
     final binary = Uint8List(0);

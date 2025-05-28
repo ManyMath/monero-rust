@@ -139,6 +139,12 @@ pub struct HandleReorg {
 }
 
 #[derive(Debug, Clone)]
+pub struct RecordBlockHashes {
+    pub block_hashes: Vec<(u64, String)>,
+    pub daemon_height: u64,
+}
+
+#[derive(Debug, Clone)]
 pub struct SetDaemonHeight {
     pub height: u64,
 }

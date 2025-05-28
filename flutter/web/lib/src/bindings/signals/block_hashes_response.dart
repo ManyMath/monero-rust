@@ -4,9 +4,16 @@ part of 'signals.dart';
 
 @immutable
 class BlockHashesResponse {
+  /// An async broadcast stream that listens for signals from Rust.
+  /// It supports multiple subscriptions.
+  /// Make sure to cancel the subscription when it's no longer needed,
+  /// such as when a widget is disposed.
   static final rustSignalStream =
       _blockHashesResponseStreamController.stream.asBroadcastStream();
-
+        
+  /// The latest signal value received from Rust.
+  /// This is updated every time a new signal is received.
+  /// It can be null if no signals have been received yet.
   static RustSignalPack<BlockHashesResponse>? latestRustSignal = null;
 
   const BlockHashesResponse({

@@ -91,15 +91,6 @@ final assignRustSignal = <String, void Function(Uint8List, Uint8List)>{
     _multiWalletScanResponseStreamController.add(rustSignal);
     MultiWalletScanResponse.latestRustSignal = rustSignal;
   },
-  'ReorgDetectedResponse': (Uint8List messageBytes, Uint8List binary) {
-    final message = ReorgDetectedResponse.bincodeDeserialize(messageBytes);
-    final rustSignal = RustSignalPack(
-      message,
-      binary,
-    );
-    _reorgDetectedResponseStreamController.add(rustSignal);
-    ReorgDetectedResponse.latestRustSignal = rustSignal;
-  },
   'OutProofGeneratedResponse': (Uint8List messageBytes, Uint8List binary) {
     final message = OutProofGeneratedResponse.bincodeDeserialize(messageBytes);
     final rustSignal = RustSignalPack(
@@ -108,6 +99,15 @@ final assignRustSignal = <String, void Function(Uint8List, Uint8List)>{
     );
     _outProofGeneratedResponseStreamController.add(rustSignal);
     OutProofGeneratedResponse.latestRustSignal = rustSignal;
+  },
+  'ReorgDetectedResponse': (Uint8List messageBytes, Uint8List binary) {
+    final message = ReorgDetectedResponse.bincodeDeserialize(messageBytes);
+    final rustSignal = RustSignalPack(
+      message,
+      binary,
+    );
+    _reorgDetectedResponseStreamController.add(rustSignal);
+    ReorgDetectedResponse.latestRustSignal = rustSignal;
   },
   'SeedBirthdayResponse': (Uint8List messageBytes, Uint8List binary) {
     final message = SeedBirthdayResponse.bincodeDeserialize(messageBytes);

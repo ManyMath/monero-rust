@@ -878,6 +878,19 @@ impl Notifiable<StoreOutputs> for WalletActor {
 }
 
 #[async_trait]
+impl Notifiable<RecordBlockHashes> for WalletActor {
+    async fn notify(&mut self, msg: RecordBlockHashes, _ctx: &Context<Self>) {
+        for (height, hash) in msg.block_hashes {
+            self.core_state.record_block_hash(height, hash);
+        }
+        self.core_state.block_hashes.compact();
+        if msg.daemon_height > self.core_state.daemon_height {
+            self.core_state.daemon_height = msg.daemon_height;
+        }
+    }
+}
+
+#[async_trait]
 impl Handler<GetWalletData> for WalletActor {
     type Result = WalletData;
 
@@ -1336,6 +1349,7 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
         let wallets = self.multi_wallet_scan_wallets.clone();
         let target_height = self.multi_wallet_scan_target_height;
         let mut self_addr = ctx.address();
+        let block_hash_history = self.core_state.get_short_chain_history();
 
         // Prevent re-entry while batch is in flight
         self.multi_wallet_scan_current_height = self.multi_wallet_scan_target_height;
@@ -1355,14 +1369,15 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                 })
                 .collect();
 
-            // 1. Take from prefetch slot or fetch fresh
+            // 1. Take from prefetch slot or fetch fresh (with history for reorg detection)
             let fetched = match take_prefetch(scan_gen, batch_start_height) {
                 Some(data) => data,
-                None => match monero_rust::fetch_blocks_batch_with_url(
+                None => match monero_rust::fetch_blocks_batch_with_history_url(
                     &node_url,
                     batch_start_height,
+                    &block_hash_history,
                 ).await {
-                    Ok(data) => data,
+                    Ok((data, _actual_start)) => data,
                     Err(e) => {
                         MultiWalletScanResponse {
                             success: false,
@@ -1413,10 +1428,81 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                         return;
                     }
 
+                    // Check for reorg: compare block hashes against known history
+                    let mut reorg_detected = false;
+                    for result in &batch_results {
+                        for (known_height, known_hash) in &block_hash_history {
+                            if result.block_height == *known_height && result.block_hash != *known_hash {
+                                reorg_detected = true;
+                                break;
+                            }
+                        }
+                        if reorg_detected { break; }
+                    }
+
+                    if reorg_detected {
+                        #[cfg(target_arch = "wasm32")]
+                        web_sys::console::warn_1(
+                            &format!("[ContinueMultiWalletScan] Reorg detected at batch starting {}", batch_start_height).into(),
+                        );
+                        // Convert MultiWalletScanResult to BlockScanResult for HandleReorg
+                        // Use first wallet's data as representative (all wallets see same blocks)
+                        let block_scan_results: Vec<monero_rust::BlockScanResult> = batch_results.iter().map(|r| {
+                            monero_rust::BlockScanResult {
+                                block_height: r.block_height,
+                                block_hash: r.block_hash.clone(),
+                                block_timestamp: r.block_timestamp,
+                                tx_count: r.tx_count,
+                                outputs: Vec::new(),
+                                daemon_height: r.daemon_height,
+                                spent_key_images: r.spent_key_images.clone(),
+                            }
+                        }).collect();
+                        // Use first wallet's config for reorg handling
+                        let first_wallet = &wallets[0];
+                        let _ = self_addr.notify(HandleReorg {
+                            batch_results: block_scan_results,
+                            accounts_to_scan: first_wallet.accounts_to_scan.clone(),
+                            target_height,
+                            batch_start_height,
+                            node_url,
+                            seed: first_wallet.seed.clone(),
+                            network: first_wallet.network.clone(),
+                            account_lookahead: first_wallet.account_lookahead,
+                        }).await;
+                        return;
+                    }
+
                     let batch_end_height = batch_results
                         .last()
                         .map(|r| r.block_height + 1)
                         .unwrap_or(batch_start_height);
+
+                    // Collect block hashes and spent key images from this batch
+                    let mut block_hashes = Vec::new();
+                    let mut all_spent_key_images = Vec::new();
+                    let mut last_daemon_height = 0u64;
+                    for result in &batch_results {
+                        block_hashes.push((result.block_height, result.block_hash.clone()));
+                        all_spent_key_images.extend(result.spent_key_images.iter().cloned());
+                        if result.daemon_height > last_daemon_height {
+                            last_daemon_height = result.daemon_height;
+                        }
+                    }
+
+                    // Record block hashes into core_state
+                    let _ = self_addr.notify(RecordBlockHashes {
+                        block_hashes,
+                        daemon_height: last_daemon_height,
+                    }).await;
+
+                    // Record spent key images into core_state
+                    if !all_spent_key_images.is_empty() {
+                        let _ = self_addr.notify(UpdateSpentStatus {
+                            key_images: all_spent_key_images,
+                            height: batch_end_height,
+                        }).await;
+                    }
 
                     let wallet_accounts: Vec<Option<HashSet<u32>>> = wallets
                         .iter()
