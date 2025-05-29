@@ -31,6 +31,7 @@ import '../widgets/close_wallet_dialog.dart';
 import '../widgets/create_transaction_panel.dart';
 import '../widgets/overwrite_wallet_dialog.dart';
 import '../widgets/security_warning_dialog.dart';
+import '../widgets/reorg_notification_display.dart';
 import '../services/wallet_lifecycle_manager.dart';
 
 enum DebugPanel {
@@ -160,6 +161,8 @@ class _DebugViewState extends State<DebugView> {
   }
 
   int? _daemonHeight;
+
+  ReorgDetectedResponse? _reorgInfo;
 
   // Transaction tracking state
   List<WalletTransaction> get _allTransactionsAllAccounts => _lifecycle.allTransactions;
@@ -598,6 +601,7 @@ class _DebugViewState extends State<DebugView> {
     _reorgDetectedSubscription = ReorgDetectedResponse.rustSignalStream.listen((signal) {
       final msg = signal.message;
       setState(() {
+        _reorgInfo = msg;
         _lifecycle.handleReorgDetected(
           splitHeight: msg.splitHeight.toInt(),
           removedKeyImages: msg.removedKeyImages,
@@ -1549,6 +1553,17 @@ class _DebugViewState extends State<DebugView> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              if (_reorgInfo != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: ReorgNotificationDisplay(
+                    splitHeight: _reorgInfo!.splitHeight.toInt(),
+                    blocksDetached: _reorgInfo!.blocksDetached.toInt(),
+                    outputsRemoved: _reorgInfo!.outputsRemoved.toInt(),
+                    outputsUnspent: _reorgInfo!.outputsUnspent.toInt(),
+                    onDismiss: () => setState(() => _reorgInfo = null),
+                  ),
+                ),
               ExpansionPanelList(
                   expansionCallback: (int index, bool isExpanded) {
                     setState(() {
