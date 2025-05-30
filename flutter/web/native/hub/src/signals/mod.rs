@@ -465,3 +465,15 @@ pub struct ReorgDetectedResponse {
     pub removed_key_images: Vec<String>,
     pub unspent_key_images: Vec<String>,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, SignalPiece)]
+pub struct DoubleSpendConflict {
+    pub key_image: String,
+    pub previous_spent_height: u64, // 0 = unknown
+    pub new_height: u64,            // 0 = mempool
+}
+
+#[derive(Serialize, RustSignal)]
+pub struct DoubleSpendDetectedResponse {
+    pub conflicts: Vec<DoubleSpendConflict>,
+}
