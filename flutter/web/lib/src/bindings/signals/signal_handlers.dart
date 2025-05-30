@@ -55,6 +55,15 @@ final assignRustSignal = <String, void Function(Uint8List, Uint8List)>{
     _daemonHeightResponseStreamController.add(rustSignal);
     DaemonHeightResponse.latestRustSignal = rustSignal;
   },
+  'DoubleSpendDetectedResponse': (Uint8List messageBytes, Uint8List binary) {
+    final message = DoubleSpendDetectedResponse.bincodeDeserialize(messageBytes);
+    final rustSignal = RustSignalPack(
+      message,
+      binary,
+    );
+    _doubleSpendDetectedResponseStreamController.add(rustSignal);
+    DoubleSpendDetectedResponse.latestRustSignal = rustSignal;
+  },
   'KeysDerivedResponse': (Uint8List messageBytes, Uint8List binary) {
     final message = KeysDerivedResponse.bincodeDeserialize(messageBytes);
     final rustSignal = RustSignalPack(
