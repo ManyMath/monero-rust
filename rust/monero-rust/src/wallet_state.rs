@@ -156,6 +156,14 @@ impl BlockHashChain {
     }
 }
 
+/// A conflict detected when a key image is spent at two different heights.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpentConflict {
+    pub key_image: String,
+    pub previous_spent_height: Option<u64>,
+    pub new_height: u64,
+}
+
 /// Result of rolling back wallet state after a reorg.
 #[derive(Debug, Clone)]
 pub struct RollbackResult {
@@ -390,6 +398,60 @@ impl WalletState {
             }
         }
         count
+    }
+
+    /// Like `mark_spent_by_key_images_at_height` but also detects conflicts:
+    /// an output already spent at a *different* height.
+    ///
+    /// Not a conflict: `spent_height: None` (broadcast-marked) confirmed at any height,
+    /// or same height (idempotent).
+    ///
+    /// Returns (newly_spent_count, conflicts).
+    pub fn mark_spent_detecting_conflicts(&mut self, key_images: &[String], height: u64) -> (usize, Vec<SpentConflict>) {
+        let mut count = 0;
+        let mut conflicts = Vec::new();
+        for ki in key_images {
+            if let Some(&idx) = self.key_image_index.get(ki) {
+                let output = &mut self.outputs[idx];
+                if !output.spent {
+                    output.spent = true;
+                    output.spent_height = Some(height);
+                    count += 1;
+                } else if let Some(prev_h) = output.spent_height {
+                    if prev_h != height {
+                        conflicts.push(SpentConflict {
+                            key_image: ki.clone(),
+                            previous_spent_height: Some(prev_h),
+                            new_height: height,
+                        });
+                    }
+                    // Same height = idempotent, no conflict
+                }
+                // spent_height: None + already spent = broadcast confirmation, no conflict
+            }
+        }
+        (count, conflicts)
+    }
+
+    /// Read-only check: find conflicts where mempool key images match
+    /// outputs already confirmed-spent at some height.
+    pub fn check_spent_conflicts(&self, key_images: &[String]) -> Vec<SpentConflict> {
+        let mut conflicts = Vec::new();
+        for ki in key_images {
+            if let Some(&idx) = self.key_image_index.get(ki) {
+                let output = &self.outputs[idx];
+                if output.spent {
+                    if let Some(prev_h) = output.spent_height {
+                        conflicts.push(SpentConflict {
+                            key_image: ki.clone(),
+                            previous_spent_height: Some(prev_h),
+                            new_height: 0, // 0 = mempool sentinel
+                        });
+                    }
+                }
+            }
+        }
+        conflicts
     }
 
     /// Roll back wallet state to just before `split_height`.
@@ -1291,5 +1353,79 @@ mod tests {
         assert_eq!(c2, 0);
         // Original spent_height preserved
         assert_eq!(state.outputs()[0].spent_height, Some(100));
+    }
+
+    // ---- Double-spend conflict detection tests ----
+
+    #[test]
+    fn test_conflict_different_height() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1_000_000_000_000, 50, "ki1")]);
+
+        let (count, conflicts) = state.mark_spent_detecting_conflicts(&["ki1".to_string()], 100);
+        assert_eq!(count, 1);
+        assert!(conflicts.is_empty());
+
+        // Same key image at a different height -> conflict
+        let (count2, conflicts2) = state.mark_spent_detecting_conflicts(&["ki1".to_string()], 200);
+        assert_eq!(count2, 0);
+        assert_eq!(conflicts2.len(), 1);
+        assert_eq!(conflicts2[0], SpentConflict {
+            key_image: "ki1".to_string(),
+            previous_spent_height: Some(100),
+            new_height: 200,
+        });
+    }
+
+    #[test]
+    fn test_no_conflict_same_height() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1_000_000_000_000, 50, "ki1")]);
+
+        let (count, conflicts) = state.mark_spent_detecting_conflicts(&["ki1".to_string()], 100);
+        assert_eq!(count, 1);
+        assert!(conflicts.is_empty());
+
+        // Same height = idempotent, no conflict
+        let (count2, conflicts2) = state.mark_spent_detecting_conflicts(&["ki1".to_string()], 100);
+        assert_eq!(count2, 0);
+        assert!(conflicts2.is_empty());
+    }
+
+    #[test]
+    fn test_no_conflict_broadcast_then_confirmed() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1_000_000_000_000, 50, "ki1")]);
+
+        // Mark spent without height (broadcast)
+        state.mark_spent_by_key_images(&["ki1".to_string()]);
+        assert!(state.outputs()[0].spent);
+        assert_eq!(state.outputs()[0].spent_height, None);
+
+        // Now confirmed at some height -> NOT a conflict
+        let (count, conflicts) = state.mark_spent_detecting_conflicts(&["ki1".to_string()], 150);
+        assert_eq!(count, 0);
+        assert!(conflicts.is_empty());
+    }
+
+    #[test]
+    fn test_mempool_conflict_check() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![
+            make_output(1_000_000_000_000, 50, "ki1"),
+            make_output(2_000_000_000_000, 60, "ki2"),
+        ]);
+
+        // Confirm ki1 spent at height 100
+        state.mark_spent_by_key_images_at_height(&["ki1".to_string()], 100);
+
+        // Check mempool key images against confirmed spends
+        let conflicts = state.check_spent_conflicts(&["ki1".to_string(), "ki2".to_string()]);
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0], SpentConflict {
+            key_image: "ki1".to_string(),
+            previous_spent_height: Some(100),
+            new_height: 0,
+        });
     }
 }
