@@ -118,7 +118,7 @@ impl WalletActor {
         _owned_tasks.spawn(Self::listen_to_query_daemon_height(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_start_continuous_scan(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_stop_scan(self_addr.clone()));
-        _owned_tasks.spawn(Self::listen_to_mempool_scan());
+        _owned_tasks.spawn(Self::listen_to_mempool_scan(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_scan_block_multi_wallet());
         _owned_tasks.spawn(Self::listen_to_start_multi_wallet_scan(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_restore_wallet_data(self_addr.clone()));
@@ -550,10 +550,11 @@ impl WalletActor {
         }
     }
 
-    async fn listen_to_mempool_scan() {
+    async fn listen_to_mempool_scan(self_addr: Address<Self>) {
         let receiver = MempoolScanRequest::get_dart_signal_receiver();
         while let Some(signal_pack) = receiver.recv().await {
             let request = signal_pack.message;
+            let mut addr = self_addr.clone();
 
             wasm_bindgen_futures::spawn_local(async move {
                 match monero_rust::scan_mempool_for_outputs_with_account_lookahead(
@@ -575,6 +576,8 @@ impl WalletActor {
                             })
                             .collect();
 
+                        let spent_key_images = result.spent_key_images.clone();
+
                         MempoolScanResponse {
                             success: true,
                             error: None,
@@ -583,6 +586,12 @@ impl WalletActor {
                             spent_key_images: result.spent_key_images,
                         }
                         .send_signal_to_dart();
+
+                        if !spent_key_images.is_empty() {
+                            let _ = addr.notify(CheckMempoolConflicts {
+                                key_images: spent_key_images,
+                            }).await;
+                        }
                     }
                     Err(e) => {
                         MempoolScanResponse {
@@ -1608,9 +1617,20 @@ impl Notifiable<SetDaemonHeight> for WalletActor {
 #[async_trait]
 impl Notifiable<UpdateSpentStatus> for WalletActor {
     async fn notify(&mut self, msg: UpdateSpentStatus, _ctx: &Context<Self>) {
-        let updated_count = self.core_state.mark_spent_by_key_images_at_height(
+        let (updated_count, conflicts) = self.core_state.mark_spent_detecting_conflicts(
             &msg.key_images, msg.height
         );
+
+        if !conflicts.is_empty() {
+            DoubleSpendDetectedResponse {
+                conflicts: conflicts.iter().map(|c| DoubleSpendConflict {
+                    key_image: c.key_image.clone(),
+                    previous_spent_height: c.previous_spent_height.unwrap_or(0),
+                    new_height: c.new_height,
+                }).collect(),
+            }
+            .send_signal_to_dart();
+        }
 
         if updated_count > 0 {
             let balance = self.core_state.balance();
@@ -1623,6 +1643,23 @@ impl Notifiable<UpdateSpentStatus> for WalletActor {
 
             SpentStatusUpdatedResponse {
                 spent_key_images: msg.key_images.clone(),
+            }
+            .send_signal_to_dart();
+        }
+    }
+}
+
+#[async_trait]
+impl Notifiable<CheckMempoolConflicts> for WalletActor {
+    async fn notify(&mut self, msg: CheckMempoolConflicts, _ctx: &Context<Self>) {
+        let conflicts = self.core_state.check_spent_conflicts(&msg.key_images);
+        if !conflicts.is_empty() {
+            DoubleSpendDetectedResponse {
+                conflicts: conflicts.iter().map(|c| DoubleSpendConflict {
+                    key_image: c.key_image.clone(),
+                    previous_spent_height: c.previous_spent_height.unwrap_or(0),
+                    new_height: c.new_height,
+                }).collect(),
             }
             .send_signal_to_dart();
         }

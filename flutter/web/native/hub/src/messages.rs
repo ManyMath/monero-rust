@@ -149,3 +149,8 @@ pub struct SetDaemonHeight {
     pub height: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct CheckMempoolConflicts {
+    pub key_images: Vec<String>,
+}
+
