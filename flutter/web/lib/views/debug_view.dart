@@ -32,6 +32,7 @@ import '../widgets/create_transaction_panel.dart';
 import '../widgets/overwrite_wallet_dialog.dart';
 import '../widgets/security_warning_dialog.dart';
 import '../widgets/reorg_notification_display.dart';
+import '../widgets/double_spend_alert_display.dart';
 import '../services/wallet_lifecycle_manager.dart';
 
 enum DebugPanel {
@@ -163,6 +164,7 @@ class _DebugViewState extends State<DebugView> {
   int? _daemonHeight;
 
   ReorgDetectedResponse? _reorgInfo;
+  List<DoubleSpendConflict>? _doubleSpendConflicts;
 
   // Transaction tracking state
   List<WalletTransaction> get _allTransactionsAllAccounts => _lifecycle.allTransactions;
@@ -285,6 +287,7 @@ class _DebugViewState extends State<DebugView> {
   StreamSubscription? _mempoolScanSubscription;
   StreamSubscription? _multiWalletScanSubscription;
   StreamSubscription? _reorgDetectedSubscription;
+  StreamSubscription? _doubleSpendDetectedSubscription;
 
   @override
   void initState() {
@@ -614,6 +617,17 @@ class _DebugViewState extends State<DebugView> {
       });
     });
 
+    _doubleSpendDetectedSubscription = DoubleSpendDetectedResponse.rustSignalStream.listen((signal) {
+      setState(() {
+        final incoming = signal.message.conflicts;
+        if (_doubleSpendConflicts == null) {
+          _doubleSpendConflicts = List.from(incoming);
+        } else {
+          _doubleSpendConflicts!.addAll(incoming);
+        }
+      });
+    });
+
     // Load available wallets from localStorage
     _refreshAvailableWallets();
   }
@@ -700,6 +714,7 @@ class _DebugViewState extends State<DebugView> {
     _mempoolScanSubscription?.cancel();
     _multiWalletScanSubscription?.cancel();
     _reorgDetectedSubscription?.cancel();
+    _doubleSpendDetectedSubscription?.cancel();
 
     _stopPollingTimers();
     _debounceTimer?.cancel();
@@ -1562,6 +1577,14 @@ class _DebugViewState extends State<DebugView> {
                     outputsRemoved: _reorgInfo!.outputsRemoved.toInt(),
                     outputsUnspent: _reorgInfo!.outputsUnspent.toInt(),
                     onDismiss: () => setState(() => _reorgInfo = null),
+                  ),
+                ),
+              if (_doubleSpendConflicts != null && _doubleSpendConflicts!.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: DoubleSpendAlertDisplay(
+                    conflicts: _doubleSpendConflicts!,
+                    onDismiss: () => setState(() => _doubleSpendConflicts = null),
                   ),
                 ),
               ExpansionPanelList(
