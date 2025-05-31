@@ -1,73 +1,19 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
-@immutable
-class DoubleSpendConflict {
-  const DoubleSpendConflict({
-    required this.keyImage,
-    required this.previousSpentHeight,
-    required this.newHeight,
-  });
-
-  static DoubleSpendConflict deserialize(BinaryDeserializer deserializer) {
-    deserializer.increaseContainerDepth();
-    final instance = DoubleSpendConflict(
-      keyImage: deserializer.deserializeString(),
-      previousSpentHeight: deserializer.deserializeUint64(),
-      newHeight: deserializer.deserializeUint64(),
-    );
-    deserializer.decreaseContainerDepth();
-    return instance;
-  }
-
-  final String keyImage;
-  final Uint64 previousSpentHeight;
-  final Uint64 newHeight;
-
-  void serialize(BinarySerializer serializer) {
-    serializer.increaseContainerDepth();
-    serializer.serializeString(keyImage);
-    serializer.serializeUint64(previousSpentHeight);
-    serializer.serializeUint64(newHeight);
-    serializer.decreaseContainerDepth();
-  }
-
-  @override
-  bool operator ==(Object other) {
-    if (identical(this, other)) return true;
-    if (other.runtimeType != runtimeType) return false;
-
-    return other is DoubleSpendConflict
-      && keyImage == other.keyImage
-      && previousSpentHeight == other.previousSpentHeight
-      && newHeight == other.newHeight;
-  }
-
-  @override
-  int get hashCode => Object.hash(keyImage, previousSpentHeight, newHeight);
-
-  @override
-  String toString() {
-    String? fullString;
-
-    assert(() {
-      fullString = '$runtimeType('
-        'keyImage: $keyImage, '
-        'previousSpentHeight: $previousSpentHeight, '
-        'newHeight: $newHeight'
-        ')';
-      return true;
-    }());
-
-    return fullString ?? 'DoubleSpendConflict';
-  }
-}
 
 @immutable
 class DoubleSpendDetectedResponse {
+  /// An async broadcast stream that listens for signals from Rust.
+  /// It supports multiple subscriptions.
+  /// Make sure to cancel the subscription when it's no longer needed,
+  /// such as when a widget is disposed.
   static final rustSignalStream =
       _doubleSpendDetectedResponseStreamController.stream.asBroadcastStream();
-
+        
+  /// The latest signal value received from Rust.
+  /// This is updated every time a new signal is received.
+  /// It can be null if no signals have been received yet.
   static RustSignalPack<DoubleSpendDetectedResponse>? latestRustSignal = null;
 
   const DoubleSpendDetectedResponse({
@@ -124,7 +70,7 @@ class DoubleSpendDetectedResponse {
   }
 
   @override
-  int get hashCode => Object.hashAll(conflicts);
+  int get hashCode => conflicts.hashCode;
 
   @override
   String toString() {

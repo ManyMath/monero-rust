@@ -103,18 +103,6 @@ class TraitHelpers {
     );
   }
 
-  static void serializeVectorDoubleSpendConflict(List<DoubleSpendConflict> value, BinarySerializer serializer) {
-    serializer.serializeLength(value.length);
-    for (final item in value) {
-        item.serialize(serializer);
-    }
-  }
-
-  static List<DoubleSpendConflict> deserializeVectorDoubleSpendConflict(BinaryDeserializer deserializer) {
-    final length = deserializer.deserializeLength();
-    return List.generate(length, (_) => DoubleSpendConflict.deserialize(deserializer));
-  }
-
   static void serializeVectorChangeOutput(List<ChangeOutput> value, BinarySerializer serializer) {
     serializer.serializeLength(value.length);
     for (final item in value) {
@@ -125,6 +113,18 @@ class TraitHelpers {
   static List<ChangeOutput> deserializeVectorChangeOutput(BinaryDeserializer deserializer) {
     final length = deserializer.deserializeLength();
     return List.generate(length, (_) => ChangeOutput.deserialize(deserializer));
+  }
+
+  static void serializeVectorDoubleSpendConflict(List<DoubleSpendConflict> value, BinarySerializer serializer) {
+    serializer.serializeLength(value.length);
+    for (final item in value) {
+        item.serialize(serializer);
+    }
+  }
+
+  static List<DoubleSpendConflict> deserializeVectorDoubleSpendConflict(BinaryDeserializer deserializer) {
+    final length = deserializer.deserializeLength();
+    return List.generate(length, (_) => DoubleSpendConflict.deserialize(deserializer));
   }
 
   static void serializeVectorOwnedOutput(List<OwnedOutput> value, BinarySerializer serializer) {

@@ -27,6 +27,7 @@ part 'daemon_height_response.dart';
 part 'derive_address_request.dart';
 part 'derive_keys_request.dart';
 part 'derive_subaddress_request.dart';
+part 'double_spend_conflict.dart';
 part 'double_spend_detected_response.dart';
 part 'generate_out_proof_request.dart';
 part 'generate_seed_request.dart';
