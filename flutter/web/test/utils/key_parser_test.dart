@@ -80,42 +80,42 @@ void main() {
       test('single word returns invalid', () {
         final result = KeyParser.parse('hello');
         expect(result.isValid, false);
-        expect(result.error, 'Expected 16 or 25 words, got 1');
+        expect(result.error, 'Expected 12, 16, or 25 words, got 1');
       });
 
       test('15 words returns invalid', () {
         final seed = List.generate(15, (i) => 'word${i + 1}').join(' ');
         final result = KeyParser.parse(seed);
         expect(result.isValid, false);
-        expect(result.error, 'Expected 16 or 25 words, got 15');
+        expect(result.error, 'Expected 12, 16, or 25 words, got 15');
       });
 
       test('17 words returns invalid', () {
         final seed = List.generate(17, (i) => 'word${i + 1}').join(' ');
         final result = KeyParser.parse(seed);
         expect(result.isValid, false);
-        expect(result.error, 'Expected 16 or 25 words, got 17');
+        expect(result.error, 'Expected 12, 16, or 25 words, got 17');
       });
 
       test('24 words returns invalid', () {
         final seed = List.generate(24, (i) => 'word${i + 1}').join(' ');
         final result = KeyParser.parse(seed);
         expect(result.isValid, false);
-        expect(result.error, 'Expected 16 or 25 words, got 24');
+        expect(result.error, 'Expected 12, 16, or 25 words, got 24');
       });
 
       test('26 words returns invalid', () {
         final seed = List.generate(26, (i) => 'word${i + 1}').join(' ');
         final result = KeyParser.parse(seed);
         expect(result.isValid, false);
-        expect(result.error, 'Expected 16 or 25 words, got 26');
+        expect(result.error, 'Expected 12, 16, or 25 words, got 26');
       });
 
       test('100 words returns invalid', () {
         final seed = List.generate(100, (i) => 'word${i + 1}').join(' ');
         final result = KeyParser.parse(seed);
         expect(result.isValid, false);
-        expect(result.error, 'Expected 16 or 25 words, got 100');
+        expect(result.error, 'Expected 12, 16, or 25 words, got 100');
       });
     });
 

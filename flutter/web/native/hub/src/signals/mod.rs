@@ -477,3 +477,16 @@ pub struct DoubleSpendConflict {
 pub struct DoubleSpendDetectedResponse {
     pub conflicts: Vec<DoubleSpendConflict>,
 }
+
+#[derive(Deserialize, DartSignal)]
+pub struct ConvertBip39ToLegacyRequest {
+    pub bip39_mnemonic: String,
+    pub account_index: u32,
+}
+
+#[derive(Serialize, RustSignal)]
+pub struct Bip39LegacySeedResponse {
+    pub legacy_seed: String,
+    pub success: bool,
+    pub error: Option<String>,
+}

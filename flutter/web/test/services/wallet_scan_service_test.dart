@@ -43,7 +43,7 @@ void main() {
       );
       expect(result.isValid, false);
       expect(result.error, contains('Invalid seed phrase'));
-      expect(result.error, contains('Expected 16 or 25 words'));
+      expect(result.error, contains('Expected 12, 16, or 25 words'));
     });
 
     test('empty block height returns error', () {
@@ -298,7 +298,7 @@ void main() {
       );
       expect(result.isValid, false);
       expect(result.error, contains('Invalid seed phrase'));
-      expect(result.error, contains('Expected 16 or 25 words'));
+      expect(result.error, contains('Expected 12, 16, or 25 words'));
     });
 
     test('empty node URL returns error', () {

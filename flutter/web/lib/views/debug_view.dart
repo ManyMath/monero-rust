@@ -90,6 +90,7 @@ class _DebugViewState extends State<DebugView> {
   String? _validationError;
   String? _derivedAddress;
   String? _responseError;
+  String? _derivedLegacySeed;
   bool _isScanning = false;
   Timer? _debounceTimer;
   String? _secretSpendKey;
@@ -288,6 +289,7 @@ class _DebugViewState extends State<DebugView> {
   StreamSubscription? _multiWalletScanSubscription;
   StreamSubscription? _reorgDetectedSubscription;
   StreamSubscription? _doubleSpendDetectedSubscription;
+  StreamSubscription? _bip39LegacySeedSubscription;
 
   @override
   void initState() {
@@ -628,6 +630,21 @@ class _DebugViewState extends State<DebugView> {
       });
     });
 
+    _bip39LegacySeedSubscription = Bip39LegacySeedResponse.rustSignalStream.listen((signal) {
+      if (signal.message.success) {
+        setState(() {
+          _derivedLegacySeed = signal.message.legacySeed;
+        });
+        // Auto-derive keys from the legacy seed
+        DeriveKeysRequest(seed: signal.message.legacySeed, network: _network).sendSignalToRust();
+      } else {
+        setState(() {
+          _responseError = signal.message.error ?? 'BIP39 conversion failed';
+          _derivedLegacySeed = null;
+        });
+      }
+    });
+
     // Load available wallets from localStorage
     _refreshAvailableWallets();
   }
@@ -715,6 +732,7 @@ class _DebugViewState extends State<DebugView> {
     _multiWalletScanSubscription?.cancel();
     _reorgDetectedSubscription?.cancel();
     _doubleSpendDetectedSubscription?.cancel();
+    _bip39LegacySeedSubscription?.cancel();
 
     _stopPollingTimers();
     _debounceTimer?.cancel();
@@ -736,6 +754,7 @@ class _DebugViewState extends State<DebugView> {
   void _onSeedChanged() {
     if (_isRestoringWallet) return;
     _debounceTimer?.cancel();
+    _derivedLegacySeed = null;
 
     if (_isContinuousScanning) {
       _isChangingSeed = true;
@@ -763,6 +782,7 @@ class _DebugViewState extends State<DebugView> {
       _daemonHeight = null;
       _scanResult = null;
       _polyseedRestoreHeight = null;
+      _derivedLegacySeed = null;
     });
   }
 
@@ -811,7 +831,11 @@ class _DebugViewState extends State<DebugView> {
     });
 
     // Convert UI seed type to backend value
-    final seedType = _seedType.contains('polyseed') ? 'polyseed' : 'classic';
+    final seedType = _seedType.contains('polyseed')
+        ? 'polyseed'
+        : _seedType.contains('bip39')
+            ? 'bip39'
+            : 'classic';
     GenerateSeedRequest(seedType: seedType).sendSignalToRust();
   }
 
@@ -845,6 +869,16 @@ class _DebugViewState extends State<DebugView> {
       setState(() {
         _validationError = result.error;
       });
+      return;
+    }
+
+    final words = result.normalizedInput!.split(' ');
+    if (_seedType.contains('bip39') && words.length == 12) {
+      // BIP39 flow: convert to legacy first, then derive_keys is called in the response handler
+      ConvertBip39ToLegacyRequest(
+        bip39Mnemonic: result.normalizedInput!,
+        accountIndex: 0,
+      ).sendSignalToRust();
       return;
     }
 
@@ -1636,6 +1670,7 @@ class _DebugViewState extends State<DebugView> {
                         network: _network,
                         validationError: _validationError,
                         responseError: _responseError,
+                        derivedLegacySeed: _derivedLegacySeed,
                         onGenerateSeed: _generateSeed,
                         onNetworkChanged: (value) {
                           setState(() {

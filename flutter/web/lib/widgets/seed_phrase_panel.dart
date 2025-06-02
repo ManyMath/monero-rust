@@ -8,6 +8,7 @@ class SeedPhrasePanel extends StatelessWidget {
   final String network;
   final String? validationError;
   final String? responseError;
+  final String? derivedLegacySeed;
   final VoidCallback onGenerateSeed;
   final ValueChanged<String> onNetworkChanged;
   final ValueChanged<String> onSeedTypeChanged;
@@ -19,6 +20,7 @@ class SeedPhrasePanel extends StatelessWidget {
     required this.network,
     required this.validationError,
     required this.responseError,
+    this.derivedLegacySeed,
     required this.onGenerateSeed,
     required this.onNetworkChanged,
     required this.onSeedTypeChanged,
@@ -52,8 +54,9 @@ class SeedPhrasePanel extends StatelessWidget {
                     contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   ),
                   items: const [
-                    DropdownMenuItem(value: '25 word', child: Text('25 word (classic)')),
+                    DropdownMenuItem(value: '25 word (classic)', child: Text('25 word (classic)')),
                     DropdownMenuItem(value: '16-word (polyseed)', child: Text('16 word (polyseed)')),
+                    DropdownMenuItem(value: '12-word (bip39)', child: Text('12 word (BIP39)')),
                   ],
                   onChanged: (value) {
                     if (value != null) {
@@ -93,7 +96,7 @@ class SeedPhrasePanel extends StatelessWidget {
                   controller: controller,
                   decoration: InputDecoration(
                     labelText: 'Seed Phrase',
-                    hintText: 'Enter or generate a 16 or 25-word seed phrase',
+                    hintText: 'Enter or generate a 12, 16, or 25-word seed phrase',
                     border: const OutlineInputBorder(),
                     errorText: validationError,
                   ),
@@ -107,6 +110,34 @@ class SeedPhrasePanel extends StatelessWidget {
               ),
             ],
           ),
+          if (derivedLegacySeed != null) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade100,
+                border: Border.all(color: Colors.grey.shade300),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [
+                    const Text('Derived 25-word Monero seed:',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                    const Spacer(),
+                    IconButton(
+                      icon: const Icon(Icons.copy_outlined, size: 16),
+                      onPressed: () => _copyToClipboard(context, derivedLegacySeed!, 'Legacy Seed'),
+                    ),
+                  ]),
+                  const SizedBox(height: 4),
+                  SelectableText(derivedLegacySeed!,
+                      style: const TextStyle(fontSize: 12, fontFamily: 'monospace')),
+                ],
+              ),
+            ),
+          ],
           if (responseError != null) ...[
             const SizedBox(height: 16),
             ErrorMessageContainer(message: 'Error: $responseError'),

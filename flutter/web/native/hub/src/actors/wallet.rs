@@ -123,6 +123,7 @@ impl WalletActor {
         _owned_tasks.spawn(Self::listen_to_start_multi_wallet_scan(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_restore_wallet_data(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_get_block_hashes(self_addr.clone()));
+        _owned_tasks.spawn(Self::listen_to_convert_bip39_to_legacy(self_addr.clone()));
 
         WalletActor {
             core_state: monero_rust::WalletState::new(),
@@ -760,6 +761,35 @@ impl WalletActor {
         let receiver = GetBlockHashesRequest::get_dart_signal_receiver();
         while let Some(_signal_pack) = receiver.recv().await {
             let _ = self_addr.notify(GetBlockHashesMsg).await;
+        }
+    }
+
+    async fn listen_to_convert_bip39_to_legacy(_self_addr: Address<Self>) {
+        let receiver = ConvertBip39ToLegacyRequest::get_dart_signal_receiver();
+        while let Some(signal_pack) = receiver.recv().await {
+            let request = signal_pack.message;
+            match monero_rust::bip39_to_legacy_mnemonic(
+                &request.bip39_mnemonic,
+                "",
+                request.account_index,
+            ) {
+                Ok(legacy) => {
+                    Bip39LegacySeedResponse {
+                        legacy_seed: legacy,
+                        success: true,
+                        error: None,
+                    }
+                    .send_signal_to_dart();
+                }
+                Err(e) => {
+                    Bip39LegacySeedResponse {
+                        legacy_seed: String::new(),
+                        success: false,
+                        error: Some(e),
+                    }
+                    .send_signal_to_dart();
+                }
+            }
         }
     }
 }
