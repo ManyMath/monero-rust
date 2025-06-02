@@ -5,6 +5,7 @@
 
 // Core modules
 pub mod abstractions;
+pub mod bip39_conv;
 pub mod coin_selection;
 pub mod encryption;
 pub mod scan_coordinator;
@@ -35,6 +36,9 @@ pub use scan_coordinator::{
     process_batch_with_reorg_detection,
     sync_progress, BlockOutputSummary, ProcessedBatch, ReorgInfo, ScanBatchOutcome, SyncProgress,
 };
+
+// -- BIP39 conversion --
+pub use bip39_conv::{bip39_to_legacy_mnemonic, validate_bip39, generate_bip39};
 
 // -- Encryption --
 pub use encryption::{encrypt, decrypt, EncryptionError};

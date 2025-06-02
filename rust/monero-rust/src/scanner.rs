@@ -229,12 +229,26 @@ fn register_subaddresses(scanner: &mut Scanner, lookahead: Lookahead) {
     }
 }
 
+/// Resolve a mnemonic to a Monero `Seed`. If 12 words, convert from BIP39 first.
+fn resolve_seed(mnemonic: &str) -> Result<Seed, String> {
+    let word_count = mnemonic.split_whitespace().count();
+    if word_count == 12 {
+        let legacy = crate::bip39_conv::bip39_to_legacy_mnemonic(mnemonic, "", 0)?;
+        Seed::from_string(Zeroizing::new(legacy))
+            .map_err(|e| format!("Failed to parse derived legacy seed: {:?}", e))
+    } else {
+        Seed::from_string(Zeroizing::new(mnemonic.to_string()))
+            .map_err(|e| format!("Failed to parse seed: {:?}", e))
+    }
+}
+
 pub fn generate_seed(seed_type: &str) -> Result<String, String> {
     // Use thread_rng which works in both native and WASM contexts
     let mut rng = rand::thread_rng();
 
     let seed = match seed_type {
         "polyseed" => Seed::new_polyseed(&mut rng),
+        "bip39" => return crate::bip39_conv::generate_bip39(),
         _ => Seed::new(&mut rng, Language::English),
     };
 
@@ -249,6 +263,11 @@ pub fn seed_birthday(mnemonic: &str) -> Option<u64> {
 pub fn validate_seed(mnemonic: &str) -> Result<(), String> {
     if mnemonic.trim().is_empty() {
         return Err("Seed phrase is empty".to_string());
+    }
+
+    let word_count = mnemonic.split_whitespace().count();
+    if word_count == 12 {
+        return crate::bip39_conv::validate_bip39(mnemonic);
     }
 
     Seed::from_string(Zeroizing::new(mnemonic.to_string()))
@@ -271,8 +290,7 @@ fn address_from_seed(seed: &Seed, network: Network) -> String {
 
 pub fn derive_address(mnemonic: &str, network_str: &str) -> Result<String, String> {
     let network = parse_network(network_str)?;
-    let seed = Seed::from_string(Zeroizing::new(mnemonic.to_string()))
-        .map_err(|e| format!("Failed to parse seed: {:?}", e))?;
+    let seed = resolve_seed(mnemonic)?;
     Ok(address_from_seed(&seed, network))
 }
 
@@ -286,8 +304,7 @@ pub fn derive_subaddress(
 
     let network = parse_network(network_str)?;
 
-    let seed = Seed::from_string(Zeroizing::new(mnemonic.to_string()))
-        .map_err(|e| format!("Failed to parse seed: {:?}", e))?;
+    let seed = resolve_seed(mnemonic)?;
 
     let spend: [u8; 32] = *seed.key_bytes();
     let spend_scalar = Scalar::from_bytes_mod_order(spend);
@@ -318,8 +335,7 @@ pub fn derive_subaddress(
 pub fn derive_keys(mnemonic: &str, network_str: &str) -> Result<DerivedKeys, String> {
     let network = parse_network(network_str)?;
 
-    let seed = Seed::from_string(Zeroizing::new(mnemonic.to_string()))
-        .map_err(|e| format!("Failed to parse seed: {:?}", e))?;
+    let seed = resolve_seed(mnemonic)?;
 
     let spend: [u8; 32] = *seed.key_bytes();
     let spend_scalar = Scalar::from_bytes_mod_order(spend);
