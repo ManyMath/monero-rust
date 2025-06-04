@@ -41,3 +41,9 @@ npm install && npm test
 
 ## Notes
 This runs as a browser extension to bypass CORS restrictions when talking to Monero nodes. Most nodes don't send headers that allow arbitrary web origins. The extension sidesteps this for testing purposes.
+
+# Acknowledgements
+- Thank you Diego "rehrar" Salazar and Cypher Stack for commissioning me to
+  prove this concept via the https://github.com/cypherstack/libxmr project.
+- Thank you Luke "kayabaNerve" Parker and Serai and Boog900 and the monero-oxide contributors for `monero-serai` and `monero-oxide`, respectively.
+- Thank you Cake Wallet for your "Exodus style" BIP39 test vectors and implementation.
