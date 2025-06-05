@@ -230,7 +230,7 @@ fn register_subaddresses(scanner: &mut Scanner, lookahead: Lookahead) {
 }
 
 /// Resolve a mnemonic to a Monero `Seed`. If 12 words, convert from BIP39 first.
-fn resolve_seed(mnemonic: &str) -> Result<Seed, String> {
+pub fn resolve_seed(mnemonic: &str) -> Result<Seed, String> {
     let word_count = mnemonic.split_whitespace().count();
     if word_count == 12 {
         let legacy = crate::bip39_conv::bip39_to_legacy_mnemonic(mnemonic, "", 0)?;
@@ -459,8 +459,7 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
 ) -> Result<BlockScanResult, String> {
     let _network = parse_network(network_str)?;
 
-    let seed = Seed::from_string(Zeroizing::new(mnemonic.to_string()))
-        .map_err(|e| format!("Invalid mnemonic: {:?}", e))?;
+    let seed = resolve_seed(mnemonic)?;
 
     let spend_point = spend_key_from_seed(&seed);
     let view_scalar = view_key_from_seed(&seed);
@@ -615,8 +614,7 @@ pub async fn process_batch_response(
 ) -> Result<Vec<BlockScanResult>, String> {
     let _network = parse_network(network_str)?;
 
-    let seed = Seed::from_string(Zeroizing::new(mnemonic.to_string()))
-        .map_err(|e| format!("Invalid mnemonic: {:?}", e))?;
+    let seed = resolve_seed(mnemonic)?;
     let spend_point = spend_key_from_seed(&seed);
     let view_scalar = view_key_from_seed(&seed);
     #[cfg(target_arch = "wasm32")]
@@ -836,8 +834,7 @@ pub async fn process_batch_multi_wallet_response(
     let mut wallet_scanners = Vec::with_capacity(wallet_configs.len());
     for config in &wallet_configs {
         let network = parse_network(&config.network)?;
-        let seed = Seed::from_string(Zeroizing::new(config.mnemonic.clone()))
-            .map_err(|e| format!("Invalid mnemonic: {:?}", e))?;
+        let seed = resolve_seed(&config.mnemonic)?;
         let address = address_from_seed(&seed, network);
         let spend_point = spend_key_from_seed(&seed);
         let view_scalar = view_key_from_seed(&seed);
@@ -1314,8 +1311,7 @@ pub async fn scan_block_multi_wallet<R: RpcConnection + Send + Sync + Clone + 's
         join_set.spawn(async move {
             // Parse seed once — used for both address derivation and scanner setup
             let network = parse_network(&wallet_config.network)?;
-            let seed = Seed::from_string(Zeroizing::new(wallet_config.mnemonic.clone()))
-                .map_err(|e| format!("Invalid mnemonic: {:?}", e))?;
+            let seed = resolve_seed(&wallet_config.mnemonic)?;
             let address = address_from_seed(&seed, network);
 
             let spend_point = spend_key_from_seed(&seed);
@@ -1483,8 +1479,7 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
     for wallet_config in wallet_configs {
         // Parse seed once — used for both address derivation and scanner setup
         let network = parse_network(&wallet_config.network)?;
-        let seed = Seed::from_string(Zeroizing::new(wallet_config.mnemonic.clone()))
-            .map_err(|e| format!("Invalid mnemonic: {:?}", e))?;
+        let seed = resolve_seed(&wallet_config.mnemonic)?;
         let address = address_from_seed(&seed, network);
 
         let spend_point = spend_key_from_seed(&seed);
@@ -1609,8 +1604,7 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
     _network_str: &str,
     lookahead: Lookahead,
 ) -> Result<MempoolScanResult, String> {
-    let seed = Seed::from_string(Zeroizing::new(mnemonic.to_string()))
-        .map_err(|e| format!("Invalid mnemonic: {:?}", e))?;
+    let seed = resolve_seed(mnemonic)?;
 
     let spend_point = spend_key_from_seed(&seed);
     let view_scalar = view_key_from_seed(&seed);

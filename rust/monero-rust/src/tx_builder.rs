@@ -20,6 +20,7 @@ pub mod native {
     #[cfg(target_arch = "wasm32")]
     use crate::rpc_serai::WasmRpcConnection;
 
+    use crate::scanner::resolve_seed;
     use serde::{Deserialize, Serialize};
     use sha3::{Digest, Keccak256};
     use std::collections::HashSet;
@@ -412,8 +413,7 @@ pub mod native {
 
         let network = parse_network(network_str)?;
 
-        let seed = Seed::from_string(Zeroizing::new(seed_phrase.to_string()))
-            .map_err(|e| format!("Invalid seed: {:?}", e))?;
+        let seed = resolve_seed(seed_phrase)?;
 
         let spend_key = spend_key_from_seed(&seed);
         let view_pair = view_pair_from_seed(&seed);
@@ -525,8 +525,7 @@ pub mod native {
 
         let network = parse_network(network_str)?;
 
-        let seed = Seed::from_string(Zeroizing::new(seed_phrase.to_string()))
-            .map_err(|e| format!("Invalid seed: {:?}", e))?;
+        let seed = resolve_seed(seed_phrase)?;
 
         let spend_key = spend_key_from_seed(&seed);
         let view_pair = view_pair_from_seed(&seed);
@@ -704,8 +703,7 @@ pub mod native {
         seed_phrase: &str,
         _network_str: &str,
     ) -> Result<Vec<ReceivedOutput>, String> {
-        let seed = Seed::from_string(Zeroizing::new(seed_phrase.to_string()))
-            .map_err(|e| format!("Invalid seed: {:?}", e))?;
+        let seed = resolve_seed(seed_phrase)?;
 
         let view_pair = view_pair_from_seed(&seed);
         let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
@@ -745,8 +743,7 @@ pub mod native {
         seed_phrase: &str,
         _network_str: &str,
     ) -> Result<Vec<ReceivedOutput>, String> {
-        let seed = Seed::from_string(Zeroizing::new(seed_phrase.to_string()))
-            .map_err(|e| format!("Invalid seed: {:?}", e))?;
+        let seed = resolve_seed(seed_phrase)?;
 
         let view_pair = view_pair_from_seed(&seed);
         let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
