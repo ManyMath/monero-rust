@@ -1,7 +1,7 @@
 use monero_rust::{
     bip39_to_legacy_mnemonic, validate_bip39, generate_bip39,
     derive_address, derive_keys, derive_subaddress,
-    generate_seed, validate_seed,
+    generate_seed, resolve_seed, validate_seed,
 };
 
 
@@ -191,4 +191,31 @@ fn test_different_accounts_produce_different_seeds() {
     assert_ne!(seed0, seed1);
     assert_ne!(seed1, seed2);
     assert_ne!(seed0, seed2);
+}
+
+#[test]
+fn test_resolve_seed_with_bip39() {
+    let bip39 = "color ranch color remove subway public water embrace before begin liberty fault";
+    let seed = resolve_seed(bip39).unwrap();
+    // Verify it produces the same keys as the explicit conversion path
+    let keys = derive_keys(bip39, "mainnet").unwrap();
+    assert_eq!(
+        keys.address,
+        "49MggvPosJugF8Zq7WAKbsSchz6vbyL6YiUxM4ryfGQDXphs6wiWiXLFWCSshnLPcceGTWUaKfWWMHQAAKESV3TQJVQsL9a"
+    );
+}
+
+#[test]
+fn test_resolve_seed_with_classic_25_word() {
+    let classic = "tasked eight afraid laboratory tail feline rift reinvest vane cafe bailed \
+        foggy dormant paper jigsaw king hazard suture king dapper dummy jolted \
+        dating dwindling king";
+    let seed = resolve_seed(classic).unwrap();
+    let keys = derive_keys(classic, "mainnet").unwrap();
+    assert!(!keys.address.is_empty());
+}
+
+#[test]
+fn test_resolve_seed_invalid_input() {
+    assert!(resolve_seed("not a valid seed").is_err());
 }
