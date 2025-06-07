@@ -1,7 +1,7 @@
 use monero_rust::{
     bip39_to_legacy_mnemonic, validate_bip39, generate_bip39,
     derive_address, derive_keys, derive_subaddress,
-    generate_seed, resolve_seed, validate_seed,
+    generate_seed, resolve_seed, seed_birthday, validate_seed,
 };
 
 
@@ -218,4 +218,46 @@ fn test_resolve_seed_with_classic_25_word() {
 #[test]
 fn test_resolve_seed_invalid_input() {
     assert!(resolve_seed("not a valid seed").is_err());
+}
+
+#[test]
+fn test_seed_birthday_with_bip39_does_not_panic() {
+    let bip39 = "color ranch color remove subway public water embrace before begin liberty fault";
+    // Should not panic; returns None because legacy seeds don't encode birthday
+    let birthday = seed_birthday(bip39);
+    assert_eq!(birthday, None);
+}
+
+#[test]
+fn test_resolve_seed_matches_explicit_bip39_conversion() {
+    let bip39 = "color ranch color remove subway public water embrace before begin liberty fault";
+    let keys_via_resolve = derive_keys(bip39, "mainnet").unwrap();
+    let legacy = bip39_to_legacy_mnemonic(bip39, "", 0).unwrap();
+    let keys_via_legacy = derive_keys(&legacy, "mainnet").unwrap();
+    assert_eq!(keys_via_resolve.address, keys_via_legacy.address);
+    assert_eq!(keys_via_resolve.secret_spend_key, keys_via_legacy.secret_spend_key);
+    assert_eq!(keys_via_resolve.secret_view_key, keys_via_legacy.secret_view_key);
+}
+
+#[test]
+fn test_resolve_seed_with_polyseed() {
+    let polyseed = generate_seed("polyseed").unwrap();
+    assert_eq!(polyseed.split_whitespace().count(), 16);
+    // Polyseed should pass through resolve_seed without BIP39 conversion
+    let _seed = resolve_seed(&polyseed).unwrap();
+    let keys = derive_keys(&polyseed, "mainnet").unwrap();
+    assert!(!keys.address.is_empty());
+}
+
+#[test]
+fn test_validate_seed_accepts_all_types() {
+    // 12-word BIP39
+    validate_seed("meadow tip best belt boss eyebrow control affair eternal piece very shiver").unwrap();
+    // 16-word polyseed
+    let polyseed = generate_seed("polyseed").unwrap();
+    validate_seed(&polyseed).unwrap();
+    // 25-word classic
+    validate_seed("tasked eight afraid laboratory tail feline rift reinvest vane cafe bailed \
+        foggy dormant paper jigsaw king hazard suture king dapper dummy jolted \
+        dating dwindling king").unwrap();
 }
