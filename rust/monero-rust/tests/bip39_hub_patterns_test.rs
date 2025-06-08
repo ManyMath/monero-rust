@@ -156,6 +156,18 @@ fn hub_all_seed_types_through_restore_pipeline() {
 }
 
 #[test]
+fn hub_pre_resolve_bip39_cake_wallet_passphrase_vector() {
+    // Cross-validated against Cake Wallet: pre-resolve pattern with passphrase
+    let bip39 = "meadow tip best belt boss eyebrow control affair eternal piece very shiver";
+    let legacy = bip39_to_legacy_mnemonic(bip39, "passphrase", 0).unwrap();
+    let addr = derive_address(&legacy, "mainnet").unwrap();
+    assert_eq!(
+        addr,
+        "44KghHsEKVxbf9kpZ5Jry33rbX2J3DkWV3HVKEMsaAykY1Gmi2s55F6fsTB41U98dnSjgswjhc7HkY9nq9nwP4cDERWwpsM"
+    );
+}
+
+#[test]
 fn hub_pre_resolve_bip39_with_passphrase_derives_different_address() {
     // Simulates what the hub does: pre-resolve seed, then call derive_address
     let bip39 = BIP39_SEED;

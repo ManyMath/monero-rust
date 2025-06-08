@@ -263,6 +263,31 @@ fn test_validate_seed_accepts_all_types() {
 }
 
 #[test]
+fn test_bip39_passphrase_cake_wallet_vector() {
+    // Cross-validated against Cake Wallet: BIP39 seed with passphrase="passphrase"
+    let bip39 = "meadow tip best belt boss eyebrow control affair eternal piece very shiver";
+    let legacy = bip39_to_legacy_mnemonic(bip39, "passphrase", 0).unwrap();
+    assert_eq!(
+        legacy,
+        "eject vinegar artistic toyed aunt imagine evolved truth pause abnormal lemon \
+        arena taken utopia alumni baby gearbox molten aspire dude sample trolling \
+        afoot aside evolved"
+    );
+    let keys = derive_keys(&legacy, "mainnet").unwrap();
+    assert_eq!(
+        keys.address,
+        "44KghHsEKVxbf9kpZ5Jry33rbX2J3DkWV3HVKEMsaAykY1Gmi2s55F6fsTB41U98dnSjgswjhc7HkY9nq9nwP4cDERWwpsM"
+    );
+
+    // Must differ from no-passphrase
+    let keys_no_pass = derive_keys(bip39, "mainnet").unwrap();
+    assert_ne!(keys_no_pass.address, keys.address);
+
+    // resolve_seed_bip39 should match the explicit conversion
+    let _seed = resolve_seed_bip39(bip39, "passphrase", 0).unwrap();
+}
+
+#[test]
 fn test_resolve_seed_bip39_with_passphrase() {
     let bip39 = "meadow tip best belt boss eyebrow control affair eternal piece very shiver";
 
@@ -293,13 +318,6 @@ fn test_resolve_seed_bip39_with_passphrase() {
         keys_a1.address,
         "42cmFtDdVjEQaP4aYPKfTEh1NrCxTpd6XGNSGyvphacMHqEKK3nWHVP6VgZV48172386mQWHSashEXpdmEdDv6vF2yu5PeP"
     );
-
-    // Must differ from no-passphrase
-    let keys_no_pass = derive_keys(bip39, "mainnet").unwrap();
-    assert_ne!(keys_no_pass.address, keys.address);
-
-    // resolve_seed_bip39 should match the explicit conversion
-    let _seed = resolve_seed_bip39(bip39, "mypassphrase", 0).unwrap();
 }
 
 #[test]
