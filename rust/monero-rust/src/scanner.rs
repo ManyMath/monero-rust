@@ -229,17 +229,22 @@ fn register_subaddresses(scanner: &mut Scanner, lookahead: Lookahead) {
     }
 }
 
-/// Resolve a mnemonic to a Monero `Seed`. If 12 words, convert from BIP39 first.
-pub fn resolve_seed(mnemonic: &str) -> Result<Seed, String> {
+/// Resolve a mnemonic with explicit BIP39 passphrase and account index.
+/// If 12 words, convert from BIP39 first using the given passphrase and account index.
+/// Non-BIP39 seeds (16-word polyseed, 25-word classic) pass through unchanged.
+pub fn resolve_seed_bip39(mnemonic: &str, passphrase: &str, account_index: u32) -> Result<Seed, String> {
     let word_count = mnemonic.split_whitespace().count();
     if word_count == 12 {
-        let legacy = crate::bip39_conv::bip39_to_legacy_mnemonic(mnemonic, "", 0)?;
+        let legacy = crate::bip39_conv::bip39_to_legacy_mnemonic(mnemonic, passphrase, account_index)?;
         Seed::from_string(Zeroizing::new(legacy))
             .map_err(|e| format!("Failed to parse derived legacy seed: {:?}", e))
     } else {
         Seed::from_string(Zeroizing::new(mnemonic.to_string()))
             .map_err(|e| format!("Failed to parse seed: {:?}", e))
     }
+}
+pub fn resolve_seed(mnemonic: &str) -> Result<Seed, String> {
+    resolve_seed_bip39(mnemonic, "", 0)
 }
 
 pub fn generate_seed(seed_type: &str) -> Result<String, String> {

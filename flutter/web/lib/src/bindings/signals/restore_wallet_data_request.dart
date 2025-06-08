@@ -11,6 +11,8 @@ class RestoreWalletDataRequest {
     required this.daemonHeight,
     required this.currentHeight,
     this.blockHashesJson,
+    required this.passphrase,
+    required this.bip39AccountIndex,
   });
 
   static RestoreWalletDataRequest deserialize(BinaryDeserializer deserializer) {
@@ -22,6 +24,8 @@ class RestoreWalletDataRequest {
       daemonHeight: deserializer.deserializeUint64(),
       currentHeight: deserializer.deserializeUint64(),
       blockHashesJson: TraitHelpers.deserializeOptionStr(deserializer),
+      passphrase: deserializer.deserializeString(),
+      bip39AccountIndex: deserializer.deserializeUint32(),
     );
     deserializer.decreaseContainerDepth();
     return instance;
@@ -42,6 +46,8 @@ class RestoreWalletDataRequest {
   final Uint64 daemonHeight;
   final Uint64 currentHeight;
   final String? blockHashesJson;
+  final String passphrase;
+  final int bip39AccountIndex;
 
   RestoreWalletDataRequest copyWith({
     String? seed,
@@ -50,6 +56,8 @@ class RestoreWalletDataRequest {
     Uint64? daemonHeight,
     Uint64? currentHeight,
     String? Function()? blockHashesJson,
+    String? passphrase,
+    int? bip39AccountIndex,
   }) {
     return RestoreWalletDataRequest(
       seed: seed ?? this.seed,
@@ -58,6 +66,8 @@ class RestoreWalletDataRequest {
       daemonHeight: daemonHeight ?? this.daemonHeight,
       currentHeight: currentHeight ?? this.currentHeight,
       blockHashesJson: blockHashesJson == null ? this.blockHashesJson : blockHashesJson(),
+      passphrase: passphrase ?? this.passphrase,
+      bip39AccountIndex: bip39AccountIndex ?? this.bip39AccountIndex,
     );
   }
 
@@ -69,6 +79,8 @@ class RestoreWalletDataRequest {
     serializer.serializeUint64(daemonHeight);
     serializer.serializeUint64(currentHeight);
     TraitHelpers.serializeOptionStr(blockHashesJson, serializer);
+    serializer.serializeString(passphrase);
+    serializer.serializeUint32(bip39AccountIndex);
     serializer.decreaseContainerDepth();
   }
 
@@ -89,7 +101,9 @@ class RestoreWalletDataRequest {
       && listEquals(outputs, other.outputs)
       && daemonHeight == other.daemonHeight
       && currentHeight == other.currentHeight
-      && blockHashesJson == other.blockHashesJson;
+      && blockHashesJson == other.blockHashesJson
+      && passphrase == other.passphrase
+      && bip39AccountIndex == other.bip39AccountIndex;
   }
 
   @override
@@ -100,6 +114,8 @@ class RestoreWalletDataRequest {
         daemonHeight,
         currentHeight,
         blockHashesJson,
+        passphrase,
+        bip39AccountIndex,
       );
 
   @override
@@ -113,7 +129,9 @@ class RestoreWalletDataRequest {
         'outputs: $outputs, '
         'daemonHeight: $daemonHeight, '
         'currentHeight: $currentHeight, '
-        'blockHashesJson: $blockHashesJson'
+        'blockHashesJson: $blockHashesJson, '
+        'passphrase: $passphrase, '
+        'bip39AccountIndex: $bip39AccountIndex'
         ')';
       return true;
     }());

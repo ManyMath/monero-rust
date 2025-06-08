@@ -52,6 +52,8 @@ class WalletScanService {
       blockHeight: Uint64(BigInt.from(blockHeight)),
       seed: seed,
       network: network,
+      passphrase: '',
+      bip39AccountIndex: 0,
     ).sendSignalToRust();
   }
 
@@ -122,6 +124,8 @@ class WalletScanService {
         seed: wallet.seed,
         network: wallet.network,
         accountLookahead: accountLookahead,
+        passphrase: '',
+        bip39AccountIndex: 0,
       ).sendSignalToRust();
     } else if (seed != null && network != null) {
       StartContinuousScanRequest(
@@ -130,6 +134,8 @@ class WalletScanService {
         seed: seed,
         network: network,
         accountLookahead: accountLookahead,
+        passphrase: '',
+        bip39AccountIndex: 0,
       ).sendSignalToRust();
     }
   }
@@ -181,6 +187,8 @@ class WalletScanService {
       seed: seed,
       network: network,
       accountLookahead: 0,
+      passphrase: '',
+      bip39AccountIndex: 0,
     ).sendSignalToRust();
   }
 }

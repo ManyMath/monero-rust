@@ -187,6 +187,8 @@ class WalletInstance {
       seed: seed,
       network: network,
       accountLookahead: highestAccount,
+      passphrase: '',
+      bip39AccountIndex: 0,
     );
   }
 

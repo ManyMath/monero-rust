@@ -320,7 +320,7 @@ class _DebugViewState extends State<DebugView> {
 
           // Get seed birthday for polyseed display if seed was manually entered
           if (seed.isNotEmpty) {
-            GetSeedBirthdayRequest(seed: seed).sendSignalToRust();
+            GetSeedBirthdayRequest(seed: seed, passphrase: '', bip39AccountIndex: 0).sendSignalToRust();
           }
         } else {
           _derivedAddress = null;
@@ -636,7 +636,7 @@ class _DebugViewState extends State<DebugView> {
           _derivedLegacySeed = signal.message.legacySeed;
         });
         // Auto-derive keys from the legacy seed
-        DeriveKeysRequest(seed: signal.message.legacySeed, network: _network).sendSignalToRust();
+        DeriveKeysRequest(seed: signal.message.legacySeed, network: _network, passphrase: '', bip39AccountIndex: 0).sendSignalToRust();
       } else {
         setState(() {
           _responseError = signal.message.error ?? 'BIP39 conversion failed';
@@ -694,6 +694,8 @@ class _DebugViewState extends State<DebugView> {
         seed: wallet.seed,
         network: wallet.network,
         accountLookahead: highestAccount,
+        passphrase: '',
+        bip39AccountIndex: 0,
       ).sendSignalToRust();
     }
   }
@@ -711,6 +713,8 @@ class _DebugViewState extends State<DebugView> {
       seed: seed,
       network: _network,
       accountLookahead: highestAccount,
+      passphrase: '',
+      bip39AccountIndex: 0,
     ).sendSignalToRust();
   }
 
@@ -878,6 +882,7 @@ class _DebugViewState extends State<DebugView> {
       ConvertBip39ToLegacyRequest(
         bip39Mnemonic: result.normalizedInput!,
         accountIndex: 0,
+        passphrase: '',
       ).sendSignalToRust();
       return;
     }
@@ -885,6 +890,8 @@ class _DebugViewState extends State<DebugView> {
     DeriveKeysRequest(
       seed: result.normalizedInput!,
       network: _network,
+      passphrase: '',
+      bip39AccountIndex: 0,
     ).sendSignalToRust();
 
     // Also derive subaddresses for the active account
@@ -915,6 +922,8 @@ class _DebugViewState extends State<DebugView> {
                 network: _network,
                 account: account,
                 addressIndex: index,
+                passphrase: '',
+                bip39AccountIndex: 0,
               ).sendSignalToRust();
             }
             derived++;
@@ -939,6 +948,8 @@ class _DebugViewState extends State<DebugView> {
               network: _network,
               account: _activeAccount,
               addressIndex: index,
+              passphrase: '',
+              bip39AccountIndex: 0,
             ).sendSignalToRust();
           }
           derived++;
@@ -1264,6 +1275,8 @@ class _DebugViewState extends State<DebugView> {
       outputs: _allOutputsAllAccounts,
       daemonHeight: Uint64(BigInt.from(_daemonHeight ?? 0)),
       currentHeight: Uint64(BigInt.from(_continuousScanCurrentHeight)),
+      passphrase: '',
+      bip39AccountIndex: 0,
     ).sendSignalToRust();
   }
 
@@ -2316,6 +2329,8 @@ class _DebugViewState extends State<DebugView> {
       daemonHeight: Uint64(BigInt.from(_daemonHeight ?? 0)),
       currentHeight: Uint64(BigInt.from(loadedHeight)),
       blockHashesJson: loadResult.blockHashesJson,
+      passphrase: '',
+      bip39AccountIndex: 0,
     ).sendSignalToRust();
 
     // Derive address to populate keys

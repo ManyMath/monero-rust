@@ -51,7 +51,7 @@ pub use scanner::{
     // Constants
     DEFAULT_LOOKAHEAD,
     // Key derivation
-    derive_address, derive_keys, derive_subaddress, generate_seed, resolve_seed, seed_birthday, validate_seed,
+    derive_address, derive_keys, derive_subaddress, generate_seed, resolve_seed, resolve_seed_bip39, seed_birthday, validate_seed,
     // Single-block scanning
     get_daemon_height,
     scan_block_for_outputs_with_url, scan_block_for_outputs_with_url_and_lookahead,

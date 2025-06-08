@@ -9,6 +9,16 @@ use tokio::task::JoinSet;
 use tokio_with_wasm::alias as tokio;
 use wasm_bindgen_futures;
 
+/// Pre-convert BIP39 12-word seeds to legacy format using the given passphrase
+/// and account index. Non-BIP39 seeds pass through unchanged.
+pub(crate) fn pre_resolve_bip39(seed: &str, passphrase: &str, account_index: u32) -> Result<String, String> {
+    if seed.split_whitespace().count() == 12 {
+        monero_rust::bip39_to_legacy_mnemonic(seed, passphrase, account_index)
+    } else {
+        Ok(seed.to_string())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Double-buffered prefetch infrastructure
 // ---------------------------------------------------------------------------
@@ -206,7 +216,14 @@ impl WalletActor {
         let receiver = GetSeedBirthdayRequest::get_dart_signal_receiver();
         while let Some(signal_pack) = receiver.recv().await {
             let request = signal_pack.message;
-            let birthday = monero_rust::seed_birthday(&request.seed);
+            let resolved = match pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
+                Ok(s) => s,
+                Err(e) => {
+                    SeedBirthdayResponse { birthday: None, success: false, error: Some(e) }.send_signal_to_dart();
+                    continue;
+                }
+            };
+            let birthday = monero_rust::seed_birthday(&resolved);
             SeedBirthdayResponse {
                 birthday,
                 success: true,
@@ -344,7 +361,14 @@ impl WalletActor {
         let receiver = DeriveAddressRequest::get_dart_signal_receiver();
         while let Some(signal_pack) = receiver.recv().await {
             let request = signal_pack.message;
-            match monero_rust::derive_address(&request.seed, &request.network) {
+            let resolved = match pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
+                Ok(s) => s,
+                Err(e) => {
+                    AddressDerivedResponse { address: String::new(), success: false, error: Some(e) }.send_signal_to_dart();
+                    continue;
+                }
+            };
+            match monero_rust::derive_address(&resolved, &request.network) {
                 Ok(address) => {
                     AddressDerivedResponse {
                         address,
@@ -369,8 +393,15 @@ impl WalletActor {
         let receiver = DeriveSubaddressRequest::get_dart_signal_receiver();
         while let Some(signal_pack) = receiver.recv().await {
             let request = signal_pack.message;
+            let resolved = match pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
+                Ok(s) => s,
+                Err(e) => {
+                    SubaddressDerivedResponse { address: String::new(), success: false, error: Some(e) }.send_signal_to_dart();
+                    continue;
+                }
+            };
             match monero_rust::derive_subaddress(
-                &request.seed,
+                &resolved,
                 &request.network,
                 request.account,
                 request.address_index,
@@ -399,7 +430,18 @@ impl WalletActor {
         let receiver = DeriveKeysRequest::get_dart_signal_receiver();
         while let Some(signal_pack) = receiver.recv().await {
             let request = signal_pack.message;
-            match monero_rust::derive_keys(&request.seed, &request.network) {
+            let resolved = match pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
+                Ok(s) => s,
+                Err(e) => {
+                    KeysDerivedResponse {
+                        address: String::new(), secret_spend_key: String::new(),
+                        secret_view_key: String::new(), public_spend_key: String::new(),
+                        public_view_key: String::new(), success: false, error: Some(e),
+                    }.send_signal_to_dart();
+                    continue;
+                }
+            };
+            match monero_rust::derive_keys(&resolved, &request.network) {
                 Ok(keys) => {
                     KeysDerivedResponse {
                         address: keys.address,
@@ -433,13 +475,23 @@ impl WalletActor {
         while let Some(signal_pack) = receiver.recv().await {
             let request = signal_pack.message;
 
-            let seed = request.seed.clone();
+            let seed = match pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
+                Ok(s) => s,
+                Err(e) => {
+                    BlockScanResponse {
+                        success: false, error: Some(e), block_height: request.block_height,
+                        block_hash: String::new(), block_timestamp: 0, tx_count: 0,
+                        outputs: Vec::new(), daemon_height: 0, spent_key_images: Vec::new(),
+                    }.send_signal_to_dart();
+                    continue;
+                }
+            };
             let network = request.network.clone();
 
             match monero_rust::scan_block_for_outputs_with_url(
                 &request.node_url,
                 request.block_height,
-                &request.seed,
+                &seed,
                 &request.network,
             )
             .await
@@ -531,11 +583,22 @@ impl WalletActor {
         let receiver = StartContinuousScanRequest::get_dart_signal_receiver();
         while let Some(signal_pack) = receiver.recv().await {
             let request = signal_pack.message;
+            let resolved_seed = match pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
+                Ok(s) => s,
+                Err(e) => {
+                    BlockScanResponse {
+                        success: false, error: Some(e), block_height: request.start_height,
+                        block_hash: String::new(), block_timestamp: 0, tx_count: 0,
+                        outputs: Vec::new(), daemon_height: 0, spent_key_images: Vec::new(),
+                    }.send_signal_to_dart();
+                    continue;
+                }
+            };
             let _ = self_addr
                 .notify(StartContinuousScan {
                     node_url: request.node_url,
                     start_height: request.start_height,
-                    seed: request.seed,
+                    seed: resolved_seed,
                     network: request.network,
                     account_lookahead: request.account_lookahead,
                     accounts_to_scan: request.accounts_to_scan,
@@ -555,12 +618,22 @@ impl WalletActor {
         let receiver = MempoolScanRequest::get_dart_signal_receiver();
         while let Some(signal_pack) = receiver.recv().await {
             let request = signal_pack.message;
+            let resolved_seed = match pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
+                Ok(s) => s,
+                Err(e) => {
+                    MempoolScanResponse {
+                        success: false, error: Some(e), tx_count: 0,
+                        outputs: Vec::new(), spent_key_images: Vec::new(),
+                    }.send_signal_to_dart();
+                    continue;
+                }
+            };
             let mut addr = self_addr.clone();
 
             wasm_bindgen_futures::spawn_local(async move {
                 match monero_rust::scan_mempool_for_outputs_with_account_lookahead(
                     &request.node_url,
-                    &request.seed,
+                    &resolved_seed,
                     &request.network,
                     request.account_lookahead,
                 )
@@ -614,13 +687,32 @@ impl WalletActor {
         while let Some(signal_pack) = receiver.recv().await {
             let request = signal_pack.message;
 
+            // Pre-resolve all wallet seeds before spawning async task
+            let mut resolved_seeds = Vec::new();
+            let mut resolve_err = None;
+            for w in &request.wallets {
+                match pre_resolve_bip39(&w.seed, &w.passphrase, w.bip39_account_index) {
+                    Ok(s) => resolved_seeds.push(s),
+                    Err(e) => { resolve_err = Some(e); break; }
+                }
+            }
+            if let Some(e) = resolve_err {
+                MultiWalletScanResponse {
+                    success: false, error: Some(e), block_height: request.block_height,
+                    block_hash: String::new(), block_timestamp: 0, tx_count: 0,
+                    daemon_height: 0, spent_key_images: Vec::new(), wallet_results: Vec::new(),
+                }.send_signal_to_dart();
+                continue;
+            }
+
             wasm_bindgen_futures::spawn_local(async move {
                 // Convert wallet configs to the format expected by the scanner
                 let wallet_configs: Vec<monero_rust::WalletScanConfig> = request
                     .wallets
                     .iter()
-                    .map(|w| monero_rust::WalletScanConfig {
-                        mnemonic: w.seed.clone(),
+                    .enumerate()
+                    .map(|(i, w)| monero_rust::WalletScanConfig {
+                        mnemonic: resolved_seeds[i].clone(),
                         network: w.network.clone(),
                         lookahead: monero_rust::Lookahead {
                             account: w.account_lookahead,
@@ -688,9 +780,36 @@ impl WalletActor {
         let receiver = StartMultiWalletScanRequest::get_dart_signal_receiver();
         while let Some(signal_pack) = receiver.recv().await {
             let request = signal_pack.message;
+
+            // Pre-resolve all wallet seeds
+            let mut resolved_wallets = Vec::new();
+            let mut resolve_err = None;
+            for w in &request.wallets {
+                match pre_resolve_bip39(&w.seed, &w.passphrase, w.bip39_account_index) {
+                    Ok(s) => resolved_wallets.push(WalletConfig {
+                        seed: s,
+                        network: w.network.clone(),
+                        account_lookahead: w.account_lookahead,
+                        accounts_to_scan: w.accounts_to_scan.clone(),
+                        passphrase: String::new(),
+                        bip39_account_index: 0,
+                    }),
+                    Err(e) => { resolve_err = Some(e); break; }
+                }
+            }
+            if let Some(e) = resolve_err {
+                MultiWalletScanResponse {
+                    success: false, error: Some(format!("Failed to resolve BIP39 seed: {}", e)),
+                    block_height: 0, block_hash: String::new(), block_timestamp: 0,
+                    tx_count: 0, daemon_height: 0, spent_key_images: Vec::new(),
+                    wallet_results: Vec::new(),
+                }.send_signal_to_dart();
+                continue;
+            }
+
             let node_url = request.node_url.clone();
             let start_height = request.start_height;
-            let wallets = request.wallets.clone();
+            let wallets = resolved_wallets;
             let mut self_addr_clone = self_addr.clone();
 
             // Spawn task to get daemon height and start scanning
@@ -745,9 +864,13 @@ impl WalletActor {
         let receiver = RestoreWalletDataRequest::get_dart_signal_receiver();
         while let Some(signal_pack) = receiver.recv().await {
             let msg = signal_pack.message;
+            let resolved_seed = match pre_resolve_bip39(&msg.seed, &msg.passphrase, msg.bip39_account_index) {
+                Ok(s) => s,
+                Err(_e) => msg.seed.clone(), // Fall through; RestoreOutputs just stores seed
+            };
             let outputs: Vec<monero_rust::WalletOutput> = msg.outputs.into_iter().map(|o| o.into()).collect();
             let _ = self_addr.notify(RestoreOutputs {
-                seed: msg.seed,
+                seed: resolved_seed,
                 network: msg.network,
                 outputs,
                 daemon_height: msg.daemon_height,
@@ -770,7 +893,7 @@ impl WalletActor {
             let request = signal_pack.message;
             match monero_rust::bip39_to_legacy_mnemonic(
                 &request.bip39_mnemonic,
-                "",
+                &request.passphrase,
                 request.account_index,
             ) {
                 Ok(legacy) => {

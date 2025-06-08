@@ -54,6 +54,10 @@ pub struct CreateTransactionRequest {
     pub network: String,
     pub recipients: Vec<Recipient>,
     pub selected_outputs: Option<Vec<String>>, // "txHash:outputIndex" keys for coin control
+    #[serde(default)]
+    pub passphrase: String,
+    #[serde(default)]
+    pub bip39_account_index: u32,
 }
 
 #[derive(Deserialize, DartSignal)]
@@ -63,6 +67,10 @@ pub struct SweepAllRequest {
     pub network: String,
     pub destination_address: String,
     pub selected_outputs: Option<Vec<String>>, // "txHash:outputIndex" keys to sweep (for account filtering)
+    #[serde(default)]
+    pub passphrase: String,
+    #[serde(default)]
+    pub bip39_account_index: u32,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, SignalPiece)]
@@ -111,6 +119,10 @@ pub struct SeedGeneratedResponse {
 #[derive(Deserialize, DartSignal)]
 pub struct GetSeedBirthdayRequest {
     pub seed: String,
+    #[serde(default)]
+    pub passphrase: String,
+    #[serde(default)]
+    pub bip39_account_index: u32,
 }
 
 #[derive(Serialize, RustSignal)]
@@ -137,6 +149,10 @@ pub struct BlockHeightFromTimestampResponse {
 pub struct DeriveAddressRequest {
     pub seed: String,
     pub network: String,
+    #[serde(default)]
+    pub passphrase: String,
+    #[serde(default)]
+    pub bip39_account_index: u32,
 }
 
 #[derive(Serialize, RustSignal)]
@@ -152,6 +168,10 @@ pub struct DeriveSubaddressRequest {
     pub network: String,
     pub account: u32,
     pub address_index: u32,
+    #[serde(default)]
+    pub passphrase: String,
+    #[serde(default)]
+    pub bip39_account_index: u32,
 }
 
 #[derive(Serialize, RustSignal)]
@@ -165,6 +185,10 @@ pub struct SubaddressDerivedResponse {
 pub struct DeriveKeysRequest {
     pub seed: String,
     pub network: String,
+    #[serde(default)]
+    pub passphrase: String,
+    #[serde(default)]
+    pub bip39_account_index: u32,
 }
 
 #[derive(Serialize, RustSignal)]
@@ -184,6 +208,10 @@ pub struct ScanBlockRequest {
     pub block_height: u64,
     pub seed: String,
     pub network: String,
+    #[serde(default)]
+    pub passphrase: String,
+    #[serde(default)]
+    pub bip39_account_index: u32,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, SignalPiece)]
@@ -316,6 +344,10 @@ pub struct StartContinuousScanRequest {
     pub account_lookahead: u32,
     #[serde(default)]
     pub accounts_to_scan: Option<Vec<u32>>,
+    #[serde(default)]
+    pub passphrase: String,
+    #[serde(default)]
+    pub bip39_account_index: u32,
 }
 
 #[derive(Deserialize, DartSignal)]
@@ -335,6 +367,10 @@ pub struct MempoolScanRequest {
     #[serde(default)]
     #[allow(dead_code)]
     pub accounts_to_scan: Option<Vec<u32>>,
+    #[serde(default)]
+    pub passphrase: String,
+    #[serde(default)]
+    pub bip39_account_index: u32,
 }
 
 #[derive(Serialize, RustSignal)]
@@ -400,6 +436,10 @@ pub struct WalletConfig {
     pub account_lookahead: u32, // Keep for backwards compatibility
     #[serde(default)]
     pub accounts_to_scan: Option<Vec<u32>>,
+    #[serde(default)]
+    pub passphrase: String,
+    #[serde(default)]
+    pub bip39_account_index: u32,
 }
 
 #[derive(Deserialize, DartSignal)]
@@ -444,6 +484,10 @@ pub struct RestoreWalletDataRequest {
     pub current_height: u64,
     #[serde(default)]
     pub block_hashes_json: Option<String>,
+    #[serde(default)]
+    pub passphrase: String,
+    #[serde(default)]
+    pub bip39_account_index: u32,
 }
 
 #[derive(Deserialize, DartSignal)]
@@ -482,6 +526,8 @@ pub struct DoubleSpendDetectedResponse {
 pub struct ConvertBip39ToLegacyRequest {
     pub bip39_mnemonic: String,
     pub account_index: u32,
+    #[serde(default)]
+    pub passphrase: String,
 }
 
 #[derive(Serialize, RustSignal)]

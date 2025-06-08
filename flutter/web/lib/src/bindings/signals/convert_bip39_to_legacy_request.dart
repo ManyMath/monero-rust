@@ -7,6 +7,7 @@ class ConvertBip39ToLegacyRequest {
   const ConvertBip39ToLegacyRequest({
     required this.bip39Mnemonic,
     required this.accountIndex,
+    required this.passphrase,
   });
 
   static ConvertBip39ToLegacyRequest deserialize(BinaryDeserializer deserializer) {
@@ -14,6 +15,7 @@ class ConvertBip39ToLegacyRequest {
     final instance = ConvertBip39ToLegacyRequest(
       bip39Mnemonic: deserializer.deserializeString(),
       accountIndex: deserializer.deserializeUint32(),
+      passphrase: deserializer.deserializeString(),
     );
     deserializer.decreaseContainerDepth();
     return instance;
@@ -30,14 +32,17 @@ class ConvertBip39ToLegacyRequest {
 
   final String bip39Mnemonic;
   final int accountIndex;
+  final String passphrase;
 
   ConvertBip39ToLegacyRequest copyWith({
     String? bip39Mnemonic,
     int? accountIndex,
+    String? passphrase,
   }) {
     return ConvertBip39ToLegacyRequest(
       bip39Mnemonic: bip39Mnemonic ?? this.bip39Mnemonic,
       accountIndex: accountIndex ?? this.accountIndex,
+      passphrase: passphrase ?? this.passphrase,
     );
   }
 
@@ -45,6 +50,7 @@ class ConvertBip39ToLegacyRequest {
     serializer.increaseContainerDepth();
     serializer.serializeString(bip39Mnemonic);
     serializer.serializeUint32(accountIndex);
+    serializer.serializeString(passphrase);
     serializer.decreaseContainerDepth();
   }
 
@@ -61,13 +67,15 @@ class ConvertBip39ToLegacyRequest {
 
     return other is ConvertBip39ToLegacyRequest
       && bip39Mnemonic == other.bip39Mnemonic
-      && accountIndex == other.accountIndex;
+      && accountIndex == other.accountIndex
+      && passphrase == other.passphrase;
   }
 
   @override
   int get hashCode => Object.hash(
         bip39Mnemonic,
         accountIndex,
+        passphrase,
       );
 
   @override
@@ -77,7 +85,8 @@ class ConvertBip39ToLegacyRequest {
     assert(() {
       fullString = '$runtimeType('
         'bip39Mnemonic: $bip39Mnemonic, '
-        'accountIndex: $accountIndex'
+        'accountIndex: $accountIndex, '
+        'passphrase: $passphrase'
         ')';
       return true;
     }());
@@ -87,6 +96,9 @@ class ConvertBip39ToLegacyRequest {
 }
 
 extension ConvertBip39ToLegacyRequestDartSignalExt on ConvertBip39ToLegacyRequest {
+  /// Sends the signal to Rust.
+  /// Passing data from Rust to Dart involves a memory copy
+  /// because Rust cannot own data managed by Dart's garbage collector.
   void sendSignalToRust() {
     final messageBytes = bincodeSerialize();
     final binary = Uint8List(0);

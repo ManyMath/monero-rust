@@ -113,6 +113,8 @@ class TransactionService {
       network: network,
       recipients: recipients,
       selectedOutputs: selectedOutputs,
+      passphrase: '',
+      bip39AccountIndex: 0,
     ).sendSignalToRust();
   }
 
@@ -185,6 +187,8 @@ class TransactionService {
       network: network,
       destinationAddress: destinationAddress,
       selectedOutputs: selectedOutputs,
+      passphrase: '',
+      bip39AccountIndex: 0,
     ).sendSignalToRust();
   }
 

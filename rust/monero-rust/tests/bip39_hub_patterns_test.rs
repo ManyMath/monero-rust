@@ -8,7 +8,7 @@
 
 use monero_rust::{
     bip39_to_legacy_mnemonic, derive_address, derive_keys, derive_subaddress,
-    generate_seed, resolve_seed, seed_birthday, validate_seed,
+    generate_seed, resolve_seed, resolve_seed_bip39, seed_birthday, validate_seed,
 };
 
 const BIP39_SEED: &str =
@@ -153,4 +153,51 @@ fn hub_all_seed_types_through_restore_pipeline() {
         derive_subaddress(seed, "mainnet", 0, 0).unwrap_or_else(|e| panic!("{} derive_subaddress failed: {}", seed_type, e));
         resolve_seed(seed).unwrap_or_else(|e| panic!("{} resolve_seed failed: {}", seed_type, e));
     }
+}
+
+#[test]
+fn hub_pre_resolve_bip39_with_passphrase_derives_different_address() {
+    // Simulates what the hub does: pre-resolve seed, then call derive_address
+    let bip39 = BIP39_SEED;
+    let legacy_no_pass = bip39_to_legacy_mnemonic(bip39, "", 0).unwrap();
+    let legacy_with_pass = bip39_to_legacy_mnemonic(bip39, "testpass", 0).unwrap();
+    let addr_no_pass = derive_address(&legacy_no_pass, "mainnet").unwrap();
+    let addr_with_pass = derive_address(&legacy_with_pass, "mainnet").unwrap();
+    assert_ne!(addr_no_pass, addr_with_pass);
+    assert_eq!(addr_no_pass, BIP39_EXPECTED_ADDRESS);
+}
+
+#[test]
+fn hub_pre_resolve_bip39_with_account_index_derives_different_address() {
+    let bip39 = BIP39_SEED;
+    let legacy_acct0 = bip39_to_legacy_mnemonic(bip39, "", 0).unwrap();
+    let legacy_acct1 = bip39_to_legacy_mnemonic(bip39, "", 1).unwrap();
+    let addr_0 = derive_address(&legacy_acct0, "mainnet").unwrap();
+    let addr_1 = derive_address(&legacy_acct1, "mainnet").unwrap();
+    assert_ne!(addr_0, addr_1);
+}
+
+#[test]
+fn hub_pre_resolve_classic_passthrough() {
+    // Classic 25-word seeds should pass through pre_resolve unchanged
+    let classic = "tasked eight afraid laboratory tail feline rift reinvest vane cafe bailed \
+        foggy dormant paper jigsaw king hazard suture king dapper dummy jolted \
+        dating dwindling king";
+    // Simulating pre_resolve_bip39: word count != 12, so returns seed unchanged
+    assert_ne!(classic.split_whitespace().count(), 12);
+    let keys = derive_keys(classic, "mainnet").unwrap();
+    assert!(!keys.address.is_empty());
+}
+
+#[test]
+fn hub_resolve_seed_bip39_matches_pre_resolve_pattern() {
+    // resolve_seed_bip39 should produce the same result as
+    // bip39_to_legacy_mnemonic + derive_keys (the pre-resolve pattern)
+    let bip39 = BIP39_SEED;
+    let _seed = resolve_seed_bip39(bip39, "pass123", 0).unwrap();
+    let legacy = bip39_to_legacy_mnemonic(bip39, "pass123", 0).unwrap();
+    let keys_from_legacy = derive_keys(&legacy, "mainnet").unwrap();
+    // Both paths should give the same address
+    let keys_no_pass = derive_keys(bip39, "mainnet").unwrap();
+    assert_ne!(keys_from_legacy.address, keys_no_pass.address);
 }

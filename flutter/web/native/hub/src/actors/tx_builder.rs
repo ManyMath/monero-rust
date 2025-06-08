@@ -35,6 +35,17 @@ impl TxBuilderActor {
         let receiver = CreateTransactionRequest::get_dart_signal_receiver();
         while let Some(signal_pack) = receiver.recv().await {
             let request = signal_pack.message;
+            let resolved_seed = match super::wallet::pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
+                Ok(s) => s,
+                Err(e) => {
+                    TransactionCreatedResponse {
+                        success: false, error: Some(e), tx_id: String::new(), fee: 0,
+                        tx_blob: None, tx_key: None, tx_key_additional: Vec::new(),
+                        spent_output_hashes: Vec::new(), change_outputs: Vec::new(),
+                    }.send_signal_to_dart();
+                    continue;
+                }
+            };
             // Convert Vec<Recipient> to Vec<(String, u64)>
             let recipients: Vec<(String, u64)> = request
                 .recipients
@@ -44,7 +55,7 @@ impl TxBuilderActor {
             let _ = self_addr
                 .notify(BuildTransaction {
                     node_url: request.node_url,
-                    seed: request.seed,
+                    seed: resolved_seed,
                     network: request.network,
                     recipients,
                     selected_outputs: request.selected_outputs,
@@ -57,10 +68,21 @@ impl TxBuilderActor {
         let receiver = SweepAllRequest::get_dart_signal_receiver();
         while let Some(signal_pack) = receiver.recv().await {
             let request = signal_pack.message;
+            let resolved_seed = match super::wallet::pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
+                Ok(s) => s,
+                Err(e) => {
+                    TransactionCreatedResponse {
+                        success: false, error: Some(e), tx_id: String::new(), fee: 0,
+                        tx_blob: None, tx_key: None, tx_key_additional: Vec::new(),
+                        spent_output_hashes: Vec::new(), change_outputs: Vec::new(),
+                    }.send_signal_to_dart();
+                    continue;
+                }
+            };
             let _ = self_addr
                 .notify(SweepAll {
                     node_url: request.node_url,
-                    seed: request.seed,
+                    seed: resolved_seed,
                     network: request.network,
                     destination_address: request.destination_address,
                     selected_outputs: request.selected_outputs,
