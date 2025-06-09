@@ -1,3 +1,5 @@
+mod common;
+
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod rpc_tests {
@@ -35,8 +37,11 @@ mod rpc_tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_stagenet_connectivity() {
+        if !super::common::stagenet_available() {
+            eprintln!("Skipped: no stagenet node at 127.0.0.1:38081");
+            return;
+        }
         for node_url in STAGENET_NODES {
             if let Ok(rpc) = HttpRpc::new(node_url.to_string()) {
                 if let Ok(height) = rpc.get_height().await {
@@ -71,8 +76,11 @@ mod rpc_tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_fetch_stagenet_block_1384526() {
+        if !super::common::stagenet_available() {
+            eprintln!("Skipped: no stagenet node at 127.0.0.1:38081");
+            return;
+        }
         let target_height = 1384526;
 
         let (node_url, rpc) = get_working_stagenet_node()
@@ -99,8 +107,11 @@ mod rpc_tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_fetch_stagenet_specific_transaction() {
+        if !super::common::stagenet_available() {
+            eprintln!("Skipped: no stagenet node at 127.0.0.1:38081");
+            return;
+        }
         let tx_hex = "07a561e60118c0a485b20bbfac787fd8efead96a9f422d9dff4a86f2985db7c5";
 
         let (_node_url, rpc) = get_working_stagenet_node()
@@ -124,8 +135,11 @@ mod rpc_tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_comprehensive_stagenet_rpc_check() {
+        if !super::common::stagenet_available() {
+            eprintln!("Skipped: no stagenet node at 127.0.0.1:38081");
+            return;
+        }
         let (node_url, rpc) = get_working_stagenet_node()
             .await
             .expect("No working stagenet node");

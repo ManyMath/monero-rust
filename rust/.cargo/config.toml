@@ -1,0 +1,4 @@
+[env]
+# Crypto operations (transaction signing, key derivation) overflow the default
+# 2 MB test-thread stack in debug builds.
+RUST_MIN_STACK = "8388608"

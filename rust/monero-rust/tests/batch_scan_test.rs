@@ -1,5 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+mod common;
+
 use monero_serai::block::Block;
 use monero_serai::rpc::{BlockCompleteEntry, GetBlocksFastResponse};
 use monero_rust::scanner::{
@@ -162,8 +164,11 @@ async fn test_multi_wallet_produces_entry_per_wallet() {
 // ── Live node tests ──
 
 #[tokio::test]
-#[ignore = "requires local stagenet node"]
 async fn test_batch_scan_early_blocks() {
+    if !common::stagenet_available() {
+        eprintln!("Skipped: no stagenet node at 127.0.0.1:38081");
+        return;
+    }
     use monero_rust::scanner::scan_blocks_batch;
     use monero_serai::rpc::HttpRpc;
 
@@ -182,8 +187,11 @@ async fn test_batch_scan_early_blocks() {
 }
 
 #[tokio::test]
-#[ignore = "requires local stagenet node"]
 async fn test_batch_scan_later_blocks() {
+    if !common::stagenet_available() {
+        eprintln!("Skipped: no stagenet node at 127.0.0.1:38081");
+        return;
+    }
     use monero_rust::scanner::scan_blocks_batch;
     use monero_serai::rpc::HttpRpc;
 

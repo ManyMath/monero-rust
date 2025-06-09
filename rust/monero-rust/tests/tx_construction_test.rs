@@ -1,3 +1,5 @@
+mod common;
+
 use monero_rust::scanner::{derive_address, derive_keys, scan_block_for_outputs_with_lookahead, Lookahead};
 use monero_serai::wallet::{
     seed::Seed, ViewPair, Change, SignableTransactionBuilder, SpendableOutput, ReceivedOutput,
@@ -38,8 +40,12 @@ struct TestOutput {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[cfg_attr(not(feature = "mock-rpc"), ignore = "Requires live stagenet node connection")]
 async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(not(feature = "mock-rpc"))]
+    if !common::stagenet_available() {
+        eprintln!("Skipped: no stagenet node at 127.0.0.1:38081");
+        return Ok(());
+    }
     let address = derive_address(TEST_SEED, NETWORK_STR)?;
     let keys = derive_keys(TEST_SEED, NETWORK_STR)?;
 
@@ -194,8 +200,11 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio::test]
-#[ignore = "Requires live stagenet node connection"]
 async fn test_address_derivation_consistency() -> Result<(), Box<dyn std::error::Error>> {
+    if !common::stagenet_available() {
+        eprintln!("Skipped: no stagenet node at 127.0.0.1:38081");
+        return Ok(());
+    }
     let address1 = derive_address(TEST_SEED, NETWORK_STR)?;
     let address2 = derive_address(TEST_SEED, NETWORK_STR)?;
 
@@ -221,8 +230,6 @@ async fn test_address_derivation_consistency() -> Result<(), Box<dyn std::error:
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[cfg_attr(feature = "mock-rpc", ignore = "Not yet supported with mock RPC")]
-#[cfg_attr(not(feature = "mock-rpc"), ignore = "Requires live stagenet node connection")]
 async fn test_key_image_determinism() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(feature = "mock-rpc")]
     {
@@ -231,6 +238,10 @@ async fn test_key_image_determinism() -> Result<(), Box<dyn std::error::Error>> 
 
     #[cfg(not(feature = "mock-rpc"))]
     {
+        if !common::stagenet_available() {
+            eprintln!("Skipped: no stagenet node at 127.0.0.1:38081");
+            return Ok(());
+        }
         let rpc = HttpRpc::new(NODE_URL.to_string())?;
         let lookahead = Lookahead { account: 0, subaddress: 10 };
 
@@ -255,8 +266,6 @@ async fn test_key_image_determinism() -> Result<(), Box<dyn std::error::Error>> 
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[cfg_attr(feature = "mock-rpc", ignore = "Not yet supported with mock RPC")]
-#[cfg_attr(not(feature = "mock-rpc"), ignore = "Requires live stagenet node connection")]
 async fn test_transaction_with_multiple_inputs() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(feature = "mock-rpc")]
     {
@@ -265,6 +274,10 @@ async fn test_transaction_with_multiple_inputs() -> Result<(), Box<dyn std::erro
 
     #[cfg(not(feature = "mock-rpc"))]
     {
+        if !common::stagenet_available() {
+            eprintln!("Skipped: no stagenet node at 127.0.0.1:38081");
+            return Ok(());
+        }
         let rpc = HttpRpc::new(NODE_URL.to_string())?;
         let mut all_outputs = Vec::new();
     let lookahead = Lookahead { account: 0, subaddress: 10 };
@@ -338,8 +351,6 @@ async fn test_transaction_with_multiple_inputs() -> Result<(), Box<dyn std::erro
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[cfg_attr(feature = "mock-rpc", ignore = "Not yet supported with mock RPC")]
-#[cfg_attr(not(feature = "mock-rpc"), ignore = "Requires live stagenet node connection")]
 async fn test_transaction_parsing_and_validation() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(feature = "mock-rpc")]
     {
@@ -348,6 +359,10 @@ async fn test_transaction_parsing_and_validation() -> Result<(), Box<dyn std::er
 
     #[cfg(not(feature = "mock-rpc"))]
     {
+        if !common::stagenet_available() {
+            eprintln!("Skipped: no stagenet node at 127.0.0.1:38081");
+            return Ok(());
+        }
         let rpc = HttpRpc::new(NODE_URL.to_string())?;
         let lookahead = Lookahead { account: 0, subaddress: 10 };
 
