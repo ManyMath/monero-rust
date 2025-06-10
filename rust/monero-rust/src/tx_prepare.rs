@@ -25,7 +25,7 @@ pub fn prepare_send_inputs(
 ) -> Result<PreparedInputs, String> {
     let spendable: Vec<WalletOutput> = wallet_outputs
         .iter()
-        .filter(|o| !o.spent && is_spendable(o, daemon_height))
+        .filter(|o| !o.spent && !o.frozen && is_spendable(o, daemon_height))
         .cloned()
         .collect();
 
@@ -58,7 +58,7 @@ pub fn prepare_sweep_inputs(
 ) -> Result<PreparedInputs, String> {
     let mut spendable: Vec<WalletOutput> = wallet_outputs
         .iter()
-        .filter(|o| !o.spent && is_spendable(o, daemon_height))
+        .filter(|o| !o.spent && !o.frozen && is_spendable(o, daemon_height))
         .cloned()
         .collect();
 
@@ -104,6 +104,7 @@ mod tests {
             spent_height: None,
             key_image: format!("ki_{}", tx_hash),
             is_coinbase: false,
+            frozen: false,
         }
     }
 
@@ -119,6 +120,12 @@ mod tests {
         o
     }
 
+    fn make_frozen(amount: u64, height: u64, tx_hash: &str) -> WalletOutput {
+        let mut o = make_output(amount, height, tx_hash);
+        o.frozen = true;
+        o
+    }
+
     // ---- prepare_send_inputs ----
 
     #[test]
@@ -130,6 +137,26 @@ mod tests {
         let result = prepare_send_inputs(&outputs, 200, 1_000_000_000_000, None).unwrap();
         assert_eq!(result.stored_outputs.len(), 1);
         assert_eq!(result.stored_outputs[0].tx_hash, "tx1");
+    }
+
+    #[test]
+    fn send_filters_frozen_outputs() {
+        let outputs = vec![
+            make_output(5_000_000_000_000, 100, "tx1"),
+            make_frozen(3_000_000_000_000, 100, "tx2"),
+        ];
+        let result = prepare_send_inputs(&outputs, 200, 1_000_000_000_000, None).unwrap();
+        assert_eq!(result.stored_outputs.len(), 1);
+        assert_eq!(result.stored_outputs[0].tx_hash, "tx1");
+    }
+
+    #[test]
+    fn send_error_when_only_frozen() {
+        let outputs = vec![
+            make_frozen(5_000_000_000_000, 100, "tx1"),
+        ];
+        let result = prepare_send_inputs(&outputs, 200, 1_000_000_000_000, None);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -240,6 +267,26 @@ mod tests {
         let result = prepare_sweep_inputs(&outputs, 200, None).unwrap();
         assert_eq!(result.stored_outputs.len(), 3);
         assert_eq!(result.total_input, 6_000_000_000_000);
+    }
+
+    #[test]
+    fn sweep_filters_frozen() {
+        let outputs = vec![
+            make_output(1_000_000_000_000, 100, "tx1"),
+            make_frozen(2_000_000_000_000, 100, "tx2"),
+        ];
+        let result = prepare_sweep_inputs(&outputs, 200, None).unwrap();
+        assert_eq!(result.stored_outputs.len(), 1);
+        assert_eq!(result.stored_outputs[0].tx_hash, "tx1");
+    }
+
+    #[test]
+    fn sweep_error_when_only_frozen() {
+        let outputs = vec![
+            make_frozen(1_000_000_000_000, 100, "tx1"),
+        ];
+        let result = prepare_sweep_inputs(&outputs, 200, None);
+        assert!(result.is_err());
     }
 
     #[test]

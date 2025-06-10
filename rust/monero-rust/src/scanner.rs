@@ -565,6 +565,7 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
                 spent_height: None,
                 key_image,
                 is_coinbase,
+                frozen: false,
             });
         }
     }
@@ -741,6 +742,7 @@ pub async fn process_batch_response(
                     spent_height: None,
                     key_image,
                     is_coinbase,
+                    frozen: false,
                 });
             }
         }
@@ -981,6 +983,7 @@ pub async fn process_batch_multi_wallet_response(
                         spent_height: None,
                         key_image,
                         is_coinbase,
+                        frozen: false,
                     });
                 }
             }
@@ -1381,6 +1384,7 @@ pub async fn scan_block_multi_wallet<R: RpcConnection + Send + Sync + Clone + 's
                         spent_height: None,
                         key_image,
                         is_coinbase,
+                        frozen: false,
                     });
                 }
             }
@@ -1549,6 +1553,7 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
                     spent_height: None,
                     key_image,
                     is_coinbase,
+                    frozen: false,
                 });
             }
         }
@@ -1702,6 +1707,7 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
                 spent_height: None,
                 key_image,
                 is_coinbase,
+                frozen: false,
             });
         }
     }
@@ -2099,6 +2105,7 @@ mod tests {
             spent_height: None,
             key_image: "keyimage".to_string(),
             is_coinbase: false,
+            frozen: false,
         };
 
         let json = serde_json::to_string(&output).unwrap();

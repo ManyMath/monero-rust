@@ -205,7 +205,7 @@ impl WalletState {
     /// when persisting outputs.
     ///
     /// Merge by transaction hash and output position, including when no key
-    /// image is known. Preserve known key images and local spent state.
+    /// image is known. Preserve known key images and local spent/frozen state.
     /// Confirmations replace pool entries in scan order. Distinct outputs with
     /// an already known key image are not counted twice.
     pub fn add_outputs(&mut self, new_outputs: Vec<WalletOutput>) {
@@ -224,9 +224,11 @@ impl WalletState {
                     if let Some(&other_idx) = self.key_image_index.get(&output.key_image) {
                         let duplicate = &self.outputs[existing_idx];
                         let spent = duplicate.spent || output.spent;
+                        let frozen = duplicate.frozen || output.frozen;
                         let spent_height = duplicate.spent_height.or(output.spent_height);
                         let kept = &mut self.outputs[other_idx];
                         kept.spent |= spent;
+                        kept.frozen |= frozen;
                         kept.spent_height = kept.spent_height.or(spent_height);
                         upgraded.insert(existing_idx);
                         self.output_index.remove(&identity);
@@ -242,8 +244,10 @@ impl WalletState {
                         .insert(output.key_image.clone(), existing_idx);
                 }
                 existing.spent |= output.spent;
+                existing.frozen |= output.frozen;
                 existing.spent_height = existing.spent_height.or(output.spent_height);
                 output.spent = existing.spent;
+                output.frozen = existing.frozen;
                 output.spent_height = existing.spent_height;
                 if self.outputs[existing_idx].block_height == 0 && output.block_height > 0 {
                     // Mempool arrival order need not match block order. Append
@@ -359,7 +363,7 @@ impl WalletState {
     pub fn spendable_outputs_at_height(&self, height: u64) -> Vec<&WalletOutput> {
         self.outputs
             .iter()
-            .filter(|o| !o.spent && is_spendable(o, height))
+            .filter(|o| !o.spent && !o.frozen && is_spendable(o, height))
             .collect()
     }
 
@@ -519,6 +523,28 @@ impl WalletState {
         self.block_hashes.get_short_chain_history()
     }
 
+    /// Freeze an output by key image, preventing it from being selected for spending.
+    /// Returns true if the output was found and frozen.
+    pub fn freeze_output(&mut self, key_image: &str) -> bool {
+        if let Some(&idx) = self.key_image_index.get(key_image) {
+            self.outputs[idx].frozen = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Thaw (unfreeze) an output by key image, allowing it to be selected for spending.
+    /// Returns true if the output was found and thawed.
+    pub fn thaw_output(&mut self, key_image: &str) -> bool {
+        if let Some(&idx) = self.key_image_index.get(key_image) {
+            self.outputs[idx].frozen = false;
+            true
+        } else {
+            false
+        }
+    }
+
     fn rebuild_key_image_index(&mut self) {
         self.key_image_index.clear();
         self.output_index.clear();
@@ -566,6 +592,7 @@ mod tests {
             spent_height: None,
             key_image: key_image.into(),
             is_coinbase: false,
+            frozen: false,
         }
     }
 
@@ -881,9 +908,11 @@ mod tests {
         let mut second = second;
         first.key_image = "shared".into();
         second.key_image = "shared".into();
+        second.frozen = true;
         state.add_outputs(vec![first.clone(), second.clone()]);
         assert_eq!(state.outputs().len(), 1);
         assert_eq!(state.balance_at_height(200).confirmed, first.amount);
+        assert!(state.outputs()[0].frozen);
         state.mark_spent_by_key_images_at_height(&["shared".into()], 150);
         assert_eq!(state.balance_at_height(200).confirmed, 0);
         state.add_outputs(vec![first, second]);
@@ -1337,6 +1366,114 @@ mod tests {
         assert_eq!(result.outputs_unspent, 0);
         assert!(state.outputs()[0].spent);
         assert!(state.outputs()[1].spent);
+    }
+
+    // ---- Freeze/thaw tests ----
+
+    #[test]
+    fn test_frozen_output_excluded_from_spendable() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![
+            make_output(1_000_000_000_000, 80, "ki1"),
+            make_output(2_000_000_000_000, 80, "ki2"),
+        ]);
+        state.daemon_height = 100;
+
+        state.freeze_output("ki1");
+        let spendable = state.spendable_outputs();
+        assert_eq!(spendable.len(), 1);
+        assert_eq!(spendable[0].key_image, "ki2");
+    }
+
+    #[test]
+    fn test_thaw_output_restores_spendability() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1_000_000_000_000, 80, "ki1")]);
+        state.daemon_height = 100;
+
+        state.freeze_output("ki1");
+        assert_eq!(state.spendable_outputs().len(), 0);
+
+        state.thaw_output("ki1");
+        assert_eq!(state.spendable_outputs().len(), 1);
+    }
+
+    #[test]
+    fn test_freeze_unknown_key_image() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1_000_000_000_000, 80, "ki1")]);
+        assert!(!state.freeze_output("unknown"));
+        assert!(!state.thaw_output("unknown"));
+    }
+
+    #[test]
+    fn test_frozen_output_still_in_balance() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1_000_000_000_000, 80, "ki1")]);
+        state.current_height = 100;
+
+        state.freeze_output("ki1");
+        let bal = state.balance();
+        // Frozen outputs still count in balance, just not spendable
+        assert_eq!(bal.confirmed, 1_000_000_000_000);
+    }
+
+    #[test]
+    fn test_freeze_idempotent() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1_000_000_000_000, 80, "ki1")]);
+        state.daemon_height = 100;
+
+        assert!(state.freeze_output("ki1"));
+        assert!(state.freeze_output("ki1")); // second freeze is fine
+        assert_eq!(state.spendable_outputs().len(), 0);
+        assert!(state.outputs()[0].frozen);
+    }
+
+    #[test]
+    fn test_thaw_idempotent() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1_000_000_000_000, 80, "ki1")]);
+        state.daemon_height = 100;
+
+        // Thaw an already-thawed output
+        assert!(state.thaw_output("ki1"));
+        assert!(!state.outputs()[0].frozen);
+        assert_eq!(state.spendable_outputs().len(), 1);
+    }
+
+    #[test]
+    fn test_frozen_survives_rollback() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![
+            make_output(1_000_000_000_000, 80, "ki1"),
+            make_output(2_000_000_000_000, 90, "ki2"),
+        ]);
+        state.daemon_height = 100;
+
+        state.freeze_output("ki1");
+        // Rollback to 95: output at height 80 survives, output at 90 survives
+        state.rollback_to_height(95);
+        // ki1 should still be frozen after rollback
+        assert!(state.outputs().iter().find(|o| o.key_image == "ki1").unwrap().frozen);
+        assert_eq!(state.spendable_outputs().len(), 1);
+        assert_eq!(state.spendable_outputs()[0].key_image, "ki2");
+    }
+
+    #[test]
+    fn test_frozen_excluded_from_account_spendable() {
+        let mut state = WalletState::new();
+        let mut o1 = make_output(1_000_000_000_000, 80, "ki1");
+        o1.subaddress_index = Some((1, 0));
+        let mut o2 = make_output(2_000_000_000_000, 80, "ki2");
+        o2.subaddress_index = Some((1, 1));
+        state.add_outputs(vec![o1, o2]);
+        state.daemon_height = 100;
+
+        state.freeze_output("ki1");
+        let acct1 = state.spendable_outputs_for_accounts(&[1]);
+        assert_eq!(acct1.len(), 1);
+        assert_eq!(acct1[0].key_image, "ki2");
     }
 
     #[test]

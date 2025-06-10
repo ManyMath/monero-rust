@@ -25,6 +25,7 @@ fn make_output(amount: u64, height: u64, tx_hash: &str, account: u32) -> WalletO
         spent_height: None,
         key_image: format!("ki_{}", tx_hash),
         is_coinbase: false,
+        frozen: false,
     }
 }
 

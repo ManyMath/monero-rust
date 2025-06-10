@@ -25,6 +25,9 @@ pub struct WalletOutput {
     pub spent_height: Option<u64>,
     pub key_image: String,
     pub is_coinbase: bool,
+    /// Whether this output is frozen (excluded from coin selection).
+    #[serde(default)]
+    pub frozen: bool,
 }
 
 impl From<&WalletOutput> for StoredOutputData {
@@ -87,6 +90,7 @@ mod tests {
             spent_height: None,
             key_image: "ki_abc".into(),
             is_coinbase: false,
+            frozen: false,
         }
     }
 
@@ -126,6 +130,29 @@ mod tests {
         let json = serde_json::to_string(&o).unwrap();
         let deserialized: WalletOutput = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.spent_height, Some(500));
+    }
+
+    #[test]
+    fn test_frozen_serialization_roundtrip() {
+        let mut o = sample_output();
+        o.frozen = true;
+        let json = serde_json::to_string(&o).unwrap();
+        let deserialized: WalletOutput = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.frozen);
+    }
+
+    #[test]
+    fn test_frozen_backward_compat() {
+        // JSON without frozen field should deserialize to false
+        let json = r#"{
+            "tx_hash":"abc123","output_index":0,"amount":1000000000000,
+            "amount_xmr":"1.000000000000","key":"key","key_offset":"offset",
+            "commitment_mask":"mask","subaddress_index":[0,1],"payment_id":null,
+            "received_output_bytes":"bytes","block_height":100,"spent":false,
+            "key_image":"ki_abc","is_coinbase":false
+        }"#;
+        let deserialized: WalletOutput = serde_json::from_str(json).unwrap();
+        assert!(!deserialized.frozen);
     }
 
     #[test]

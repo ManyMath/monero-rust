@@ -247,6 +247,7 @@ mod tests {
             spent_height: None,
             key_image: format!("ki_{}", tx_hash),
             is_coinbase: false,
+            frozen: false,
         }
     }
 
