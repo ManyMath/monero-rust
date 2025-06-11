@@ -30,6 +30,7 @@ class TestHelpers {
       spent: spent,
       keyImage: keyImage ?? 'keyimage_$txHash$outputIndex',
       isCoinbase: isCoinbase,
+      frozen: false,
     );
   }
 

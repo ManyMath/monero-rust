@@ -138,7 +138,7 @@ void main() {
           receivedOutputBytes: 'b',
           blockHeight: Uint64(BigInt.from(1000)),
           spent: false, keyImage: 'ki1',
-          isCoinbase: false,
+          isCoinbase: false, frozen: false,
         );
         // 0.000000000001 XMR — 1 piconero
         final output2 = OwnedOutput(
@@ -150,7 +150,7 @@ void main() {
           receivedOutputBytes: 'b2',
           blockHeight: Uint64(BigInt.from(1000)),
           spent: false, keyImage: 'ki2',
-          isCoinbase: false,
+          isCoinbase: false, frozen: false,
         );
 
         final transaction = WalletTransaction(
@@ -183,6 +183,7 @@ void main() {
           blockHeight: Uint64(BigInt.from(1000)),
           spent: false,
           keyImage: 'keyimage_123',
+          frozen: false,
         );
 
         final transaction = WalletTransaction(

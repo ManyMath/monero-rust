@@ -53,6 +53,7 @@ class WalletTransaction {
       'blockHeight': o.blockHeight.toString(),
       'spent': o.spent,
       'keyImage': o.keyImage,
+      'frozen': o.frozen,
     }).toList(),
     'spentKeyImages': spentKeyImages,
   };
@@ -109,6 +110,9 @@ class WalletTransaction {
           isCoinbase: outputData.containsKey('isCoinbase') && outputData['isCoinbase'] != null
               ? outputData['isCoinbase'] as bool
               : false,  // Default to non-coinbase for backward compatibility
+          frozen: outputData.containsKey('frozen') && outputData['frozen'] != null
+              ? outputData['frozen'] as bool
+              : false,
         );
       }).toList(),
       spentKeyImages: (json['spentKeyImages'] as List).cast<String>(),

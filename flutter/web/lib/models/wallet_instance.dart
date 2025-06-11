@@ -214,6 +214,7 @@ class WalletInstance {
       'spent': o.spent,
       'keyImage': o.keyImage,
       'isCoinbase': o.isCoinbase,
+      'frozen': o.frozen,
     }).toList(),
     'transactions': transactions.map((t) => t.toJson()).toList(),
     'currentHeight': currentHeight,
@@ -243,6 +244,7 @@ class WalletInstance {
           'spent': o.spent,
           'keyImage': o.keyImage,
           'isCoinbase': o.isCoinbase,
+          'frozen': o.frozen,
         }).toList(),
       );
     }),
@@ -281,6 +283,9 @@ class WalletInstance {
           isCoinbase: outputData.containsKey('isCoinbase') && outputData['isCoinbase'] != null
               ? outputData['isCoinbase'] as bool
               : false,  // Default to non-coinbase for backward compatibility
+          frozen: outputData.containsKey('frozen') && outputData['frozen'] != null
+              ? outputData['frozen'] as bool
+              : false,
         );
       }).toList(),
       transactions: (json['transactions'] as List)
@@ -323,6 +328,9 @@ class WalletInstance {
               isCoinbase: outputData.containsKey('isCoinbase') && outputData['isCoinbase'] != null
                   ? outputData['isCoinbase'] as bool
                   : false,  // Default to non-coinbase for backward compatibility
+              frozen: outputData.containsKey('frozen') && outputData['frozen'] != null
+                  ? outputData['frozen'] as bool
+                  : false,
             );
           }).toList();
           return MapEntry(accountIndex, accountOutputs);

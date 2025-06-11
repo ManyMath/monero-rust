@@ -101,7 +101,7 @@ void main() {
         receivedOutputBytes: 'bytes',
         blockHeight: Uint64(BigInt.from(100000)),
         spent: false, keyImage: 'ki',
-        isCoinbase: false,
+        isCoinbase: false, frozen: false,
       );
 
       final saved = WalletSerializer.serialize(
@@ -365,7 +365,7 @@ void main() {
         receivedOutputBytes: 'bytes',
         blockHeight: Uint64(BigInt.from(500)),
         spent: false, keyImage: 'ki',
-        isCoinbase: false,
+        isCoinbase: false, frozen: false,
       );
 
       final saved = WalletSerializer.serialize(

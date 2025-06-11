@@ -49,6 +49,7 @@ class WalletSerializer {
                 'spent': o.spent,
                 'keyImage': o.keyImage,
                 'isCoinbase': o.isCoinbase,
+                'frozen': o.frozen,
               })
           .toList(),
       'transactions': transactions.map((t) => {
@@ -149,6 +150,9 @@ class WalletSerializer {
         spent: spentValue,
         keyImage: d['keyImage'] as String,
         isCoinbase: isCoinbaseValue,
+        frozen: d.containsKey('frozen') && d['frozen'] != null
+            ? d['frozen'] as bool
+            : false,
       );
     }).toList();
 

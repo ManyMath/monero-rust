@@ -22,6 +22,7 @@ OwnedOutput _makeOutput({
     spent: spent,
     keyImage: 'ki1',
     isCoinbase: isCoinbase,
+    frozen: false,
   );
 }
 

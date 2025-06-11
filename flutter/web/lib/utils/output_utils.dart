@@ -124,6 +124,7 @@ class OutputUtils {
       spent: false,
       keyImage: change.keyImage,
       isCoinbase: false, // Change outputs are never coinbase
+      frozen: false,
     );
   }
 
