@@ -507,8 +507,10 @@ mod tests {
             received_output_bytes: String::new(),
             block_height,
             spent: false,
+            spent_height: None,
             key_image: format!("key_image_{}", output_index),
             is_coinbase: false,
+            frozen: false,
         }
     }
 

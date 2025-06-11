@@ -230,6 +230,7 @@ pub struct OwnedOutput {
     pub spent: bool,
     pub key_image: String,
     pub is_coinbase: bool,
+    pub frozen: bool,
 }
 
 impl From<monero_rust::WalletOutput> for OwnedOutput {
@@ -249,6 +250,7 @@ impl From<monero_rust::WalletOutput> for OwnedOutput {
             spent: o.spent,
             key_image: o.key_image,
             is_coinbase: o.is_coinbase,
+            frozen: o.frozen,
         }
     }
 }
@@ -270,6 +272,7 @@ impl From<&monero_rust::WalletOutput> for OwnedOutput {
             spent: o.spent,
             key_image: o.key_image.clone(),
             is_coinbase: o.is_coinbase,
+            frozen: o.frozen,
         }
     }
 }
@@ -292,6 +295,7 @@ impl From<OwnedOutput> for monero_rust::WalletOutput {
             spent_height: None,
             key_image: o.key_image,
             is_coinbase: o.is_coinbase,
+            frozen: o.frozen,
         }
     }
 }
@@ -535,4 +539,23 @@ pub struct Bip39LegacySeedResponse {
     pub legacy_seed: String,
     pub success: bool,
     pub error: Option<String>,
+}
+
+// --- Freeze/Thaw signals ---
+
+#[derive(Deserialize, DartSignal)]
+pub struct FreezeOutputRequest {
+    pub key_image: String,
+}
+
+#[derive(Deserialize, DartSignal)]
+pub struct ThawOutputRequest {
+    pub key_image: String,
+}
+
+#[derive(Serialize, RustSignal)]
+pub struct FreezeThawResponse {
+    pub success: bool,
+    pub key_image: String,
+    pub frozen: bool,
 }

@@ -134,6 +134,8 @@ impl WalletActor {
         _owned_tasks.spawn(Self::listen_to_restore_wallet_data(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_get_block_hashes(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_convert_bip39_to_legacy(self_addr.clone()));
+        _owned_tasks.spawn(Self::listen_to_freeze_output(self_addr.clone()));
+        _owned_tasks.spawn(Self::listen_to_thaw_output(self_addr.clone()));
 
         WalletActor {
             core_state: monero_rust::WalletState::new(),
@@ -1910,5 +1912,49 @@ impl Notifiable<HandleReorg> for WalletActor {
                 let _ = self_addr.notify(StopScan).await;
             }
         }
+    }
+}
+
+// --- Freeze/Thaw ---
+
+impl WalletActor {
+    async fn listen_to_freeze_output(mut self_addr: Address<Self>) {
+        let receiver = FreezeOutputRequest::get_dart_signal_receiver();
+        while let Some(signal_pack) = receiver.recv().await {
+            let _ = self_addr.notify(signal_pack.message).await;
+        }
+    }
+
+    async fn listen_to_thaw_output(mut self_addr: Address<Self>) {
+        let receiver = ThawOutputRequest::get_dart_signal_receiver();
+        while let Some(signal_pack) = receiver.recv().await {
+            let _ = self_addr.notify(signal_pack.message).await;
+        }
+    }
+}
+
+#[async_trait]
+impl Notifiable<FreezeOutputRequest> for WalletActor {
+    async fn notify(&mut self, msg: FreezeOutputRequest, _ctx: &Context<Self>) {
+        let success = self.core_state.freeze_output(&msg.key_image);
+        FreezeThawResponse {
+            success,
+            key_image: msg.key_image,
+            frozen: true,
+        }
+        .send_signal_to_dart();
+    }
+}
+
+#[async_trait]
+impl Notifiable<ThawOutputRequest> for WalletActor {
+    async fn notify(&mut self, msg: ThawOutputRequest, _ctx: &Context<Self>) {
+        let success = self.core_state.thaw_output(&msg.key_image);
+        FreezeThawResponse {
+            success,
+            key_image: msg.key_image,
+            frozen: false,
+        }
+        .send_signal_to_dart();
     }
 }

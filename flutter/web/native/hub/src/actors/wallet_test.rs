@@ -23,6 +23,7 @@ fn make_test_output(tx_hash: &str, output_index: u8, amount: u64, block_height: 
         spent_height: None,
         key_image: format!("ki_{}", tx_hash),
         is_coinbase: false,
+        frozen: false,
     }
 }
 
