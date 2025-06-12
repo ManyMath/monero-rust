@@ -290,6 +290,7 @@ class _DebugViewState extends State<DebugView> {
   StreamSubscription? _reorgDetectedSubscription;
   StreamSubscription? _doubleSpendDetectedSubscription;
   StreamSubscription? _bip39LegacySeedSubscription;
+  StreamSubscription? _freezeThawSubscription;
 
   @override
   void initState() {
@@ -645,6 +646,10 @@ class _DebugViewState extends State<DebugView> {
       }
     });
 
+    _freezeThawSubscription = FreezeThawResponse.rustSignalStream.listen((signal) {
+      // Response from Rust confirming freeze/thaw — UI already updated optimistically
+    });
+
     // Load available wallets from localStorage
     _refreshAvailableWallets();
   }
@@ -737,6 +742,7 @@ class _DebugViewState extends State<DebugView> {
     _reorgDetectedSubscription?.cancel();
     _doubleSpendDetectedSubscription?.cancel();
     _bip39LegacySeedSubscription?.cancel();
+    _freezeThawSubscription?.cancel();
 
     _stopPollingTimers();
     _debounceTimer?.cancel();
@@ -1221,45 +1227,38 @@ class _DebugViewState extends State<DebugView> {
   }
 
   String? _checkMultiAccountOutputs() {
-    if (_selectedOutputs.isEmpty) {
-      return null;
-    }
-
-    final selectedAccounts = <int>{};
-
-    for (final outputKey in _selectedOutputs) {
-      final output = _allOutputsAllAccounts.where((o) => '${o.txHash}:${o.outputIndex}' == outputKey).firstOrNull;
-      if (output != null) {
+    // Check if unfrozen spendable outputs span multiple accounts
+    final spendableAccounts = <int>{};
+    for (final output in _allOutputsAllAccounts) {
+      if (!output.spent && !output.frozen) {
         final account = output.subaddressIndex?.item1 ?? 0;
-        selectedAccounts.add(account);
+        spendableAccounts.add(account);
       }
     }
 
-    if (selectedAccounts.length > 1 && _activeAccount != -1) {
-      return 'Cannot create transaction with outputs from multiple accounts (${selectedAccounts.join(', ')}). Switch to "All" accounts view to allow multi-account transactions.';
+    if (spendableAccounts.length > 1 && _activeAccount != -1) {
+      return 'Unfrozen outputs span multiple accounts (${spendableAccounts.join(', ')}). Switch to "All" accounts view or freeze outputs from other accounts.';
     }
 
     return null;
   }
 
   String? _getMultiAccountWarning() {
-    if (_selectedOutputs.isEmpty || _activeAccount != -1) {
+    if (_activeAccount != -1) {
       return null;
     }
 
-    final selectedAccounts = <int>{};
-
-    for (final outputKey in _selectedOutputs) {
-      final output = _allOutputsAllAccounts.where((o) => '${o.txHash}:${o.outputIndex}' == outputKey).firstOrNull;
-      if (output != null) {
+    final spendableAccounts = <int>{};
+    for (final output in _allOutputsAllAccounts) {
+      if (!output.spent && !output.frozen) {
         final account = output.subaddressIndex?.item1 ?? 0;
-        selectedAccounts.add(account);
+        spendableAccounts.add(account);
       }
     }
 
-    if (selectedAccounts.length > 1) {
-      final accountsList = selectedAccounts.toList()..sort();
-      return 'WARNING: Creating transaction with outputs from multiple accounts (${accountsList.join(', ')}). This may reduce privacy.';
+    if (spendableAccounts.length > 1) {
+      final accountsList = spendableAccounts.toList()..sort();
+      return 'WARNING: Creating transaction with unfrozen outputs from multiple accounts (${accountsList.join(', ')}). This may reduce privacy.';
     }
 
     return null;
@@ -1304,7 +1303,6 @@ class _DebugViewState extends State<DebugView> {
     if (isSingleRecipient) {
       final maxSpendable = TransactionService.calculateMaxSpendable(
         availableOutputs: _allOutputs,
-        selectedOutputs: _selectedOutputs.isNotEmpty ? _selectedOutputs : null,
         currentHeight: _currentHeight,
       );
 
@@ -1327,7 +1325,6 @@ class _DebugViewState extends State<DebugView> {
         availableOutputs: _allOutputs,
         destinationAddress: destinationAddress,
         nodeUrl: _nodeUrlController.text,
-        selectedOutputs: _selectedOutputs.isNotEmpty ? _selectedOutputs : null,
         currentHeight: _currentHeight,
       );
 
@@ -1354,7 +1351,6 @@ class _DebugViewState extends State<DebugView> {
         network: _network,
         destinationAddress: validation.destinationAddress!,
         nodeUrl: validation.nodeUrl!,
-        selectedOutputs: validation.selectedOutputs,
       );
     } else {
       // Normal transaction creation
@@ -1363,7 +1359,6 @@ class _DebugViewState extends State<DebugView> {
         availableOutputs: _allOutputs,
         recipients: recipientInputs,
         nodeUrl: _nodeUrlController.text,
-        selectedOutputs: _selectedOutputs.isNotEmpty ? _selectedOutputs : null,
         currentHeight: _currentHeight,
       );
 
@@ -1388,7 +1383,6 @@ class _DebugViewState extends State<DebugView> {
         network: _network,
         recipients: validation.recipients!,
         nodeUrl: validation.nodeUrl!,
-        selectedOutputs: validation.selectedOutputs,
       );
     }
   }
@@ -1427,7 +1421,6 @@ class _DebugViewState extends State<DebugView> {
   void _setMaxAmount(int recipientIndex) {
     final maxSpendable = TransactionService.calculateMaxSpendable(
       availableOutputs: _allOutputs,
-      selectedOutputs: _selectedOutputs.isNotEmpty ? _selectedOutputs : null,
       currentHeight: _currentHeight,
     );
 
@@ -1594,7 +1587,7 @@ class _DebugViewState extends State<DebugView> {
         ? 'No transactions'
         : '$txCount transaction${txCount == 1 ? '' : 's'} ($incomingCount in, $outgoingCount out)';
 
-    final balance = BalanceUtils.calculate(filteredOutputs, _currentHeight, _selectedOutputs);
+    final balance = BalanceUtils.calculate(filteredOutputs, _currentHeight);
     final coinsSubtitle = '${balance.balanceStr} - ${balance.outputCountStr}${balance.selectedStr}';
 
     return Scaffold(
@@ -1794,15 +1787,14 @@ class _DebugViewState extends State<DebugView> {
                         showSpentOutputs: _showSpentOutputs,
                         sortBy: _sortBy,
                         sortAscending: _sortAscending,
-                        selectedOutputs: _selectedOutputs,
                         activeAccount: _activeAccount,
                         onToggleShowSpent: () {
                           setState(() {
                             _showSpentOutputs = !_showSpentOutputs;
                           });
                         },
-                        onSelectAllSpendable: _selectAllSpendable,
-                        onClearSelection: _clearSelection,
+                        onThawAll: _thawAll,
+                        onFreezeAll: _freezeAll,
                         onSortChanged: (sortKey) {
                           setState(() {
                             if (_sortBy == sortKey) {
@@ -1813,14 +1805,8 @@ class _DebugViewState extends State<DebugView> {
                             }
                           });
                         },
-                        onOutputSelectionChanged: (outputKey, selected) {
-                          setState(() {
-                            if (selected) {
-                              _selectedOutputs.add(outputKey);
-                            } else {
-                              _selectedOutputs.remove(outputKey);
-                            }
-                          });
+                        onFreezeChanged: (keyImage, freeze) {
+                          _setOutputFrozen(keyImage, freeze);
                         },
                       ),
                     ),
@@ -1900,15 +1886,47 @@ class _DebugViewState extends State<DebugView> {
     );
   }
 
-  void _selectAllSpendable() {
+  void _setOutputFrozen(String keyImage, bool freeze) {
     setState(() {
-      _selectedOutputs = OutputUtils.selectAllSpendable(_allOutputs, _currentHeight);
+      final outputs = _allOutputsAllAccounts;
+      for (int i = 0; i < outputs.length; i++) {
+        if (outputs[i].keyImage == keyImage) {
+          outputs[i] = outputs[i].copyWith(frozen: freeze);
+          break;
+        }
+      }
+      _invalidateCaches();
+    });
+    if (freeze) {
+      FreezeOutputRequest(keyImage: keyImage).sendSignalToRust();
+    } else {
+      ThawOutputRequest(keyImage: keyImage).sendSignalToRust();
+    }
+  }
+
+  void _thawAll() {
+    setState(() {
+      final outputs = _allOutputsAllAccounts;
+      for (int i = 0; i < outputs.length; i++) {
+        if (!outputs[i].spent && outputs[i].frozen) {
+          outputs[i] = outputs[i].copyWith(frozen: false);
+          ThawOutputRequest(keyImage: outputs[i].keyImage).sendSignalToRust();
+        }
+      }
+      _invalidateCaches();
     });
   }
 
-  void _clearSelection() {
+  void _freezeAll() {
     setState(() {
-      _selectedOutputs.clear();
+      final outputs = _allOutputsAllAccounts;
+      for (int i = 0; i < outputs.length; i++) {
+        if (!outputs[i].spent && !outputs[i].frozen) {
+          outputs[i] = outputs[i].copyWith(frozen: true);
+          FreezeOutputRequest(keyImage: outputs[i].keyImage).sendSignalToRust();
+        }
+      }
+      _invalidateCaches();
     });
   }
 
@@ -2002,7 +2020,7 @@ class _DebugViewState extends State<DebugView> {
       outputs: _allOutputs,
       transactions: _getFilteredTransactions(_keyImageMap),
       continuousScanCurrentHeight: _continuousScanCurrentHeight,
-      selectedOutputs: _selectedOutputs,
+      selectedOutputs: const {},
       accounts: accounts,
       activeAccount: activeAccount,
       scanningAccounts: scanningAccounts,

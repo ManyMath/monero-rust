@@ -4,10 +4,10 @@ import 'output_lock_utils.dart';
 class BalanceInfo {
   final double totalBalance;
   final double unlockedBalance;
-  final double selectedBalance;
+  final double frozenBalance;
   final int spendableCount;
   final int lockedCount;
-  final int selectedCount;
+  final int frozenCount;
   final String balanceStr;
   final String outputCountStr;
   final String selectedStr;
@@ -15,10 +15,10 @@ class BalanceInfo {
   const BalanceInfo({
     required this.totalBalance,
     required this.unlockedBalance,
-    required this.selectedBalance,
+    required this.frozenBalance,
     required this.spendableCount,
     required this.lockedCount,
-    required this.selectedCount,
+    required this.frozenCount,
     required this.balanceStr,
     required this.outputCountStr,
     required this.selectedStr,
@@ -26,30 +26,28 @@ class BalanceInfo {
 }
 
 class BalanceUtils {
-  /// Calculate balance information from outputs, current height, and selected outputs.
+  /// Calculate balance information from outputs and current height.
+  /// Frozen outputs are tracked separately.
   static BalanceInfo calculate(
     List<OwnedOutput> allOutputs,
     int currentHeight,
-    Set<String> selectedOutputs,
   ) {
     int totalAtomicBalance = 0;
     int unlockedAtomicBalance = 0;
-    int selectedAtomicBalance = 0;
+    int frozenAtomicBalance = 0;
     int spendableCount = 0;
     int lockedCount = 0;
-    int selectedCount = 0;
+    int frozenCount = 0;
     for (var output in allOutputs) {
       if (!output.spent) {
         final amount = output.amount.toInt();
         totalAtomicBalance += amount;
-        if (OutputLockUtils.isOutputUnlocked(output: output, currentHeight: currentHeight)) {
+        if (output.frozen) {
+          frozenAtomicBalance += amount;
+          frozenCount++;
+        } else if (OutputLockUtils.isOutputUnlocked(output: output, currentHeight: currentHeight)) {
           unlockedAtomicBalance += amount;
           spendableCount++;
-          final outputKey = '${output.txHash}:${output.outputIndex}';
-          if (selectedOutputs.contains(outputKey)) {
-            selectedAtomicBalance += amount;
-            selectedCount++;
-          }
         } else {
           lockedCount++;
         }
@@ -57,8 +55,8 @@ class BalanceUtils {
     }
     final totalBalance = totalAtomicBalance / 1e12;
     final unlockedBalance = unlockedAtomicBalance / 1e12;
-    final selectedBalance = selectedAtomicBalance / 1e12;
-    final hasLockedBalance = unlockedBalance < totalBalance;
+    final frozenBalance = frozenAtomicBalance / 1e12;
+    final hasLockedBalance = unlockedBalance + frozenBalance < totalBalance;
     final balanceStr = hasLockedBalance
         ? '${totalBalance.toStringAsFixed(12)} XMR (Unlocked: ${unlockedBalance.toStringAsFixed(12)})'
         : '${totalBalance.toStringAsFixed(12)} XMR';
@@ -67,17 +65,17 @@ class BalanceUtils {
         : lockedCount > 0
             ? '$lockedCount locked output${lockedCount == 1 ? '' : 's'}'
             : 'No outputs';
-    final selectedStr = selectedCount > 0
-        ? ' | Selected: ${selectedBalance.toStringAsFixed(12)} XMR ($selectedCount)'
+    final selectedStr = frozenCount > 0
+        ? ' | Frozen: ${frozenBalance.toStringAsFixed(12)} XMR ($frozenCount)'
         : '';
 
     return BalanceInfo(
       totalBalance: totalBalance,
       unlockedBalance: unlockedBalance,
-      selectedBalance: selectedBalance,
+      frozenBalance: frozenBalance,
       spendableCount: spendableCount,
       lockedCount: lockedCount,
-      selectedCount: selectedCount,
+      frozenCount: frozenCount,
       balanceStr: balanceStr,
       outputCountStr: outputCountStr,
       selectedStr: selectedStr,

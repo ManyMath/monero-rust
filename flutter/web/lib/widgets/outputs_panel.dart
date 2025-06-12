@@ -5,7 +5,7 @@ import 'common_widgets.dart';
 
 /// Widget that displays UTXO/coin management interface.
 ///
-/// Shows output list with filtering, coin selection checkboxes,
+/// Shows output list with filtering, freeze/thaw checkboxes,
 /// sort controls, and balance summaries.
 class OutputsPanel extends StatelessWidget {
   final List<OwnedOutput> allOutputs;
@@ -13,13 +13,12 @@ class OutputsPanel extends StatelessWidget {
   final bool showSpentOutputs;
   final String sortBy;
   final bool sortAscending;
-  final Set<String> selectedOutputs;
   final int activeAccount; // -1 means "All"
   final VoidCallback onToggleShowSpent;
-  final VoidCallback onSelectAllSpendable;
-  final VoidCallback onClearSelection;
+  final VoidCallback onThawAll;
+  final VoidCallback onFreezeAll;
   final Function(String sortKey) onSortChanged;
-  final Function(String outputKey, bool selected) onOutputSelectionChanged;
+  final Function(String keyImage, bool freeze)? onFreezeChanged;
 
   const OutputsPanel({
     super.key,
@@ -28,13 +27,12 @@ class OutputsPanel extends StatelessWidget {
     required this.showSpentOutputs,
     required this.sortBy,
     required this.sortAscending,
-    required this.selectedOutputs,
     required this.activeAccount,
     required this.onToggleShowSpent,
-    required this.onSelectAllSpendable,
-    required this.onClearSelection,
+    required this.onThawAll,
+    required this.onFreezeAll,
     required this.onSortChanged,
-    required this.onOutputSelectionChanged,
+    this.onFreezeChanged,
   });
 
   List<OwnedOutput> _sortedOutputs() {
@@ -102,10 +100,9 @@ class OutputsPanel extends StatelessWidget {
                   ),
                   const SizedBox(width: 12),
                 ],
-                const Text('Select: ', style: TextStyle(fontSize: 12)),
-                CommonWidgets.buildSelectButton(label: 'All', onPressed: onSelectAllSpendable),
+                CommonWidgets.buildSelectButton(label: 'Thaw All', onPressed: onThawAll),
                 const SizedBox(width: 4),
-                CommonWidgets.buildSelectButton(label: 'None', onPressed: onClearSelection),
+                CommonWidgets.buildSelectButton(label: 'Freeze All', onPressed: onFreezeAll),
                 const Spacer(),
                 const Text('Sort: ', style: TextStyle(fontSize: 12)),
                 CommonWidgets.buildSortButton(
@@ -140,6 +137,7 @@ class OutputsPanel extends StatelessWidget {
                 : 0;
             final isSpendable = OutputLockUtils.isOutputSpendable(output: output, currentHeight: currentHeight);
             final requiredConfirmations = OutputLockUtils.getRequiredConfirmations(output);
+            final isFrozen = output.frozen;
             final statusColor = output.spent
                 ? Colors.grey
                 : isSpendable
@@ -150,9 +148,6 @@ class OutputsPanel extends StatelessWidget {
                 : isSpendable
                     ? 'SPENDABLE'
                     : 'LOCKED ($confirmations/$requiredConfirmations)';
-
-            final outputKey = '${output.txHash}:${output.outputIndex}';
-            final isSelected = selectedOutputs.contains(outputKey);
 
             return Card(
               margin: const EdgeInsets.only(bottom: 12),
@@ -165,45 +160,56 @@ class OutputsPanel extends StatelessWidget {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
+                        Text(
+                          '${output.amountXmr} XMR',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                            color: output.spent ? Colors.grey.shade600 : Colors.black,
+                          ),
+                        ),
                         Row(
                           children: [
-                            if (isSpendable)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: statusColor.withValues(alpha: 0.1),
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(color: statusColor),
+                              ),
+                              child: Text(
+                                statusText,
+                                style: TextStyle(
+                                  color: statusColor.shade800,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                            if (!output.spent) ...[
+                              const SizedBox(width: 8),
                               SizedBox(
                                 width: 24,
                                 height: 24,
                                 child: Checkbox(
-                                  value: isSelected,
+                                  value: !isFrozen,
                                   onChanged: (value) {
-                                    onOutputSelectionChanged(outputKey, value ?? false);
+                                    final freeze = !(value ?? true);
+                                    onFreezeChanged?.call(output.keyImage, freeze);
                                   },
                                 ),
                               ),
-                            if (isSpendable) const SizedBox(width: 8),
-                            Text(
-                              '${output.amountXmr} XMR',
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 16,
-                                color: output.spent ? Colors.grey.shade600 : Colors.black,
+                              const SizedBox(width: 4),
+                              Text(
+                                isFrozen ? 'Frozen' : 'Spend',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                  color: isFrozen ? Colors.blue.shade800 : Colors.green.shade800,
+                                ),
                               ),
-                            ),
+                            ],
                           ],
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: statusColor.withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(color: statusColor),
-                          ),
-                          child: Text(
-                            statusText,
-                            style: TextStyle(
-                              color: statusColor.shade800,
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
                         ),
                       ],
                     ),
