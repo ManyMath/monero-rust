@@ -17,8 +17,10 @@ pub mod wallet_state;
 pub mod tx_builder;
 pub mod tx_prepare;
 pub mod tx_proof;
+pub mod tx_utils;
 pub use tx_builder::native;
 pub use tx_prepare::{prepare_send_inputs, prepare_sweep_inputs, PreparedInputs};
+pub use tx_utils::classify_broadcast_error;
 
 // RPC
 pub mod rpc_serai;
