@@ -469,17 +469,23 @@ impl Notifiable<BroadcastTransaction> for TxBuilderActor {
                         success: true,
                         error: None,
                         tx_id: None,
+                        is_retryable: false,
+                        is_double_spend: false,
                     }
                     .send_signal_to_dart();
                 }
                 Err(e) => {
+                    let error_str = format!("Broadcast failed: {}", e);
                     #[cfg(target_arch = "wasm32")]
-                    web_sys::console::error_1(&format!("Broadcast failed: {}", e).into());
+                    web_sys::console::error_1(&error_str.as_str().into());
+                    let (is_double_spend, is_retryable) = monero_rust::classify_broadcast_error(&error_str);
 
                     TransactionBroadcastResponse {
                         success: false,
-                        error: Some(format!("Broadcast failed: {}", e)),
+                        error: Some(error_str),
                         tx_id: None,
+                        is_retryable,
+                        is_double_spend,
                     }
                     .send_signal_to_dart();
                 }

@@ -250,6 +250,8 @@ class _DebugViewState extends State<DebugView> {
   bool _isBroadcasting = false;
   TransactionBroadcastResponse? _broadcastResult;
   String? _broadcastError;
+  bool _isBroadcastRetryable = false;
+  bool _isBroadcastDoubleSpend = false;
 
   bool _showSpentOutputs = false;
   String _sortBy = 'confirms'; // 'confirms' or 'value'
@@ -502,6 +504,8 @@ class _DebugViewState extends State<DebugView> {
         } else {
           _broadcastResult = null;
           _broadcastError = signal.message.error ?? 'Unknown error during broadcast';
+          _isBroadcastRetryable = signal.message.isRetryable;
+          _isBroadcastDoubleSpend = signal.message.isDoubleSpend;
         }
       });
     });
@@ -1821,6 +1825,8 @@ class _DebugViewState extends State<DebugView> {
                         broadcastResult: _broadcastResult,
                         txError: _txError,
                         broadcastError: _broadcastError,
+                        isBroadcastRetryable: _isBroadcastRetryable,
+                        isBroadcastDoubleSpend: _isBroadcastDoubleSpend,
                         multiAccountWarning: _getMultiAccountWarning(),
                         onAddRecipient: _addRecipient,
                         onRemoveRecipient: _removeRecipient,

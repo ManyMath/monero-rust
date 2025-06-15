@@ -23,6 +23,8 @@ class CreateTransactionPanel extends StatelessWidget {
   final VoidCallback? onProvePayment;
   final VoidCallback onAmountChanged;
   final Function(int)? onSendMax;
+  final bool isBroadcastRetryable;
+  final bool isBroadcastDoubleSpend;
 
   const CreateTransactionPanel({
     super.key,
@@ -34,6 +36,8 @@ class CreateTransactionPanel extends StatelessWidget {
     required this.broadcastResult,
     required this.txError,
     required this.broadcastError,
+    this.isBroadcastRetryable = false,
+    this.isBroadcastDoubleSpend = false,
     this.multiAccountWarning,
     required this.onAddRecipient,
     required this.onRemoveRecipient,
@@ -138,6 +142,40 @@ class CreateTransactionPanel extends StatelessWidget {
           if (broadcastError != null) ...[
             const SizedBox(height: 16),
             ErrorMessageContainer(message: 'Broadcast Error: $broadcastError'),
+            if (isBroadcastDoubleSpend)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.shade50,
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: Colors.orange.shade300),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.warning_amber, color: Colors.orange.shade700, size: 20),
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        child: Text(
+                          'Double spend detected. One or more inputs were already spent. '
+                          'Rescan the blockchain to update output status.',
+                          style: TextStyle(fontSize: 12),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            if (isBroadcastRetryable && !isBroadcastDoubleSpend)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: OutlinedButton.icon(
+                  onPressed: isBroadcasting ? null : onBroadcastTransaction,
+                  icon: const Icon(Icons.refresh, size: 16),
+                  label: const Text('Retry Broadcast'),
+                ),
+              ),
           ],
           if (broadcastResult != null && broadcastResult!.success) ...[
             const SizedBox(height: 16),

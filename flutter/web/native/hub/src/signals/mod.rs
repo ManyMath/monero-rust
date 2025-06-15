@@ -325,6 +325,10 @@ pub struct TransactionBroadcastResponse {
     pub success: bool,
     pub error: Option<String>,
     pub tx_id: Option<String>,
+    #[serde(default)]
+    pub is_retryable: bool,
+    #[serde(default)]
+    pub is_double_spend: bool,
 }
 
 #[derive(Deserialize, DartSignal)]
