@@ -505,6 +505,118 @@ void main() {
     });
   });
 
+  group('transaction description persistence', () {
+    test('serialize preserves transaction description', () {
+      final output = TestHelpers.createMockOutput(
+        txHash: 'tx_noted',
+        outputIndex: 0,
+        amountXmr: '1.0',
+        blockHeight: 100,
+        subaddressIndex: const Tuple2(0, 0),
+      );
+
+      final tx = WalletTransaction(
+        txHash: 'tx_noted',
+        blockHeight: 100,
+        blockTimestamp: 1700000000,
+        receivedOutputs: [output],
+        spentKeyImages: [],
+        description: 'Rent payment March',
+      );
+
+      final serialized = WalletSerializer.serialize(
+        seed: 'test seed',
+        network: 'stagenet',
+        address: '5addr...',
+        nodeUrl: 'http://node:38081',
+        outputs: [output],
+        transactions: [tx],
+        continuousScanCurrentHeight: 200,
+        selectedOutputs: {},
+        accounts: [0],
+        activeAccount: 0,
+        scanningAccounts: {0},
+      );
+
+      final txMap = (serialized['transactions'] as List)[0] as Map<String, dynamic>;
+      expect(txMap['description'], 'Rent payment March');
+    });
+
+    test('round-trip preserves transaction description', () {
+      final output = TestHelpers.createMockOutput(
+        txHash: 'tx_desc',
+        outputIndex: 0,
+        amountXmr: '5.0',
+        blockHeight: 100,
+        subaddressIndex: const Tuple2(0, 0),
+      );
+
+      final tx = WalletTransaction(
+        txHash: 'tx_desc',
+        blockHeight: 100,
+        blockTimestamp: 1700000000,
+        receivedOutputs: [output],
+        spentKeyImages: [],
+        description: 'Coffee payment',
+      );
+
+      final serialized = WalletSerializer.serialize(
+        seed: 'test seed',
+        network: 'stagenet',
+        address: '5addr...',
+        nodeUrl: 'http://node:38081',
+        outputs: [output],
+        transactions: [tx],
+        continuousScanCurrentHeight: 200,
+        selectedOutputs: {},
+        accounts: [0],
+        activeAccount: 0,
+        scanningAccounts: {0},
+      );
+
+      final deserialized = WalletSerializer.deserialize(serialized);
+      expect(deserialized.transactions[0].description, 'Coffee payment');
+    });
+
+    test('null description is omitted in serialization', () {
+      final output = TestHelpers.createMockOutput(
+        txHash: 'tx_no_desc',
+        outputIndex: 0,
+        amountXmr: '1.0',
+        blockHeight: 100,
+        subaddressIndex: const Tuple2(0, 0),
+      );
+
+      final tx = WalletTransaction(
+        txHash: 'tx_no_desc',
+        blockHeight: 100,
+        blockTimestamp: 1700000000,
+        receivedOutputs: [output],
+        spentKeyImages: [],
+      );
+
+      final serialized = WalletSerializer.serialize(
+        seed: 'test seed',
+        network: 'stagenet',
+        address: '5addr...',
+        nodeUrl: 'http://node:38081',
+        outputs: [output],
+        transactions: [tx],
+        continuousScanCurrentHeight: 200,
+        selectedOutputs: {},
+        accounts: [0],
+        activeAccount: 0,
+        scanningAccounts: {0},
+      );
+
+      final txMap = (serialized['transactions'] as List)[0] as Map<String, dynamic>;
+      expect(txMap.containsKey('description'), false);
+
+      final deserialized = WalletSerializer.deserialize(serialized);
+      expect(deserialized.transactions[0].description, isNull);
+    });
+  });
+
   group('spent and isCoinbase backward compatibility', () {
     test('deserialize handles missing spent field', () {
       // Manually construct serialized data with outputs missing the 'spent' key

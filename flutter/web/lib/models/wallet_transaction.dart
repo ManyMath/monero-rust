@@ -7,6 +7,7 @@ class WalletTransaction {
   final int blockTimestamp;
   final List<OwnedOutput> receivedOutputs;
   final List<String> spentKeyImages;
+  String? description;
 
   WalletTransaction({
     required this.txHash,
@@ -14,6 +15,7 @@ class WalletTransaction {
     required this.blockTimestamp,
     required this.receivedOutputs,
     required this.spentKeyImages,
+    this.description,
   });
 
   double balanceChange(Map<String, OwnedOutput> keyImageMap) {
@@ -56,6 +58,7 @@ class WalletTransaction {
       'frozen': o.frozen,
     }).toList(),
     'spentKeyImages': spentKeyImages,
+    if (description != null) 'description': description,
   };
 
   factory WalletTransaction.fromJsonCompact(
@@ -75,6 +78,7 @@ class WalletTransaction {
       blockTimestamp: json['blockTimestamp'] as int,
       receivedOutputs: outputs,
       spentKeyImages: (json['spentKeyImages'] as List).cast<String>(),
+      description: json['description'] as String?,
     );
   }
 
@@ -116,6 +120,7 @@ class WalletTransaction {
         );
       }).toList(),
       spentKeyImages: (json['spentKeyImages'] as List).cast<String>(),
+      description: json['description'] as String?,
     );
   }
 }

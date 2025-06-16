@@ -383,6 +383,78 @@ void main() {
         expect(transaction.receivedOutputs[0].isCoinbase, isFalse);
       });
 
+      test('description field serialization round-trip', () {
+        final output = TestHelpers.createMockOutput(
+          txHash: 'tx_desc',
+          outputIndex: 0,
+          amountXmr: '1.0',
+          blockHeight: 100,
+        );
+
+        final transaction = WalletTransaction(
+          txHash: 'tx_desc',
+          blockHeight: 100,
+          blockTimestamp: 1234567890,
+          receivedOutputs: [output],
+          spentKeyImages: [],
+          description: 'Payment for services',
+        );
+
+        final json = transaction.toJson();
+        expect(json['description'], 'Payment for services');
+
+        final restored = WalletTransaction.fromJson(json);
+        expect(restored.description, 'Payment for services');
+      });
+
+      test('null description is not included in toJson', () {
+        final transaction = WalletTransaction(
+          txHash: 'tx_no_desc',
+          blockHeight: 100,
+          blockTimestamp: 1234567890,
+          receivedOutputs: [],
+          spentKeyImages: [],
+        );
+
+        final json = transaction.toJson();
+        expect(json.containsKey('description'), false);
+      });
+
+      test('fromJson handles missing description', () {
+        final json = {
+          'txHash': 'tx_old',
+          'blockHeight': 100,
+          'blockTimestamp': 1234567890,
+          'receivedOutputs': [],
+          'spentKeyImages': [],
+        };
+
+        final transaction = WalletTransaction.fromJson(json);
+        expect(transaction.description, isNull);
+      });
+
+      test('fromJsonCompact preserves description', () {
+        final output = TestHelpers.createMockOutput(
+          txHash: 'tx_compact',
+          outputIndex: 0,
+          amountXmr: '1.0',
+          blockHeight: 100,
+        );
+
+        final outputLookup = {'tx_compact:0': output};
+        final json = {
+          'txHash': 'tx_compact',
+          'blockHeight': 100,
+          'blockTimestamp': 1234567890,
+          'receivedOutputRefs': ['tx_compact:0'],
+          'spentKeyImages': [],
+          'description': 'Compact format note',
+        };
+
+        final transaction = WalletTransaction.fromJsonCompact(json, outputLookup);
+        expect(transaction.description, 'Compact format note');
+      });
+
       test('fromJson handles null subaddressIndex and paymentId', () {
         final json = {
           'txHash': 'tx123',

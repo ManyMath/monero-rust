@@ -17,6 +17,7 @@ class TransactionsPanel extends StatelessWidget {
   final int activeAccount; // -1 means "All"
   final Function(String sortKey) onSortChanged;
   final Function(String txHash) onToggleExpanded;
+  final Function(String txHash, String description)? onDescriptionChanged;
 
   const TransactionsPanel({
     super.key,
@@ -29,6 +30,7 @@ class TransactionsPanel extends StatelessWidget {
     required this.activeAccount,
     required this.onSortChanged,
     required this.onToggleExpanded,
+    this.onDescriptionChanged,
   });
 
   /// Get the set of account indices involved in this transaction
@@ -190,9 +192,24 @@ class TransactionsPanel extends StatelessWidget {
                           ],
                         ),
                       ),
-                      // Expanded details
+                      // Show description below summary if present
+                      if (tx.description != null && tx.description!.isNotEmpty && !isExpanded)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            tx.description!,
+                            style: TextStyle(fontSize: 11, color: Colors.grey.shade700, fontStyle: FontStyle.italic),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
                       if (isExpanded) ...[
                         const Divider(height: 16),
+                        if (onDescriptionChanged != null)
+                          _DescriptionField(
+                            txHash: tx.txHash,
+                            initialValue: tx.description ?? '',
+                            onChanged: (value) => onDescriptionChanged!(tx.txHash, value),
+                          ),
                         CommonWidgets.buildOutputDetailRow(
                           label: 'TX Hash',
                           value: tx.txHash.startsWith('spend:') ? 'Unknown (outgoing)' : tx.txHash,
@@ -337,6 +354,56 @@ class TransactionsPanel extends StatelessWidget {
           },
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _DescriptionField extends StatefulWidget {
+  final String txHash;
+  final String initialValue;
+  final Function(String) onChanged;
+
+  const _DescriptionField({
+    required this.txHash,
+    required this.initialValue,
+    required this.onChanged,
+  });
+
+  @override
+  State<_DescriptionField> createState() => _DescriptionFieldState();
+}
+
+class _DescriptionFieldState extends State<_DescriptionField> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialValue);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: TextField(
+        controller: _controller,
+        decoration: const InputDecoration(
+          labelText: 'Note',
+          hintText: 'Add a note...',
+          isDense: true,
+          contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          border: OutlineInputBorder(),
+        ),
+        style: const TextStyle(fontSize: 12),
+        onChanged: widget.onChanged,
       ),
     );
   }

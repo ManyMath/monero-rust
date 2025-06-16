@@ -60,6 +60,7 @@ class WalletSerializer {
                 .map((o) => '${o.txHash}:${o.outputIndex}')
                 .toList(),
             'spentKeyImages': t.spentKeyImages,
+            if (t.description != null) 'description': t.description,
           }).toList(),
       'scanState': {
         'continuousScanCurrentHeight': continuousScanCurrentHeight,

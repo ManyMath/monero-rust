@@ -1780,6 +1780,15 @@ class _DebugViewState extends State<DebugView> {
                             }
                           });
                         },
+                        onDescriptionChanged: (txHash, description) {
+                          final tx = _allTransactionsAllAccounts.firstWhere(
+                            (t) => t.txHash == txHash,
+                            orElse: () => _allTransactionsAllAccounts.first,
+                          );
+                          if (tx.txHash == txHash) {
+                            tx.description = description.isEmpty ? null : description;
+                          }
+                        },
                       ),
                     ),
                     _buildPanel(
