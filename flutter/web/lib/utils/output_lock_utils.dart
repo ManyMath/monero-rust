@@ -37,6 +37,7 @@ class OutputLockUtils {
     required OwnedOutput output,
     required int currentHeight,
   }) {
+    if (output.frozen) return false;
     return isOutputUnlocked(output: output, currentHeight: currentHeight);
   }
 

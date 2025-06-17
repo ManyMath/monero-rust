@@ -6,6 +6,7 @@ OwnedOutput _makeOutput({
   int blockHeight = 100,
   bool spent = false,
   bool isCoinbase = false,
+  bool frozen = false,
 }) {
   return OwnedOutput(
     txHash: 'tx1',
@@ -22,7 +23,7 @@ OwnedOutput _makeOutput({
     spent: spent,
     keyImage: 'ki1',
     isCoinbase: isCoinbase,
-    frozen: false,
+    frozen: frozen,
   );
 }
 
@@ -49,31 +50,31 @@ void main() {
       expect(result, false);
     });
 
-    test('mempool output (height=0) returns true', () {
+    test('mempool output (height=0) returns false', () {
       final output = _makeOutput(blockHeight: 0);
       final result = OutputLockUtils.isOutputUnlocked(
         output: output,
         currentHeight: 500,
       );
-      expect(result, true);
+      expect(result, false);
     });
 
     test('exactly at threshold (10 confirmations) returns true', () {
-      // blockHeight=100, currentHeight=109 => confirmations = 109 - 100 + 1 = 10
+      // blockHeight=100, currentHeight=110 => confirmations = 110 - 100 = 10
       final output = _makeOutput(blockHeight: 100);
       final result = OutputLockUtils.isOutputUnlocked(
         output: output,
-        currentHeight: 109,
+        currentHeight: 110,
       );
       expect(result, true);
     });
 
     test('one below threshold (9 confirmations) returns false', () {
-      // blockHeight=100, currentHeight=108 => confirmations = 108 - 100 + 1 = 9
+      // blockHeight=100, currentHeight=109 => confirmations = 109 - 100 = 9
       final output = _makeOutput(blockHeight: 100);
       final result = OutputLockUtils.isOutputUnlocked(
         output: output,
-        currentHeight: 108,
+        currentHeight: 109,
       );
       expect(result, false);
     });
@@ -88,38 +89,35 @@ void main() {
     });
 
     test('coinbase at 59 confirmations is locked', () {
-      // blockHeight=100, currentHeight=158 => confirmations = 158 - 100 + 1 = 59
-      final output = _makeOutput(blockHeight: 100, isCoinbase: true);
-      final result = OutputLockUtils.isOutputUnlocked(
-        output: output,
-        currentHeight: 158,
-      );
-      expect(result, false);
-    });
-
-    test('coinbase at 60 confirmations is unlocked', () {
-      // blockHeight=100, currentHeight=159 => confirmations = 159 - 100 + 1 = 60
+      // blockHeight=100, currentHeight=159 => confirmations = 159 - 100 = 59
       final output = _makeOutput(blockHeight: 100, isCoinbase: true);
       final result = OutputLockUtils.isOutputUnlocked(
         output: output,
         currentHeight: 159,
       );
+      expect(result, false);
+    });
+
+    test('coinbase at 60 confirmations is unlocked', () {
+      // blockHeight=100, currentHeight=160 => confirmations = 160 - 100 = 60
+      final output = _makeOutput(blockHeight: 100, isCoinbase: true);
+      final result = OutputLockUtils.isOutputUnlocked(
+        output: output,
+        currentHeight: 160,
+      );
       expect(result, true);
     });
 
     test('currentHeight == outputHeight gives 0 confirmations', () {
-      // blockHeight=100, currentHeight=100 => 100 > 100 is false => confirmations = 0
       final output = _makeOutput(blockHeight: 100);
       final result = OutputLockUtils.isOutputUnlocked(
         output: output,
         currentHeight: 100,
       );
-      // 0 confirmations < 10 required, so locked
       expect(result, false);
     });
 
     test('currentHeight < outputHeight gives 0 confirmations', () {
-      // blockHeight=100, currentHeight=50 => currentHeight not > outputHeight => 0
       final output = _makeOutput(blockHeight: 100);
       final result = OutputLockUtils.isOutputUnlocked(
         output: output,
@@ -157,13 +155,22 @@ void main() {
       expect(result, false);
     });
 
-    test('delegates to isOutputUnlocked - mempool case', () {
+    test('mempool output is not spendable', () {
       final output = _makeOutput(blockHeight: 0);
       final result = OutputLockUtils.isOutputSpendable(
         output: output,
         currentHeight: 500,
       );
-      expect(result, true);
+      expect(result, false);
+    });
+
+    test('frozen output is not spendable even if unlocked', () {
+      final output = _makeOutput(blockHeight: 100, frozen: true);
+      final result = OutputLockUtils.isOutputSpendable(
+        output: output,
+        currentHeight: 200,
+      );
+      expect(result, false);
     });
   });
 
@@ -177,13 +184,13 @@ void main() {
       expect(result, 0);
     });
 
-    test('mempool output (height=0) returns 0', () {
+    test('mempool output (height=0) returns required confirmations', () {
       final output = _makeOutput(blockHeight: 0);
       final result = OutputLockUtils.getBlocksUntilUnlocked(
         output: output,
         currentHeight: 500,
       );
-      expect(result, 0);
+      expect(result, 10);
     });
 
     test('already unlocked returns 0', () {
@@ -196,49 +203,46 @@ void main() {
     });
 
     test('needs N more blocks for normal output', () {
-      // blockHeight=100, currentHeight=105 => confirmations = 105 - 100 + 1 = 6
-      // required = 10, remaining = 10 - 6 = 4
+      // blockHeight=100, currentHeight=105 => confirmations = 5, remaining = 5
       final output = _makeOutput(blockHeight: 100);
       final result = OutputLockUtils.getBlocksUntilUnlocked(
         output: output,
         currentHeight: 105,
       );
-      expect(result, 4);
+      expect(result, 5);
     });
 
     test('coinbase needing blocks', () {
-      // blockHeight=100, currentHeight=130 => confirmations = 130 - 100 + 1 = 31
-      // required = 60, remaining = 60 - 31 = 29
+      // blockHeight=100, currentHeight=130 => confirmations = 30, remaining = 30
       final output = _makeOutput(blockHeight: 100, isCoinbase: true);
       final result = OutputLockUtils.getBlocksUntilUnlocked(
         output: output,
         currentHeight: 130,
       );
-      expect(result, 29);
+      expect(result, 30);
     });
 
     test('exactly at threshold returns 0', () {
-      // blockHeight=100, currentHeight=109 => confirmations = 10
+      // blockHeight=100, currentHeight=110 => confirmations = 10
       final output = _makeOutput(blockHeight: 100);
       final result = OutputLockUtils.getBlocksUntilUnlocked(
         output: output,
-        currentHeight: 109,
+        currentHeight: 110,
       );
       expect(result, 0);
     });
 
     test('one below threshold returns 1', () {
-      // blockHeight=100, currentHeight=108 => confirmations = 9, remaining = 1
+      // blockHeight=100, currentHeight=109 => confirmations = 9, remaining = 1
       final output = _makeOutput(blockHeight: 100);
       final result = OutputLockUtils.getBlocksUntilUnlocked(
         output: output,
-        currentHeight: 108,
+        currentHeight: 109,
       );
       expect(result, 1);
     });
 
     test('currentHeight == outputHeight (0 confirmations) returns full required', () {
-      // blockHeight=100, currentHeight=100 => 100 > 100 is false => confirmations = 0, remaining = 10
       final output = _makeOutput(blockHeight: 100);
       final result = OutputLockUtils.getBlocksUntilUnlocked(
         output: output,
@@ -248,7 +252,6 @@ void main() {
     });
 
     test('currentHeight < outputHeight (0 confirmations) returns full required', () {
-      // blockHeight=100, currentHeight=50 => confirmations = 0, remaining = 10
       final output = _makeOutput(blockHeight: 100);
       final result = OutputLockUtils.getBlocksUntilUnlocked(
         output: output,
@@ -277,70 +280,67 @@ void main() {
       expect(result, 'Pending (mempool)');
     });
 
-    test('unlocked output contains "Unlocked" and shows confirmations', () {
-      // blockHeight=100, currentHeight=200 => confirmations = 101
+    test('unlocked output shows confirmations', () {
+      // blockHeight=100, currentHeight=200 => confirmations = 100
       final output = _makeOutput(blockHeight: 100);
       final result = OutputLockUtils.getLockStatusString(
         output: output,
         currentHeight: 200,
       );
-      expect(result, contains('Unlocked'));
-      expect(result, 'Unlocked (101 confirmations)');
+      expect(result, 'Unlocked (100 confirmations)');
     });
 
-    test('locked output contains "Locked" and shows confirmation progress', () {
-      // blockHeight=100, currentHeight=105 => confirmations = 6, required = 10, remaining = 4
+    test('locked output shows confirmation progress', () {
+      // blockHeight=100, currentHeight=105 => confirmations = 5, remaining = 5
       final output = _makeOutput(blockHeight: 100);
       final result = OutputLockUtils.getLockStatusString(
         output: output,
         currentHeight: 105,
       );
-      expect(result, contains('Locked'));
-      expect(result, 'Locked (6/10 confirmations, 4 blocks remaining)');
+      expect(result, 'Locked (5/10 confirmations, 5 blocks remaining)');
     });
 
     test('exactly at threshold shows "Unlocked"', () {
-      // blockHeight=100, currentHeight=109 => confirmations = 10
+      // blockHeight=100, currentHeight=110 => confirmations = 10
       final output = _makeOutput(blockHeight: 100);
       final result = OutputLockUtils.getLockStatusString(
         output: output,
-        currentHeight: 109,
+        currentHeight: 110,
       );
       expect(result, 'Unlocked (10 confirmations)');
     });
 
     test('one below threshold shows "Locked"', () {
-      // blockHeight=100, currentHeight=108 => confirmations = 9, remaining = 1
+      // blockHeight=100, currentHeight=109 => confirmations = 9, remaining = 1
       final output = _makeOutput(blockHeight: 100);
       final result = OutputLockUtils.getLockStatusString(
         output: output,
-        currentHeight: 108,
+        currentHeight: 109,
       );
       expect(result, 'Locked (9/10 confirmations, 1 blocks remaining)');
     });
 
     test('coinbase locked shows correct required confirmations', () {
-      // blockHeight=100, currentHeight=130 => confirmations = 31, required = 60, remaining = 29
+      // blockHeight=100, currentHeight=130 => confirmations = 30, remaining = 30
       final output = _makeOutput(blockHeight: 100, isCoinbase: true);
       final result = OutputLockUtils.getLockStatusString(
         output: output,
         currentHeight: 130,
       );
-      expect(result, 'Locked (31/60 confirmations, 29 blocks remaining)');
+      expect(result, 'Locked (30/60 confirmations, 30 blocks remaining)');
     });
 
     test('coinbase unlocked shows correct confirmations', () {
-      // blockHeight=100, currentHeight=200 => confirmations = 101
+      // blockHeight=100, currentHeight=200 => confirmations = 100
       final output = _makeOutput(blockHeight: 100, isCoinbase: true);
       final result = OutputLockUtils.getLockStatusString(
         output: output,
         currentHeight: 200,
       );
-      expect(result, 'Unlocked (101 confirmations)');
+      expect(result, 'Unlocked (100 confirmations)');
     });
 
     test('currentHeight == outputHeight shows 0 confirmations locked', () {
-      // blockHeight=100, currentHeight=100 => 100 > 100 is false => confirmations = 0, remaining = 10
       final output = _makeOutput(blockHeight: 100);
       final result = OutputLockUtils.getLockStatusString(
         output: output,
@@ -350,7 +350,6 @@ void main() {
     });
 
     test('currentHeight < outputHeight shows 0 confirmations locked', () {
-      // blockHeight=100, currentHeight=50 => confirmations = 0, remaining = 10
       final output = _makeOutput(blockHeight: 100);
       final result = OutputLockUtils.getLockStatusString(
         output: output,
