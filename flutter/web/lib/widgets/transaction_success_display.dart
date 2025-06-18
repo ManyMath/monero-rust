@@ -14,8 +14,18 @@ class TransactionSuccessDisplay extends StatelessWidget {
     required this.onBroadcast,
   });
 
+  static const int _feeAnomalyThreshold = 10000000000; // 0.01 XMR
+
+  bool get _isFeeAnomaly {
+    final fee = txResult.fee.toInt();
+    return fee > _feeAnomalyThreshold;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final feeXmr = (txResult.fee.toInt() / 1e12).toStringAsFixed(12);
+    final feeAnomaly = _isFeeAnomaly;
+
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -38,8 +48,36 @@ class TransactionSuccessDisplay extends StatelessWidget {
           CommonWidgets.buildScanResultRow(label: 'TX ID', value: txResult.txId),
           CommonWidgets.buildScanResultRow(
             label: 'Fee',
-            value: '${(txResult.fee.toInt() / 1e12).toStringAsFixed(12)} XMR',
+            value: '$feeXmr XMR',
           ),
+          if (feeAnomaly) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.red.shade50,
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: Colors.red.shade400),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.warning, color: Colors.red.shade700, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Warning: Unusually high fee (> 0.01 XMR). '
+                      'This may indicate a malicious node returning inflated fee rates.',
+                      style: TextStyle(
+                        color: Colors.red.shade900,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           if (txResult.txBlob != null)
             CommonWidgets.buildScanResultRow(
               label: 'TX Blob',
