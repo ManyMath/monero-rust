@@ -3,6 +3,34 @@ import '../src/bindings/bindings.dart';
 import '../services/wallet_polling_service.dart';
 import 'common_widgets.dart';
 
+enum NodeConnectionState {
+  disconnected,
+  connecting,
+  synchronizing,
+  synchronized;
+
+  String get label => switch (this) {
+    disconnected => 'Disconnected',
+    connecting => 'Connecting',
+    synchronizing => 'Synchronizing',
+    synchronized => 'Synchronized',
+  };
+
+  Color get color => switch (this) {
+    disconnected => Colors.red,
+    connecting => Colors.orange,
+    synchronizing => Colors.yellow.shade700,
+    synchronized => Colors.green,
+  };
+
+  IconData get icon => switch (this) {
+    disconnected => Icons.cloud_off,
+    connecting => Icons.cloud_queue,
+    synchronizing => Icons.sync,
+    synchronized => Icons.cloud_done,
+  };
+}
+
 class ScanningPanel extends StatefulWidget {
   final TextEditingController nodeUrlController;
   final TextEditingController blockHeightController;
@@ -25,6 +53,7 @@ class ScanningPanel extends StatefulWidget {
   final VoidCallback onScanMempool;
   final String Function() getContinuousScanButtonLabel;
   final Color Function() getContinuousScanButtonColor;
+  final NodeConnectionState connectionState;
 
   const ScanningPanel({
     super.key,
@@ -49,6 +78,7 @@ class ScanningPanel extends StatefulWidget {
     required this.getContinuousScanButtonLabel,
     required this.getContinuousScanButtonColor,
     this.restoreHeight,
+    this.connectionState = NodeConnectionState.disconnected,
   });
 
   @override
@@ -132,14 +162,40 @@ class _ScanningPanelState extends State<ScanningPanel> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          TextField(
-            controller: widget.nodeUrlController,
-            decoration: const InputDecoration(
-              labelText: 'Node Address',
-              hintText: '127.0.0.1:38081',
-              border: OutlineInputBorder(),
-              helperText: 'For local stagenet node',
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: widget.nodeUrlController,
+                  decoration: const InputDecoration(
+                    labelText: 'Node Address',
+                    hintText: '127.0.0.1:38081',
+                    border: OutlineInputBorder(),
+                    helperText: 'For local stagenet node',
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: widget.connectionState.color.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: widget.connectionState.color),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(widget.connectionState.icon, size: 14, color: widget.connectionState.color),
+                    const SizedBox(width: 4),
+                    Text(
+                      widget.connectionState.label,
+                      style: TextStyle(fontSize: 11, color: widget.connectionState.color, fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 16),
           // First row: Block height input and Lookahead dropdown

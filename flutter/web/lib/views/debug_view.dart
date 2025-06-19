@@ -260,6 +260,23 @@ class _DebugViewState extends State<DebugView> {
   set _selectedOutputs(Set<String> v) => _lifecycle.selectedOutputs = v;
 
   bool _isScanningMempool = false;
+  bool _hasConnectedOnce = false;
+
+  NodeConnectionState get _connectionState {
+    if (_scanError != null && !_isContinuousScanning && !_isScanning) {
+      return NodeConnectionState.disconnected;
+    }
+    if (_isScanning && !_isContinuousScanning) {
+      return NodeConnectionState.connecting;
+    }
+    if (_isContinuousScanning && !_isSynced) {
+      return NodeConnectionState.synchronizing;
+    }
+    if (_isSynced || _hasConnectedOnce) {
+      return NodeConnectionState.synchronized;
+    }
+    return NodeConnectionState.disconnected;
+  }
 
   // File management state
   bool _isSaving = false;
@@ -450,6 +467,7 @@ class _DebugViewState extends State<DebugView> {
           _scanResult = signal.message;
           _scanError = null;
           _daemonHeight = signal.message.daemonHeight.toInt();
+          _hasConnectedOnce = true;
 
           // Integrate scan results into the active wallet instance
           _lifecycle.integrateSingleBlockScanResults(signal.message);
@@ -464,6 +482,7 @@ class _DebugViewState extends State<DebugView> {
       if (signal.message.success) {
         setState(() {
           _daemonHeight = signal.message.daemonHeight.toInt();
+          _hasConnectedOnce = true;
         });
       } else {
         setState(() {
@@ -793,6 +812,7 @@ class _DebugViewState extends State<DebugView> {
       _allTransactionsAllAccounts = [];
       _expandedTransactions = {};
       _selectedOutputs = {};
+      _hasConnectedOnce = false;
       _daemonHeight = null;
       _scanResult = null;
       _polyseedRestoreHeight = null;
@@ -1748,6 +1768,7 @@ class _DebugViewState extends State<DebugView> {
                         onScanMempool: _scanMempool,
                         getContinuousScanButtonLabel: _continuousScanButtonLabel,
                         getContinuousScanButtonColor: _continuousScanButtonColor,
+                        connectionState: _connectionState,
                       ),
                     ),
                     _buildPanel(
