@@ -284,6 +284,8 @@ class _DebugViewState extends State<DebugView> {
   String? _saveError;
   String? _loadError;
   String? _lastSaveTime;
+  String? _lastSavedPassword; // Cached for auto-save
+  Timer? _autoSaveTimer;
   bool _isExporting = false;
   bool _isImporting = false;
   bool _isRestoringWallet = false;
@@ -520,6 +522,8 @@ class _DebugViewState extends State<DebugView> {
           if (_txResult != null) {
             OutputUtils.markSpentByOutputKeys(_allOutputsAllAccounts, _txResult!.spentOutputHashes, _selectedOutputs);
           }
+          // Auto-save immediately after successful broadcast
+          _autoSaveIfReady();
         } else {
           _broadcastResult = null;
           _broadcastError = signal.message.error ?? 'Unknown error during broadcast';
@@ -767,6 +771,7 @@ class _DebugViewState extends State<DebugView> {
     _bip39LegacySeedSubscription?.cancel();
     _freezeThawSubscription?.cancel();
 
+    _autoSaveTimer?.cancel();
     _stopPollingTimers();
     _debounceTimer?.cancel();
     _controller.removeListener(_onSeedChanged);
@@ -2070,7 +2075,9 @@ class _DebugViewState extends State<DebugView> {
       if (success) {
         _saveError = null;
         _lastSaveTime = DateTime.now().toString().substring(0, 19);
+        _lastSavedPassword = password;
         _invalidateStorageBytesCache();
+        _startAutoSaveTimer();
       } else {
         _saveError = saveResult.error ?? 'Failed to save wallet data';
       }
@@ -2126,6 +2133,47 @@ class _DebugViewState extends State<DebugView> {
     }
   }
 
+  void _startAutoSaveTimer() {
+    _autoSaveTimer?.cancel();
+    _autoSaveTimer = Timer.periodic(const Duration(minutes: 2), (_) {
+      _autoSaveIfReady();
+    });
+  }
+
+  Future<void> _autoSaveIfReady() async {
+    if (_lastSavedPassword == null || _walletId.isEmpty || _walletId == 'temp_wallet') return;
+    if (_isContinuousScanning && !_isSynced) return;
+    if (_isSaving) return;
+
+    final activeWallet = _lifecycle.activeWallet;
+    final accounts = activeWallet?.accounts ?? [0];
+    final activeAccount = activeWallet?.activeAccount ?? _activeAccount;
+    final scanningAccounts = activeWallet?.scanningAccounts ?? {0};
+
+    final saveResult = await WalletPersistenceBrowser.saveWalletData(
+      walletId: _walletId,
+      password: _lastSavedPassword!,
+      seed: _controller.text.trim(),
+      network: _network,
+      address: _derivedAddress,
+      nodeUrl: _nodeUrlController.text,
+      outputs: _allOutputsAllAccounts,
+      transactions: _allTransactionsAllAccounts,
+      continuousScanCurrentHeight: _continuousScanCurrentHeight,
+      selectedOutputs: const {},
+      accounts: accounts,
+      activeAccount: activeAccount,
+      scanningAccounts: scanningAccounts,
+    );
+
+    if (saveResult.success && mounted) {
+      setState(() {
+        _lastSaveTime = DateTime.now().toString().substring(0, 19);
+        _invalidateStorageBytesCache();
+      });
+    }
+  }
+
   void _refreshAvailableWallets() {
     setState(() {
       _lifecycle.refreshAvailableWallets();
@@ -2134,6 +2182,7 @@ class _DebugViewState extends State<DebugView> {
 
   void _startNewWallet() {
     _stopPollingTimers();
+    _autoSaveTimer?.cancel();
 
     setState(() {
       _lifecycle.startNewWallet();
@@ -2144,6 +2193,8 @@ class _DebugViewState extends State<DebugView> {
       _txError = null;
       _broadcastResult = null;
       _broadcastError = null;
+      _lastSavedPassword = null;
+      _hasConnectedOnce = false;
     });
 
     // Clean up any leftover temp_wallet from localStorage when starting fresh
