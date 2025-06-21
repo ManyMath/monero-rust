@@ -284,7 +284,8 @@ class _DebugViewState extends State<DebugView> {
   String? _saveError;
   String? _loadError;
   String? _lastSaveTime;
-  String? _lastSavedPassword; // Cached for auto-save
+  String? _cachedKeyHex; // Derived encryption key for auto-save
+  String? _cachedSaltHex;
   Timer? _autoSaveTimer;
   bool _isExporting = false;
   bool _isImporting = false;
@@ -2075,13 +2076,21 @@ class _DebugViewState extends State<DebugView> {
       if (success) {
         _saveError = null;
         _lastSaveTime = DateTime.now().toString().substring(0, 19);
-        _lastSavedPassword = password;
         _invalidateStorageBytesCache();
-        _startAutoSaveTimer();
       } else {
         _saveError = saveResult.error ?? 'Failed to save wallet data';
       }
     });
+
+    // Derive encryption key for auto-save (avoids caching raw password)
+    if (success) {
+      final derived = await WalletPersistenceBrowser.deriveEncryptionKey(password);
+      if (derived != null && mounted) {
+        _cachedKeyHex = derived.keyHex;
+        _cachedSaltHex = derived.saltHex;
+        _startAutoSaveTimer();
+      }
+    }
 
     // Refresh wallet list to include the newly saved wallet
     if (success) {
@@ -2141,7 +2150,7 @@ class _DebugViewState extends State<DebugView> {
   }
 
   Future<void> _autoSaveIfReady() async {
-    if (_lastSavedPassword == null || _walletId.isEmpty || _walletId == 'temp_wallet') return;
+    if (_cachedKeyHex == null || _walletId.isEmpty || _walletId == 'temp_wallet') return;
     if (_isContinuousScanning && !_isSynced) return;
     if (_isSaving) return;
 
@@ -2150,9 +2159,10 @@ class _DebugViewState extends State<DebugView> {
     final activeAccount = activeWallet?.activeAccount ?? _activeAccount;
     final scanningAccounts = activeWallet?.scanningAccounts ?? {0};
 
-    final saveResult = await WalletPersistenceBrowser.saveWalletData(
+    final saveResult = await WalletPersistenceBrowser.saveWithDerivedKey(
       walletId: _walletId,
-      password: _lastSavedPassword!,
+      keyHex: _cachedKeyHex!,
+      saltHex: _cachedSaltHex!,
       seed: _controller.text.trim(),
       network: _network,
       address: _derivedAddress,
@@ -2193,7 +2203,8 @@ class _DebugViewState extends State<DebugView> {
       _txError = null;
       _broadcastResult = null;
       _broadcastError = null;
-      _lastSavedPassword = null;
+      _cachedKeyHex = null;
+      _cachedSaltHex = null;
       _hasConnectedOnce = false;
     });
 

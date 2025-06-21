@@ -30,6 +30,15 @@ class IdentityCryptoBackend implements CryptoBackend {
   @override
   Future<String?> decrypt(String password, String ciphertext) async =>
       ciphertext;
+
+  @override
+  Future<({String keyHex, String saltHex})?> deriveKey(String password) async =>
+      (keyHex: 'deadbeef' * 8, saltHex: 'cafebabe' * 4);
+
+  @override
+  Future<String?> encryptWithKey(
+          String keyHex, String saltHex, String plaintext) async =>
+      plaintext;
 }
 
 /// Crypto backend that fails all operations.
@@ -39,4 +48,13 @@ class FailingCryptoBackend implements CryptoBackend {
 
   @override
   Future<String?> decrypt(String password, String ciphertext) async => null;
+
+  @override
+  Future<({String keyHex, String saltHex})?> deriveKey(String password) async =>
+      null;
+
+  @override
+  Future<String?> encryptWithKey(
+          String keyHex, String saltHex, String plaintext) async =>
+      null;
 }

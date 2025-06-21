@@ -66,6 +66,56 @@ class WalletPersistenceService {
     }
   }
 
+  Future<({String keyHex, String saltHex})?> deriveKey(String password) =>
+      _crypto.deriveKey(password);
+
+  Future<SaveWalletResult> saveWithDerivedKey({
+    required String walletId,
+    required String keyHex,
+    required String saltHex,
+    required String seed,
+    required String network,
+    required String? address,
+    required String nodeUrl,
+    required List<OwnedOutput> outputs,
+    required List<WalletTransaction> transactions,
+    required int continuousScanCurrentHeight,
+    required Set<String> selectedOutputs,
+    required List<int> accounts,
+    required int activeAccount,
+    required Set<int> scanningAccounts,
+  }) async {
+    try {
+      final storageKey = getStorageKey(walletId);
+      final walletData = WalletSerializer.serialize(
+        seed: seed,
+        network: network,
+        address: address,
+        nodeUrl: nodeUrl,
+        outputs: outputs,
+        transactions: transactions,
+        continuousScanCurrentHeight: continuousScanCurrentHeight,
+        selectedOutputs: selectedOutputs,
+        accounts: accounts,
+        activeAccount: activeAccount,
+        scanningAccounts: scanningAccounts,
+      );
+
+      final jsonString = jsonEncode(walletData);
+
+      final encryptedData =
+          await _crypto.encryptWithKey(keyHex, saltHex, jsonString);
+      if (encryptedData == null) {
+        return SaveWalletResult.error('Encryption with derived key failed');
+      }
+
+      _storage.set(storageKey, encryptedData);
+      return SaveWalletResult.success();
+    } catch (e) {
+      return SaveWalletResult.error('Save failed: $e');
+    }
+  }
+
   Future<LoadWalletResult> load({
     required String walletId,
     required String password,

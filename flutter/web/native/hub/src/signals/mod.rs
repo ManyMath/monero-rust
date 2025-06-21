@@ -435,6 +435,28 @@ pub struct WalletDataLoadedResponse {
     pub wallet_data_json: Option<String>,
 }
 
+// --- Derived-key encryption signals (for auto-save without caching raw password) ---
+
+#[derive(Deserialize, DartSignal)]
+pub struct DeriveEncryptionKeyRequest {
+    pub password: String,
+}
+
+#[derive(Serialize, RustSignal)]
+pub struct EncryptionKeyDerivedResponse {
+    pub success: bool,
+    pub error: Option<String>,
+    pub key_hex: Option<String>,
+    pub salt_hex: Option<String>,
+}
+
+#[derive(Deserialize, DartSignal)]
+pub struct SaveWithDerivedKeyRequest {
+    pub key_hex: String,
+    pub salt_hex: String,
+    pub wallet_data_json: String,
+}
+
 // Multi-wallet scanning signals
 
 #[derive(Deserialize, Debug, Clone, SignalPiece)]

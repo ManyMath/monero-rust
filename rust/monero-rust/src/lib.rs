@@ -43,7 +43,7 @@ pub use scan_coordinator::{
 pub use bip39_conv::{bip39_to_legacy_mnemonic, validate_bip39, generate_bip39};
 
 // -- Encryption --
-pub use encryption::{encrypt, decrypt, EncryptionError};
+pub use encryption::{decrypt, derive_key_fresh, encrypt, encrypt_with_key, EncryptionError};
 
 // -- Scanning --
 pub use scanner::{

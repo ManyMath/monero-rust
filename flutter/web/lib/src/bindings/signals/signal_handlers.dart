@@ -73,6 +73,15 @@ final assignRustSignal = <String, void Function(Uint8List, Uint8List)>{
     _doubleSpendDetectedResponseStreamController.add(rustSignal);
     DoubleSpendDetectedResponse.latestRustSignal = rustSignal;
   },
+  'EncryptionKeyDerivedResponse': (Uint8List messageBytes, Uint8List binary) {
+    final message = EncryptionKeyDerivedResponse.bincodeDeserialize(messageBytes);
+    final rustSignal = RustSignalPack(
+      message,
+      binary,
+    );
+    _encryptionKeyDerivedResponseStreamController.add(rustSignal);
+    EncryptionKeyDerivedResponse.latestRustSignal = rustSignal;
+  },
   'FreezeThawResponse': (Uint8List messageBytes, Uint8List binary) {
     final message = FreezeThawResponse.bincodeDeserialize(messageBytes);
     final rustSignal = RustSignalPack(

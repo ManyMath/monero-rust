@@ -90,6 +90,42 @@ pub fn encrypt(plaintext: &[u8], password: &str) -> Result<Vec<u8>, EncryptionEr
     Ok(result)
 }
 
+/// Derive a key from a password using a fresh random salt.
+/// Returns (key, salt) so the caller can cache the key and reuse it.
+pub fn derive_key_fresh(password: &str) -> Result<([u8; 32], [u8; 16]), EncryptionError> {
+    let mut salt = [0u8; 16];
+    OsRng.fill_bytes(&mut salt);
+    let key = derive_key(password, &salt)?;
+    Ok((key, salt))
+}
+
+/// Encrypt plaintext using a pre-derived key and its associated salt.
+/// Output format is identical to `encrypt()`: salt || nonce || ciphertext+tag.
+/// This allows `decrypt()` with the original password to work unchanged.
+pub fn encrypt_with_key(
+    plaintext: &[u8],
+    key: &[u8; 32],
+    salt: &[u8; 16],
+) -> Result<Vec<u8>, EncryptionError> {
+    let cipher =
+        ChaCha20Poly1305::new_from_slice(key).map_err(|_| EncryptionError::EncryptionFailed)?;
+
+    let mut nonce_bytes = [0u8; NONCE_SIZE];
+    OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext)
+        .map_err(|_| EncryptionError::EncryptionFailed)?;
+
+    let mut result = Vec::with_capacity(16 + NONCE_SIZE + ciphertext.len());
+    result.extend_from_slice(salt);
+    result.extend_from_slice(&nonce_bytes);
+    result.extend_from_slice(&ciphertext);
+
+    Ok(result)
+}
+
 /// Decrypt ciphertext using ChaCha20-Poly1305.
 /// Input format: salt (16 bytes) || nonce (12 bytes) || ciphertext || tag (16 bytes)
 pub fn decrypt(encrypted_data: &[u8], password: &str) -> Result<Vec<u8>, EncryptionError> {
@@ -159,6 +195,19 @@ mod tests {
 
         let encrypted = encrypt(plaintext, password).expect("Encryption failed");
         let decrypted = decrypt(&encrypted, password).expect("Decryption failed");
+
+        assert_eq!(plaintext, decrypted.as_slice());
+    }
+
+    #[test]
+    fn test_encrypt_with_key_decrypt_with_password() {
+        let password = "test_password_123";
+        let plaintext = b"Auto-saved wallet data";
+
+        let (key, salt) = derive_key_fresh(password).expect("Key derivation failed");
+        let encrypted =
+            encrypt_with_key(plaintext, &key, &salt).expect("Encrypt with key failed");
+        let decrypted = decrypt(&encrypted, password).expect("Decrypt with password failed");
 
         assert_eq!(plaintext, decrypted.as_slice());
     }

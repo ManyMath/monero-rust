@@ -56,6 +56,43 @@ class WalletPersistenceBrowser {
         blockHashesJson: blockHashesJson,
       );
 
+  static Future<({String keyHex, String saltHex})?> deriveEncryptionKey(
+          String password) =>
+      _defaultInstance.deriveKey(password);
+
+  static Future<SaveWalletResult> saveWithDerivedKey({
+    required String walletId,
+    required String keyHex,
+    required String saltHex,
+    required String seed,
+    required String network,
+    required String? address,
+    required String nodeUrl,
+    required List<OwnedOutput> outputs,
+    required List<WalletTransaction> transactions,
+    required int continuousScanCurrentHeight,
+    required Set<String> selectedOutputs,
+    required List<int> accounts,
+    required int activeAccount,
+    required Set<int> scanningAccounts,
+  }) =>
+      _defaultInstance.saveWithDerivedKey(
+        walletId: walletId,
+        keyHex: keyHex,
+        saltHex: saltHex,
+        seed: seed,
+        network: network,
+        address: address,
+        nodeUrl: nodeUrl,
+        outputs: outputs,
+        transactions: transactions,
+        continuousScanCurrentHeight: continuousScanCurrentHeight,
+        selectedOutputs: selectedOutputs,
+        accounts: accounts,
+        activeAccount: activeAccount,
+        scanningAccounts: scanningAccounts,
+      );
+
   static Future<LoadWalletResult> loadWalletData({
     required String walletId,
     required String password,
