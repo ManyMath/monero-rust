@@ -7,6 +7,9 @@ use crate::wallet_output::WalletOutput;
 const CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE: u64 = 10;
 const CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW: u64 = 60;
 
+/// Pending spends expire after 2 hours if not confirmed.
+pub const PENDING_SPEND_TTL_SECS: u64 = 7200;
+
 /// Number of recent block hashes kept densely (every height).
 const DENSE_HASH_WINDOW: u64 = 100;
 
@@ -18,6 +21,46 @@ pub const MAX_REORG_DEPTH: u64 = 1000;
 pub struct Balance {
     pub confirmed: u64,
     pub unconfirmed: u64,
+    /// Total amount of outputs that are pending-spent (broadcast but not yet confirmed).
+    pub pending_spend: u64,
+}
+
+/// Transaction lifecycle status.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TxStatus {
+    Created,
+    Broadcast,
+    Confirmed { height: u64 },
+}
+
+/// Reference to a change output expected from a transaction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangeOutputRef {
+    pub tx_hash: String,
+    pub output_index: u8,
+    pub amount: u64,
+}
+
+/// A pending spend: an output used in a broadcast-but-unconfirmed transaction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingSpend {
+    pub tx_id: String,
+    pub key_image: String,
+    pub output_key: String,
+    pub amount: u64,
+    pub created_at_secs: u64,
+}
+
+/// A tracked transaction through its lifecycle.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrackedTransaction {
+    pub tx_id: String,
+    pub status: TxStatus,
+    pub spent_key_images: Vec<String>,
+    pub spent_output_keys: Vec<String>,
+    pub change_outputs: Vec<ChangeOutputRef>,
+    pub fee: u64,
+    pub created_at_secs: u64,
 }
 
 /// Sparse chain of block hashes for fork-point detection.
@@ -186,6 +229,10 @@ pub struct WalletState {
     pub current_height: u64,
     pub daemon_height: u64,
     pub block_hashes: BlockHashChain,
+    /// Outputs used in broadcast-but-unconfirmed transactions (key_image -> PendingSpend).
+    pending_spends: HashMap<String, PendingSpend>,
+    /// Transaction lifecycle tracking (tx_id -> TrackedTransaction).
+    tracked_transactions: HashMap<String, TrackedTransaction>,
 }
 
 impl WalletState {
@@ -197,6 +244,8 @@ impl WalletState {
             current_height: 0,
             daemon_height: 0,
             block_hashes: BlockHashChain::new(),
+            pending_spends: HashMap::new(),
+            tracked_transactions: HashMap::new(),
         }
     }
 
@@ -339,6 +388,10 @@ impl WalletState {
             if output.spent {
                 continue;
             }
+            if self.pending_spends.contains_key(&output.key_image) {
+                bal.pending_spend += output.amount;
+                continue;
+            }
             let confirmations = height.saturating_sub(output.block_height);
             let required = if output.is_coinbase {
                 CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW
@@ -363,7 +416,12 @@ impl WalletState {
     pub fn spendable_outputs_at_height(&self, height: u64) -> Vec<&WalletOutput> {
         self.outputs
             .iter()
-            .filter(|o| !o.spent && !o.frozen && is_spendable(o, height))
+            .filter(|o| {
+                !o.spent
+                    && !o.frozen
+                    && !self.pending_spends.contains_key(&o.key_image)
+                    && is_spendable(o, height)
+            })
             .collect()
     }
 
@@ -501,6 +559,11 @@ impl WalletState {
         self.rebuild_key_image_index();
         self.block_hashes.rollback_to(split_height);
 
+        // Clear pending spends whose key images were removed or unspent
+        for ki in removed_key_images.iter().chain(unspent_key_images.iter()) {
+            self.pending_spends.remove(ki);
+        }
+
         if split_height > 0 {
             self.current_height = split_height - 1;
         } else {
@@ -543,6 +606,148 @@ impl WalletState {
         } else {
             false
         }
+    }
+
+    // ---- Pending spend management ----
+
+    /// Add pending spends for a broadcast transaction.
+    pub fn add_pending_spends(&mut self, tx_id: &str, spends: Vec<PendingSpend>) {
+        for spend in spends {
+            self.pending_spends.insert(spend.key_image.clone(), spend);
+        }
+        // Advance tracked tx to Broadcast if it exists
+        if let Some(tx) = self.tracked_transactions.get_mut(tx_id) {
+            if tx.status == TxStatus::Created {
+                tx.status = TxStatus::Broadcast;
+            }
+        }
+    }
+
+    /// Confirm a pending spend: remove it from pending and mark the output as spent.
+    /// Returns true if the key image was pending.
+    pub fn confirm_pending_spend(&mut self, key_image: &str, height: u64) -> bool {
+        if self.pending_spends.remove(key_image).is_some() {
+            if let Some(&idx) = self.key_image_index.get(key_image) {
+                if !self.outputs[idx].spent {
+                    self.outputs[idx].spent = true;
+                    self.outputs[idx].spent_height = Some(height);
+                }
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Remove expired pending spends (older than PENDING_SPEND_TTL_SECS).
+    /// Returns the tx_ids of transactions whose pending spends were all cleaned up.
+    pub fn cleanup_expired_pending_spends(&mut self, now_secs: u64) -> Vec<String> {
+        let expired: Vec<String> = self
+            .pending_spends
+            .iter()
+            .filter(|(_, ps)| now_secs.saturating_sub(ps.created_at_secs) >= PENDING_SPEND_TTL_SECS)
+            .map(|(ki, _)| ki.clone())
+            .collect();
+
+        let mut affected_txs: HashSet<String> = HashSet::new();
+        for ki in &expired {
+            if let Some(ps) = self.pending_spends.remove(ki) {
+                affected_txs.insert(ps.tx_id.clone());
+            }
+        }
+
+        // Return tx_ids where ALL pending spends are now gone
+        affected_txs
+            .into_iter()
+            .filter(|tx_id| !self.pending_spends.values().any(|ps| &ps.tx_id == tx_id))
+            .collect()
+    }
+
+    /// Check if an output is pending-spent.
+    pub fn is_pending_spent(&self, key_image: &str) -> bool {
+        self.pending_spends.contains_key(key_image)
+    }
+
+    /// Get all pending spends.
+    pub fn pending_spends(&self) -> &HashMap<String, PendingSpend> {
+        &self.pending_spends
+    }
+
+    /// Get pending spends for a specific transaction.
+    pub fn pending_spends_for_tx(&self, tx_id: &str) -> Vec<&PendingSpend> {
+        self.pending_spends
+            .values()
+            .filter(|ps| ps.tx_id == tx_id)
+            .collect()
+    }
+
+    /// Collect all pending key images into a HashSet (for passing to coin selection).
+    pub fn pending_key_images(&self) -> HashSet<String> {
+        self.pending_spends.keys().cloned().collect()
+    }
+
+    // ---- Tracked transaction management ----
+
+    /// Track a new transaction.
+    pub fn track_transaction(&mut self, tx: TrackedTransaction) {
+        self.tracked_transactions.insert(tx.tx_id.clone(), tx);
+    }
+
+    /// Advance a tracked transaction's status.
+    /// Returns the new status if the transaction exists.
+    pub fn advance_tx_status(&mut self, tx_id: &str, new_status: TxStatus) -> Option<&TxStatus> {
+        if let Some(tx) = self.tracked_transactions.get_mut(tx_id) {
+            tx.status = new_status;
+            Some(&tx.status)
+        } else {
+            None
+        }
+    }
+
+    /// Get a tracked transaction by ID.
+    pub fn get_tracked_tx(&self, tx_id: &str) -> Option<&TrackedTransaction> {
+        self.tracked_transactions.get(tx_id)
+    }
+
+    /// Get all tracked transactions.
+    pub fn tracked_transactions(&self) -> &HashMap<String, TrackedTransaction> {
+        &self.tracked_transactions
+    }
+
+    /// Find a tracked transaction by one of its spent key images.
+    pub fn find_tx_by_key_image(&self, key_image: &str) -> Option<&TrackedTransaction> {
+        self.tracked_transactions
+            .values()
+            .find(|tx| tx.spent_key_images.iter().any(|ki| ki == key_image))
+    }
+
+    /// Restore pending spends from persistence, filtering out expired entries.
+    pub fn restore_pending_spends(&mut self, spends: HashMap<String, PendingSpend>, now_secs: u64) {
+        for (ki, ps) in spends {
+            if now_secs.saturating_sub(ps.created_at_secs) < PENDING_SPEND_TTL_SECS {
+                self.pending_spends.insert(ki, ps);
+            }
+        }
+    }
+
+    /// Restore tracked transactions from persistence.
+    pub fn restore_tracked_transactions(&mut self, txs: HashMap<String, TrackedTransaction>) {
+        for (id, tx) in txs {
+            self.tracked_transactions.insert(id, tx);
+        }
+    }
+
+    /// Remove tracked transactions older than `max_age_secs` that are already confirmed.
+    pub fn cleanup_old_tracked_txs(&mut self, now_secs: u64, max_age_secs: u64) -> usize {
+        let before = self.tracked_transactions.len();
+        self.tracked_transactions.retain(|_, tx| {
+            if matches!(tx.status, TxStatus::Confirmed { .. }) {
+                now_secs.saturating_sub(tx.created_at_secs) < max_age_secs
+            } else {
+                true
+            }
+        });
+        before - self.tracked_transactions.len()
     }
 
     fn rebuild_key_image_index(&mut self) {
@@ -1564,5 +1769,313 @@ mod tests {
             previous_spent_height: Some(100),
             new_height: 0,
         });
+    }
+
+    // ---- Pending spend tests ----
+
+    fn make_pending_spend(tx_id: &str, key_image: &str, amount: u64, created_at: u64) -> PendingSpend {
+        PendingSpend {
+            tx_id: tx_id.to_string(),
+            key_image: key_image.to_string(),
+            output_key: format!("tx_{}:0", key_image),
+            amount,
+            created_at_secs: created_at,
+        }
+    }
+
+    #[test]
+    fn test_pending_spend_excludes_from_balance() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![
+            make_output(1_000_000_000_000, 80, "ki1"),
+            make_output(2_000_000_000_000, 80, "ki2"),
+        ]);
+        state.current_height = 200;
+
+        state.add_pending_spends("tx_abc", vec![
+            make_pending_spend("tx_abc", "ki1", 1_000_000_000_000, 1000),
+        ]);
+
+        let bal = state.balance();
+        assert_eq!(bal.confirmed, 2_000_000_000_000);
+        assert_eq!(bal.pending_spend, 1_000_000_000_000);
+    }
+
+    #[test]
+    fn test_pending_spend_excludes_from_spendable() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![
+            make_output(1_000_000_000_000, 80, "ki1"),
+            make_output(2_000_000_000_000, 80, "ki2"),
+        ]);
+        state.daemon_height = 200;
+
+        state.add_pending_spends("tx_abc", vec![
+            make_pending_spend("tx_abc", "ki1", 1_000_000_000_000, 1000),
+        ]);
+
+        let spendable = state.spendable_outputs();
+        assert_eq!(spendable.len(), 1);
+        assert_eq!(spendable[0].key_image, "ki2");
+    }
+
+    #[test]
+    fn test_confirm_pending_spend() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![
+            make_output(1_000_000_000_000, 80, "ki1"),
+        ]);
+        state.current_height = 200;
+
+        state.add_pending_spends("tx_abc", vec![
+            make_pending_spend("tx_abc", "ki1", 1_000_000_000_000, 1000),
+        ]);
+        assert!(state.is_pending_spent("ki1"));
+
+        let confirmed = state.confirm_pending_spend("ki1", 150);
+        assert!(confirmed);
+        assert!(!state.is_pending_spent("ki1"));
+        assert!(state.outputs()[0].spent);
+        assert_eq!(state.outputs()[0].spent_height, Some(150));
+    }
+
+    #[test]
+    fn test_confirm_pending_spend_unknown() {
+        let mut state = WalletState::new();
+        assert!(!state.confirm_pending_spend("unknown", 100));
+    }
+
+    #[test]
+    fn test_cleanup_expired_pending_spends() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![
+            make_output(1_000_000_000_000, 80, "ki1"),
+            make_output(2_000_000_000_000, 80, "ki2"),
+        ]);
+
+        state.add_pending_spends("tx_old", vec![
+            make_pending_spend("tx_old", "ki1", 1_000_000_000_000, 1000),
+        ]);
+        state.add_pending_spends("tx_new", vec![
+            make_pending_spend("tx_new", "ki2", 2_000_000_000_000, 5000),
+        ]);
+
+        // now=8200: tx_old expired (1000 + 7200 = 8200), tx_new not (5000 + 7200 = 12200)
+        let cleaned = state.cleanup_expired_pending_spends(8200);
+        assert_eq!(cleaned.len(), 1);
+        assert!(cleaned.contains(&"tx_old".to_string()));
+        assert!(!state.is_pending_spent("ki1"));
+        assert!(state.is_pending_spent("ki2"));
+    }
+
+    #[test]
+    fn test_pending_spends_for_tx() {
+        let mut state = WalletState::new();
+        state.add_pending_spends("tx1", vec![
+            make_pending_spend("tx1", "ki_a", 100, 1000),
+            make_pending_spend("tx1", "ki_b", 200, 1000),
+        ]);
+        state.add_pending_spends("tx2", vec![
+            make_pending_spend("tx2", "ki_c", 300, 1000),
+        ]);
+
+        let tx1_spends = state.pending_spends_for_tx("tx1");
+        assert_eq!(tx1_spends.len(), 2);
+        let tx2_spends = state.pending_spends_for_tx("tx2");
+        assert_eq!(tx2_spends.len(), 1);
+    }
+
+    #[test]
+    fn test_pending_key_images() {
+        let mut state = WalletState::new();
+        state.add_pending_spends("tx1", vec![
+            make_pending_spend("tx1", "ki_a", 100, 1000),
+            make_pending_spend("tx1", "ki_b", 200, 1000),
+        ]);
+
+        let ki = state.pending_key_images();
+        assert_eq!(ki.len(), 2);
+        assert!(ki.contains("ki_a"));
+        assert!(ki.contains("ki_b"));
+    }
+
+    #[test]
+    fn test_rollback_clears_pending_spends_for_removed_outputs() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![
+            make_output(1_000_000_000_000, 50, "ki1"),
+            make_output(2_000_000_000_000, 100, "ki2"),
+        ]);
+        state.add_pending_spends("tx_abc", vec![
+            make_pending_spend("tx_abc", "ki2", 2_000_000_000_000, 1000),
+        ]);
+
+        state.rollback_to_height(80);
+        // ki2 was removed (block_height 100 >= 80), so its pending spend should be cleared
+        assert!(!state.is_pending_spent("ki2"));
+    }
+
+    // ---- Tracked transaction tests ----
+
+    #[test]
+    fn test_track_and_advance_transaction() {
+        let mut state = WalletState::new();
+        state.track_transaction(TrackedTransaction {
+            tx_id: "tx1".into(),
+            status: TxStatus::Created,
+            spent_key_images: vec!["ki1".into()],
+            spent_output_keys: vec!["tx_ki1:0".into()],
+            change_outputs: vec![],
+            fee: 50_000_000,
+            created_at_secs: 1000,
+        });
+
+        assert_eq!(state.get_tracked_tx("tx1").unwrap().status, TxStatus::Created);
+
+        state.advance_tx_status("tx1", TxStatus::Broadcast);
+        assert_eq!(state.get_tracked_tx("tx1").unwrap().status, TxStatus::Broadcast);
+
+        state.advance_tx_status("tx1", TxStatus::Confirmed { height: 500 });
+        assert_eq!(
+            state.get_tracked_tx("tx1").unwrap().status,
+            TxStatus::Confirmed { height: 500 }
+        );
+    }
+
+    #[test]
+    fn test_find_tx_by_key_image() {
+        let mut state = WalletState::new();
+        state.track_transaction(TrackedTransaction {
+            tx_id: "tx1".into(),
+            status: TxStatus::Broadcast,
+            spent_key_images: vec!["ki_a".into(), "ki_b".into()],
+            spent_output_keys: vec![],
+            change_outputs: vec![],
+            fee: 0,
+            created_at_secs: 1000,
+        });
+
+        assert_eq!(state.find_tx_by_key_image("ki_a").unwrap().tx_id, "tx1");
+        assert_eq!(state.find_tx_by_key_image("ki_b").unwrap().tx_id, "tx1");
+        assert!(state.find_tx_by_key_image("ki_c").is_none());
+    }
+
+    #[test]
+    fn test_cleanup_old_tracked_txs() {
+        let mut state = WalletState::new();
+        state.track_transaction(TrackedTransaction {
+            tx_id: "old_confirmed".into(),
+            status: TxStatus::Confirmed { height: 100 },
+            spent_key_images: vec![],
+            spent_output_keys: vec![],
+            change_outputs: vec![],
+            fee: 0,
+            created_at_secs: 1000,
+        });
+        state.track_transaction(TrackedTransaction {
+            tx_id: "recent_confirmed".into(),
+            status: TxStatus::Confirmed { height: 200 },
+            spent_key_images: vec![],
+            spent_output_keys: vec![],
+            change_outputs: vec![],
+            fee: 0,
+            created_at_secs: 5000,
+        });
+        state.track_transaction(TrackedTransaction {
+            tx_id: "broadcast".into(),
+            status: TxStatus::Broadcast,
+            spent_key_images: vec![],
+            spent_output_keys: vec![],
+            change_outputs: vec![],
+            fee: 0,
+            created_at_secs: 1000,
+        });
+
+        // max_age=3600, now=6000: old_confirmed (age 5000) removed, recent_confirmed (age 1000) kept
+        let removed = state.cleanup_old_tracked_txs(6000, 3600);
+        assert_eq!(removed, 1);
+        assert!(state.get_tracked_tx("old_confirmed").is_none());
+        assert!(state.get_tracked_tx("recent_confirmed").is_some());
+        assert!(state.get_tracked_tx("broadcast").is_some()); // non-confirmed kept regardless
+    }
+
+    #[test]
+    fn test_restore_pending_spends_filters_expired() {
+        let mut state = WalletState::new();
+        let mut spends = HashMap::new();
+        spends.insert("ki_fresh".to_string(), PendingSpend {
+            tx_id: "tx1".into(),
+            key_image: "ki_fresh".into(),
+            output_key: "ok1".into(),
+            amount: 100,
+            created_at_secs: 5000,
+        });
+        spends.insert("ki_expired".to_string(), PendingSpend {
+            tx_id: "tx2".into(),
+            key_image: "ki_expired".into(),
+            output_key: "ok2".into(),
+            amount: 200,
+            created_at_secs: 1000,
+        });
+
+        // now=8000: ki_fresh age=3000 < 7200 (kept), ki_expired age=7000 < 7200 (kept)
+        state.restore_pending_spends(spends.clone(), 8000);
+        assert!(state.is_pending_spent("ki_fresh"));
+        assert!(state.is_pending_spent("ki_expired"));
+
+        // Reset and test with later time: ki_expired age=8200 >= 7200 (filtered)
+        let mut state2 = WalletState::new();
+        state2.restore_pending_spends(spends, 9200);
+        assert!(state2.is_pending_spent("ki_fresh"));
+        assert!(!state2.is_pending_spent("ki_expired"));
+    }
+
+    #[test]
+    fn test_restore_tracked_transactions() {
+        let mut state = WalletState::new();
+        let mut txs = HashMap::new();
+        txs.insert("tx1".to_string(), TrackedTransaction {
+            tx_id: "tx1".into(),
+            status: TxStatus::Broadcast,
+            spent_key_images: vec!["ki1".into()],
+            spent_output_keys: vec![],
+            change_outputs: vec![],
+            fee: 50_000_000,
+            created_at_secs: 1000,
+        });
+        txs.insert("tx2".to_string(), TrackedTransaction {
+            tx_id: "tx2".into(),
+            status: TxStatus::Confirmed { height: 500 },
+            spent_key_images: vec![],
+            spent_output_keys: vec![],
+            change_outputs: vec![],
+            fee: 0,
+            created_at_secs: 2000,
+        });
+
+        state.restore_tracked_transactions(txs);
+        assert_eq!(state.get_tracked_tx("tx1").unwrap().status, TxStatus::Broadcast);
+        assert_eq!(state.get_tracked_tx("tx2").unwrap().status, TxStatus::Confirmed { height: 500 });
+        assert!(state.get_tracked_tx("tx3").is_none());
+    }
+
+    #[test]
+    fn test_add_pending_spends_advances_tracked_tx() {
+        let mut state = WalletState::new();
+        state.track_transaction(TrackedTransaction {
+            tx_id: "tx1".into(),
+            status: TxStatus::Created,
+            spent_key_images: vec!["ki1".into()],
+            spent_output_keys: vec![],
+            change_outputs: vec![],
+            fee: 0,
+            created_at_secs: 1000,
+        });
+
+        state.add_pending_spends("tx1", vec![
+            make_pending_spend("tx1", "ki1", 1_000_000_000_000, 1000),
+        ]);
+
+        assert_eq!(state.get_tracked_tx("tx1").unwrap().status, TxStatus::Broadcast);
     }
 }
