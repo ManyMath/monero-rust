@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletState {
@@ -40,6 +41,7 @@ pub struct WalletData {
     #[allow(dead_code)]
     pub network: Option<String>,
     pub outputs: Vec<monero_rust::WalletOutput>,
+    pub pending_key_images: HashSet<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +80,8 @@ pub struct BroadcastTransaction {
     pub node_url: String,
     pub tx_blob: String,
     pub spent_output_hashes: Vec<String>,
+    pub tx_id: String,
+    pub spent_key_images: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -151,6 +155,33 @@ pub struct SetDaemonHeight {
 
 #[derive(Debug, Clone)]
 pub struct CheckMempoolConflicts {
+    pub key_images: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingSpendInfo {
+    pub key_image: String,
+    pub output_key: String,
+    pub amount: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct AddPendingSpends {
+    pub tx_id: String,
+    pub spends: Vec<PendingSpendInfo>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TrackTransaction {
+    pub tx_id: String,
+    pub spent_key_images: Vec<String>,
+    pub spent_output_keys: Vec<String>,
+    pub change_outputs: Vec<monero_rust::ChangeOutputRef>,
+    pub fee: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct AddMempoolPendingSpends {
     pub key_images: Vec<String>,
 }
 

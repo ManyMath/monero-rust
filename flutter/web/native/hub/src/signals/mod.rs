@@ -45,6 +45,7 @@ pub struct GetBalanceRequest {}
 pub struct BalanceResponse {
     pub confirmed: u64,
     pub unconfirmed: u64,
+    pub pending_spend: u64,
 }
 
 #[derive(Deserialize, DartSignal)]
@@ -318,6 +319,10 @@ pub struct BroadcastTransactionRequest {
     pub node_url: String,
     pub tx_blob: String,
     pub spent_output_hashes: Vec<String>,
+    #[serde(default)]
+    pub tx_id: String,
+    #[serde(default)]
+    pub spent_key_images: Vec<String>,
 }
 
 #[derive(Serialize, RustSignal)]
@@ -515,6 +520,8 @@ pub struct RestoreWalletDataRequest {
     #[serde(default)]
     pub block_hashes_json: Option<String>,
     #[serde(default)]
+    pub pending_state_json: Option<String>,
+    #[serde(default)]
     pub passphrase: String,
     #[serde(default)]
     pub bip39_account_index: u32,
@@ -528,6 +535,16 @@ pub struct BlockHashesResponse {
     pub success: bool,
     pub error: Option<String>,
     pub block_hashes_json: Option<String>,
+}
+
+#[derive(Deserialize, DartSignal)]
+pub struct GetPendingStateRequest {}
+
+#[derive(Serialize, RustSignal)]
+pub struct PendingStateResponse {
+    pub success: bool,
+    pub error: Option<String>,
+    pub pending_state_json: Option<String>,
 }
 
 #[derive(Serialize, RustSignal)]
@@ -584,4 +601,11 @@ pub struct FreezeThawResponse {
     pub success: bool,
     pub key_image: String,
     pub frozen: bool,
+}
+
+#[derive(Serialize, RustSignal)]
+pub struct TransactionStatusUpdate {
+    pub tx_id: String,
+    pub status: String,
+    pub confirmed_height: Option<u64>,
 }

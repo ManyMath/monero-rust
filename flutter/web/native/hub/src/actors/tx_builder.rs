@@ -99,6 +99,8 @@ impl TxBuilderActor {
                 node_url: request.node_url,
                 tx_blob: request.tx_blob,
                 spent_output_hashes: request.spent_output_hashes,
+                tx_id: request.tx_id,
+                spent_key_images: request.spent_key_images,
             }).await;
         }
     }
@@ -190,11 +192,17 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
 
                         let total_send_amount: u64 = recipients.iter().map(|(_, amt)| amt).sum();
 
+                        let excluded = if wallet_data.pending_key_images.is_empty() {
+                            None
+                        } else {
+                            Some(&wallet_data.pending_key_images)
+                        };
                         let prepared = match monero_rust::prepare_send_inputs(
                             &wallet_data.outputs,
                             daemon_height,
                             total_send_amount,
                             selected_outputs.as_deref(),
+                            excluded,
                         ) {
                             Ok(p) => p,
                             Err(error_msg) => {
@@ -328,10 +336,16 @@ impl Notifiable<SweepAll> for TxBuilderActor {
                             Err(_) => stored_daemon_height,
                         };
 
+                        let excluded = if wallet_data.pending_key_images.is_empty() {
+                            None
+                        } else {
+                            Some(&wallet_data.pending_key_images)
+                        };
                         let prepared = match monero_rust::prepare_sweep_inputs(
                             &wallet_data.outputs,
                             daemon_height,
                             selected_outputs.as_deref(),
+                            excluded,
                         ) {
                             Ok(p) => p,
                             Err(error_msg) => {
@@ -446,7 +460,9 @@ impl Notifiable<SweepAll> for TxBuilderActor {
 impl Notifiable<BroadcastTransaction> for TxBuilderActor {
     async fn notify(&mut self, msg: BroadcastTransaction, _ctx: &Context<Self>) {
         let wallet_actor = self.wallet_actor.clone();
-        let spent_hashes = msg.spent_output_hashes.clone();
+        let tx_id = msg.tx_id.clone();
+        let spent_key_images = msg.spent_key_images.clone();
+        let spent_output_hashes = msg.spent_output_hashes.clone();
 
         #[cfg(target_arch = "wasm32")]
         web_sys::console::log_1(&"Broadcasting transaction...".into());
@@ -458,17 +474,29 @@ impl Notifiable<BroadcastTransaction> for TxBuilderActor {
                     #[cfg(target_arch = "wasm32")]
                     web_sys::console::log_1(&"Transaction broadcast successful!".into());
 
-                    // Mark outputs as spent
+                    // Add pending spends instead of marking outputs as spent
                     if let Some(mut wallet) = wallet_actor {
-                        let _ = wallet.notify(MarkOutputsSpent {
-                            output_keys: spent_hashes,
+                        // Build PendingSpendInfo by zipping key images with output hashes
+                        let spends: Vec<PendingSpendInfo> = spent_key_images
+                            .iter()
+                            .zip(spent_output_hashes.iter())
+                            .map(|(ki, oh)| PendingSpendInfo {
+                                key_image: ki.clone(),
+                                output_key: oh.clone(),
+                                amount: 0, // amount will be resolved from wallet state
+                            })
+                            .collect();
+
+                        let _ = wallet.notify(AddPendingSpends {
+                            tx_id: tx_id.clone(),
+                            spends,
                         }).await;
                     }
 
                     TransactionBroadcastResponse {
                         success: true,
                         error: None,
-                        tx_id: None,
+                        tx_id: Some(tx_id),
                         is_retryable: false,
                         is_double_spend: false,
                     }

@@ -9,6 +9,21 @@ use tokio::task::JoinSet;
 use tokio_with_wasm::alias as tokio;
 use wasm_bindgen_futures;
 
+/// Get current time in seconds (WASM-safe).
+pub(crate) fn current_time_secs() -> u64 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        (js_sys::Date::now() / 1000.0) as u64
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    }
+}
+
 /// Pre-convert BIP39 12-word seeds to legacy format using the given passphrase
 /// and account index. Non-BIP39 seeds pass through unchanged.
 pub(crate) fn pre_resolve_bip39(seed: &str, passphrase: &str, account_index: u32) -> Result<String, String> {
@@ -133,6 +148,7 @@ impl WalletActor {
         _owned_tasks.spawn(Self::listen_to_start_multi_wallet_scan(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_restore_wallet_data(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_get_block_hashes(self_addr.clone()));
+        _owned_tasks.spawn(Self::listen_to_get_pending_state(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_convert_bip39_to_legacy(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_freeze_output(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_thaw_output(self_addr.clone()));
@@ -664,6 +680,10 @@ impl WalletActor {
                         .send_signal_to_dart();
 
                         if !spent_key_images.is_empty() {
+                            // Track mempool-detected spends as pending
+                            let _ = addr.notify(AddMempoolPendingSpends {
+                                key_images: spent_key_images.clone(),
+                            }).await;
                             let _ = addr.notify(CheckMempoolConflicts {
                                 key_images: spent_key_images,
                             }).await;
@@ -878,6 +898,7 @@ impl WalletActor {
                 daemon_height: msg.daemon_height,
                 current_height: msg.current_height,
                 block_hashes_json: msg.block_hashes_json,
+                pending_state_json: msg.pending_state_json,
             }).await;
         }
     }
@@ -886,6 +907,13 @@ impl WalletActor {
         let receiver = GetBlockHashesRequest::get_dart_signal_receiver();
         while let Some(_signal_pack) = receiver.recv().await {
             let _ = self_addr.notify(GetBlockHashesMsg).await;
+        }
+    }
+
+    async fn listen_to_get_pending_state(mut self_addr: Address<Self>) {
+        let receiver = GetPendingStateRequest::get_dart_signal_receiver();
+        while let Some(_signal_pack) = receiver.recv().await {
+            let _ = self_addr.notify(GetPendingStateMsg).await;
         }
     }
 
@@ -927,10 +955,14 @@ struct RestoreOutputs {
     daemon_height: u64,
     current_height: u64,
     block_hashes_json: Option<String>,
+    pending_state_json: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 struct GetBlockHashesMsg;
+
+#[derive(Debug, Clone)]
+struct GetPendingStateMsg;
 
 #[async_trait]
 impl Notifiable<RestoreOutputs> for WalletActor {
@@ -961,6 +993,66 @@ impl Notifiable<RestoreOutputs> for WalletActor {
                         &format!("[RestoreOutputs] Failed to deserialize block hashes: {}", e).into(),
                     );
                 }
+            }
+        }
+
+        if let Some(json) = msg.pending_state_json {
+            #[derive(serde::Deserialize)]
+            struct PendingStateBlob {
+                #[serde(default)]
+                pending_spends: std::collections::HashMap<String, monero_rust::PendingSpend>,
+                #[serde(default)]
+                tracked_transactions: std::collections::HashMap<String, monero_rust::TrackedTransaction>,
+            }
+            match serde_json::from_str::<PendingStateBlob>(&json) {
+                Ok(blob) => {
+                    let now = current_time_secs();
+                    self.core_state.restore_pending_spends(blob.pending_spends, now);
+                    self.core_state.restore_tracked_transactions(blob.tracked_transactions);
+                    #[cfg(target_arch = "wasm32")]
+                    web_sys::console::log_1(
+                        &"[RestoreOutputs] Pending state restored".into(),
+                    );
+                }
+                Err(e) => {
+                    #[cfg(target_arch = "wasm32")]
+                    web_sys::console::error_1(
+                        &format!("[RestoreOutputs] Failed to deserialize pending state: {}", e).into(),
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl Notifiable<GetPendingStateMsg> for WalletActor {
+    async fn notify(&mut self, _msg: GetPendingStateMsg, _ctx: &Context<Self>) {
+        #[derive(serde::Serialize)]
+        struct PendingStateBlob<'a> {
+            pending_spends: &'a std::collections::HashMap<String, monero_rust::PendingSpend>,
+            tracked_transactions: &'a std::collections::HashMap<String, monero_rust::TrackedTransaction>,
+        }
+        let blob = PendingStateBlob {
+            pending_spends: self.core_state.pending_spends(),
+            tracked_transactions: self.core_state.tracked_transactions(),
+        };
+        match serde_json::to_string(&blob) {
+            Ok(json) => {
+                PendingStateResponse {
+                    success: true,
+                    error: None,
+                    pending_state_json: Some(json),
+                }
+                .send_signal_to_dart();
+            }
+            Err(e) => {
+                PendingStateResponse {
+                    success: false,
+                    error: Some(format!("Failed to serialize pending state: {}", e)),
+                    pending_state_json: None,
+                }
+                .send_signal_to_dart();
             }
         }
     }
@@ -1016,6 +1108,7 @@ impl Notifiable<GetBalanceRequest> for WalletActor {
         BalanceResponse {
             confirmed: bal.confirmed,
             unconfirmed: bal.unconfirmed,
+            pending_spend: bal.pending_spend,
         }
         .send_signal_to_dart();
     }
@@ -1063,6 +1156,7 @@ impl Handler<GetWalletData> for WalletActor {
             seed: self.seed.clone(),
             network: self.network.clone(),
             outputs: self.core_state.outputs().to_vec(),
+            pending_key_images: self.core_state.pending_key_images(),
         }
     }
 }
@@ -1772,6 +1866,15 @@ impl Notifiable<SetDaemonHeight> for WalletActor {
 #[async_trait]
 impl Notifiable<UpdateSpentStatus> for WalletActor {
     async fn notify(&mut self, msg: UpdateSpentStatus, _ctx: &Context<Self>) {
+        // Confirm any pending spends that are now on-chain
+        let mut confirmed_tx_ids: HashSet<String> = HashSet::new();
+        for ki in &msg.key_images {
+            if let Some(ps) = self.core_state.pending_spends().get(ki).cloned() {
+                confirmed_tx_ids.insert(ps.tx_id.clone());
+            }
+            self.core_state.confirm_pending_spend(ki, msg.height);
+        }
+
         let (updated_count, conflicts) = self.core_state.mark_spent_detecting_conflicts(
             &msg.key_images, msg.height
         );
@@ -1787,12 +1890,38 @@ impl Notifiable<UpdateSpentStatus> for WalletActor {
             .send_signal_to_dart();
         }
 
-        if updated_count > 0 {
+        // Check if any tracked transaction is now fully confirmed
+        for tx_id in &confirmed_tx_ids {
+            let all_confirmed = self
+                .core_state
+                .pending_spends_for_tx(tx_id)
+                .is_empty();
+            if all_confirmed {
+                if let Some(new_status) = self.core_state.advance_tx_status(
+                    tx_id,
+                    monero_rust::TxStatus::Confirmed { height: msg.height },
+                ) {
+                    let height = match new_status {
+                        monero_rust::TxStatus::Confirmed { height } => Some(*height),
+                        _ => None,
+                    };
+                    TransactionStatusUpdate {
+                        tx_id: tx_id.clone(),
+                        status: "confirmed".to_string(),
+                        confirmed_height: height,
+                    }
+                    .send_signal_to_dart();
+                }
+            }
+        }
+
+        if updated_count > 0 || !confirmed_tx_ids.is_empty() {
             let balance = self.core_state.balance();
 
             BalanceResponse {
                 confirmed: balance.confirmed,
                 unconfirmed: balance.unconfirmed,
+                pending_spend: balance.pending_spend,
             }
             .send_signal_to_dart();
 
@@ -1878,6 +2007,7 @@ impl Notifiable<HandleReorg> for WalletActor {
                 BalanceResponse {
                     confirmed: balance.confirmed,
                     unconfirmed: balance.unconfirmed,
+                    pending_spend: balance.pending_spend,
                 }.send_signal_to_dart();
 
                 // Continue scanning from where the batch left off
@@ -1911,6 +2041,111 @@ impl Notifiable<HandleReorg> for WalletActor {
                 let mut self_addr = ctx.address();
                 let _ = self_addr.notify(StopScan).await;
             }
+        }
+    }
+}
+
+// --- Pending spends ---
+
+#[async_trait]
+impl Notifiable<AddPendingSpends> for WalletActor {
+    async fn notify(&mut self, msg: AddPendingSpends, _ctx: &Context<Self>) {
+        let now = current_time_secs();
+        let spends: Vec<monero_rust::PendingSpend> = msg
+            .spends
+            .into_iter()
+            .map(|s| monero_rust::PendingSpend {
+                tx_id: msg.tx_id.clone(),
+                key_image: s.key_image,
+                output_key: s.output_key,
+                amount: s.amount,
+                created_at_secs: now,
+            })
+            .collect();
+
+        self.core_state.add_pending_spends(&msg.tx_id, spends);
+
+        // Advance tracked tx to Broadcast status
+        self.core_state
+            .advance_tx_status(&msg.tx_id, monero_rust::TxStatus::Broadcast);
+
+        let balance = self.core_state.balance();
+        BalanceResponse {
+            confirmed: balance.confirmed,
+            unconfirmed: balance.unconfirmed,
+            pending_spend: balance.pending_spend,
+        }
+        .send_signal_to_dart();
+
+        TransactionStatusUpdate {
+            tx_id: msg.tx_id,
+            status: "broadcast".to_string(),
+            confirmed_height: None,
+        }
+        .send_signal_to_dart();
+    }
+}
+
+#[async_trait]
+impl Notifiable<TrackTransaction> for WalletActor {
+    async fn notify(&mut self, msg: TrackTransaction, _ctx: &Context<Self>) {
+        let now = current_time_secs();
+        let change_outputs: Vec<monero_rust::ChangeOutputRef> = msg.change_outputs;
+
+        self.core_state
+            .track_transaction(monero_rust::TrackedTransaction {
+                tx_id: msg.tx_id.clone(),
+                status: monero_rust::TxStatus::Created,
+                spent_key_images: msg.spent_key_images,
+                spent_output_keys: msg.spent_output_keys,
+                change_outputs,
+                fee: msg.fee,
+                created_at_secs: now,
+            });
+
+        TransactionStatusUpdate {
+            tx_id: msg.tx_id,
+            status: "created".to_string(),
+            confirmed_height: None,
+        }
+        .send_signal_to_dart();
+    }
+}
+
+#[async_trait]
+impl Notifiable<AddMempoolPendingSpends> for WalletActor {
+    async fn notify(&mut self, msg: AddMempoolPendingSpends, _ctx: &Context<Self>) {
+        // For mempool-detected spends, create pending spend entries
+        // for any key images that match our outputs and aren't already pending/spent
+        let now = current_time_secs();
+        let mut added = false;
+        for ki in &msg.key_images {
+            if self.core_state.is_pending_spent(ki) {
+                continue;
+            }
+            // Check if this key image belongs to one of our outputs
+            if let Some(output) = self.core_state.outputs().iter().find(|o| &o.key_image == ki && !o.spent) {
+                let tx_id = format!("mempool_{}", ki);
+                let spend = monero_rust::PendingSpend {
+                    tx_id: tx_id.clone(),
+                    key_image: ki.clone(),
+                    output_key: output.output_key(),
+                    amount: output.amount,
+                    created_at_secs: now,
+                };
+                self.core_state.add_pending_spends(&tx_id, vec![spend]);
+                added = true;
+            }
+        }
+
+        if added {
+            let balance = self.core_state.balance();
+            BalanceResponse {
+                confirmed: balance.confirmed,
+                unconfirmed: balance.unconfirmed,
+                pending_spend: balance.pending_spend,
+            }
+            .send_signal_to_dart();
         }
     }
 }
