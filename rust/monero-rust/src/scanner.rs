@@ -223,7 +223,7 @@ fn build_subaddress_indices(lookahead: Lookahead) -> Vec<SubaddressIndex> {
     indices
 }
 
-fn register_subaddresses(scanner: &mut Scanner, lookahead: Lookahead) {
+pub fn register_subaddresses(scanner: &mut Scanner, lookahead: Lookahead) {
     for index in build_subaddress_indices(lookahead) {
         scanner.register_subaddress(index);
     }

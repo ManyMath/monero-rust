@@ -20,7 +20,7 @@ pub mod native {
     #[cfg(target_arch = "wasm32")]
     use crate::rpc_serai::WasmRpcConnection;
 
-    use crate::scanner::resolve_seed;
+    use crate::scanner::{resolve_seed, register_subaddresses, Lookahead, DEFAULT_LOOKAHEAD};
     use serde::{Deserialize, Serialize};
     use sha3::{Digest, Keccak256};
     use std::collections::HashSet;
@@ -153,8 +153,10 @@ pub mod native {
         tx_id: &str,
         view_pair: ViewPair,
         spend_key: Scalar,
+        lookahead: Lookahead,
     ) -> Vec<ChangeOutputInfo> {
         let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+        register_subaddresses(&mut scanner, lookahead);
         let scan_result = scanner.scan_transaction(tx);
         let our_outputs = scan_result.ignore_timelock();
 
@@ -500,7 +502,15 @@ pub mod native {
         let tx_id = hex::encode(tx.hash());
         let tx_blob = hex::encode(tx.serialize());
 
-        let change_outputs = scan_transaction_outputs(&tx, &tx_id, view_pair, spend_key);
+        let max_account = stored_outputs.iter()
+            .filter_map(|o| o.subaddress.map(|(a, _)| a))
+            .max()
+            .unwrap_or(0);
+        let lookahead = Lookahead {
+            account: max_account,
+            subaddress: DEFAULT_LOOKAHEAD.subaddress,
+        };
+        let change_outputs = scan_transaction_outputs(&tx, &tx_id, view_pair, spend_key, lookahead);
 
         Ok(TransactionResult {
             tx_id,
@@ -643,7 +653,15 @@ pub mod native {
         let tx_id = hex::encode(tx.hash());
         let tx_blob = hex::encode(tx.serialize());
 
-        let change_outputs = scan_transaction_outputs(&tx, &tx_id, view_pair, spend_key);
+        let max_account = stored_outputs.iter()
+            .filter_map(|o| o.subaddress.map(|(a, _)| a))
+            .max()
+            .unwrap_or(0);
+        let lookahead = Lookahead {
+            account: max_account,
+            subaddress: DEFAULT_LOOKAHEAD.subaddress,
+        };
+        let change_outputs = scan_transaction_outputs(&tx, &tx_id, view_pair, spend_key, lookahead);
 
         Ok(TransactionResult {
             tx_id,
