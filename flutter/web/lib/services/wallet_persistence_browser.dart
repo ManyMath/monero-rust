@@ -38,6 +38,7 @@ class WalletPersistenceBrowser {
     required int activeAccount,
     required Set<int> scanningAccounts,
     String? blockHashesJson,
+    String? pendingStateJson,
   }) =>
       _defaultInstance.save(
         walletId: walletId,
@@ -54,6 +55,7 @@ class WalletPersistenceBrowser {
         activeAccount: activeAccount,
         scanningAccounts: scanningAccounts,
         blockHashesJson: blockHashesJson,
+        pendingStateJson: pendingStateJson,
       );
 
   static Future<({String keyHex, String saltHex})?> deriveEncryptionKey(
@@ -75,6 +77,7 @@ class WalletPersistenceBrowser {
     required List<int> accounts,
     required int activeAccount,
     required Set<int> scanningAccounts,
+    String? pendingStateJson,
   }) =>
       _defaultInstance.saveWithDerivedKey(
         walletId: walletId,
@@ -91,6 +94,7 @@ class WalletPersistenceBrowser {
         accounts: accounts,
         activeAccount: activeAccount,
         scanningAccounts: scanningAccounts,
+        pendingStateJson: pendingStateJson,
       );
 
   static Future<LoadWalletResult> loadWalletData({

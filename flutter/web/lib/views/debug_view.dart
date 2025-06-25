@@ -16,6 +16,7 @@ import '../models/wallet_transaction.dart';
 import '../utils/clipboard_utils.dart';
 import '../utils/balance_utils.dart';
 import '../utils/output_utils.dart';
+import '../utils/output_lock_utils.dart';
 import '../utils/transaction_utils.dart';
 import '../services/wallet_scan_service.dart';
 import '../services/transaction_service.dart';
@@ -246,6 +247,7 @@ class _DebugViewState extends State<DebugView> {
   final List<TextEditingController> _destinationControllers = [TextEditingController()];
   final List<TextEditingController> _amountControllers = [TextEditingController()];
   bool _isCreatingTx = false;
+  bool _subtractFee = false;
   TransactionCreatedResponse? _txResult;
   String? _txError;
 
@@ -940,6 +942,7 @@ class _DebugViewState extends State<DebugView> {
       _polyseedRestoreHeight = null;
       _derivedLegacySeed = null;
       _pendingSpentKeyImages.clear();
+      _subtractFee = false;
     });
   }
 
@@ -1443,95 +1446,43 @@ class _DebugViewState extends State<DebugView> {
       return;
     }
 
-    // Check if this is a single-recipient transaction sending the max amount
-    final isSingleRecipient = _destinationControllers.length == 1;
-    bool isSendingMax = false;
+    // Normal transaction creation (with optional subtract-fee)
+    final selectedSet = _selectedOutputs.isNotEmpty ? _selectedOutputs : null;
 
-    if (isSingleRecipient) {
-      final maxSpendable = TransactionService.calculateMaxSpendable(
-        availableOutputs: _allOutputs,
-        currentHeight: _currentHeight,
-      );
+    final validation = TransactionService.validateTransactionCreation(
+      seed: _controller.text,
+      availableOutputs: _allOutputs,
+      recipients: recipientInputs,
+      nodeUrl: _nodeUrlController.text,
+      selectedOutputs: selectedSet,
+      currentHeight: _currentHeight,
+    );
 
-      final amountStr = _amountControllers[0].text.trim();
-      final amount = double.tryParse(amountStr);
-
-      // Check if amount equals max (within small tolerance for floating point)
-      if (amount != null && (amount - maxSpendable).abs() < 0.000000001) {
-        isSendingMax = true;
-      }
+    if (!validation.isValid) {
+      setState(() {
+        _txError = validation.error;
+      });
+      return;
     }
 
-    // If sending max to a single recipient, use sweepAll
-    if (isSendingMax) {
-      final destinationAddress = _destinationControllers[0].text;
+    setState(() {
+      _isCreatingTx = true;
+      _txResult = null;
+      _txError = null;
+      _broadcastResult = null;
+      _broadcastError = null;
+    });
 
-      // Validate sweep parameters
-      final validation = TransactionService.validateSweepAll(
-        seed: _controller.text,
-        availableOutputs: _allOutputs,
-        destinationAddress: destinationAddress,
-        nodeUrl: _nodeUrlController.text,
-        currentHeight: _currentHeight,
-      );
+    _hydrateRustWalletActor();
 
-      if (!validation.isValid) {
-        setState(() {
-          _txError = validation.error;
-        });
-        return;
-      }
-
-      setState(() {
-        _isCreatingTx = true;
-        _txResult = null;
-        _txError = null;
-        _broadcastResult = null;
-        _broadcastError = null;
-      });
-
-      _hydrateRustWalletActor();
-
-      // Execute sweep
-      TransactionService.sweepAll(
-        seed: validation.normalizedSeed!,
-        network: _network,
-        destinationAddress: validation.destinationAddress!,
-        nodeUrl: validation.nodeUrl!,
-      );
-    } else {
-      // Normal transaction creation
-      final validation = TransactionService.validateTransactionCreation(
-        seed: _controller.text,
-        availableOutputs: _allOutputs,
-        recipients: recipientInputs,
-        nodeUrl: _nodeUrlController.text,
-        currentHeight: _currentHeight,
-      );
-
-      if (!validation.isValid) {
-        setState(() {
-          _txError = validation.error;
-        });
-        return;
-      }
-
-      setState(() {
-        _isCreatingTx = true;
-        _txResult = null;
-        _txError = null;
-      });
-
-      _hydrateRustWalletActor();
-
-      // Execute transaction creation
-      TransactionService.createTransaction(
-        seed: validation.normalizedSeed!,
-        network: _network,
-        recipients: validation.recipients!,
-        nodeUrl: validation.nodeUrl!,
-      );
-    }
+    TransactionService.createTransaction(
+      seed: validation.normalizedSeed!,
+      network: _network,
+      recipients: validation.recipients!,
+      nodeUrl: validation.nodeUrl!,
+      selectedOutputs: validation.selectedOutputs,
+      subtractFee: _subtractFee,
+    );
   }
 
   void _handleSendMax(int recipientIndex) {
@@ -1566,13 +1517,30 @@ class _DebugViewState extends State<DebugView> {
   }
 
   void _setMaxAmount(int recipientIndex) {
-    final maxSpendable = TransactionService.calculateMaxSpendable(
-      availableOutputs: _allOutputs,
-      currentHeight: _currentHeight,
-    );
+    // Calculate the full spendable total (no fee deduction — the fee will be
+    // subtracted by the Rust tx builder via the subtract_fee flag).
+    // Respects coin control selection, frozen status, and lock state.
+    final outputKeys = _selectedOutputs.isNotEmpty
+        ? _selectedOutputs
+        : _allOutputs.map((o) => '${o.txHash}:${o.outputIndex}').toSet();
+
+    int totalAtomic = 0;
+    for (final output in _allOutputs) {
+      final key = '${output.txHash}:${output.outputIndex}';
+      if (outputKeys.contains(key) &&
+          !output.spent &&
+          OutputLockUtils.isOutputSpendable(
+            output: output,
+            currentHeight: _currentHeight,
+          )) {
+        totalAtomic += output.amount.toInt();
+      }
+    }
+    final fullBalance = totalAtomic / 1e12;
 
     setState(() {
-      _amountControllers[recipientIndex].text = maxSpendable.toStringAsFixed(12);
+      _amountControllers[recipientIndex].text = fullBalance.toStringAsFixed(12);
+      _subtractFee = true;
     });
   }
 
@@ -1692,6 +1660,7 @@ class _DebugViewState extends State<DebugView> {
     _lastSaveTime = null;
     _loadError = null;
     _saveError = null;
+    _subtractFee = false;
   }
 
   ExpansionPanel _buildPanel({
@@ -2004,6 +1973,8 @@ class _DebugViewState extends State<DebugView> {
                         ),
                         onAmountChanged: () => setState(() {}),
                         onSendMax: _handleSendMax,
+                        subtractFee: _subtractFee,
+                        onSubtractFeeChanged: (v) => setState(() => _subtractFee = v ?? false),
                       ),
                     ),
                   ],
@@ -2380,10 +2351,12 @@ class _DebugViewState extends State<DebugView> {
           _network = wallet.network;
           _derivedAddress = wallet.address;
           _daemonHeight = wallet.daemonHeight;
+          _subtractFee = false;
         });
         _isRestoringWallet = false;
         return;
       case SwitchResult.needsLoad:
+        _subtractFee = false;
         await _loadWalletData();
         return;
       case SwitchResult.reset:

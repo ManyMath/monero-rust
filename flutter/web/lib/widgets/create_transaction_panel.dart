@@ -23,6 +23,8 @@ class CreateTransactionPanel extends StatelessWidget {
   final VoidCallback? onProvePayment;
   final VoidCallback onAmountChanged;
   final Function(int)? onSendMax;
+  final bool subtractFee;
+  final ValueChanged<bool?>? onSubtractFeeChanged;
   final bool isBroadcastRetryable;
   final bool isBroadcastDoubleSpend;
 
@@ -46,6 +48,8 @@ class CreateTransactionPanel extends StatelessWidget {
     this.onProvePayment,
     required this.onAmountChanged,
     this.onSendMax,
+    this.subtractFee = false,
+    this.onSubtractFeeChanged,
   });
 
   @override
@@ -87,6 +91,16 @@ class CreateTransactionPanel extends StatelessWidget {
               onPressed: onAddRecipient,
               icon: const Icon(Icons.add),
               label: const Text('Add Recipient'),
+            ),
+          if (onSubtractFeeChanged != null)
+            CheckboxListTile(
+              value: subtractFee,
+              onChanged: onSubtractFeeChanged,
+              title: const Text('Subtract fee from amount'),
+              subtitle: const Text('Fee is deducted from send amount instead of added on top'),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
             ),
           const SizedBox(height: 16),
           if (multiAccountWarning != null) ...[

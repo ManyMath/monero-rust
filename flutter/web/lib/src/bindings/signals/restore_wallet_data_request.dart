@@ -11,6 +11,7 @@ class RestoreWalletDataRequest {
     required this.daemonHeight,
     required this.currentHeight,
     this.blockHashesJson,
+    this.pendingStateJson,
     required this.passphrase,
     required this.bip39AccountIndex,
   });
@@ -24,6 +25,7 @@ class RestoreWalletDataRequest {
       daemonHeight: deserializer.deserializeUint64(),
       currentHeight: deserializer.deserializeUint64(),
       blockHashesJson: TraitHelpers.deserializeOptionStr(deserializer),
+      pendingStateJson: TraitHelpers.deserializeOptionStr(deserializer),
       passphrase: deserializer.deserializeString(),
       bip39AccountIndex: deserializer.deserializeUint32(),
     );
@@ -46,6 +48,7 @@ class RestoreWalletDataRequest {
   final Uint64 daemonHeight;
   final Uint64 currentHeight;
   final String? blockHashesJson;
+  final String? pendingStateJson;
   final String passphrase;
   final int bip39AccountIndex;
 
@@ -56,6 +59,7 @@ class RestoreWalletDataRequest {
     Uint64? daemonHeight,
     Uint64? currentHeight,
     String? Function()? blockHashesJson,
+    String? Function()? pendingStateJson,
     String? passphrase,
     int? bip39AccountIndex,
   }) {
@@ -66,6 +70,7 @@ class RestoreWalletDataRequest {
       daemonHeight: daemonHeight ?? this.daemonHeight,
       currentHeight: currentHeight ?? this.currentHeight,
       blockHashesJson: blockHashesJson == null ? this.blockHashesJson : blockHashesJson(),
+      pendingStateJson: pendingStateJson == null ? this.pendingStateJson : pendingStateJson(),
       passphrase: passphrase ?? this.passphrase,
       bip39AccountIndex: bip39AccountIndex ?? this.bip39AccountIndex,
     );
@@ -79,6 +84,7 @@ class RestoreWalletDataRequest {
     serializer.serializeUint64(daemonHeight);
     serializer.serializeUint64(currentHeight);
     TraitHelpers.serializeOptionStr(blockHashesJson, serializer);
+    TraitHelpers.serializeOptionStr(pendingStateJson, serializer);
     serializer.serializeString(passphrase);
     serializer.serializeUint32(bip39AccountIndex);
     serializer.decreaseContainerDepth();
@@ -102,6 +108,7 @@ class RestoreWalletDataRequest {
       && daemonHeight == other.daemonHeight
       && currentHeight == other.currentHeight
       && blockHashesJson == other.blockHashesJson
+      && pendingStateJson == other.pendingStateJson
       && passphrase == other.passphrase
       && bip39AccountIndex == other.bip39AccountIndex;
   }
@@ -114,6 +121,7 @@ class RestoreWalletDataRequest {
         daemonHeight,
         currentHeight,
         blockHashesJson,
+        pendingStateJson,
         passphrase,
         bip39AccountIndex,
       );
@@ -130,6 +138,7 @@ class RestoreWalletDataRequest {
         'daemonHeight: $daemonHeight, '
         'currentHeight: $currentHeight, '
         'blockHashesJson: $blockHashesJson, '
+        'pendingStateJson: $pendingStateJson, '
         'passphrase: $passphrase, '
         'bip39AccountIndex: $bip39AccountIndex'
         ')';

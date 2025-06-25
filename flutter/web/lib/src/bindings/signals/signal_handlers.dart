@@ -136,6 +136,15 @@ final assignRustSignal = <String, void Function(Uint8List, Uint8List)>{
     _outProofGeneratedResponseStreamController.add(rustSignal);
     OutProofGeneratedResponse.latestRustSignal = rustSignal;
   },
+  'PendingStateResponse': (Uint8List messageBytes, Uint8List binary) {
+    final message = PendingStateResponse.bincodeDeserialize(messageBytes);
+    final rustSignal = RustSignalPack(
+      message,
+      binary,
+    );
+    _pendingStateResponseStreamController.add(rustSignal);
+    PendingStateResponse.latestRustSignal = rustSignal;
+  },
   'ReorgDetectedResponse': (Uint8List messageBytes, Uint8List binary) {
     final message = ReorgDetectedResponse.bincodeDeserialize(messageBytes);
     final rustSignal = RustSignalPack(
@@ -207,6 +216,15 @@ final assignRustSignal = <String, void Function(Uint8List, Uint8List)>{
     );
     _transactionCreatedResponseStreamController.add(rustSignal);
     TransactionCreatedResponse.latestRustSignal = rustSignal;
+  },
+  'TransactionStatusUpdate': (Uint8List messageBytes, Uint8List binary) {
+    final message = TransactionStatusUpdate.bincodeDeserialize(messageBytes);
+    final rustSignal = RustSignalPack(
+      message,
+      binary,
+    );
+    _transactionStatusUpdateStreamController.add(rustSignal);
+    TransactionStatusUpdate.latestRustSignal = rustSignal;
   },
   'WalletCreatedResponse': (Uint8List messageBytes, Uint8List binary) {
     final message = WalletCreatedResponse.bincodeDeserialize(messageBytes);

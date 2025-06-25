@@ -59,6 +59,8 @@ pub struct CreateTransactionRequest {
     pub passphrase: String,
     #[serde(default)]
     pub bip39_account_index: u32,
+    #[serde(default)]
+    pub subtract_fee: bool,
 }
 
 #[derive(Deserialize, DartSignal)]

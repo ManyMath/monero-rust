@@ -34,6 +34,7 @@ class WalletPersistenceService {
     required int activeAccount,
     required Set<int> scanningAccounts,
     String? blockHashesJson,
+    String? pendingStateJson,
   }) async {
     try {
       final storageKey = getStorageKey(walletId);
@@ -50,6 +51,7 @@ class WalletPersistenceService {
         activeAccount: activeAccount,
         scanningAccounts: scanningAccounts,
         blockHashesJson: blockHashesJson,
+        pendingStateJson: pendingStateJson,
       );
 
       final jsonString = jsonEncode(walletData);
@@ -84,6 +86,7 @@ class WalletPersistenceService {
     required List<int> accounts,
     required int activeAccount,
     required Set<int> scanningAccounts,
+    String? pendingStateJson,
   }) async {
     try {
       final storageKey = getStorageKey(walletId);
@@ -99,6 +102,7 @@ class WalletPersistenceService {
         accounts: accounts,
         activeAccount: activeAccount,
         scanningAccounts: scanningAccounts,
+        pendingStateJson: pendingStateJson,
       );
 
       final jsonString = jsonEncode(walletData);
@@ -152,6 +156,7 @@ class WalletPersistenceService {
         activeAccount: parsed.activeAccount,
         scanningAccounts: parsed.scanningAccounts,
         blockHashesJson: parsed.blockHashesJson,
+        pendingStateJson: parsed.pendingStateJson,
       );
     } catch (e) {
       return LoadWalletResult.error('Failed to parse wallet data: $e');
@@ -291,6 +296,7 @@ class LoadWalletResult {
   final int? activeAccount;
   final Set<int>? scanningAccounts;
   final String? blockHashesJson;
+  final String? pendingStateJson;
 
   LoadWalletResult._({
     required this.success,
@@ -308,6 +314,7 @@ class LoadWalletResult {
     this.activeAccount,
     this.scanningAccounts,
     this.blockHashesJson,
+    this.pendingStateJson,
   });
 
   factory LoadWalletResult.success({
@@ -324,6 +331,7 @@ class LoadWalletResult {
     required int activeAccount,
     required Set<int> scanningAccounts,
     String? blockHashesJson,
+    String? pendingStateJson,
   }) =>
       LoadWalletResult._(
         success: true,
@@ -340,6 +348,7 @@ class LoadWalletResult {
         activeAccount: activeAccount,
         scanningAccounts: scanningAccounts,
         blockHashesJson: blockHashesJson,
+        pendingStateJson: pendingStateJson,
       );
 
   factory LoadWalletResult.error(String error) =>

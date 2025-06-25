@@ -30,8 +30,9 @@ class BalanceUtils {
   /// Frozen outputs are tracked separately.
   static BalanceInfo calculate(
     List<OwnedOutput> allOutputs,
-    int currentHeight,
-  ) {
+    int currentHeight, {
+    Set<String> pendingSpentKeyImages = const {},
+  }) {
     int totalAtomicBalance = 0;
     int unlockedAtomicBalance = 0;
     int frozenAtomicBalance = 0;
@@ -39,7 +40,7 @@ class BalanceUtils {
     int lockedCount = 0;
     int frozenCount = 0;
     for (var output in allOutputs) {
-      if (!output.spent) {
+      if (!output.spent && !pendingSpentKeyImages.contains(output.keyImage)) {
         final amount = output.amount.toInt();
         totalAtomicBalance += amount;
         if (output.frozen) {

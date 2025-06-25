@@ -20,6 +20,7 @@ pub struct BuildTransaction {
     pub network: String,
     pub recipients: Vec<(String, u64)>, // (address, amount) pairs
     pub selected_outputs: Option<Vec<String>>, // "txHash:outputIndex" keys for coin control
+    pub subtract_fee: bool,
 }
 
 #[derive(Debug, Clone)]
