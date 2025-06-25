@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:monero_extension/utils/network_utils.dart';
@@ -106,6 +107,7 @@ class _DebugViewState extends State<DebugView> {
   }
   final Map<String, String> _subaddresses = {}; // "account,index" -> address
   final Set<String> _pendingSubaddresses = {}; // Track pending derivations
+  final Set<String> _pendingSpentKeyImages = {}; // Key images of broadcast-but-unconfirmed spends
 
   // Get accounts from the active wallet
   List<int> get _accounts {
@@ -313,6 +315,7 @@ class _DebugViewState extends State<DebugView> {
   StreamSubscription? _doubleSpendDetectedSubscription;
   StreamSubscription? _bip39LegacySeedSubscription;
   StreamSubscription? _freezeThawSubscription;
+  StreamSubscription? _transactionStatusUpdateSubscription;
 
   @override
   void initState() {
@@ -519,9 +522,38 @@ class _DebugViewState extends State<DebugView> {
         if (signal.message.success) {
           _broadcastResult = signal.message;
           _broadcastError = null;
-          // Mark spent outputs immediately after broadcast
+          // Track spent outputs as pending (unconfirmed) instead of marking spent
+          final thisTxSpentKeyImages = <String>[];
           if (_txResult != null) {
-            OutputUtils.markSpentByOutputKeys(_allOutputsAllAccounts, _txResult!.spentOutputHashes, _selectedOutputs);
+            final spentKeys = _txResult!.spentOutputHashes.toSet();
+            for (final output in _allOutputsAllAccounts) {
+              final key = '${output.txHash}:${output.outputIndex}';
+              if (spentKeys.contains(key)) {
+                thisTxSpentKeyImages.add(output.keyImage);
+                _pendingSpentKeyImages.add(output.keyImage);
+                _selectedOutputs.remove(key);
+              }
+            }
+          }
+          // Create pending transaction (0 confirmations)
+          if (_txResult != null) {
+            final txId = _txResult!.txId;
+            final alreadyExists = _allTransactionsAllAccounts.any((tx) => tx.txHash == txId);
+            if (!alreadyExists) {
+              // Collect owned outputs (change + self-send) added during tx creation
+              final ownedOutputs = _allOutputsAllAccounts.where((o) =>
+                o.txHash == txId && o.blockHeight.toInt() == 0).toList();
+              _allTransactionsAllAccounts = [
+                ..._allTransactionsAllAccounts,
+                WalletTransaction(
+                  txHash: txId,
+                  blockHeight: 0,
+                  blockTimestamp: 0,
+                  receivedOutputs: ownedOutputs,
+                  spentKeyImages: thisTxSpentKeyImages,
+                ),
+              ];
+            }
           }
           // Auto-save immediately after successful broadcast
           _autoSaveIfReady();
@@ -587,6 +619,8 @@ class _DebugViewState extends State<DebugView> {
 
     _spentStatusUpdatedSubscription = SpentStatusUpdatedResponse.rustSignalStream.listen((signal) {
       setState(() {
+        // Remove confirmed spends from pending set
+        _pendingSpentKeyImages.removeAll(signal.message.spentKeyImages);
         // Mark on canonical wallet outputs so spent state survives re-copy
         for (var wallet in _lifecycle.openWallets.values) {
           OutputUtils.markSpentByKeyImages(wallet.outputs, signal.message.spentKeyImages, _selectedOutputs);
@@ -604,6 +638,35 @@ class _DebugViewState extends State<DebugView> {
           OutputUtils.markSpentByKeyImages(_allOutputsAllAccounts, signal.message.spentKeyImages, _selectedOutputs);
 
           _ensureAccountsExistForOutputs(signal.message.outputs);
+
+          // Create pending receive transactions for mempool outputs
+          if (signal.message.outputs.isNotEmpty) {
+            final existingTxHashes = <String>{
+              for (var tx in _allTransactionsAllAccounts) tx.txHash,
+            };
+            final outputsByTx = <String, List<OwnedOutput>>{};
+            for (var output in signal.message.outputs) {
+              outputsByTx.putIfAbsent(output.txHash, () => []).add(output);
+            }
+            final newTxs = <WalletTransaction>[];
+            for (var entry in outputsByTx.entries) {
+              if (!existingTxHashes.contains(entry.key)) {
+                newTxs.add(WalletTransaction(
+                  txHash: entry.key,
+                  blockHeight: 0,
+                  blockTimestamp: 0,
+                  receivedOutputs: entry.value,
+                  spentKeyImages: [],
+                ));
+              }
+            }
+            if (newTxs.isNotEmpty) {
+              _allTransactionsAllAccounts = [
+                ..._allTransactionsAllAccounts,
+                ...newTxs,
+              ];
+            }
+          }
         }
       });
     });
@@ -676,6 +739,58 @@ class _DebugViewState extends State<DebugView> {
 
     _freezeThawSubscription = FreezeThawResponse.rustSignalStream.listen((signal) {
       // Response from Rust confirming freeze/thaw — UI already updated optimistically
+    });
+
+    _transactionStatusUpdateSubscription = TransactionStatusUpdate.rustSignalStream.listen((signal) {
+      final msg = signal.message;
+      if (msg.status == 'confirmed' && msg.confirmedHeight != null) {
+        final confirmedHeight = msg.confirmedHeight!.toInt();
+        setState(() {
+          // Update pending transaction with confirmed height
+          final txList = _allTransactionsAllAccounts;
+          final idx = txList.indexWhere((tx) => tx.txHash == msg.txId);
+          if (idx != -1 && txList[idx].blockHeight == 0) {
+            // Remove from pending BEFORE rebuilding the list
+            _pendingSpentKeyImages.removeAll(txList[idx].spentKeyImages);
+
+            final updated = txList[idx].copyWith(
+              blockHeight: confirmedHeight,
+              blockTimestamp: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+            );
+            _allTransactionsAllAccounts = [
+              ...txList.sublist(0, idx),
+              updated,
+              ...txList.sublist(idx + 1),
+            ];
+          }
+
+          // Update owned outputs with confirmed height
+          for (int i = 0; i < _allOutputsAllAccounts.length; i++) {
+            final o = _allOutputsAllAccounts[i];
+            if (o.txHash == msg.txId && o.blockHeight.toInt() == 0) {
+              _allOutputsAllAccounts[i] = OwnedOutput(
+                txHash: o.txHash,
+                outputIndex: o.outputIndex,
+                amount: o.amount,
+                amountXmr: o.amountXmr,
+                key: o.key,
+                keyOffset: o.keyOffset,
+                commitmentMask: o.commitmentMask,
+                subaddressIndex: o.subaddressIndex,
+                paymentId: o.paymentId,
+                receivedOutputBytes: o.receivedOutputBytes,
+                blockHeight: Uint64(BigInt.from(confirmedHeight)),
+                spent: o.spent,
+                keyImage: o.keyImage,
+                isCoinbase: o.isCoinbase,
+                frozen: o.frozen,
+              );
+            }
+          }
+
+          _invalidateCaches();
+        });
+      }
     });
 
     // Load available wallets from localStorage
@@ -771,6 +886,7 @@ class _DebugViewState extends State<DebugView> {
     _doubleSpendDetectedSubscription?.cancel();
     _bip39LegacySeedSubscription?.cancel();
     _freezeThawSubscription?.cancel();
+    _transactionStatusUpdateSubscription?.cancel();
 
     _autoSaveTimer?.cancel();
     _stopPollingTimers();
@@ -823,6 +939,7 @@ class _DebugViewState extends State<DebugView> {
       _scanResult = null;
       _polyseedRestoreHeight = null;
       _derivedLegacySeed = null;
+      _pendingSpentKeyImages.clear();
     });
   }
 
@@ -1497,11 +1614,21 @@ class _DebugViewState extends State<DebugView> {
       _broadcastError = null;
     });
 
+    // Derive spent key images from outputs matching spent output hashes
+    final spentHashes = _txResult!.spentOutputHashes.toSet();
+    final spentKeyImages = _allOutputsAllAccounts
+        .where((o) => spentHashes.contains('${o.txHash}:${o.outputIndex}'))
+        .map((o) => o.keyImage)
+        .where((ki) => ki.isNotEmpty)
+        .toList();
+
     // Execute transaction broadcast
     TransactionService.broadcastTransaction(
       nodeUrl: validation.nodeUrl!,
       txBlob: validation.txBlob!,
       spentOutputHashes: validation.spentOutputHashes!,
+      txId: _txResult!.txId,
+      spentKeyImages: spentKeyImages,
     );
   }
 
@@ -1617,7 +1744,7 @@ class _DebugViewState extends State<DebugView> {
         ? 'No transactions'
         : '$txCount transaction${txCount == 1 ? '' : 's'} ($incomingCount in, $outgoingCount out)';
 
-    final balance = BalanceUtils.calculate(filteredOutputs, _currentHeight);
+    final balance = BalanceUtils.calculate(filteredOutputs, _currentHeight, pendingSpentKeyImages: _pendingSpentKeyImages);
     final coinsSubtitle = '${balance.balanceStr} - ${balance.outputCountStr}${balance.selectedStr}';
 
     return Scaffold(
@@ -1848,6 +1975,7 @@ class _DebugViewState extends State<DebugView> {
                         onFreezeChanged: (keyImage, freeze) {
                           _setOutputFrozen(keyImage, freeze);
                         },
+                        pendingSpentKeyImages: _pendingSpentKeyImages,
                       ),
                     ),
                     _buildPanel(
@@ -2052,6 +2180,26 @@ class _DebugViewState extends State<DebugView> {
       // Non-fatal: save without block hashes
     }
 
+    // Request pending state from Rust before saving
+    String? pendingStateJson;
+    try {
+      final completer = Completer<String?>();
+      final sub = PendingStateResponse.rustSignalStream.listen((signal) {
+        if (!completer.isCompleted) {
+          final msg = signal.message;
+          completer.complete(msg.success ? msg.pendingStateJson : null);
+        }
+      });
+      const GetPendingStateRequest().sendSignalToRust();
+      pendingStateJson = await completer.future.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => null,
+      );
+      await sub.cancel();
+    } catch (_) {
+      // Non-fatal: save without pending state
+    }
+
     final saveResult = await WalletPersistenceBrowser.saveWalletData(
       walletId: walletId,
       password: password,
@@ -2067,6 +2215,7 @@ class _DebugViewState extends State<DebugView> {
       activeAccount: activeAccount,
       scanningAccounts: scanningAccounts,
       blockHashesJson: blockHashesJson,
+      pendingStateJson: pendingStateJson,
     );
 
     final success = saveResult.success;
@@ -2437,7 +2586,7 @@ class _DebugViewState extends State<DebugView> {
       );
     });
     
-    // Hydrate Rust WalletActor with restored outputs and block hashes
+    // Hydrate Rust WalletActor with restored outputs, block hashes, and pending state
     RestoreWalletDataRequest(
       seed: seed,
       network: network,
@@ -2445,9 +2594,20 @@ class _DebugViewState extends State<DebugView> {
       daemonHeight: Uint64(BigInt.from(_daemonHeight ?? 0)),
       currentHeight: Uint64(BigInt.from(loadedHeight)),
       blockHashesJson: loadResult.blockHashesJson,
+      pendingStateJson: loadResult.pendingStateJson,
       passphrase: '',
       bip39AccountIndex: 0,
     ).sendSignalToRust();
+
+    // Rebuild Dart-side pending key images from restored pending state
+    _pendingSpentKeyImages.clear();
+    if (loadResult.pendingStateJson != null) {
+      try {
+        final blob = jsonDecode(loadResult.pendingStateJson!) as Map<String, dynamic>;
+        final pendingSpends = blob['pending_spends'] as Map<String, dynamic>? ?? {};
+        _pendingSpentKeyImages.addAll(pendingSpends.keys);
+      } catch (_) {}
+    }
 
     // Derive address to populate keys
     _deriveAddress();

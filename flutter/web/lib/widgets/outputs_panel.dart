@@ -19,6 +19,7 @@ class OutputsPanel extends StatelessWidget {
   final VoidCallback onFreezeAll;
   final Function(String sortKey) onSortChanged;
   final Function(String keyImage, bool freeze)? onFreezeChanged;
+  final Set<String> pendingSpentKeyImages;
 
   const OutputsPanel({
     super.key,
@@ -33,6 +34,7 @@ class OutputsPanel extends StatelessWidget {
     required this.onFreezeAll,
     required this.onSortChanged,
     this.onFreezeChanged,
+    this.pendingSpentKeyImages = const {},
   });
 
   List<OwnedOutput> _sortedOutputs() {
@@ -138,16 +140,21 @@ class OutputsPanel extends StatelessWidget {
             final isSpendable = OutputLockUtils.isOutputSpendable(output: output, currentHeight: currentHeight);
             final requiredConfirmations = OutputLockUtils.getRequiredConfirmations(output);
             final isFrozen = output.frozen;
+            final isPendingSpend = pendingSpentKeyImages.contains(output.keyImage);
             final statusColor = output.spent
                 ? Colors.grey
-                : isSpendable
-                    ? Colors.green
-                    : Colors.orange;
+                : isPendingSpend
+                    ? Colors.amber
+                    : isSpendable
+                        ? Colors.green
+                        : Colors.orange;
             final statusText = output.spent
                 ? 'SPENT'
-                : isSpendable
-                    ? 'SPENDABLE'
-                    : 'LOCKED ($confirmations/$requiredConfirmations)';
+                : isPendingSpend
+                    ? 'PENDING SPEND'
+                    : isSpendable
+                        ? 'SPENDABLE'
+                        : 'LOCKED ($confirmations/$requiredConfirmations)';
 
             return Card(
               margin: const EdgeInsets.only(bottom: 12),
@@ -186,7 +193,7 @@ class OutputsPanel extends StatelessWidget {
                                 ),
                               ),
                             ),
-                            if (!output.spent) ...[
+                            if (!output.spent && !isPendingSpend) ...[
                               const SizedBox(width: 8),
                               SizedBox(
                                 width: 24,

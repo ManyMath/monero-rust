@@ -82,6 +82,24 @@ class WalletTransaction {
     );
   }
 
+  WalletTransaction copyWith({
+    String? txHash,
+    int? blockHeight,
+    int? blockTimestamp,
+    List<OwnedOutput>? receivedOutputs,
+    List<String>? spentKeyImages,
+    String? description,
+  }) {
+    return WalletTransaction(
+      txHash: txHash ?? this.txHash,
+      blockHeight: blockHeight ?? this.blockHeight,
+      blockTimestamp: blockTimestamp ?? this.blockTimestamp,
+      receivedOutputs: receivedOutputs ?? this.receivedOutputs,
+      spentKeyImages: spentKeyImages ?? this.spentKeyImages,
+      description: description ?? this.description,
+    );
+  }
+
   factory WalletTransaction.fromJson(Map<String, dynamic> json) {
     return WalletTransaction(
       txHash: json['txHash'] as String,
