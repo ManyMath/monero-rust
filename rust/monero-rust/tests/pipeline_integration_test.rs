@@ -83,6 +83,7 @@ fn pipeline_wallet_to_send_preparation() {
         state.outputs(),
         state.daemon_height,
         1_000_000_000_000, // send 1 XMR
+        1,
         None,
         None,
     );
@@ -147,6 +148,7 @@ fn pipeline_insufficient_funds() {
         state.outputs(),
         state.daemon_height,
         50_000_000_000_000, // 50 XMR
+        1,
         None,
         None,
     );
@@ -170,6 +172,7 @@ fn pipeline_no_spendable_outputs() {
         state.outputs(),
         state.daemon_height,
         1_000_000_000_000,
+        1,
         None,
         None,
     );
@@ -198,6 +201,7 @@ fn pipeline_coinbase_maturity_in_full_flow() {
         state.outputs(),
         state.daemon_height,
         1_000_000_000_000,
+        1,
         None,
         None,
     );
@@ -212,6 +216,7 @@ fn pipeline_coinbase_maturity_in_full_flow() {
         state.outputs(),
         state.daemon_height,
         1_000_000_000_000,
+        1,
         None,
         None,
     );
@@ -235,6 +240,7 @@ fn pipeline_coin_selection_optimizes_inputs() {
         state.outputs(),
         state.daemon_height,
         1_000_000_000_000, // 1 XMR
+        1,
         None,
         None,
     );
@@ -402,6 +408,7 @@ fn lifecycle_scan_spend_rescan() {
         state.outputs(),
         state.daemon_height,
         2_000_000_000_000,
+        1,
         None,
         None,
     ).unwrap();
@@ -445,6 +452,7 @@ fn lifecycle_manual_coin_control() {
         state.outputs(),
         state.daemon_height,
         500_000_000_000, // 0.5 XMR
+        1,
         Some(&manual_keys),
         None,
     ).unwrap();
@@ -869,7 +877,7 @@ fn lifecycle_scan_reorg_spend_balance() {
     assert_eq!(bal.confirmed, 8_000_000_000_000);
 
     // Phase 2: Spend tx_med (prepare and mark spent)
-    let send = prepare_send_inputs(state.outputs(), 200, 1_000_000_000_000, None, None).unwrap();
+    let send = prepare_send_inputs(state.outputs(), 200, 1_000_000_000_000, 1, None, None).unwrap();
     state.mark_spent_by_output_keys(&send.spent_output_keys);
 
     let bal = state.balance_at_height(200);

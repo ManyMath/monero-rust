@@ -20,7 +20,7 @@ pub mod tx_proof;
 pub mod tx_utils;
 pub use tx_builder::native;
 pub use tx_prepare::{prepare_send_inputs, prepare_sweep_inputs, PreparedInputs};
-pub use tx_utils::classify_broadcast_error;
+pub use tx_utils::{adjust_recipients_for_fee, classify_broadcast_error};
 
 // RPC
 pub mod rpc_serai;
@@ -34,7 +34,7 @@ pub use wallet_state::{
 };
 
 // -- Coin selection --
-pub use coin_selection::{select_inputs, find_best_combination, CoinSelectionResult};
+pub use coin_selection::{select_inputs, find_best_combination, estimate_fee, CoinSelectionResult, DUST_THRESHOLD};
 
 // -- Scan coordination --
 pub use scan_coordinator::{

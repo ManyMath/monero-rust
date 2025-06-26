@@ -1,8 +1,48 @@
 use crate::wallet_output::WalletOutput;
 
 /// Fee estimation constants (conservative estimates).
-pub const FEE_PER_INPUT_ESTIMATE: u64 = 15_000_000; // ~0.015 XMR per input
-pub const BASE_FEE_ESTIMATE: u64 = 20_000_000; // ~0.02 XMR base fee
+/// Derived from Protocol::v16 (ring_len=16, bp_plus=true) at min fee rate
+/// (per_weight=20000, mask=10000). Actual per-input marginal weight is 771 bytes
+/// (Input 163 + CLSAG 576 + pseudo_out 32) = 15,420,000 piconero. Base overhead
+/// for a 2-output tx is ~915 bytes = 18,300,000 piconero. Constants include ~4%
+/// margin for fee rate fluctuations.
+pub const FEE_PER_INPUT_ESTIMATE: u64 = 16_000_000;
+pub const BASE_FEE_ESTIMATE: u64 = 19_000_000;
+
+/// Extra fee per Bulletproofs+ output-count doubling beyond the base 2 outputs.
+/// When outputs exceed 2, BP+ pads to next power of 2. Each doubling adds ~640
+/// bytes of proof weight = ~12,800,000 piconero. We use 13M for margin.
+const BP_DOUBLING_FEE_ESTIMATE: u64 = 13_000_000;
+
+/// Per-output field overhead (commitment + encrypted amount ≈ 40 bytes = 800,000 piconero).
+const PER_OUTPUT_FIELD_FEE_ESTIMATE: u64 = 1_000_000;
+
+/// Minimum useful output amount (piconero). Outputs below this cost more
+/// in fees to spend than they're worth. Approximately equal to the marginal
+/// fee for one input at minimum fee rate.
+pub const DUST_THRESHOLD: u64 = 20_000_000; // 0.00002 XMR
+
+/// Estimate the transaction fee given input and output counts.
+///
+/// Accounts for Bulletproofs+ output padding (outputs are padded to the next
+/// power of 2, and each doubling beyond 2 adds ~640 bytes of proof weight).
+pub fn estimate_fee(num_inputs: usize, num_outputs: usize) -> u64 {
+    let base = BASE_FEE_ESTIMATE + (num_inputs as u64 * FEE_PER_INPUT_ESTIMATE);
+
+    if num_outputs <= 2 {
+        return base;
+    }
+
+    // Extra output fields beyond the 2 included in BASE_FEE_ESTIMATE
+    let extra_output_fields = (num_outputs - 2) as u64 * PER_OUTPUT_FIELD_FEE_ESTIMATE;
+
+    // BP+ pads to next power of 2; each doubling beyond 2 adds ~640 bytes
+    let padded = (num_outputs as u32).next_power_of_two();
+    let bp_doublings = padded.trailing_zeros().saturating_sub(1); // base is 2 = 2^1
+    let bp_extra = bp_doublings as u64 * BP_DOUBLING_FEE_ESTIMATE;
+
+    base + extra_output_fields + bp_extra
+}
 
 /// Result of coin selection.
 #[derive(Debug, Clone)]
@@ -19,10 +59,14 @@ pub struct CoinSelectionResult {
 /// 2. If no single output works, find the combination with minimum inputs
 ///    that minimizes excess (locked change)
 ///
+/// `num_recipients` is the number of destination addresses (used to estimate
+/// fee weight from output count: recipients + 1 change output).
+///
 /// If `manual_selection` is Some, only those outputs (by "txHash:outputIndex" key) are used.
 pub fn select_inputs(
     spendable: &[WalletOutput],
     amount: u64,
+    num_recipients: usize,
     manual_selection: Option<&[String]>,
 ) -> Result<CoinSelectionResult, String> {
     let mut candidates: Vec<WalletOutput> = if let Some(selected_keys) = manual_selection {
@@ -43,10 +87,12 @@ pub fn select_inputs(
         });
     }
 
+    let num_outputs = num_recipients + 1; // recipients + change
+
     // If manual selection, use all selected outputs
     if manual_selection.is_some() {
         let total: u64 = candidates.iter().map(|o| o.amount).sum();
-        let estimated_fee = BASE_FEE_ESTIMATE + (candidates.len() as u64 * FEE_PER_INPUT_ESTIMATE);
+        let estimated_fee = estimate_fee(candidates.len(), num_outputs);
         return Ok(CoinSelectionResult {
             selected: candidates,
             total,
@@ -55,7 +101,7 @@ pub fn select_inputs(
     }
 
     // Auto-selection: try single output first
-    let single_input_fee = BASE_FEE_ESTIMATE + FEE_PER_INPUT_ESTIMATE;
+    let single_input_fee = estimate_fee(1, num_outputs);
     let needed_for_single = amount + single_input_fee;
 
     candidates.sort_by_key(|o| o.amount);
@@ -75,7 +121,7 @@ pub fn select_inputs(
     let mut best: Option<CoinSelectionResult> = None;
 
     for target_count in 2..=candidates.len() {
-        let estimated_fee = BASE_FEE_ESTIMATE + (target_count as u64 * FEE_PER_INPUT_ESTIMATE);
+        let estimated_fee = estimate_fee(target_count, num_outputs);
         let needed_total = amount + estimated_fee;
 
         if let Some((selection, total)) =
@@ -97,8 +143,7 @@ pub fn select_inputs(
         None => {
             // Fall back to using all outputs
             let total: u64 = candidates.iter().map(|o| o.amount).sum();
-            let estimated_fee =
-                BASE_FEE_ESTIMATE + (candidates.len() as u64 * FEE_PER_INPUT_ESTIMATE);
+            let estimated_fee = estimate_fee(candidates.len(), num_outputs);
             Ok(CoinSelectionResult {
                 selected: candidates,
                 total,
@@ -243,7 +288,7 @@ mod tests {
             make_output(2_000_000_000_000, "tx2"),
             make_output(500_000_000_000, "tx3"),
         ];
-        let result = select_inputs(&outputs, 1_000_000_000_000, None).unwrap();
+        let result = select_inputs(&outputs, 1_000_000_000_000, 1, None).unwrap();
         assert_eq!(result.selected.len(), 1);
         assert_eq!(result.selected[0].amount, 2_000_000_000_000); // smallest sufficient
     }
@@ -255,7 +300,7 @@ mod tests {
             make_output(1_500_000_000_000, "tx2"),
             make_output(800_000_000_000, "tx3"),
         ];
-        let result = select_inputs(&outputs, 3_000_000_000_000, None).unwrap();
+        let result = select_inputs(&outputs, 3_000_000_000_000, 1, None).unwrap();
         assert_eq!(result.selected.len(), 2);
         let total: u64 = result.selected.iter().map(|o| o.amount).sum();
         assert!(total >= 3_000_000_000_000 + result.estimated_fee);
@@ -269,14 +314,14 @@ mod tests {
             make_output(3_000_000_000_000, "tx3"),
         ];
         let selected_keys = vec!["tx1:0".to_string(), "tx3:0".to_string()];
-        let result = select_inputs(&outputs, 500_000_000_000, Some(&selected_keys)).unwrap();
+        let result = select_inputs(&outputs, 500_000_000_000, 1, Some(&selected_keys)).unwrap();
         assert_eq!(result.selected.len(), 2);
         assert_eq!(result.total, 4_000_000_000_000);
     }
 
     #[test]
     fn test_empty_spendable_returns_error() {
-        let result = select_inputs(&[], 1_000_000_000_000, None);
+        let result = select_inputs(&[], 1_000_000_000_000, 1, None);
         assert!(result.is_err());
     }
 
@@ -290,7 +335,7 @@ mod tests {
             make_output(100_000_000_000, "tx4"),
             make_output(100_000_000_000, "tx5"),
         ];
-        let result = select_inputs(&outputs, 400_000_000_000, None).unwrap();
+        let result = select_inputs(&outputs, 400_000_000_000, 1, None).unwrap();
         assert_eq!(result.selected.len(), 1);
         assert_eq!(result.selected[0].tx_hash, "tx_large");
     }
@@ -305,7 +350,7 @@ mod tests {
             make_output(1_500_000_000_000, "tx3"),
             make_output(2_500_000_000_000, "tx4"),
         ];
-        let result = select_inputs(&outputs, 3_000_000_000_000, None).unwrap();
+        let result = select_inputs(&outputs, 3_000_000_000_000, 1, None).unwrap();
         assert_eq!(result.selected.len(), 2);
         let total: u64 = result.selected.iter().map(|o| o.amount).sum();
         assert_eq!(total, 3_250_000_000_000);
@@ -334,5 +379,43 @@ mod tests {
         ];
         let result = find_best_combination(&outputs, 1_000_000_000_000, 2);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_estimate_fee_2_outputs() {
+        // 2 outputs = base case, no extra BP+ cost
+        assert_eq!(estimate_fee(1, 2), BASE_FEE_ESTIMATE + FEE_PER_INPUT_ESTIMATE);
+        assert_eq!(estimate_fee(2, 2), BASE_FEE_ESTIMATE + 2 * FEE_PER_INPUT_ESTIMATE);
+    }
+
+    #[test]
+    fn test_estimate_fee_3_outputs() {
+        // 3 outputs pads to 4 = 1 BP+ doubling beyond base
+        let fee_1in_3out = estimate_fee(1, 3);
+        let fee_1in_2out = estimate_fee(1, 2);
+        // Should be noticeably more than 2-output case
+        assert!(fee_1in_3out > fee_1in_2out + 10_000_000);
+    }
+
+    #[test]
+    fn test_estimate_fee_increases_with_outputs() {
+        // More outputs = higher fee
+        let fee_2out = estimate_fee(1, 2);
+        let fee_3out = estimate_fee(1, 3);
+        let fee_5out = estimate_fee(1, 5);
+        assert!(fee_3out > fee_2out);
+        assert!(fee_5out > fee_3out);
+    }
+
+    #[test]
+    fn test_select_inputs_multi_recipient() {
+        // With 3 recipients (4 outputs), fee estimate should be higher
+        let outputs = vec![
+            make_output(5_000_000_000_000, "tx1"),
+            make_output(2_000_000_000_000, "tx2"),
+        ];
+        let result_1r = select_inputs(&outputs, 1_000_000_000_000, 1, None).unwrap();
+        let result_3r = select_inputs(&outputs, 1_000_000_000_000, 3, None).unwrap();
+        assert!(result_3r.estimated_fee > result_1r.estimated_fee);
     }
 }

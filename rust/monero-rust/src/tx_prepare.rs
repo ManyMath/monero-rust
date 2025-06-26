@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::coin_selection::{select_inputs, CoinSelectionResult, BASE_FEE_ESTIMATE, FEE_PER_INPUT_ESTIMATE};
+use crate::coin_selection::{estimate_fee, select_inputs, CoinSelectionResult};
 use crate::tx_builder::native::StoredOutputData;
 use crate::wallet_output::WalletOutput;
 use crate::wallet_state::is_spendable;
@@ -23,6 +23,7 @@ pub fn prepare_send_inputs(
     wallet_outputs: &[WalletOutput],
     daemon_height: u64,
     total_amount: u64,
+    num_recipients: usize,
     manual_selection: Option<&[String]>,
     excluded_key_images: Option<&HashSet<String>>,
 ) -> Result<PreparedInputs, String> {
@@ -42,7 +43,7 @@ pub fn prepare_send_inputs(
         selected,
         total,
         estimated_fee,
-    } = select_inputs(&spendable, total_amount, manual_selection)?;
+    } = select_inputs(&spendable, total_amount, num_recipients, manual_selection)?;
 
     let spent_output_keys: Vec<String> = selected.iter().map(|o| o.output_key()).collect();
     let stored_outputs: Vec<StoredOutputData> = selected.into_iter().map(Into::into).collect();
@@ -87,7 +88,8 @@ pub fn prepare_sweep_inputs(
     }
 
     let total_input: u64 = spendable.iter().map(|o| o.amount).sum();
-    let estimated_fee = BASE_FEE_ESTIMATE + (spendable.len() as u64 * FEE_PER_INPUT_ESTIMATE);
+    // Sweep has 1 output (destination, no change); padded to 2 by BP+ = base case
+    let estimated_fee = estimate_fee(spendable.len(), 1);
     let spent_output_keys: Vec<String> = spendable.iter().map(|o| o.output_key()).collect();
     let stored_outputs: Vec<StoredOutputData> = spendable.into_iter().map(Into::into).collect();
 
@@ -150,7 +152,7 @@ mod tests {
             make_output(5_000_000_000_000, 100, "tx1"),
             make_spent(3_000_000_000_000, 100, "tx2"),
         ];
-        let result = prepare_send_inputs(&outputs, 200, 1_000_000_000_000, None, None).unwrap();
+        let result = prepare_send_inputs(&outputs, 200, 1_000_000_000_000, 1, None, None).unwrap();
         assert_eq!(result.stored_outputs.len(), 1);
         assert_eq!(result.stored_outputs[0].tx_hash, "tx1");
     }
@@ -161,7 +163,7 @@ mod tests {
             make_output(5_000_000_000_000, 100, "tx1"),
             make_frozen(3_000_000_000_000, 100, "tx2"),
         ];
-        let result = prepare_send_inputs(&outputs, 200, 1_000_000_000_000, None, None).unwrap();
+        let result = prepare_send_inputs(&outputs, 200, 1_000_000_000_000, 1, None, None).unwrap();
         assert_eq!(result.stored_outputs.len(), 1);
         assert_eq!(result.stored_outputs[0].tx_hash, "tx1");
     }
@@ -171,7 +173,7 @@ mod tests {
         let outputs = vec![
             make_frozen(5_000_000_000_000, 100, "tx1"),
         ];
-        let result = prepare_send_inputs(&outputs, 200, 1_000_000_000_000, None, None);
+        let result = prepare_send_inputs(&outputs, 200, 1_000_000_000_000, 1, None, None);
         assert!(result.is_err());
     }
 
@@ -181,7 +183,7 @@ mod tests {
         let outputs = vec![
             make_output(5_000_000_000_000, 100, "tx1"),
         ];
-        let result = prepare_send_inputs(&outputs, 105, 1_000_000_000_000, None, None);
+        let result = prepare_send_inputs(&outputs, 105, 1_000_000_000_000, 1, None, None);
         assert!(result.is_err());
     }
 
@@ -191,7 +193,7 @@ mod tests {
         let outputs = vec![
             make_output(5_000_000_000_000, 100, "tx1"),
         ];
-        let result = prepare_send_inputs(&outputs, 110, 1_000_000_000_000, None, None).unwrap();
+        let result = prepare_send_inputs(&outputs, 110, 1_000_000_000_000, 1, None, None).unwrap();
         assert_eq!(result.stored_outputs.len(), 1);
     }
 
@@ -202,7 +204,7 @@ mod tests {
             make_coinbase(5_000_000_000_000, 100, "cb1"),
             make_output(2_000_000_000_000, 100, "tx1"),
         ];
-        let result = prepare_send_inputs(&outputs, 150, 1_000_000_000_000, None, None).unwrap();
+        let result = prepare_send_inputs(&outputs, 150, 1_000_000_000_000, 1, None, None).unwrap();
         // Only the regular output should be selected (coinbase not spendable yet)
         assert_eq!(result.stored_outputs.len(), 1);
         assert_eq!(result.stored_outputs[0].tx_hash, "tx1");
@@ -214,7 +216,7 @@ mod tests {
         let outputs = vec![
             make_coinbase(2_000_000_000_000, 100, "cb1"),
         ];
-        let result = prepare_send_inputs(&outputs, 160, 1_000_000_000_000, None, None).unwrap();
+        let result = prepare_send_inputs(&outputs, 160, 1_000_000_000_000, 1, None, None).unwrap();
         assert_eq!(result.stored_outputs.len(), 1);
     }
 
@@ -226,7 +228,7 @@ mod tests {
             make_output(500_000_000_000, 100, "tx3"),
         ];
         // For 1 XMR, should pick the 2 XMR output (smallest sufficient)
-        let result = prepare_send_inputs(&outputs, 200, 1_000_000_000_000, None, None).unwrap();
+        let result = prepare_send_inputs(&outputs, 200, 1_000_000_000_000, 1, None, None).unwrap();
         assert_eq!(result.stored_outputs.len(), 1);
         assert_eq!(result.stored_outputs[0].amount, 2_000_000_000_000);
     }
@@ -236,7 +238,7 @@ mod tests {
         let mut o1 = make_output(2_000_000_000_000, 100, "tx_abc");
         o1.output_index = 1;
         let outputs = vec![o1];
-        let result = prepare_send_inputs(&outputs, 200, 1_000_000_000_000, None, None).unwrap();
+        let result = prepare_send_inputs(&outputs, 200, 1_000_000_000_000, 1, None, None).unwrap();
         assert_eq!(result.spent_output_keys, vec!["tx_abc:1".to_string()]);
     }
 
@@ -244,7 +246,7 @@ mod tests {
     fn send_converts_subaddress_field() {
         let mut o = make_output(5_000_000_000_000, 100, "tx1");
         o.subaddress_index = Some((1, 3));
-        let result = prepare_send_inputs(&[o], 200, 1_000_000_000_000, None, None).unwrap();
+        let result = prepare_send_inputs(&[o], 200, 1_000_000_000_000, 1, None, None).unwrap();
         // StoredOutputData uses `subaddress`, not `subaddress_index`
         assert_eq!(result.stored_outputs[0].subaddress, Some((1, 3)));
     }
@@ -257,7 +259,7 @@ mod tests {
             make_output(3_000_000_000_000, 100, "tx3"),
         ];
         let keys = vec!["tx1:0".to_string(), "tx3:0".to_string()];
-        let result = prepare_send_inputs(&outputs, 200, 500_000_000_000, Some(&keys), None).unwrap();
+        let result = prepare_send_inputs(&outputs, 200, 500_000_000_000, 1, Some(&keys), None).unwrap();
         assert_eq!(result.stored_outputs.len(), 2);
         assert_eq!(result.total_input, 4_000_000_000_000);
     }
@@ -267,7 +269,7 @@ mod tests {
         let outputs = vec![
             make_spent(5_000_000_000_000, 100, "tx1"),
         ];
-        let result = prepare_send_inputs(&outputs, 200, 1_000_000_000_000, None, None);
+        let result = prepare_send_inputs(&outputs, 200, 1_000_000_000_000, 1, None, None);
         assert!(result.is_err());
     }
 
@@ -367,7 +369,8 @@ mod tests {
             make_output(2_000_000_000_000, 100, "tx2"),
         ];
         let result = prepare_sweep_inputs(&outputs, 200, None, None).unwrap();
-        assert_eq!(result.estimated_fee, BASE_FEE_ESTIMATE + 2 * FEE_PER_INPUT_ESTIMATE);
+        // Sweep has 1 output (destination), estimate_fee(2, 1) since 1 output pads to 2
+        assert_eq!(result.estimated_fee, estimate_fee(2, 1));
     }
 
     #[test]
@@ -391,7 +394,7 @@ mod tests {
             make_output(2_000_000_000_000, 100, "tx2"),
         ];
         let excluded: HashSet<String> = ["ki_tx2".to_string()].into();
-        let result = prepare_send_inputs(&outputs, 200, 1_000_000_000_000, None, Some(&excluded)).unwrap();
+        let result = prepare_send_inputs(&outputs, 200, 1_000_000_000_000, 1, None, Some(&excluded)).unwrap();
         assert_eq!(result.stored_outputs.len(), 1);
         assert_eq!(result.stored_outputs[0].tx_hash, "tx1");
     }
