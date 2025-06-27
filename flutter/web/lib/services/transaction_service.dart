@@ -5,6 +5,9 @@ import '../utils/output_lock_utils.dart';
 
 /// Service for handling transaction creation and broadcasting operations
 class TransactionService {
+  /// Minimum useful output amount (piconero). Must match Rust DUST_THRESHOLD.
+  static const int dustThreshold = 20000000; // 0.00002 XMR
+
   /// Validate transaction creation parameters
   static TransactionCreateValidation validateTransactionCreation({
     required String seed,
@@ -106,6 +109,7 @@ class TransactionService {
     required List<Recipient> recipients,
     required String nodeUrl,
     List<String>? selectedOutputs,
+    bool subtractFee = false,
   }) {
     CreateTransactionRequest(
       nodeUrl: nodeUrl,
@@ -115,6 +119,7 @@ class TransactionService {
       selectedOutputs: selectedOutputs,
       passphrase: '',
       bip39AccountIndex: 0,
+      subtractFee: subtractFee,
     ).sendSignalToRust();
   }
 
@@ -217,12 +222,50 @@ class TransactionService {
     required String nodeUrl,
     required String txBlob,
     required List<String> spentOutputHashes,
+    required String txId,
+    required List<String> spentKeyImages,
   }) {
     BroadcastTransactionRequest(
       nodeUrl: nodeUrl,
       txBlob: txBlob,
       spentOutputHashes: spentOutputHashes,
+      txId: txId,
+      spentKeyImages: spentKeyImages,
     ).sendSignalToRust();
+  }
+
+  /// Estimate fee for a transaction with the given input and output counts.
+  ///
+  /// Matches the Rust `estimate_fee()` function in coin_selection.rs.
+  /// Accounts for Bulletproofs+ output padding (next power of 2).
+  static int estimateFee({required int numInputs, required int numOutputs}) {
+    const feePerInputEstimate = 16000000;
+    const baseFeeEstimate = 19000000;
+    const bpDoublingFeeEstimate = 13000000;
+    const perOutputFieldFeeEstimate = 1000000;
+
+    int base = baseFeeEstimate + (numInputs * feePerInputEstimate);
+
+    if (numOutputs <= 2) return base;
+
+    int extraOutputFields = (numOutputs - 2) * perOutputFieldFeeEstimate;
+
+    // BP+ pads to next power of 2; each doubling beyond 2 adds ~640 bytes
+    int padded = 1;
+    while (padded < numOutputs) {
+      padded *= 2;
+    }
+    if (padded < 2) padded = 2;
+    int bpDoublings = 0;
+    int p = padded;
+    while (p > 1) {
+      bpDoublings++;
+      p ~/= 2;
+    }
+    bpDoublings -= 1; // base is 2 = 2^1
+    int bpExtra = bpDoublings > 0 ? bpDoublings * bpDoublingFeeEstimate : 0;
+
+    return base + extraOutputFields + bpExtra;
   }
 
   /// Calculate maximum spendable amount (total - estimated fee)
@@ -230,6 +273,7 @@ class TransactionService {
     required List<OwnedOutput> availableOutputs,
     Set<String>? selectedOutputs,
     int currentHeight = 0,
+    int numRecipients = 1,
   }) {
     final outputKeys = selectedOutputs ??
         availableOutputs.map((o) => '${o.txHash}:${o.outputIndex}').toSet();
@@ -242,10 +286,11 @@ class TransactionService {
 
     if (totalAtomic == 0) return 0.0;
 
-    const feePerInputEstimate = 15000000;
-    const baseFeeEstimate = 20000000;
-    final numInputs = outputKeys.length;
-    final estimatedFee = baseFeeEstimate + (numInputs * feePerInputEstimate);
+    final numOutputs = numRecipients + 1; // recipients + change
+    final estimatedFee = estimateFee(
+      numInputs: outputKeys.length,
+      numOutputs: numOutputs,
+    );
 
     final maxSpendable = totalAtomic - estimatedFee;
     if (maxSpendable <= 0) return 0.0;

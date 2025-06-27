@@ -507,7 +507,7 @@ void main() {
         currentHeight: 200,
       );
       // 1 XMR = 1_000_000_000_000 atomic
-      // Fee estimate = baseFee(20_000_000) + 1 * perInput(15_000_000) = 35_000_000
+      // Fee estimate = baseFee(19_000_000) + 1 * perInput(16_000_000) = 35_000_000
       // Max spendable = (1_000_000_000_000 - 35_000_000) / 1e12
       final expectedAtomic = 1000000000000 - 35000000;
       final expected = expectedAtomic / 1e12;
@@ -524,9 +524,9 @@ void main() {
         currentHeight: 200,
       );
       // Total = 3_000_000_000_000
-      // Fee = 20_000_000 + 2 * 15_000_000 = 50_000_000
-      // Max = (3_000_000_000_000 - 50_000_000) / 1e12
-      final expectedAtomic = 3000000000000 - 50000000;
+      // Fee = 19_000_000 + 2 * 16_000_000 = 51_000_000
+      // Max = (3_000_000_000_000 - 51_000_000) / 1e12
+      final expectedAtomic = 3000000000000 - 51000000;
       final expected = expectedAtomic / 1e12;
       expect(result, closeTo(expected, 1e-15));
     });
@@ -573,7 +573,7 @@ void main() {
         currentHeight: 200,
       );
       // Only tx2 counted: 3_000_000_000_000
-      // Fee = 20_000_000 + 1 * 15_000_000 = 35_000_000
+      // Fee = 19_000_000 + 1 * 16_000_000 = 35_000_000
       final expectedAtomic = 3000000000000 - 35000000;
       final expected = expectedAtomic / 1e12;
       expect(result, closeTo(expected, 1e-15));
