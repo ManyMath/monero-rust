@@ -59,6 +59,7 @@ impl TxBuilderActor {
                     network: request.network,
                     recipients,
                     selected_outputs: request.selected_outputs,
+                    subtract_fee: request.subtract_fee,
                 })
                 .await;
         }
@@ -157,6 +158,7 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                     let network = msg.network;
                     let recipients = msg.recipients;
                     let selected_outputs = msg.selected_outputs;
+                    let subtract_fee = msg.subtract_fee;
 
                     wasm_bindgen_futures::spawn_local(async move {
                         // Query fresh daemon height to avoid stale core_state
@@ -197,18 +199,171 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                         } else {
                             Some(&wallet_data.pending_key_images)
                         };
-                        let prepared = match monero_rust::prepare_send_inputs(
-                            &wallet_data.outputs,
-                            daemon_height,
-                            total_send_amount,
-                            selected_outputs.as_deref(),
-                            excluded,
-                        ) {
-                            Ok(p) => p,
-                            Err(error_msg) => {
+
+                        let num_recipients = recipients.len();
+
+                        // Single-recipient subtract_fee: always use sweep_all.
+                        // sweep_all computes the exact fee from the RPC fee rate and
+                        // transaction weight, avoiding any constant-vs-RPC fee mismatch.
+                        if subtract_fee && recipients.len() == 1 {
+                            let prepared = match monero_rust::prepare_sweep_inputs(
+                                &wallet_data.outputs,
+                                daemon_height,
+                                selected_outputs.as_deref(),
+                                excluded,
+                            ) {
+                                Ok(p) => p,
+                                Err(error_msg) => {
+                                    TransactionCreatedResponse {
+                                        success: false,
+                                        error: Some(error_msg),
+                                        tx_id: String::new(),
+                                        fee: 0,
+                                        tx_blob: None,
+                                        tx_key: None,
+                                        tx_key_additional: Vec::new(),
+                                        spent_output_hashes: Vec::new(),
+                                        change_outputs: Vec::new(),
+                                    }
+                                    .send_signal_to_dart();
+                                    return;
+                                }
+                            };
+
+                            let spent_hashes = prepared.spent_output_keys;
+
+                            match monero_rust::tx_builder::native::sweep_all(
+                                &node_url,
+                                &seed,
+                                &network,
+                                prepared.stored_outputs,
+                                &recipients[0].0,
+                            )
+                            .await
+                            {
+                                Ok(result) => {
+                                    let change_outputs: Vec<ChangeOutput> = result.change_outputs
+                                        .into_iter()
+                                        .map(|c| ChangeOutput {
+                                            tx_hash: c.tx_hash,
+                                            output_index: c.output_index.into(),
+                                            amount: c.amount,
+                                            amount_xmr: c.amount_xmr,
+                                            key: c.key,
+                                            key_offset: c.key_offset,
+                                            commitment_mask: c.commitment_mask,
+                                            subaddress_index: c.subaddress_index,
+                                            received_output_bytes: c.received_output_bytes,
+                                            key_image: c.key_image,
+                                        })
+                                        .collect();
+
+                                    TransactionCreatedResponse {
+                                        success: true,
+                                        error: None,
+                                        tx_id: result.tx_id,
+                                        fee: result.fee,
+                                        tx_blob: Some(result.tx_blob),
+                                        tx_key: Some(result.tx_key),
+                                        tx_key_additional: result.tx_key_additional,
+                                        spent_output_hashes: spent_hashes,
+                                        change_outputs,
+                                    }
+                                    .send_signal_to_dart();
+                                }
+                                Err(e) => {
+                                    TransactionCreatedResponse {
+                                        success: false,
+                                        error: Some(format!("Transaction building failed: {}", e)),
+                                        tx_id: String::new(),
+                                        fee: 0,
+                                        tx_blob: None,
+                                        tx_key: None,
+                                        tx_key_additional: Vec::new(),
+                                        spent_output_hashes: Vec::new(),
+                                        change_outputs: Vec::new(),
+                                    }
+                                    .send_signal_to_dart();
+                                }
+                            }
+                            return;
+                        }
+
+                        // Multi-recipient or non-subtract_fee: normal coin selection
+                        let prepared = if subtract_fee {
+                            // Multi-recipient subtract_fee: try normal selection, fall back to sweep
+                            match monero_rust::prepare_send_inputs(
+                                &wallet_data.outputs,
+                                daemon_height,
+                                total_send_amount,
+                                num_recipients,
+                                selected_outputs.as_deref(),
+                                excluded,
+                            ) {
+                                Ok(p) => p,
+                                Err(_) => {
+                                    match monero_rust::prepare_sweep_inputs(
+                                        &wallet_data.outputs,
+                                        daemon_height,
+                                        selected_outputs.as_deref(),
+                                        excluded,
+                                    ) {
+                                        Ok(p) => p,
+                                        Err(error_msg) => {
+                                            TransactionCreatedResponse {
+                                                success: false,
+                                                error: Some(error_msg),
+                                                tx_id: String::new(),
+                                                fee: 0,
+                                                tx_blob: None,
+                                                tx_key: None,
+                                                tx_key_additional: Vec::new(),
+                                                spent_output_hashes: Vec::new(),
+                                                change_outputs: Vec::new(),
+                                            }
+                                            .send_signal_to_dart();
+                                            return;
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            match monero_rust::prepare_send_inputs(
+                                &wallet_data.outputs,
+                                daemon_height,
+                                total_send_amount,
+                                num_recipients,
+                                selected_outputs.as_deref(),
+                                excluded,
+                            ) {
+                                Ok(p) => p,
+                                Err(error_msg) => {
+                                    TransactionCreatedResponse {
+                                        success: false,
+                                        error: Some(error_msg),
+                                        tx_id: String::new(),
+                                        fee: 0,
+                                        tx_blob: None,
+                                        tx_key: None,
+                                        tx_key_additional: Vec::new(),
+                                        spent_output_hashes: Vec::new(),
+                                        change_outputs: Vec::new(),
+                                    }
+                                    .send_signal_to_dart();
+                                    return;
+                                }
+                            }
+                        };
+
+                        let spent_hashes = prepared.spent_output_keys;
+
+                        // Adjust amounts if subtract_fee (multi-recipient only at this point)
+                        let final_recipients = if subtract_fee {
+                            let adjusted = monero_rust::adjust_recipients_for_fee(&recipients, prepared.estimated_fee);
+                            if adjusted.iter().any(|(_, amt)| *amt == 0) {
                                 TransactionCreatedResponse {
                                     success: false,
-                                    error: Some(error_msg),
+                                    error: Some("Recipient amount(s) too small to cover the fee after subtraction".to_string()),
                                     tx_id: String::new(),
                                     fee: 0,
                                     tx_blob: None,
@@ -220,16 +375,17 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                                 .send_signal_to_dart();
                                 return;
                             }
+                            adjusted
+                        } else {
+                            recipients
                         };
-
-                        let spent_hashes = prepared.spent_output_keys;
 
                         match monero_rust::native::create_transaction(
                             &node_url,
                             &seed,
                             &network,
-                            prepared.stored_outputs,
-                            &recipients,
+                            prepared.stored_outputs.clone(),
+                            &final_recipients,
                         )
                         .await
                         {
@@ -262,6 +418,58 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                                     change_outputs,
                                 }
                                 .send_signal_to_dart();
+                            }
+                            Err(e) if subtract_fee && e.contains("dust") && final_recipients.len() == 1 => {
+                                // Redirect single-recipient dust change to sweep_all
+                                match monero_rust::tx_builder::native::sweep_all(
+                                    &node_url, &seed, &network,
+                                    prepared.stored_outputs, &final_recipients[0].0,
+                                ).await {
+                                    Ok(result) => {
+                                        let change_outputs: Vec<ChangeOutput> = result.change_outputs
+                                            .into_iter()
+                                            .map(|c| ChangeOutput {
+                                                tx_hash: c.tx_hash,
+                                                output_index: c.output_index.into(),
+                                                amount: c.amount,
+                                                amount_xmr: c.amount_xmr,
+                                                key: c.key,
+                                                key_offset: c.key_offset,
+                                                commitment_mask: c.commitment_mask,
+                                                subaddress_index: c.subaddress_index,
+                                                received_output_bytes: c.received_output_bytes,
+                                                key_image: c.key_image,
+                                            })
+                                            .collect();
+
+                                        TransactionCreatedResponse {
+                                            success: true,
+                                            error: None,
+                                            tx_id: result.tx_id,
+                                            fee: result.fee,
+                                            tx_blob: Some(result.tx_blob),
+                                            tx_key: Some(result.tx_key),
+                                            tx_key_additional: result.tx_key_additional,
+                                            spent_output_hashes: spent_hashes,
+                                            change_outputs,
+                                        }
+                                        .send_signal_to_dart();
+                                    }
+                                    Err(e2) => {
+                                        TransactionCreatedResponse {
+                                            success: false,
+                                            error: Some(format!("Transaction building failed: {}", e2)),
+                                            tx_id: String::new(),
+                                            fee: 0,
+                                            tx_blob: None,
+                                            tx_key: None,
+                                            tx_key_additional: Vec::new(),
+                                            spent_output_hashes: Vec::new(),
+                                            change_outputs: Vec::new(),
+                                        }
+                                        .send_signal_to_dart();
+                                    }
+                                }
                             }
                             Err(e) => {
                                 TransactionCreatedResponse {
@@ -553,7 +761,7 @@ mod tests {
         available_outputs: Vec<monero_rust::WalletOutput>,
         total_send_amount: u64,
     ) -> Vec<monero_rust::WalletOutput> {
-        monero_rust::select_inputs(&available_outputs, total_send_amount, None)
+        monero_rust::select_inputs(&available_outputs, total_send_amount, 1, None)
             .map(|r| r.selected)
             .unwrap_or(available_outputs)
     }
