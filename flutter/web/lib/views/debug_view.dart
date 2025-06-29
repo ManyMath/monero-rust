@@ -36,6 +36,7 @@ import '../widgets/security_warning_dialog.dart';
 import '../widgets/reorg_notification_display.dart';
 import '../widgets/double_spend_alert_display.dart';
 import '../services/wallet_lifecycle_manager.dart';
+import '../state/rinf_signal_hub.dart';
 
 enum DebugPanel {
   fileManagement('File Management'),
@@ -299,25 +300,7 @@ class _DebugViewState extends State<DebugView> {
 
   DebugPanel? _expandedPanel;
 
-  // Stream subscriptions
-  StreamSubscription? _keysDerivedSubscription;
-  StreamSubscription? _subaddressDerivedSubscription;
-  StreamSubscription? _seedGeneratedSubscription;
-  StreamSubscription? _seedBirthdaySubscription;
-  StreamSubscription? _blockHeightFromTimestampSubscription;
-  StreamSubscription? _blockScanSubscription;
-  StreamSubscription? _daemonHeightSubscription;
-  StreamSubscription? _transactionCreatedSubscription;
-  StreamSubscription? _transactionBroadcastSubscription;
-  StreamSubscription? _syncProgressSubscription;
-  StreamSubscription? _spentStatusUpdatedSubscription;
-  StreamSubscription? _mempoolScanSubscription;
-  StreamSubscription? _multiWalletScanSubscription;
-  StreamSubscription? _reorgDetectedSubscription;
-  StreamSubscription? _doubleSpendDetectedSubscription;
-  StreamSubscription? _bip39LegacySeedSubscription;
-  StreamSubscription? _freezeThawSubscription;
-  StreamSubscription? _transactionStatusUpdateSubscription;
+  late final RinfSignalHub _signalHub;
 
   @override
   void initState() {
@@ -330,23 +313,23 @@ class _DebugViewState extends State<DebugView> {
     _controller.addListener(_onSeedChanged);
     _blockHeightController.addListener(_onBlockHeightChanged);
 
-    _keysDerivedSubscription = KeysDerivedResponse.rustSignalStream.listen((signal) {
+    _signalHub = RinfSignalHub();
+
+    _signalHub.onKeysDerived = (msg) {
       setState(() {
-        if (signal.message.success) {
-          _derivedAddress = signal.message.address;
-          _secretSpendKey = signal.message.secretSpendKey;
-          _secretViewKey = signal.message.secretViewKey;
-          _publicSpendKey = signal.message.publicSpendKey;
-          _publicViewKey = signal.message.publicViewKey;
+        if (msg.success) {
+          _derivedAddress = msg.address;
+          _secretSpendKey = msg.secretSpendKey;
+          _secretViewKey = msg.secretViewKey;
+          _publicSpendKey = msg.publicSpendKey;
+          _publicViewKey = msg.publicViewKey;
           _responseError = null;
 
-          // Open wallet when keys are derived from seed
           final seed = _controller.text.trim();
           if (seed.isNotEmpty && _derivedAddress != null && _lifecycle.activeWallet == null) {
             _openWallet(_walletId.isEmpty ? 'temp_wallet' : _walletId, seed, _network, _derivedAddress!);
           }
 
-          // Get seed birthday for polyseed display if seed was manually entered
           if (seed.isNotEmpty) {
             GetSeedBirthdayRequest(seed: seed, passphrase: '', bip39AccountIndex: 0).sendSignalToRust();
           }
@@ -356,37 +339,34 @@ class _DebugViewState extends State<DebugView> {
           _secretViewKey = null;
           _publicSpendKey = null;
           _publicViewKey = null;
-          _responseError = signal.message.error ?? 'Unknown error';
+          _responseError = msg.error ?? 'Unknown error';
           _polyseedRestoreHeight = null;
         }
       });
-    });
+    };
 
-    _subaddressDerivedSubscription = SubaddressDerivedResponse.rustSignalStream.listen((signal) {
-      if (signal.message.success && signal.message.address.isNotEmpty) {
+    _signalHub.onSubaddressDerived = (msg) {
+      if (msg.success && msg.address.isNotEmpty) {
         setState(() {
-          // Match the response to the first pending request
           if (_pendingSubaddresses.isNotEmpty) {
             final key = _pendingSubaddresses.first;
-            _subaddresses[key] = signal.message.address;
+            _subaddresses[key] = msg.address;
             _pendingSubaddresses.remove(key);
           }
         });
       }
-    });
+    };
 
-    _seedGeneratedSubscription = SeedGeneratedResponse.rustSignalStream.listen((signal) {
-      if (signal.message.success) {
+    _signalHub.onSeedGenerated = (msg) {
+      if (msg.success) {
         setState(() {
-          _controller.text = signal.message.seed;
+          _controller.text = msg.seed;
           _validationError = null;
           _responseError = null;
           _derivedAddress = null;
 
-          // Auto-populate block height for polyseed if available
-          // restoreHeight is seconds since Unix epoch (from polyseed birthday())
-          if (signal.message.restoreHeight != null) {
-            final timestamp = signal.message.restoreHeight!.toInt();
+          if (msg.restoreHeight != null) {
+            final timestamp = msg.restoreHeight!.toInt();
             if (timestamp > 0) {
               final genesisTimestamp = _getGenesisTimestamp(_network);
               final approxHeight = ((timestamp - genesisTimestamp) / 120).toInt();
@@ -396,7 +376,6 @@ class _DebugViewState extends State<DebugView> {
               _blockHeightController.text = safeHeight.toString();
               _blockHeightUserEdited = false;
 
-              // Try to get exact height from daemon
               final nodeUrl = _normalizeNodeUrl(_nodeUrlController.text);
               if (nodeUrl.isNotEmpty) {
                 GetBlockHeightFromTimestampRequest(
@@ -413,16 +392,15 @@ class _DebugViewState extends State<DebugView> {
         });
       } else {
         setState(() {
-          _responseError = signal.message.error ?? 'Failed to generate seed';
+          _responseError = msg.error ?? 'Failed to generate seed';
           _polyseedRestoreHeight = null;
         });
       }
-    });
+    };
 
-    _seedBirthdaySubscription = SeedBirthdayResponse.rustSignalStream.listen((signal) {
-      if (signal.message.success && signal.message.birthday != null) {
-        // birthday is seconds since Unix epoch (from polyseed birthday())
-        final timestamp = signal.message.birthday!.toInt();
+    _signalHub.onSeedBirthday = (msg) {
+      if (msg.success && msg.birthday != null) {
+        final timestamp = msg.birthday!.toInt();
         if (timestamp > 0) {
           final genesisTimestamp = _getGenesisTimestamp(_network);
           final approxHeight = ((timestamp - genesisTimestamp) / 120).toInt();
@@ -432,7 +410,6 @@ class _DebugViewState extends State<DebugView> {
             _polyseedRestoreHeight = safeHeight;
           });
 
-          // Try to get exact height from daemon
           final nodeUrl = _normalizeNodeUrl(_nodeUrlController.text);
           if (nodeUrl.isNotEmpty) {
             GetBlockHeightFromTimestampRequest(
@@ -450,81 +427,74 @@ class _DebugViewState extends State<DebugView> {
           _polyseedRestoreHeight = null;
         });
       }
-    });
+    };
 
-    _blockHeightFromTimestampSubscription = BlockHeightFromTimestampResponse.rustSignalStream.listen((signal) {
-      if (signal.message.success) {
+    _signalHub.onBlockHeightFromTimestamp = (msg) {
+      if (msg.success) {
         setState(() {
-          final blockHeight = signal.message.blockHeight.toInt();
-          // Subtract safety margin (~720 blocks = ~1 day) to avoid missing transactions
+          final blockHeight = msg.blockHeight.toInt();
           final safeHeight = (blockHeight - 720).clamp(0, blockHeight);
           _polyseedRestoreHeight = safeHeight;
           _blockHeightController.text = safeHeight.toString();
           _blockHeightUserEdited = false;
         });
       }
-      // On error, keep the estimated value that was already set
-      // This provides a reasonable fallback if RPC lookup fails
-    });
+    };
 
-    _blockScanSubscription = BlockScanResponse.rustSignalStream.listen((signal) {
+    _signalHub.onBlockScan = (msg) {
       if (_isChangingSeed) return;
       setState(() {
         _isScanning = false;
-        if (signal.message.success) {
-          _scanResult = signal.message;
+        if (msg.success) {
+          _scanResult = msg;
           _scanError = null;
-          _daemonHeight = signal.message.daemonHeight.toInt();
+          _daemonHeight = msg.daemonHeight.toInt();
           _hasConnectedOnce = true;
-
-          // Integrate scan results into the active wallet instance
-          _lifecycle.integrateSingleBlockScanResults(signal.message);
+          _lifecycle.integrateSingleBlockScanResults(msg);
         } else {
           _scanResult = null;
-          _scanError = signal.message.error ?? 'Unknown error during scan';
+          _scanError = msg.error ?? 'Unknown error during scan';
         }
       });
-    });
+    };
 
-    _daemonHeightSubscription = DaemonHeightResponse.rustSignalStream.listen((signal) {
-      if (signal.message.success) {
+    _signalHub.onDaemonHeight = (msg) {
+      if (msg.success) {
         setState(() {
-          _daemonHeight = signal.message.daemonHeight.toInt();
+          _daemonHeight = msg.daemonHeight.toInt();
           _hasConnectedOnce = true;
         });
       } else {
         setState(() {
-          _scanError = signal.message.error ?? 'Failed to get daemon height';
+          _scanError = msg.error ?? 'Failed to get daemon height';
         });
       }
-    });
+    };
 
-    _transactionCreatedSubscription = TransactionCreatedResponse.rustSignalStream.listen((signal) {
+    _signalHub.onTransactionCreated = (msg) {
       setState(() {
         _isCreatingTx = false;
-        if (signal.message.success) {
-          _txResult = signal.message;
+        if (msg.success) {
+          _txResult = msg;
           _txError = null;
           _broadcastResult = null;
           _broadcastError = null;
 
-          // Add change outputs as unconfirmed (blockHeight=0)
-          final changeOwned = signal.message.changeOutputs.map(OutputUtils.changeOutputToOwned).toList();
+          final changeOwned = msg.changeOutputs.map(OutputUtils.changeOutputToOwned).toList();
           OutputUtils.addIfAbsent(_allOutputsAllAccounts, changeOwned);
         } else {
           _txResult = null;
-          _txError = signal.message.error ?? 'Unknown error during transaction creation';
+          _txError = msg.error ?? 'Unknown error during transaction creation';
         }
       });
-    });
+    };
 
-    _transactionBroadcastSubscription = TransactionBroadcastResponse.rustSignalStream.listen((signal) {
+    _signalHub.onTransactionBroadcast = (msg) {
       setState(() {
         _isBroadcasting = false;
-        if (signal.message.success) {
-          _broadcastResult = signal.message;
+        if (msg.success) {
+          _broadcastResult = msg;
           _broadcastError = null;
-          // Track spent outputs as pending (unconfirmed) instead of marking spent
           final thisTxSpentKeyImages = <String>[];
           if (_txResult != null) {
             final spentKeys = _txResult!.spentOutputHashes.toSet();
@@ -537,12 +507,10 @@ class _DebugViewState extends State<DebugView> {
               }
             }
           }
-          // Create pending transaction (0 confirmations)
           if (_txResult != null) {
             final txId = _txResult!.txId;
             final alreadyExists = _allTransactionsAllAccounts.any((tx) => tx.txHash == txId);
             if (!alreadyExists) {
-              // Collect owned outputs (change + self-send) added during tx creation
               final ownedOutputs = _allOutputsAllAccounts.where((o) =>
                 o.txHash == txId && o.blockHeight.toInt() == 0).toList();
               _allTransactionsAllAccounts = [
@@ -557,21 +525,19 @@ class _DebugViewState extends State<DebugView> {
               ];
             }
           }
-          // Auto-save immediately after successful broadcast
           _autoSaveIfReady();
         } else {
           _broadcastResult = null;
-          _broadcastError = signal.message.error ?? 'Unknown error during broadcast';
-          _isBroadcastRetryable = signal.message.isRetryable;
-          _isBroadcastDoubleSpend = signal.message.isDoubleSpend;
+          _broadcastError = msg.error ?? 'Unknown error during broadcast';
+          _isBroadcastRetryable = msg.isRetryable;
+          _isBroadcastDoubleSpend = msg.isDoubleSpend;
         }
       });
-    });
+    };
 
-    _syncProgressSubscription = SyncProgressResponse.rustSignalStream.listen((signal) {
-      // If we're changing seeds, wait for scan to stop then clear state
+    _signalHub.onSyncProgress = (msg) {
       if (_isChangingSeed) {
-        if (!signal.message.isScanning) {
+        if (!msg.isScanning) {
           _isChangingSeed = false;
           _isContinuousScanning = false;
           _clearWalletState();
@@ -582,12 +548,12 @@ class _DebugViewState extends State<DebugView> {
       final wasSynced = _isSynced;
       final wasScanning = _isContinuousScanning;
       setState(() {
-        _continuousScanCurrentHeight = signal.message.currentHeight.toInt();
-        _continuousScanTargetHeight = signal.message.daemonHeight.toInt();
-        _isSynced = signal.message.isSynced;
+        _continuousScanCurrentHeight = msg.currentHeight.toInt();
+        _continuousScanTargetHeight = msg.daemonHeight.toInt();
+        _isSynced = msg.isSynced;
         if (!_isContinuousPaused) {
-          _isContinuousScanning = signal.message.isScanning;
-        } else if (!signal.message.isScanning) {
+          _isContinuousScanning = msg.isScanning;
+        } else if (!msg.isScanning) {
           _isContinuousScanning = false;
         }
         if (_isContinuousScanning && !wasScanning) {
@@ -599,55 +565,46 @@ class _DebugViewState extends State<DebugView> {
         }
       });
 
-      // Stop polling timers when continuous scanning starts
       if (_isContinuousScanning && !wasScanning) {
         _stopPollingTimers();
       }
-      // Start polling timers when:
-      // - Sync completes
-      // - Continuous scan finishes or is paused
-      // - We're synced and not actively scanning
       if (!_isContinuousScanning && (wasScanning || (_isSynced && !wasSynced))) {
         _startPollingTimers();
       }
 
-      // Fire pending scan-stopped callback (used by pause/resume)
-      if (!signal.message.isScanning && _onScanStopped != null) {
+      if (!msg.isScanning && _onScanStopped != null) {
         final cb = _onScanStopped!;
         _onScanStopped = null;
         cb();
       }
-    });
+    };
 
-    _spentStatusUpdatedSubscription = SpentStatusUpdatedResponse.rustSignalStream.listen((signal) {
+    _signalHub.onSpentStatusUpdated = (msg) {
       setState(() {
-        // Remove confirmed spends from pending set
-        _pendingSpentKeyImages.removeAll(signal.message.spentKeyImages);
-        // Mark on canonical wallet outputs so spent state survives re-copy
+        _pendingSpentKeyImages.removeAll(msg.spentKeyImages);
         for (var wallet in _lifecycle.openWallets.values) {
-          OutputUtils.markSpentByKeyImages(wallet.outputs, signal.message.spentKeyImages, _selectedOutputs);
+          OutputUtils.markSpentByKeyImages(wallet.outputs, msg.spentKeyImages, _selectedOutputs);
         }
-        OutputUtils.markSpentByKeyImages(_allOutputsAllAccounts, signal.message.spentKeyImages, _selectedOutputs);
+        OutputUtils.markSpentByKeyImages(_allOutputsAllAccounts, msg.spentKeyImages, _selectedOutputs);
       });
-    });
+    };
 
-    _mempoolScanSubscription = MempoolScanResponse.rustSignalStream.listen((signal) {
+    _signalHub.onMempoolScan = (msg) {
       if (_isChangingSeed) return;
       setState(() {
         _isScanningMempool = false;
-        if (signal.message.success) {
-          OutputUtils.addIfAbsent(_allOutputsAllAccounts, signal.message.outputs);
-          OutputUtils.markSpentByKeyImages(_allOutputsAllAccounts, signal.message.spentKeyImages, _selectedOutputs);
+        if (msg.success) {
+          OutputUtils.addIfAbsent(_allOutputsAllAccounts, msg.outputs);
+          OutputUtils.markSpentByKeyImages(_allOutputsAllAccounts, msg.spentKeyImages, _selectedOutputs);
 
-          _ensureAccountsExistForOutputs(signal.message.outputs);
+          _ensureAccountsExistForOutputs(msg.outputs);
 
-          // Create pending receive transactions for mempool outputs
-          if (signal.message.outputs.isNotEmpty) {
+          if (msg.outputs.isNotEmpty) {
             final existingTxHashes = <String>{
               for (var tx in _allTransactionsAllAccounts) tx.txHash,
             };
             final outputsByTx = <String, List<OwnedOutput>>{};
-            for (var output in signal.message.outputs) {
+            for (var output in msg.outputs) {
               outputsByTx.putIfAbsent(output.txHash, () => []).add(output);
             }
             final newTxs = <WalletTransaction>[];
@@ -671,34 +628,32 @@ class _DebugViewState extends State<DebugView> {
           }
         }
       });
-    });
+    };
 
-    _multiWalletScanSubscription = MultiWalletScanResponse.rustSignalStream.listen((signalPack) {
+    _signalHub.onMultiWalletScan = (msg) {
       if (_isChangingSeed) return;
-      final response = signalPack.message;
 
-      if (!response.success) {
+      if (!msg.success) {
         setState(() {
-          _scanError = response.error;
+          _scanError = msg.error;
         });
         return;
       }
 
       setState(() {
-        _daemonHeight = response.daemonHeight.toInt();
+        _daemonHeight = msg.daemonHeight.toInt();
         _lifecycle.distributeMultiWalletScanResults(
-          walletResults: response.walletResults,
-          blockHeight: response.blockHeight.toInt(),
-          daemonHeight: response.daemonHeight.toInt(),
-          spentKeyImages: response.spentKeyImages,
-          blockTimestamp: response.blockTimestamp.toInt(),
+          walletResults: msg.walletResults,
+          blockHeight: msg.blockHeight.toInt(),
+          daemonHeight: msg.daemonHeight.toInt(),
+          spentKeyImages: msg.spentKeyImages,
+          blockTimestamp: msg.blockTimestamp.toInt(),
         );
       });
       _updateBlockHeightFromWallets();
-    });
+    };
 
-    _reorgDetectedSubscription = ReorgDetectedResponse.rustSignalStream.listen((signal) {
-      final msg = signal.message;
+    _signalHub.onReorgDetected = (msg) {
       setState(() {
         _reorgInfo = msg;
         _lifecycle.handleReorgDetected(
@@ -711,48 +666,44 @@ class _DebugViewState extends State<DebugView> {
           _allTransactionsAllAccounts = List.from(_lifecycle.activeWallet!.transactions);
         }
       });
-    });
+    };
 
-    _doubleSpendDetectedSubscription = DoubleSpendDetectedResponse.rustSignalStream.listen((signal) {
+    _signalHub.onDoubleSpendDetected = (msg) {
       setState(() {
-        final incoming = signal.message.conflicts;
+        final incoming = msg.conflicts;
         if (_doubleSpendConflicts == null) {
           _doubleSpendConflicts = List.from(incoming);
         } else {
           _doubleSpendConflicts!.addAll(incoming);
         }
       });
-    });
+    };
 
-    _bip39LegacySeedSubscription = Bip39LegacySeedResponse.rustSignalStream.listen((signal) {
-      if (signal.message.success) {
+    _signalHub.onBip39LegacySeed = (msg) {
+      if (msg.success) {
         setState(() {
-          _derivedLegacySeed = signal.message.legacySeed;
+          _derivedLegacySeed = msg.legacySeed;
         });
-        // Auto-derive keys from the legacy seed
-        DeriveKeysRequest(seed: signal.message.legacySeed, network: _network, passphrase: '', bip39AccountIndex: 0).sendSignalToRust();
+        DeriveKeysRequest(seed: msg.legacySeed, network: _network, passphrase: '', bip39AccountIndex: 0).sendSignalToRust();
       } else {
         setState(() {
-          _responseError = signal.message.error ?? 'BIP39 conversion failed';
+          _responseError = msg.error ?? 'BIP39 conversion failed';
           _derivedLegacySeed = null;
         });
       }
-    });
+    };
 
-    _freezeThawSubscription = FreezeThawResponse.rustSignalStream.listen((signal) {
+    _signalHub.onFreezeThaw = (msg) {
       // Response from Rust confirming freeze/thaw — UI already updated optimistically
-    });
+    };
 
-    _transactionStatusUpdateSubscription = TransactionStatusUpdate.rustSignalStream.listen((signal) {
-      final msg = signal.message;
+    _signalHub.onTransactionStatusUpdate = (msg) {
       if (msg.status == 'confirmed' && msg.confirmedHeight != null) {
         final confirmedHeight = msg.confirmedHeight!.toInt();
         setState(() {
-          // Update pending transaction with confirmed height
           final txList = _allTransactionsAllAccounts;
           final idx = txList.indexWhere((tx) => tx.txHash == msg.txId);
           if (idx != -1 && txList[idx].blockHeight == 0) {
-            // Remove from pending BEFORE rebuilding the list
             _pendingSpentKeyImages.removeAll(txList[idx].spentKeyImages);
 
             final updated = txList[idx].copyWith(
@@ -766,7 +717,6 @@ class _DebugViewState extends State<DebugView> {
             ];
           }
 
-          // Update owned outputs with confirmed height
           for (int i = 0; i < _allOutputsAllAccounts.length; i++) {
             final o = _allOutputsAllAccounts[i];
             if (o.txHash == msg.txId && o.blockHeight.toInt() == 0) {
@@ -793,7 +743,9 @@ class _DebugViewState extends State<DebugView> {
           _invalidateCaches();
         });
       }
-    });
+    };
+
+    _signalHub.start();
 
     // Load available wallets from localStorage
     _refreshAvailableWallets();
@@ -870,25 +822,7 @@ class _DebugViewState extends State<DebugView> {
 
   @override
   void dispose() {
-    // Cancel stream subscriptions
-    _keysDerivedSubscription?.cancel();
-    _subaddressDerivedSubscription?.cancel();
-    _seedGeneratedSubscription?.cancel();
-    _seedBirthdaySubscription?.cancel();
-    _blockHeightFromTimestampSubscription?.cancel();
-    _blockScanSubscription?.cancel();
-    _daemonHeightSubscription?.cancel();
-    _transactionCreatedSubscription?.cancel();
-    _transactionBroadcastSubscription?.cancel();
-    _syncProgressSubscription?.cancel();
-    _spentStatusUpdatedSubscription?.cancel();
-    _mempoolScanSubscription?.cancel();
-    _multiWalletScanSubscription?.cancel();
-    _reorgDetectedSubscription?.cancel();
-    _doubleSpendDetectedSubscription?.cancel();
-    _bip39LegacySeedSubscription?.cancel();
-    _freezeThawSubscription?.cancel();
-    _transactionStatusUpdateSubscription?.cancel();
+    _signalHub.dispose();
 
     _autoSaveTimer?.cancel();
     _stopPollingTimers();
