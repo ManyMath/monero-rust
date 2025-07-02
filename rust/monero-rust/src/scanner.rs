@@ -101,6 +101,7 @@ pub struct BlockScanResult {
     pub outputs: Vec<WalletOutput>,
     pub daemon_height: u64,
     pub spent_key_images: Vec<String>,
+    pub spent_key_image_tx_hashes: Vec<String>,
 }
 
 
@@ -109,6 +110,7 @@ pub struct MempoolScanResult {
     pub tx_count: usize,
     pub outputs: Vec<WalletOutput>,
     pub spent_key_images: Vec<String>,
+    pub spent_key_image_tx_hashes: Vec<String>,
 }
 
 /// Multi-wallet scan result containing outputs for each wallet
@@ -120,6 +122,7 @@ pub struct MultiWalletScanResult {
     pub tx_count: usize,
     pub daemon_height: u64,
     pub spent_key_images: Vec<String>,
+    pub spent_key_image_tx_hashes: Vec<String>,
     /// Map of wallet address to its scan result
     pub wallet_results: HashMap<String, WalletScanData>,
 }
@@ -506,6 +509,7 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
     let tx_count = all_transactions.len();
     let mut outputs = Vec::new();
     let mut spent_key_images = Vec::new();
+    let mut spent_key_image_tx_hashes = Vec::new();
 
     for tx in all_transactions.iter() {
         let tx_hash = hex::encode(tx.hash());
@@ -516,6 +520,7 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
             if let Input::ToKey { key_image, .. } = input {
                 let ki_hex = hex::encode(key_image.compress().to_bytes());
                 spent_key_images.push(ki_hex);
+                spent_key_image_tx_hashes.push(tx_hash.clone());
             }
         }
 
@@ -578,6 +583,7 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
         outputs,
         daemon_height,
         spent_key_images,
+        spent_key_image_tx_hashes,
     })
 }
 
@@ -646,6 +652,7 @@ pub async fn process_batch_response(
                 daemon_height,
                 outputs: vec![],
                 spent_key_images: vec![],
+                spent_key_image_tx_hashes: vec![],
                 tx_count: 0,
             });
             continue;
@@ -683,7 +690,9 @@ pub async fn process_batch_response(
 
         let tx_count = 1 + block_entry.txs.len();
         let mut outputs = Vec::new();
+        let skipped_count = skipped_key_images.len();
         let mut spent_key_images = skipped_key_images;
+        let mut spent_key_image_tx_hashes: Vec<String> = vec![String::new(); skipped_count];
 
         for tx in &all_transactions {
             let tx_hash = hex::encode(tx.hash());
@@ -693,6 +702,7 @@ pub async fn process_batch_response(
                 if let Input::ToKey { key_image, .. } = input {
                     let ki_hex = hex::encode(key_image.compress().to_bytes());
                     spent_key_images.push(ki_hex);
+                    spent_key_image_tx_hashes.push(tx_hash.clone());
                 }
             }
 
@@ -755,6 +765,7 @@ pub async fn process_batch_response(
             outputs,
             daemon_height,
             spent_key_images,
+            spent_key_image_tx_hashes,
         });
 
         if block_idx % YIELD_EVERY_N_BLOCKS == YIELD_EVERY_N_BLOCKS - 1 {
@@ -885,6 +896,7 @@ pub async fn process_batch_multi_wallet_response(
                 tx_count: 0,
                 daemon_height: response.current_height,
                 spent_key_images: vec![],
+                spent_key_image_tx_hashes: vec![],
                 wallet_results,
             });
             continue;
@@ -921,11 +933,15 @@ pub async fn process_batch_multi_wallet_response(
             .collect();
         let tx_count = 1 + block_entry.txs.len();
 
+        let skipped_count = skipped_key_images.len();
         let mut spent_key_images = skipped_key_images;
+        let mut spent_key_image_tx_hashes: Vec<String> = vec![String::new(); skipped_count];
         for tx in &all_transactions {
+            let tx_hash_for_ki = hex::encode(tx.hash());
             for input in &tx.prefix.inputs {
                 if let Input::ToKey { key_image, .. } = input {
                     spent_key_images.push(hex::encode(key_image.compress().to_bytes()));
+                    spent_key_image_tx_hashes.push(tx_hash_for_ki.clone());
                 }
             }
         }
@@ -1003,6 +1019,7 @@ pub async fn process_batch_multi_wallet_response(
             tx_count,
             daemon_height,
             spent_key_images,
+            spent_key_image_tx_hashes,
             wallet_results,
         });
 
@@ -1300,11 +1317,14 @@ pub async fn scan_block_multi_wallet<R: RpcConnection + Send + Sync + Clone + 's
 
     // Extract spent key images (shared across all wallets)
     let mut spent_key_images = Vec::new();
+    let mut spent_key_image_tx_hashes = Vec::new();
     for tx in all_transactions.iter() {
+        let tx_hash = hex::encode(tx.hash());
         for input in &tx.prefix.inputs {
             if let Input::ToKey { key_image, .. } = input {
                 let ki_hex = hex::encode(key_image.compress().to_bytes());
                 spent_key_images.push(ki_hex);
+                spent_key_image_tx_hashes.push(tx_hash.clone());
             }
         }
     }
@@ -1412,6 +1432,7 @@ pub async fn scan_block_multi_wallet<R: RpcConnection + Send + Sync + Clone + 's
         tx_count,
         daemon_height,
         spent_key_images,
+        spent_key_image_tx_hashes,
         wallet_results,
     })
 }
@@ -1473,11 +1494,14 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
 
     // Extract spent key images (shared across all wallets)
     let mut spent_key_images = Vec::new();
+    let mut spent_key_image_tx_hashes = Vec::new();
     for tx in all_transactions.iter() {
+        let tx_hash = hex::encode(tx.hash());
         for input in &tx.prefix.inputs {
             if let monero_serai::transaction::Input::ToKey { key_image, .. } = input {
                 let ki_hex = hex::encode(key_image.compress().to_bytes());
                 spent_key_images.push(ki_hex);
+                spent_key_image_tx_hashes.push(tx_hash.clone());
             }
         }
     }
@@ -1571,6 +1595,7 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
         tx_count,
         daemon_height,
         spent_key_images,
+        spent_key_image_tx_hashes,
         wallet_results,
     })
 }
@@ -1645,9 +1670,9 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
 
     let tx_count = mempool_txs.len();
     let mut outputs = Vec::new();
-    let mut spent_key_images_set: HashSet<String> = mempool_spent_key_images
+    let mut spent_key_images_map: HashMap<String, String> = mempool_spent_key_images
         .iter()
-        .map(hex::encode)
+        .map(|ki| (hex::encode(ki), String::new()))
         .collect();
 
     for tx in mempool_txs.iter() {
@@ -1657,7 +1682,7 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
         for input in &tx.prefix.inputs {
             if let Input::ToKey { key_image, .. } = input {
                 let ki_hex = hex::encode(key_image.compress().to_bytes());
-                spent_key_images_set.insert(ki_hex);
+                spent_key_images_map.insert(ki_hex, tx_hash.clone());
             }
         }
 
@@ -1712,10 +1737,14 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
         }
     }
 
+    let (spent_key_images, spent_key_image_tx_hashes): (Vec<String>, Vec<String>) =
+        spent_key_images_map.into_iter().unzip();
+
     Ok(MempoolScanResult {
         tx_count,
         outputs,
-        spent_key_images: spent_key_images_set.into_iter().collect(),
+        spent_key_images,
+        spent_key_image_tx_hashes,
     })
 }
 
@@ -2078,6 +2107,7 @@ mod tests {
             outputs: vec![],
             daemon_height: 12350,
             spent_key_images: vec!["key1".to_string(), "key2".to_string()],
+            spent_key_image_tx_hashes: vec!["tx1".to_string(), "tx2".to_string()],
         };
 
         let json = serde_json::to_string(&result).unwrap();
@@ -2121,6 +2151,7 @@ mod tests {
             tx_count: 3,
             outputs: vec![],
             spent_key_images: vec!["ki1".to_string()],
+            spent_key_image_tx_hashes: vec!["tx1".to_string()],
         };
 
         let json = serde_json::to_string(&result).unwrap();

@@ -34,6 +34,7 @@ pub struct BlockOutputSummary {
     pub outputs: Vec<WalletOutput>,
     pub daemon_height: u64,
     pub spent_key_images: Vec<String>,
+    pub spent_key_image_tx_hashes: Vec<String>,
 }
 
 /// Processed result from a single-wallet batch scan.
@@ -42,6 +43,7 @@ pub struct ProcessedBatch {
     pub batch_end_height: u64,
     pub outputs_to_store: Vec<WalletOutput>,
     pub spent_key_images: Vec<String>,
+    pub spent_key_image_tx_hashes: Vec<String>,
     pub should_continue: bool,
     pub blocks_with_outputs: Vec<BlockOutputSummary>,
     pub daemon_height: u64,
@@ -103,6 +105,7 @@ pub fn process_single_wallet_batch(
             batch_end_height: batch_start_height,
             outputs_to_store: Vec::new(),
             spent_key_images: Vec::new(),
+            spent_key_image_tx_hashes: Vec::new(),
             should_continue: false,
             blocks_with_outputs: Vec::new(),
             daemon_height: 0,
@@ -120,6 +123,7 @@ pub fn process_single_wallet_batch(
 
     let mut all_outputs = Vec::new();
     let mut all_spent_key_images = Vec::new();
+    let mut all_spent_key_image_tx_hashes = Vec::new();
     let mut blocks_with_outputs = Vec::new();
     let mut all_block_hashes = Vec::new();
     let mut last_daemon_height = 0u64;
@@ -129,6 +133,7 @@ pub fn process_single_wallet_batch(
         all_block_hashes.push((result.block_height, result.block_hash.clone()));
 
         all_spent_key_images.extend(result.spent_key_images.iter().cloned());
+        all_spent_key_image_tx_hashes.extend(result.spent_key_image_tx_hashes.iter().cloned());
 
         let filtered = filter_outputs_by_accounts(
             result.outputs.iter(),
@@ -146,6 +151,7 @@ pub fn process_single_wallet_batch(
                 outputs: filtered,
                 daemon_height: result.daemon_height,
                 spent_key_images: result.spent_key_images.clone(),
+                spent_key_image_tx_hashes: result.spent_key_image_tx_hashes.clone(),
             });
         }
     }
@@ -154,6 +160,7 @@ pub fn process_single_wallet_batch(
         batch_end_height,
         outputs_to_store: all_outputs,
         spent_key_images: all_spent_key_images,
+        spent_key_image_tx_hashes: all_spent_key_image_tx_hashes,
         should_continue: batch_end_height < target_height,
         blocks_with_outputs,
         daemon_height: last_daemon_height,
@@ -256,6 +263,7 @@ mod tests {
         outputs: Vec<WalletOutput>,
         spent_key_images: Vec<String>,
     ) -> BlockScanResult {
+        let tx_hashes_len = spent_key_images.len();
         BlockScanResult {
             block_height: height,
             block_hash: format!("hash_{}", height),
@@ -264,6 +272,7 @@ mod tests {
             outputs,
             daemon_height: 1000,
             spent_key_images,
+            spent_key_image_tx_hashes: vec![String::new(); tx_hashes_len],
         }
     }
 
