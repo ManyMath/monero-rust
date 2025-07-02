@@ -500,6 +500,7 @@ impl WalletActor {
                         success: false, error: Some(e), block_height: request.block_height,
                         block_hash: String::new(), block_timestamp: 0, tx_count: 0,
                         outputs: Vec::new(), daemon_height: 0, spent_key_images: Vec::new(),
+                        spent_key_image_tx_hashes: Vec::new(),
                     }.send_signal_to_dart();
                     continue;
                 }
@@ -548,6 +549,7 @@ impl WalletActor {
                         outputs,
                         daemon_height: result.daemon_height,
                         spent_key_images: result.spent_key_images.clone(),
+                        spent_key_image_tx_hashes: result.spent_key_image_tx_hashes.clone(),
                     }
                     .send_signal_to_dart();
                 }
@@ -562,6 +564,7 @@ impl WalletActor {
                         outputs: Vec::new(),
                         daemon_height: 0,
                         spent_key_images: Vec::new(),
+                        spent_key_image_tx_hashes: Vec::new(),
                     }
                     .send_signal_to_dart();
                 }
@@ -608,6 +611,7 @@ impl WalletActor {
                         success: false, error: Some(e), block_height: request.start_height,
                         block_hash: String::new(), block_timestamp: 0, tx_count: 0,
                         outputs: Vec::new(), daemon_height: 0, spent_key_images: Vec::new(),
+                        spent_key_image_tx_hashes: Vec::new(),
                     }.send_signal_to_dart();
                     continue;
                 }
@@ -642,6 +646,7 @@ impl WalletActor {
                     MempoolScanResponse {
                         success: false, error: Some(e), tx_count: 0,
                         outputs: Vec::new(), spent_key_images: Vec::new(),
+                        spent_key_image_tx_hashes: Vec::new(),
                     }.send_signal_to_dart();
                     continue;
                 }
@@ -676,6 +681,7 @@ impl WalletActor {
                             tx_count: result.tx_count as u32,
                             outputs,
                             spent_key_images: result.spent_key_images,
+                            spent_key_image_tx_hashes: result.spent_key_image_tx_hashes,
                         }
                         .send_signal_to_dart();
 
@@ -696,6 +702,7 @@ impl WalletActor {
                             tx_count: 0,
                             outputs: Vec::new(),
                             spent_key_images: Vec::new(),
+                            spent_key_image_tx_hashes: Vec::new(),
                         }
                         .send_signal_to_dart();
                     }
@@ -722,7 +729,8 @@ impl WalletActor {
                 MultiWalletScanResponse {
                     success: false, error: Some(e), block_height: request.block_height,
                     block_hash: String::new(), block_timestamp: 0, tx_count: 0,
-                    daemon_height: 0, spent_key_images: Vec::new(), wallet_results: Vec::new(),
+                    daemon_height: 0, spent_key_images: Vec::new(),
+                    spent_key_image_tx_hashes: Vec::new(), wallet_results: Vec::new(),
                 }.send_signal_to_dart();
                 continue;
             }
@@ -775,6 +783,7 @@ impl WalletActor {
                             tx_count: result.tx_count as u32,
                             daemon_height: result.daemon_height,
                             spent_key_images: result.spent_key_images,
+                            spent_key_image_tx_hashes: result.spent_key_image_tx_hashes,
                             wallet_results,
                         }
                         .send_signal_to_dart();
@@ -789,6 +798,7 @@ impl WalletActor {
                             tx_count: 0,
                             daemon_height: 0,
                             spent_key_images: Vec::new(),
+                            spent_key_image_tx_hashes: Vec::new(),
                             wallet_results: Vec::new(),
                         }
                         .send_signal_to_dart();
@@ -824,7 +834,7 @@ impl WalletActor {
                     success: false, error: Some(format!("Failed to resolve BIP39 seed: {}", e)),
                     block_height: 0, block_hash: String::new(), block_timestamp: 0,
                     tx_count: 0, daemon_height: 0, spent_key_images: Vec::new(),
-                    wallet_results: Vec::new(),
+                    spent_key_image_tx_hashes: Vec::new(), wallet_results: Vec::new(),
                 }.send_signal_to_dart();
                 continue;
             }
@@ -873,6 +883,7 @@ impl WalletActor {
                             tx_count: 0,
                             daemon_height: 0,
                             spent_key_images: Vec::new(),
+                            spent_key_image_tx_hashes: Vec::new(),
                             wallet_results: Vec::new(),
                         }
                         .send_signal_to_dart();
@@ -1283,6 +1294,7 @@ impl Notifiable<StartContinuousScan> for WalletActor {
                         outputs: Vec::new(),
                         daemon_height: 0,
                         spent_key_images: Vec::new(),
+                        spent_key_image_tx_hashes: Vec::new(),
                     }
                     .send_signal_to_dart();
                 }
@@ -1390,6 +1402,7 @@ impl Notifiable<ContinueScan> for WalletActor {
                             outputs: Vec::new(),
                             daemon_height: 0,
                             spent_key_images: Vec::new(),
+                            spent_key_image_tx_hashes: Vec::new(),
                         }
                         .send_signal_to_dart();
 
@@ -1494,6 +1507,7 @@ impl Notifiable<ContinueScan> for WalletActor {
                             outputs,
                             daemon_height: block.daemon_height,
                             spent_key_images: block.spent_key_images.clone(),
+                            spent_key_image_tx_hashes: block.spent_key_image_tx_hashes.clone(),
                         }
                         .send_signal_to_dart();
                     }
@@ -1567,6 +1581,7 @@ impl Notifiable<ContinueScan> for WalletActor {
                         outputs: Vec::new(),
                         daemon_height: 0,
                         spent_key_images: Vec::new(),
+                        spent_key_image_tx_hashes: Vec::new(),
                     }
                     .send_signal_to_dart();
 
@@ -1646,6 +1661,7 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                             tx_count: 0,
                             daemon_height: 0,
                             spent_key_images: Vec::new(),
+                            spent_key_image_tx_hashes: Vec::new(),
                             wallet_results: Vec::new(),
                         }
                         .send_signal_to_dart();
@@ -1714,6 +1730,7 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                                 outputs: Vec::new(),
                                 daemon_height: r.daemon_height,
                                 spent_key_images: r.spent_key_images.clone(),
+                                spent_key_image_tx_hashes: r.spent_key_image_tx_hashes.clone(),
                             }
                         }).collect();
                         // Use first wallet's config for reorg handling
@@ -1801,6 +1818,7 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                                 tx_count: result.tx_count as u32,
                                 daemon_height: result.daemon_height,
                                 spent_key_images: result.spent_key_images.clone(),
+                                spent_key_image_tx_hashes: result.spent_key_image_tx_hashes.clone(),
                                 wallet_results,
                             }
                             .send_signal_to_dart();
@@ -1843,6 +1861,7 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                         tx_count: 0,
                         daemon_height: 0,
                         spent_key_images: Vec::new(),
+                        spent_key_image_tx_hashes: Vec::new(),
                         wallet_results: Vec::new(),
                     }
                     .send_signal_to_dart();

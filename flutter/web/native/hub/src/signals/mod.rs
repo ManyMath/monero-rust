@@ -314,6 +314,7 @@ pub struct BlockScanResponse {
     pub outputs: Vec<OwnedOutput>,
     pub daemon_height: u64,
     pub spent_key_images: Vec<String>,
+    pub spent_key_image_tx_hashes: Vec<String>,
 }
 
 #[derive(Deserialize, DartSignal)]
@@ -395,6 +396,7 @@ pub struct MempoolScanResponse {
     pub tx_count: u32,
     pub outputs: Vec<OwnedOutput>,
     pub spent_key_images: Vec<String>,
+    pub spent_key_image_tx_hashes: Vec<String>,
 }
 
 #[derive(Deserialize, DartSignal)]
@@ -502,6 +504,7 @@ pub struct MultiWalletScanResponse {
     pub tx_count: u32,
     pub daemon_height: u64,
     pub spent_key_images: Vec<String>,
+    pub spent_key_image_tx_hashes: Vec<String>,
     pub wallet_results: Vec<WalletScanResult>,
 }
 
