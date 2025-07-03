@@ -39,6 +39,7 @@ class TestHelpers {
     required int blockTimestamp,
     List<OwnedOutput>? outputs,
     List<String>? spentKeyImages,
+    List<String>? spentKeyImageTxHashes,
     bool success = true,
     String? error,
     String blockHash = 'mock_block_hash',
@@ -55,6 +56,7 @@ class TestHelpers {
       outputs: outputs ?? [],
       daemonHeight: Uint64(BigInt.from(daemonHeight > 0 ? daemonHeight : blockHeight)),
       spentKeyImages: spentKeyImages ?? [],
+      spentKeyImageTxHashes: spentKeyImageTxHashes ?? [],
     );
   }
 }

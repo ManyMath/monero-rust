@@ -146,6 +146,80 @@ void main() {
       expect(result[0].spentKeyImages, ['ki_spent']);
     });
 
+    test('groups spent key images from same tx using real tx hash', () {
+      final spentOutput1 = TestHelpers.createMockOutput(
+        txHash: 'old_tx1', outputIndex: 0, amountXmr: '3.0',
+        blockHeight: 400, keyImage: 'ki_1',
+      );
+      final spentOutput2 = TestHelpers.createMockOutput(
+        txHash: 'old_tx2', outputIndex: 0, amountXmr: '2.0',
+        blockHeight: 400, keyImage: 'ki_2',
+      );
+      final scan = TestHelpers.createMockScanResponse(
+        blockHeight: 500, blockTimestamp: 1700000000,
+        outputs: [],
+        spentKeyImages: ['ki_1', 'ki_2'],
+        spentKeyImageTxHashes: ['spending_tx', 'spending_tx'],
+      );
+
+      final result = TransactionUtils.updateTransactionsFromScan(
+        [], scan, TransactionUtils.buildKeyImageMap([spentOutput1, spentOutput2]),
+      );
+
+      expect(result.length, 1);
+      expect(result[0].txHash, 'spending_tx');
+      expect(result[0].spentKeyImages, containsAll(['ki_1', 'ki_2']));
+      expect(result[0].spentKeyImages.length, 2);
+    });
+
+    test('merges spent key images into existing receive transaction (change output)', () {
+      final changeOutput = TestHelpers.createMockOutput(
+        txHash: 'spending_tx', outputIndex: 0, amountXmr: '1.5',
+        blockHeight: 500,
+      );
+      final spentOutput = TestHelpers.createMockOutput(
+        txHash: 'old_tx', outputIndex: 0, amountXmr: '5.0',
+        blockHeight: 400, keyImage: 'ki_spent',
+      );
+      // First, scan finds the change output (receive side)
+      final scan = TestHelpers.createMockScanResponse(
+        blockHeight: 500, blockTimestamp: 1700000000,
+        outputs: [changeOutput],
+        spentKeyImages: ['ki_spent'],
+        spentKeyImageTxHashes: ['spending_tx'],
+      );
+
+      final result = TransactionUtils.updateTransactionsFromScan(
+        [], scan, TransactionUtils.buildKeyImageMap([spentOutput]),
+      );
+
+      // Should be one transaction with both the received change and the spent input
+      expect(result.length, 1);
+      expect(result[0].txHash, 'spending_tx');
+      expect(result[0].receivedOutputs.length, 1);
+      expect(result[0].spentKeyImages, ['ki_spent']);
+    });
+
+    test('falls back to synthetic hash when tx hash is empty', () {
+      final spentOutput = TestHelpers.createMockOutput(
+        txHash: 'old_tx', outputIndex: 0, amountXmr: '5.0',
+        blockHeight: 400, keyImage: 'ki_spent',
+      );
+      final scan = TestHelpers.createMockScanResponse(
+        blockHeight: 500, blockTimestamp: 1700000000,
+        outputs: [],
+        spentKeyImages: ['ki_spent'],
+        spentKeyImageTxHashes: [''],
+      );
+
+      final result = TransactionUtils.updateTransactionsFromScan(
+        [], scan, TransactionUtils.buildKeyImageMap([spentOutput]),
+      );
+
+      expect(result.length, 1);
+      expect(result[0].txHash, 'spend:ki_spent');
+    });
+
     test('ignores spent key image if no matching output in allOutputs', () {
       final scan = TestHelpers.createMockScanResponse(
         blockHeight: 500, blockTimestamp: 1700000000,
