@@ -191,6 +191,7 @@ class WalletLifecycleManager {
     required int blockHeight,
     required int daemonHeight,
     required List<String> spentKeyImages,
+    List<String> spentKeyImageTxHashes = const [],
     int blockTimestamp = 0,
   }) {
     final updatedWalletAddresses = <String>{};
@@ -240,6 +241,7 @@ class WalletLifecycleManager {
         outputs: walletResult.outputs,
         daemonHeight: Uint64(BigInt.from(daemonHeight)),
         spentKeyImages: spentKeyImages,
+        spentKeyImageTxHashes: spentKeyImageTxHashes,
       );
 
       final walletKeyImageMap = TransactionUtils.buildKeyImageMap(activeWalletInstance.outputs);
@@ -264,6 +266,7 @@ class WalletLifecycleManager {
             outputs: [],
             daemonHeight: Uint64(BigInt.from(daemonHeight)),
             spentKeyImages: spentKeyImages,
+            spentKeyImageTxHashes: spentKeyImageTxHashes,
           );
 
           final cachedMap = keyImageMaps[walletInstance.walletId]

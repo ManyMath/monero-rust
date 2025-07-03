@@ -229,6 +229,7 @@ class ScanState extends ChangeNotifier {
       blockHeight: msg.blockHeight.toInt(),
       daemonHeight: msg.daemonHeight.toInt(),
       spentKeyImages: msg.spentKeyImages,
+      spentKeyImageTxHashes: msg.spentKeyImageTxHashes,
       blockTimestamp: msg.blockTimestamp.toInt(),
     );
     _walletState.notify();

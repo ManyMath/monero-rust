@@ -69,16 +69,32 @@ class TransactionUtils {
       spentKeyImageSet.addAll(t.spentKeyImages);
     }
 
+    final spentKeyImageTxMap = <String, String>{};
+    for (int i = 0; i < scan.spentKeyImages.length; i++) {
+      if (i < scan.spentKeyImageTxHashes.length &&
+          scan.spentKeyImageTxHashes[i].isNotEmpty) {
+        spentKeyImageTxMap[scan.spentKeyImages[i]] = scan.spentKeyImageTxHashes[i];
+      }
+    }
+
     for (var spentKeyImage in scan.spentKeyImages) {
       final spentOutput = keyImageMap[spentKeyImage];
       if (spentOutput == null) continue;
+      if (spentKeyImageSet.contains(spentKeyImage)) continue;
 
-      if (!spentKeyImageSet.contains(spentKeyImage)) {
-        final syntheticTxHash = 'spend:$spentKeyImage';
-        txIndexMap[syntheticTxHash] = transactions.length;
-        spentKeyImageSet.add(spentKeyImage);
+      spentKeyImageSet.add(spentKeyImage);
+      final spendingTxHash = spentKeyImageTxMap[spentKeyImage] ?? 'spend:$spentKeyImage';
+
+      final existingIndex = txIndexMap[spendingTxHash];
+      if (existingIndex != null) {
+        final existing = transactions[existingIndex];
+        transactions[existingIndex] = existing.copyWith(
+          spentKeyImages: [...existing.spentKeyImages, spentKeyImage],
+        );
+      } else {
+        txIndexMap[spendingTxHash] = transactions.length;
         transactions.add(WalletTransaction(
-          txHash: syntheticTxHash,
+          txHash: spendingTxHash,
           blockHeight: blockHeight,
           blockTimestamp: blockTimestamp,
           receivedOutputs: [],
