@@ -94,6 +94,7 @@ class ScanState extends ChangeNotifier {
       daemonHeight = msg.daemonHeight.toInt();
       hasConnectedOnce = true;
       _walletState.lifecycle.integrateSingleBlockScanResults(msg);
+      _walletState.deriveSubaddresses();
       _walletState.notify();
     } else {
       scanResult = null;
@@ -209,6 +210,7 @@ class ScanState extends ChangeNotifier {
         }
       }
 
+      _walletState.deriveSubaddresses();
       _walletState.notify();
     }
     notifyListeners();
@@ -232,6 +234,7 @@ class ScanState extends ChangeNotifier {
       spentKeyImageTxHashes: msg.spentKeyImageTxHashes,
       blockTimestamp: msg.blockTimestamp.toInt(),
     );
+    _walletState.deriveSubaddresses();
     _walletState.notify();
     notifyListeners();
     _walletState.updateBlockHeightFromWallets();
