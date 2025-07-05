@@ -232,6 +232,152 @@ pub fn register_subaddresses(scanner: &mut Scanner, lookahead: Lookahead) {
     }
 }
 
+/// How often to yield during subaddress registration on WASM.
+const YIELD_EVERY_N_REGISTRATIONS: usize = 100;
+
+/// Register subaddresses asynchronously, yielding every 100 registrations on wasm
+/// so other tasks can run during large lookaheads.
+pub async fn register_subaddresses_async(scanner: &mut Scanner, lookahead: Lookahead) {
+    for (i, index) in build_subaddress_indices(lookahead).into_iter().enumerate() {
+        scanner.register_subaddress(index);
+        if i % YIELD_EVERY_N_REGISTRATIONS == YIELD_EVERY_N_REGISTRATIONS - 1 {
+            yield_to_event_loop().await;
+        }
+    }
+}
+
+/// Tracks the high-water mark of registered subaddresses per account so we can
+/// expand the scanning window when outputs are discovered near the edge.
+struct SubaddressWatermark {
+    /// For each account we've registered, the max minor index registered.
+    /// Accounts `0..max_minor_per_account.len()` are covered.
+    max_minor_per_account: Vec<u32>,
+}
+
+impl SubaddressWatermark {
+    fn new(lookahead: Lookahead) -> Self {
+        if lookahead.account == 0 && lookahead.subaddress == 0 {
+            return Self { max_minor_per_account: Vec::new() };
+        }
+        Self {
+            max_minor_per_account: vec![lookahead.subaddress; (lookahead.account + 1) as usize],
+        }
+    }
+}
+
+/// Opaque wrapper caching a `Scanner` across batch scans.
+///
+/// Holds the pre-registered scanner plus a fingerprint (compressed public spend key)
+/// and the lookahead used to build it. On each batch the caller validates these
+/// against the current wallet parameters — a match means we skip the expensive
+/// `register_subaddresses` step entirely.
+pub struct CachedScanner {
+    scanner: Scanner,
+    lookahead: Lookahead,
+    fingerprint: [u8; 32],
+    watermark: SubaddressWatermark,
+    #[cfg(target_arch = "wasm32")]
+    spend_scalar: Scalar,
+}
+
+/// Expand the registered subaddress window if `found` is near the edge.
+/// Mimics wallet2's `expand_subaddresses`: after discovering an output at
+/// `(major, minor)`, ensure the scanner covers `major + lookahead.account`
+/// accounts and `minor + lookahead.subaddress` addresses within that account.
+fn expand_subaddresses_if_needed(
+    scanner: &mut Scanner,
+    watermark: &mut SubaddressWatermark,
+    lookahead: Lookahead,
+    found: SubaddressIndex,
+) -> bool {
+    if lookahead.account == 0 && lookahead.subaddress == 0 {
+        return false;
+    }
+
+    let found_account = found.account();
+    let found_address = found.address();
+    let mut expanded = false;
+
+    // 1. Account expansion: ensure we cover up to found_account + lookahead.account
+    let needed_account = found_account.saturating_add(lookahead.account);
+    let current_max_account = watermark.max_minor_per_account.len().saturating_sub(1) as u32;
+
+    if needed_account > current_max_account {
+        for acct in (current_max_account + 1)..=needed_account {
+            for addr in 0..=lookahead.subaddress {
+                if let Some(idx) = SubaddressIndex::new(acct, addr) {
+                    scanner.register_subaddress(idx);
+                }
+            }
+            watermark.max_minor_per_account.push(lookahead.subaddress);
+        }
+        expanded = true;
+    }
+
+    // 2. Subaddress expansion within found_account
+    let needed_address = found_address.saturating_add(lookahead.subaddress);
+    let current_max_address = watermark.max_minor_per_account[found_account as usize];
+
+    if needed_address > current_max_address {
+        for addr in (current_max_address + 1)..=needed_address {
+            if let Some(idx) = SubaddressIndex::new(found_account, addr) {
+                scanner.register_subaddress(idx);
+            }
+        }
+        watermark.max_minor_per_account[found_account as usize] = needed_address;
+        expanded = true;
+    }
+
+    expanded
+}
+
+impl CachedScanner {
+    fn expand_if_needed(&mut self, found: SubaddressIndex) -> bool {
+        expand_subaddresses_if_needed(
+            &mut self.scanner, &mut self.watermark, self.lookahead, found,
+        )
+    }
+}
+
+impl CachedScannerEntry {
+    fn expand_if_needed(&mut self, found: SubaddressIndex) -> bool {
+        expand_subaddresses_if_needed(
+            &mut self.scanner, &mut self.watermark, self.lookahead, found,
+        )
+    }
+}
+
+impl std::fmt::Debug for CachedScanner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CachedScanner")
+            .field("lookahead", &self.lookahead)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Multi-wallet variant of `CachedScanner`.
+pub struct CachedScanners {
+    entries: Vec<CachedScannerEntry>,
+}
+
+impl std::fmt::Debug for CachedScanners {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CachedScanners")
+            .field("count", &self.entries.len())
+            .finish_non_exhaustive()
+    }
+}
+
+struct CachedScannerEntry {
+    scanner: Scanner,
+    address: String,
+    lookahead: Lookahead,
+    fingerprint: [u8; 32],
+    watermark: SubaddressWatermark,
+    #[cfg(target_arch = "wasm32")]
+    spend_scalar: Scalar,
+}
+
 /// Resolve a mnemonic with explicit BIP39 passphrase and account index.
 /// If 12 words, convert from BIP39 first using the given passphrase and account index.
 /// Non-BIP39 seeds (16-word polyseed, 25-word classic) pass through unchanged.
@@ -612,28 +758,65 @@ pub async fn scan_blocks_batch<R: RpcConnection>(
         .await
         .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
 
-    process_batch_response(response, mnemonic, network_str, lookahead).await
+    let (results, _cached) = process_batch_response(response, mnemonic, network_str, lookahead, None).await?;
+    Ok(results)
 }
 
 /// Process a batch of blocks fetched via `/getblocks.bin` and scan them for outputs.
 ///
 /// This is the core scanning logic, separated from the RPC layer for testability.
+/// When `cached` is provided and its fingerprint + lookahead match the current wallet,
+/// the expensive `register_subaddresses` step is skipped entirely.
 pub async fn process_batch_response(
     response: GetBlocksFastResponse,
     mnemonic: &str,
     network_str: &str,
     lookahead: Lookahead,
-) -> Result<Vec<BlockScanResult>, String> {
+    cached: Option<CachedScanner>,
+) -> Result<(Vec<BlockScanResult>, CachedScanner), String> {
     let _network = parse_network(network_str)?;
 
     let seed = resolve_seed(mnemonic)?;
     let spend_point = spend_key_from_seed(&seed);
-    let view_scalar = view_key_from_seed(&seed);
+    let fingerprint = spend_point.compress().to_bytes();
     #[cfg(target_arch = "wasm32")]
     let spend_scalar = spend_key_scalar_from_seed(&seed);
-    let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
-    let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
-    register_subaddresses(&mut scanner, lookahead);
+
+    let mut scanner = if let Some(c) = cached {
+        if c.fingerprint == fingerprint && c.lookahead == lookahead {
+            #[cfg(target_arch = "wasm32")]
+            { let _ = spend_scalar; } // use the fresh one below
+            c
+        } else {
+            // Mismatch — rebuild
+            drop(c);
+            let view_scalar = view_key_from_seed(&seed);
+            let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
+            let mut s = Scanner::from_view(view_pair, Some(HashSet::new()));
+            register_subaddresses_async(&mut s, lookahead).await;
+            CachedScanner {
+                scanner: s,
+                lookahead,
+                fingerprint,
+                watermark: SubaddressWatermark::new(lookahead),
+                #[cfg(target_arch = "wasm32")]
+                spend_scalar: spend_key_scalar_from_seed(&seed),
+            }
+        }
+    } else {
+        let view_scalar = view_key_from_seed(&seed);
+        let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
+        let mut s = Scanner::from_view(view_pair, Some(HashSet::new()));
+        register_subaddresses_async(&mut s, lookahead).await;
+        CachedScanner {
+            scanner: s,
+            lookahead,
+            fingerprint,
+            watermark: SubaddressWatermark::new(lookahead),
+            #[cfg(target_arch = "wasm32")]
+            spend_scalar: spend_key_scalar_from_seed(&seed),
+        }
+    };
 
     let daemon_height = response.current_height;
     let mut results = Vec::with_capacity(response.blocks.len());
@@ -706,10 +889,14 @@ pub async fn process_batch_response(
                 }
             }
 
-            let scan_result = scanner.scan_transaction(tx);
+            let scan_result = scanner.scanner.scan_transaction(tx);
             let owned_outputs = scan_result.ignore_timelock();
 
             for output in owned_outputs {
+                if let Some(subaddr) = output.metadata.subaddress {
+                    scanner.expand_if_needed(subaddr);
+                }
+
                 let amount = output.data.commitment.amount;
                 let amount_xmr = format!("{:.12}", amount as f64 / 1_000_000_000_000.0);
                 let output_index = output.absolute.o;
@@ -730,7 +917,7 @@ pub async fn process_batch_response(
                 #[cfg(target_arch = "wasm32")]
                 let key_image = {
                     let key_image_point =
-                        calculate_key_image(&spend_scalar, &output.data.key_offset);
+                        calculate_key_image(&scanner.spend_scalar, &output.data.key_offset);
                     hex::encode(key_image_point.compress().to_bytes())
                 };
                 #[cfg(not(target_arch = "wasm32"))]
@@ -773,7 +960,7 @@ pub async fn process_batch_response(
         }
     }
 
-    Ok(results)
+    Ok((results, scanner))
 }
 
 /// Convenience wrapper for batch scanning with URL-based RPC creation.
@@ -826,49 +1013,73 @@ pub async fn scan_blocks_batch_multi_wallet<R: RpcConnection>(
         .await
         .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
 
-    process_batch_multi_wallet_response(response, wallet_configs).await
+    let (results, _cached) = process_batch_multi_wallet_response(response, wallet_configs, None).await?;
+    Ok(results)
 }
 
 /// Process a batch of blocks fetched via `/getblocks.bin` and scan for multiple wallets.
 ///
 /// This is the core multi-wallet scanning logic, separated from the RPC layer for testability.
+/// When `cached` is provided and all fingerprints + lookaheads match, the expensive
+/// subaddress registration is skipped.
 pub async fn process_batch_multi_wallet_response(
     response: GetBlocksFastResponse,
     wallet_configs: Vec<WalletScanConfig>,
-) -> Result<Vec<MultiWalletScanResult>, String> {
+    cached: Option<CachedScanners>,
+) -> Result<(Vec<MultiWalletScanResult>, CachedScanners), String> {
     if wallet_configs.is_empty() {
         return Err("No wallet configurations provided".to_string());
     }
 
     let daemon_height = response.current_height;
 
-    struct WalletScanner {
-        address: String,
-        scanner: Scanner,
-        #[cfg(target_arch = "wasm32")]
-        spend_scalar: Scalar,
-    }
-
-    let mut wallet_scanners = Vec::with_capacity(wallet_configs.len());
+    // Derive fingerprints for each wallet (cheap hash ops)
+    let mut config_fingerprints = Vec::with_capacity(wallet_configs.len());
     for config in &wallet_configs {
-        let network = parse_network(&config.network)?;
         let seed = resolve_seed(&config.mnemonic)?;
-        let address = address_from_seed(&seed, network);
         let spend_point = spend_key_from_seed(&seed);
-        let view_scalar = view_key_from_seed(&seed);
-        #[cfg(target_arch = "wasm32")]
-        let spend_scalar = spend_key_scalar_from_seed(&seed);
-        let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
-        let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
-        register_subaddresses(&mut scanner, config.lookahead);
-
-        wallet_scanners.push(WalletScanner {
-            address,
-            scanner,
-            #[cfg(target_arch = "wasm32")]
-            spend_scalar,
-        });
+        config_fingerprints.push(spend_point.compress().to_bytes());
     }
+
+    // Check if cached scanners are valid
+    let cache_valid = cached.as_ref().map_or(false, |c| {
+        if c.entries.len() != wallet_configs.len() {
+            return false;
+        }
+        c.entries.iter().zip(wallet_configs.iter()).zip(config_fingerprints.iter()).all(
+            |((entry, config), fp)| {
+                entry.fingerprint == *fp && entry.lookahead == config.lookahead
+            },
+        )
+    });
+
+    let mut cached_scanners = if cache_valid {
+        cached.unwrap()
+    } else {
+        drop(cached);
+        let mut entries = Vec::with_capacity(wallet_configs.len());
+        for (config, fp) in wallet_configs.iter().zip(config_fingerprints.iter()) {
+            let network = parse_network(&config.network)?;
+            let seed = resolve_seed(&config.mnemonic)?;
+            let address = address_from_seed(&seed, network);
+            let spend_point = spend_key_from_seed(&seed);
+            let view_scalar = view_key_from_seed(&seed);
+            let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
+            let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+            register_subaddresses_async(&mut scanner, config.lookahead).await;
+
+            entries.push(CachedScannerEntry {
+                scanner,
+                address,
+                lookahead: config.lookahead,
+                fingerprint: *fp,
+                watermark: SubaddressWatermark::new(config.lookahead),
+                #[cfg(target_arch = "wasm32")]
+                spend_scalar: spend_key_scalar_from_seed(&seed),
+            });
+        }
+        CachedScanners { entries }
+    };
 
     let mut results = Vec::with_capacity(response.blocks.len());
 
@@ -880,11 +1091,11 @@ pub async fn process_batch_multi_wallet_response(
         if major_version < 4 {
             let block_hash = hex::encode(Keccak256::digest(&block_entry.block));
             let mut wallet_results = HashMap::new();
-            for ws in &wallet_scanners {
+            for entry in &cached_scanners.entries {
                 wallet_results.insert(
-                    ws.address.clone(),
+                    entry.address.clone(),
                     WalletScanData {
-                        address: ws.address.clone(),
+                        address: entry.address.clone(),
                         outputs: vec![],
                     },
                 );
@@ -947,16 +1158,20 @@ pub async fn process_batch_multi_wallet_response(
         }
 
         let mut wallet_results = HashMap::new();
-        for ws in &mut wallet_scanners {
+        for entry in &mut cached_scanners.entries {
             let mut outputs = Vec::new();
             for tx in &all_transactions {
                 let tx_hash = hex::encode(tx.hash());
                 let is_coinbase = matches!(tx.prefix.inputs.get(0), Some(Input::Gen(_)));
 
-                let scan_result = ws.scanner.scan_transaction(tx);
+                let scan_result = entry.scanner.scan_transaction(tx);
                 let owned_outputs = scan_result.ignore_timelock();
 
                 for output in owned_outputs {
+                    if let Some(subaddr) = output.metadata.subaddress {
+                        entry.expand_if_needed(subaddr);
+                    }
+
                     let amount = output.data.commitment.amount;
                     let amount_xmr = format!("{:.12}", amount as f64 / 1_000_000_000_000.0);
                     let output_index = output.absolute.o;
@@ -977,7 +1192,7 @@ pub async fn process_batch_multi_wallet_response(
                     #[cfg(target_arch = "wasm32")]
                     let key_image = {
                         let key_image_point =
-                            calculate_key_image(&ws.spend_scalar, &output.data.key_offset);
+                            calculate_key_image(&entry.spend_scalar, &output.data.key_offset);
                         hex::encode(key_image_point.compress().to_bytes())
                     };
                     #[cfg(not(target_arch = "wasm32"))]
@@ -1004,9 +1219,9 @@ pub async fn process_batch_multi_wallet_response(
                 }
             }
             wallet_results.insert(
-                ws.address.clone(),
+                entry.address.clone(),
                 WalletScanData {
-                    address: ws.address.clone(),
+                    address: entry.address.clone(),
                     outputs,
                 },
             );
@@ -1028,7 +1243,7 @@ pub async fn process_batch_multi_wallet_response(
         }
     }
 
-    Ok(results)
+    Ok((results, cached_scanners))
 }
 
 /// Convenience wrapper for multi-wallet batch scanning with URL-based RPC creation.
@@ -1111,14 +1326,26 @@ pub async fn fetch_blocks_batch_with_url(
     }
 }
 
-/// Process a previously fetched batch for a single wallet.
+/// Process a previously fetched batch for a single wallet (no caching).
 pub async fn process_fetched_batch(
     fetched: FetchedBlocks,
     mnemonic: &str,
     network_str: &str,
     lookahead: Lookahead,
 ) -> Result<Vec<BlockScanResult>, String> {
-    process_batch_response(fetched.response, mnemonic, network_str, lookahead).await
+    let (results, _cached) = process_batch_response(fetched.response, mnemonic, network_str, lookahead, None).await?;
+    Ok(results)
+}
+
+/// Process a previously fetched batch for a single wallet, with scanner caching.
+pub async fn process_fetched_batch_cached(
+    fetched: FetchedBlocks,
+    mnemonic: &str,
+    network_str: &str,
+    lookahead: Lookahead,
+    cached: Option<CachedScanner>,
+) -> Result<(Vec<BlockScanResult>, CachedScanner), String> {
+    process_batch_response(fetched.response, mnemonic, network_str, lookahead, cached).await
 }
 
 fn hex_to_hash(hex_str: &str) -> Result<[u8; 32], String> {
@@ -1168,7 +1395,7 @@ pub async fn scan_blocks_batch_with_history<R: RpcConnection>(
         .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
 
     let actual_start = response.start_height;
-    let results = process_batch_response(response, mnemonic, network_str, lookahead).await?;
+    let (results, _cached) = process_batch_response(response, mnemonic, network_str, lookahead, None).await?;
     Ok((results, actual_start))
 }
 
@@ -1255,12 +1482,22 @@ pub async fn fetch_blocks_batch_with_history_url(
     }
 }
 
-/// Process a previously fetched batch for multiple wallets.
+/// Process a previously fetched batch for multiple wallets (no caching).
 pub async fn process_fetched_batch_multi_wallet(
     fetched: FetchedBlocks,
     wallet_configs: Vec<WalletScanConfig>,
 ) -> Result<Vec<MultiWalletScanResult>, String> {
-    process_batch_multi_wallet_response(fetched.response, wallet_configs).await
+    let (results, _cached) = process_batch_multi_wallet_response(fetched.response, wallet_configs, None).await?;
+    Ok(results)
+}
+
+/// Process a previously fetched batch for multiple wallets, with scanner caching.
+pub async fn process_fetched_batch_multi_wallet_cached(
+    fetched: FetchedBlocks,
+    wallet_configs: Vec<WalletScanConfig>,
+    cached: Option<CachedScanners>,
+) -> Result<(Vec<MultiWalletScanResult>, CachedScanners), String> {
+    process_batch_multi_wallet_response(fetched.response, wallet_configs, cached).await
 }
 
 /// Scan a single block for outputs belonging to multiple wallets simultaneously.
@@ -1625,10 +1862,11 @@ pub async fn scan_mempool_for_outputs_with_account_lookahead(
     mnemonic: &str,
     network_str: &str,
     account_lookahead: u32,
+    subaddress_lookahead: u32,
 ) -> Result<MempoolScanResult, String> {
     let lookahead = Lookahead {
         account: account_lookahead,
-        subaddress: DEFAULT_LOOKAHEAD.subaddress,
+        subaddress: if subaddress_lookahead > 0 { subaddress_lookahead } else { DEFAULT_LOOKAHEAD.subaddress },
     };
     scan_mempool_for_outputs_with_lookahead(node_url, mnemonic, network_str, lookahead).await
 }
@@ -2207,6 +2445,119 @@ mod tests {
 
         assert_eq!(lookahead1, lookahead2);
         assert_ne!(lookahead1, lookahead3);
+    }
+
+    #[test]
+    fn test_watermark_new_normal_lookahead() {
+        let la = Lookahead { account: 2, subaddress: 5 };
+        let wm = SubaddressWatermark::new(la);
+        assert_eq!(wm.max_minor_per_account.len(), 3); // accounts 0,1,2
+        assert!(wm.max_minor_per_account.iter().all(|&v| v == 5));
+    }
+
+    #[test]
+    fn test_watermark_new_zero_lookahead() {
+        let la = Lookahead { account: 0, subaddress: 0 };
+        let wm = SubaddressWatermark::new(la);
+        assert!(wm.max_minor_per_account.is_empty());
+    }
+
+    #[test]
+    fn test_expand_subaddress_within_account() {
+        // Lookahead (2,5), discovery at (0,4) → should expand minor to 9
+        let la = Lookahead { account: 2, subaddress: 5 };
+        let spend = Scalar::from(42u64);
+        let spend_point = &spend * &ED25519_BASEPOINT_TABLE;
+        let view = Scalar::from(99u64);
+        let view_pair = ViewPair::new(spend_point, Zeroizing::new(view));
+        let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+        register_subaddresses(&mut scanner, la);
+        let mut wm = SubaddressWatermark::new(la);
+
+        let found = SubaddressIndex::new(0, 4).unwrap();
+        let expanded = expand_subaddresses_if_needed(&mut scanner, &mut wm, la, found);
+        assert!(expanded);
+        assert_eq!(wm.max_minor_per_account[0], 9); // 4 + 5
+        assert_eq!(wm.max_minor_per_account.len(), 3); // accounts unchanged
+    }
+
+    #[test]
+    fn test_expand_account_and_subaddress() {
+        // Lookahead (2,5), discovery at (1,3) → accounts should expand to 3,
+        // and account 1's minor should expand to 8
+        let la = Lookahead { account: 2, subaddress: 5 };
+        let spend = Scalar::from(42u64);
+        let spend_point = &spend * &ED25519_BASEPOINT_TABLE;
+        let view = Scalar::from(99u64);
+        let view_pair = ViewPair::new(spend_point, Zeroizing::new(view));
+        let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+        register_subaddresses(&mut scanner, la);
+        let mut wm = SubaddressWatermark::new(la);
+
+        let found = SubaddressIndex::new(1, 3).unwrap();
+        let expanded = expand_subaddresses_if_needed(&mut scanner, &mut wm, la, found);
+        assert!(expanded);
+        assert_eq!(wm.max_minor_per_account.len(), 4); // accounts 0,1,2,3
+        assert_eq!(wm.max_minor_per_account[1], 8); // 3 + 5
+        assert_eq!(wm.max_minor_per_account[3], 5); // new account gets default
+    }
+
+    #[test]
+    fn test_expand_zero_lookahead_noop() {
+        let la = Lookahead { account: 0, subaddress: 0 };
+        let spend = Scalar::from(42u64);
+        let spend_point = &spend * &ED25519_BASEPOINT_TABLE;
+        let view = Scalar::from(99u64);
+        let view_pair = ViewPair::new(spend_point, Zeroizing::new(view));
+        let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+        let mut wm = SubaddressWatermark::new(la);
+
+        let found = SubaddressIndex::new(0, 1).unwrap();
+        let expanded = expand_subaddresses_if_needed(&mut scanner, &mut wm, la, found);
+        assert!(!expanded);
+    }
+
+    #[test]
+    fn test_expand_idempotent() {
+        let la = Lookahead { account: 2, subaddress: 5 };
+        let spend = Scalar::from(42u64);
+        let spend_point = &spend * &ED25519_BASEPOINT_TABLE;
+        let view = Scalar::from(99u64);
+        let view_pair = ViewPair::new(spend_point, Zeroizing::new(view));
+        let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+        register_subaddresses(&mut scanner, la);
+        let mut wm = SubaddressWatermark::new(la);
+
+        let found = SubaddressIndex::new(0, 4).unwrap();
+        assert!(expand_subaddresses_if_needed(&mut scanner, &mut wm, la, found));
+        // Second call with same index should not expand further
+        assert!(!expand_subaddresses_if_needed(&mut scanner, &mut wm, la, found));
+        assert_eq!(wm.max_minor_per_account[0], 9);
+    }
+
+    #[test]
+    fn test_expand_no_expansion_within_window() {
+        // Discovery at (0,2) with lookahead (2,5) → already covered (max=5, 2+5=7>5 → expands)
+        // Actually 2+5=7 > 5, so it does expand.
+        // Discovery at (0,0) with lookahead (2,5) → 0+5=5 == current max 5, no expansion
+        let la = Lookahead { account: 2, subaddress: 5 };
+        let spend = Scalar::from(42u64);
+        let spend_point = &spend * &ED25519_BASEPOINT_TABLE;
+        let view = Scalar::from(99u64);
+        let view_pair = ViewPair::new(spend_point, Zeroizing::new(view));
+        let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+        register_subaddresses(&mut scanner, la);
+        let mut wm = SubaddressWatermark::new(la);
+
+        // SubaddressIndex::new(0, 0) returns None (primary), use (0, 1)
+        // Discovery at (0,0) would be None. Use (1,0):
+        // needed_account = 0+2 = 2, current_max = 2 → no account expansion
+        // needed_address = 0+5 = 5, current_max = 5 → no subaddress expansion
+        // But SubaddressIndex::new(1,0) returns Some since it's not (0,0)
+        let found = SubaddressIndex::new(1, 0).unwrap();
+        let expanded = expand_subaddresses_if_needed(&mut scanner, &mut wm, la, found);
+        // needed_account = 1+2 = 3 > 2 → account expansion
+        assert!(expanded);
     }
 
     #[test]

@@ -52,7 +52,7 @@ pub use encryption::{decrypt, derive_key_fresh, encrypt, encrypt_with_key, Encry
 // -- Scanning --
 pub use scanner::{
     // Types
-    BlockScanResult, DerivedKeys, Lookahead, MempoolScanResult,
+    BlockScanResult, CachedScanner, CachedScanners, DerivedKeys, Lookahead, MempoolScanResult,
     MultiWalletScanResult, WalletScanConfig, WalletScanData,
     // Constants
     DEFAULT_LOOKAHEAD,
@@ -70,7 +70,8 @@ pub use scanner::{
     process_batch_response, process_batch_multi_wallet_response,
     // Double-buffered pipelining
     FetchedBlocks, fetch_blocks_batch_with_url,
-    process_fetched_batch, process_fetched_batch_multi_wallet,
+    process_fetched_batch, process_fetched_batch_cached,
+    process_fetched_batch_multi_wallet, process_fetched_batch_multi_wallet_cached,
     // History-aware scanning
     scan_blocks_batch_with_history_url, fetch_blocks_batch_with_history_url,
 };

@@ -84,21 +84,21 @@ fn lookahead() -> Lookahead {
 #[tokio::test]
 async fn test_invalid_seed_rejected() {
     let resp = make_response(100, 1, 101);
-    let err = process_batch_response(resp, "bad seed", "stagenet", lookahead()).await.unwrap_err();
+    let err = process_batch_response(resp, "bad seed", "stagenet", lookahead(), None).await.unwrap_err();
     assert!(err.contains("mnemonic") || err.contains("seed"), "{err}");
 }
 
 #[tokio::test]
 async fn test_invalid_network_rejected() {
     let resp = make_response(100, 1, 101);
-    let err = process_batch_response(resp, STAGENET_SEED, "badnet", lookahead()).await.unwrap_err();
+    let err = process_batch_response(resp, STAGENET_SEED, "badnet", lookahead(), None).await.unwrap_err();
     assert!(err.contains("network") || err.contains("Network"), "{err}");
 }
 
 #[tokio::test]
 async fn test_empty_configs_rejected() {
     let resp = make_response(100, 1, 101);
-    let err = process_batch_multi_wallet_response(resp, vec![]).await.unwrap_err();
+    let err = process_batch_multi_wallet_response(resp, vec![], None).await.unwrap_err();
     assert!(err.contains("No wallet"));
 }
 
@@ -109,7 +109,7 @@ async fn test_one_bad_seed_fails_multi_wallet_batch() {
         WalletScanConfig { mnemonic: STAGENET_SEED.to_string(), network: "stagenet".to_string(), lookahead: lookahead() },
         WalletScanConfig { mnemonic: "bad".to_string(), network: "stagenet".to_string(), lookahead: lookahead() },
     ];
-    assert!(process_batch_multi_wallet_response(resp, configs).await.is_err());
+    assert!(process_batch_multi_wallet_response(resp, configs, None).await.is_err());
 }
 
 // ── Edge cases ──
@@ -117,7 +117,7 @@ async fn test_one_bad_seed_fails_multi_wallet_batch() {
 #[tokio::test]
 async fn test_empty_batch_returns_empty() {
     let resp = make_response(100, 0, 100);
-    assert!(process_batch_response(resp, STAGENET_SEED, "stagenet", lookahead()).await.unwrap().is_empty());
+    assert!(process_batch_response(resp, STAGENET_SEED, "stagenet", lookahead(), None).await.unwrap().0.is_empty());
 }
 
 #[tokio::test]
@@ -136,7 +136,7 @@ async fn test_height_mismatch_detected() {
         top_hash: String::new(),
         daemon_time: 0,
     };
-    let err = process_batch_response(resp, STAGENET_SEED, "stagenet", lookahead()).await.unwrap_err();
+    let err = process_batch_response(resp, STAGENET_SEED, "stagenet", lookahead(), None).await.unwrap_err();
     assert!(err.contains("mismatch"), "{err}");
 }
 
@@ -154,7 +154,7 @@ async fn test_multi_wallet_produces_entry_per_wallet() {
             lookahead: lookahead(),
         },
     ];
-    let results = process_batch_multi_wallet_response(resp, configs).await.unwrap();
+    let (results, _) = process_batch_multi_wallet_response(resp, configs, None).await.unwrap();
     assert_eq!(results.len(), 3);
     for r in &results {
         assert_eq!(r.wallet_results.len(), 2);
@@ -216,7 +216,7 @@ async fn test_multi_wallet_batch_metadata_matches_single_wallet() {
     let resp_single = make_response(100, 5, 105);
     let resp_multi = make_response(100, 5, 105);
 
-    let single_results = process_batch_response(resp_single, STAGENET_SEED, "stagenet", lookahead())
+    let (single_results, _) = process_batch_response(resp_single, STAGENET_SEED, "stagenet", lookahead(), None)
         .await
         .unwrap();
 
@@ -225,7 +225,7 @@ async fn test_multi_wallet_batch_metadata_matches_single_wallet() {
         network: "stagenet".to_string(),
         lookahead: lookahead(),
     }];
-    let multi_results = process_batch_multi_wallet_response(resp_multi, configs)
+    let (multi_results, _) = process_batch_multi_wallet_response(resp_multi, configs, None)
         .await
         .unwrap();
 
@@ -257,8 +257,8 @@ async fn test_multi_wallet_batch_deterministic() {
     let resp1 = make_response(200, 10, 210);
     let resp2 = make_response(200, 10, 210);
 
-    let results1 = process_batch_multi_wallet_response(resp1, configs()).await.unwrap();
-    let results2 = process_batch_multi_wallet_response(resp2, configs()).await.unwrap();
+    let (results1, _) = process_batch_multi_wallet_response(resp1, configs(), None).await.unwrap();
+    let (results2, _) = process_batch_multi_wallet_response(resp2, configs(), None).await.unwrap();
 
     assert_eq!(results1.len(), results2.len(), "result count differs between runs");
 
@@ -298,7 +298,7 @@ async fn test_multi_wallet_batch_wallets_independent() {
         },
     ];
 
-    let results = process_batch_multi_wallet_response(resp, configs).await.unwrap();
+    let (results, _) = process_batch_multi_wallet_response(resp, configs, None).await.unwrap();
     assert_eq!(results.len(), 3);
 
     // Derive expected addresses
@@ -337,7 +337,7 @@ async fn test_multi_wallet_batch_spent_key_images_shared() {
         },
     ];
 
-    let results = process_batch_multi_wallet_response(resp, configs).await.unwrap();
+    let (results, _) = process_batch_multi_wallet_response(resp, configs, None).await.unwrap();
 
     // Synthetic coinbase-only blocks have Input::Gen, not Input::ToKey,
     // so spent_key_images should be empty (shared, not per-wallet).
@@ -356,7 +356,7 @@ async fn test_multi_wallet_single_wallet_matches_single_batch() {
     let resp_single = make_response(100, 5, 105);
     let resp_multi = make_response(100, 5, 105);
 
-    let single_results = process_batch_response(resp_single, STAGENET_SEED, "stagenet", lookahead())
+    let (single_results, _) = process_batch_response(resp_single, STAGENET_SEED, "stagenet", lookahead(), None)
         .await
         .unwrap();
 
@@ -365,7 +365,7 @@ async fn test_multi_wallet_single_wallet_matches_single_batch() {
         network: "stagenet".to_string(),
         lookahead: lookahead(),
     }];
-    let multi_results = process_batch_multi_wallet_response(resp_multi, configs)
+    let (multi_results, _) = process_batch_multi_wallet_response(resp_multi, configs, None)
         .await
         .unwrap();
 
@@ -411,7 +411,7 @@ async fn test_multi_wallet_batch_three_wallets() {
         },
     ];
 
-    let results = process_batch_multi_wallet_response(resp, configs).await.unwrap();
+    let (results, _) = process_batch_multi_wallet_response(resp, configs, None).await.unwrap();
     assert_eq!(results.len(), 5);
 
     for r in &results {
@@ -441,7 +441,7 @@ async fn test_multi_wallet_batch_large_batch() {
         },
     ];
 
-    let results = process_batch_multi_wallet_response(resp, configs).await.unwrap();
+    let (results, _) = process_batch_multi_wallet_response(resp, configs, None).await.unwrap();
     assert_eq!(results.len(), 100, "should get exactly 100 block results");
 
     for (i, r) in results.iter().enumerate() {
