@@ -56,6 +56,7 @@ pub struct ProcessedBatch {
 /// Otherwise, use the provided account_lookahead.
 pub fn compute_lookahead(
     account_lookahead: u32,
+    subaddress_lookahead: u32,
     accounts_to_scan: Option<&[u32]>,
 ) -> Lookahead {
     let account = if let Some(accounts) = accounts_to_scan {
@@ -63,9 +64,14 @@ pub fn compute_lookahead(
     } else {
         account_lookahead
     };
+    let subaddress = if subaddress_lookahead > 0 {
+        subaddress_lookahead
+    } else {
+        DEFAULT_LOOKAHEAD.subaddress
+    };
     Lookahead {
         account,
-        subaddress: DEFAULT_LOOKAHEAD.subaddress,
+        subaddress,
     }
 }
 
@@ -300,21 +306,34 @@ mod tests {
 
     #[test]
     fn lookahead_uses_account_lookahead_when_no_accounts() {
-        let l = compute_lookahead(5, None);
+        let l = compute_lookahead(5, 0, None);
         assert_eq!(l.account, 5);
         assert_eq!(l.subaddress, DEFAULT_LOOKAHEAD.subaddress);
     }
 
     #[test]
     fn lookahead_uses_max_account_from_list() {
-        let l = compute_lookahead(5, Some(&[0, 3, 1]));
+        let l = compute_lookahead(5, 0, Some(&[0, 3, 1]));
         assert_eq!(l.account, 3);
     }
 
     #[test]
     fn lookahead_handles_empty_accounts_list() {
-        let l = compute_lookahead(5, Some(&[]));
+        let l = compute_lookahead(5, 0, Some(&[]));
         assert_eq!(l.account, 0);
+    }
+
+    #[test]
+    fn lookahead_uses_subaddress_when_provided() {
+        let l = compute_lookahead(5, 200, None);
+        assert_eq!(l.account, 5);
+        assert_eq!(l.subaddress, 200);
+    }
+
+    #[test]
+    fn lookahead_falls_back_to_default_subaddress_when_zero() {
+        let l = compute_lookahead(5, 0, None);
+        assert_eq!(l.subaddress, DEFAULT_LOOKAHEAD.subaddress);
     }
 
     // ---- filter_outputs_by_accounts ----
