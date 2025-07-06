@@ -47,6 +47,8 @@ struct PrefetchSlot {
 thread_local! {
     static PREFETCH_SLOT: RefCell<Option<PrefetchSlot>> = RefCell::new(None);
     static PREFETCH_GENERATION: Cell<u64> = Cell::new(0);
+    static SCANNER_CACHE: RefCell<Option<(u64, monero_rust::CachedScanner)>> = RefCell::new(None);
+    static MULTI_SCANNER_CACHE: RefCell<Option<(u64, monero_rust::CachedScanners)>> = RefCell::new(None);
 }
 
 /// Increment the generation counter and clear any buffered prefetch.
@@ -58,6 +60,8 @@ fn bump_generation() -> u64 {
         next
     });
     PREFETCH_SLOT.with(|s| { s.borrow_mut().take(); });
+    SCANNER_CACHE.with(|s| { s.borrow_mut().take(); });
+    MULTI_SCANNER_CACHE.with(|s| { s.borrow_mut().take(); });
     PREFETCH_GENERATION.with(|g| g.get())
 }
 
@@ -93,6 +97,58 @@ fn store_prefetch(generation: u64, height: u64, data: monero_rust::FetchedBlocks
 }
 
 // ---------------------------------------------------------------------------
+// Scanner cache infrastructure (keyed by generation)
+// ---------------------------------------------------------------------------
+
+fn take_scanner_cache(generation: u64) -> Option<monero_rust::CachedScanner> {
+    SCANNER_CACHE.with(|s| {
+        let matches = {
+            let slot = s.borrow();
+            matches!(&*slot, Some((g, _)) if *g == generation)
+        };
+        if matches {
+            s.borrow_mut().take().map(|(_, cached)| cached)
+        } else {
+            None
+        }
+    })
+}
+
+fn store_scanner_cache(generation: u64, cached: monero_rust::CachedScanner) {
+    PREFETCH_GENERATION.with(|g| {
+        if g.get() == generation {
+            SCANNER_CACHE.with(|s| {
+                *s.borrow_mut() = Some((generation, cached));
+            });
+        }
+    });
+}
+
+fn take_multi_scanner_cache(generation: u64) -> Option<monero_rust::CachedScanners> {
+    MULTI_SCANNER_CACHE.with(|s| {
+        let matches = {
+            let slot = s.borrow();
+            matches!(&*slot, Some((g, _)) if *g == generation)
+        };
+        if matches {
+            s.borrow_mut().take().map(|(_, cached)| cached)
+        } else {
+            None
+        }
+    })
+}
+
+fn store_multi_scanner_cache(generation: u64, cached: monero_rust::CachedScanners) {
+    PREFETCH_GENERATION.with(|g| {
+        if g.get() == generation {
+            MULTI_SCANNER_CACHE.with(|s| {
+                *s.borrow_mut() = Some((generation, cached));
+            });
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScanType {
@@ -117,6 +173,7 @@ pub struct WalletActor {
     scan_seed: String,
     scan_network: String,
     scan_account_lookahead: u32,
+    scan_subaddress_lookahead: u32,
     scan_accounts_to_scan: Option<Vec<u32>>,
     // Multi-wallet scan state
     multi_wallet_scan_current_height: u64,
@@ -167,6 +224,7 @@ impl WalletActor {
             scan_seed: String::new(),
             scan_network: String::new(),
             scan_account_lookahead: 0,
+            scan_subaddress_lookahead: 0,
             scan_accounts_to_scan: None,
             multi_wallet_scan_current_height: 0,
             multi_wallet_scan_target_height: 0,
@@ -623,6 +681,7 @@ impl WalletActor {
                     seed: resolved_seed,
                     network: request.network,
                     account_lookahead: request.account_lookahead,
+                    subaddress_lookahead: request.subaddress_lookahead,
                     accounts_to_scan: request.accounts_to_scan,
                 })
                 .await;
@@ -659,6 +718,7 @@ impl WalletActor {
                     &resolved_seed,
                     &request.network,
                     request.account_lookahead,
+                    request.subaddress_lookahead,
                 )
                 .await
                 {
@@ -744,10 +804,11 @@ impl WalletActor {
                     .map(|(i, w)| monero_rust::WalletScanConfig {
                         mnemonic: resolved_seeds[i].clone(),
                         network: w.network.clone(),
-                        lookahead: monero_rust::Lookahead {
-                            account: w.account_lookahead,
-                            subaddress: 20,
-                        },
+                        lookahead: monero_rust::compute_lookahead(
+                            w.account_lookahead,
+                            w.subaddress_lookahead,
+                            w.accounts_to_scan.as_deref(),
+                        ),
                     })
                     .collect();
 
@@ -822,6 +883,7 @@ impl WalletActor {
                         seed: s,
                         network: w.network.clone(),
                         account_lookahead: w.account_lookahead,
+                        subaddress_lookahead: w.subaddress_lookahead,
                         accounts_to_scan: w.accounts_to_scan.clone(),
                         passphrase: String::new(),
                         bip39_account_index: 0,
@@ -1211,6 +1273,7 @@ impl Notifiable<UpdateScanState> for WalletActor {
         self.scan_seed = msg.seed;
         self.scan_network = msg.network;
         self.scan_account_lookahead = msg.account_lookahead;
+        self.scan_subaddress_lookahead = msg.subaddress_lookahead;
         self.scan_accounts_to_scan = msg.accounts_to_scan;
     }
 }
@@ -1247,6 +1310,7 @@ impl Notifiable<StartContinuousScan> for WalletActor {
         let seed = msg.seed.clone();
         let network = msg.network.clone();
         let account_lookahead = msg.account_lookahead;
+        let subaddress_lookahead = msg.subaddress_lookahead;
         let mut self_addr = ctx.address();
 
         wasm_bindgen_futures::spawn_local(async move {
@@ -1264,6 +1328,7 @@ impl Notifiable<StartContinuousScan> for WalletActor {
                             seed: seed.clone(),
                             network: network.clone(),
                             account_lookahead,
+                            subaddress_lookahead,
                             accounts_to_scan: msg.accounts_to_scan.clone(),
                         })
                         .await;
@@ -1354,6 +1419,7 @@ impl Notifiable<ContinueScan> for WalletActor {
         let seed = self.scan_seed.clone();
         let network = self.scan_network.clone();
         let account_lookahead = self.scan_account_lookahead;
+        let subaddress_lookahead = self.scan_subaddress_lookahead;
         let accounts_to_scan = self.scan_accounts_to_scan.clone();
         let target_height = self.scan_target_height;
         let mut self_addr = ctx.address();
@@ -1370,6 +1436,7 @@ impl Notifiable<ContinueScan> for WalletActor {
         wasm_bindgen_futures::spawn_local(async move {
             let lookahead = monero_rust::compute_lookahead(
                 account_lookahead,
+                subaddress_lookahead,
                 accounts_to_scan.as_deref(),
             );
 
@@ -1439,14 +1506,16 @@ impl Notifiable<ContinueScan> for WalletActor {
                 });
             }
 
-            // 3. Process current batch
-            match monero_rust::process_fetched_batch(
+            // 3. Process current batch (reuse cached scanner if available)
+            let cached_scanner = take_scanner_cache(scan_gen);
+            match monero_rust::process_fetched_batch_cached(
                 fetched,
                 &seed,
                 &network,
                 lookahead,
+                cached_scanner,
             ).await {
-                Ok(batch_results) => {
+                Ok((batch_results, returned_scanner)) => {
                     if batch_results.is_empty() {
                         let _ = self_addr.notify(StopScan).await;
                         return;
@@ -1483,9 +1552,13 @@ impl Notifiable<ContinueScan> for WalletActor {
                             seed,
                             network,
                             account_lookahead,
+                            subaddress_lookahead,
                         }).await;
                         return;
                     }
+
+                    // Cache the scanner for the next batch
+                    store_scanner_cache(scan_gen, returned_scanner);
 
                     let processed = monero_rust::process_single_wallet_batch(
                         &batch_results,
@@ -1551,6 +1624,7 @@ impl Notifiable<ContinueScan> for WalletActor {
                             seed,
                             network,
                             account_lookahead,
+                            subaddress_lookahead,
                             accounts_to_scan,
                         })
                         .await;
@@ -1637,6 +1711,7 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                     network: w.network.clone(),
                     lookahead: monero_rust::compute_lookahead(
                         w.account_lookahead,
+                        w.subaddress_lookahead,
                         w.accounts_to_scan.as_deref(),
                     ),
                 })
@@ -1691,12 +1766,14 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                 });
             }
 
-            // 3. Process current batch
-            match monero_rust::process_fetched_batch_multi_wallet(
+            // 3. Process current batch (reuse cached scanners if available)
+            let cached_scanners = take_multi_scanner_cache(scan_gen);
+            match monero_rust::process_fetched_batch_multi_wallet_cached(
                 fetched,
                 wallet_configs,
+                cached_scanners,
             ).await {
-                Ok(batch_results) => {
+                Ok((batch_results, returned_scanners)) => {
                     if batch_results.is_empty() {
                         let _ = self_addr.notify(StopScan).await;
                         return;
@@ -1744,9 +1821,13 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                             seed: first_wallet.seed.clone(),
                             network: first_wallet.network.clone(),
                             account_lookahead: first_wallet.account_lookahead,
+                            subaddress_lookahead: first_wallet.subaddress_lookahead,
                         }).await;
                         return;
                     }
+
+                    // Cache the scanners for the next batch
+                    store_multi_scanner_cache(scan_gen, returned_scanners);
 
                     let batch_end_height = batch_results
                         .last()
@@ -2039,6 +2120,7 @@ impl Notifiable<HandleReorg> for WalletActor {
                     seed: msg.seed,
                     network: msg.network,
                     account_lookahead: msg.account_lookahead,
+                    subaddress_lookahead: msg.subaddress_lookahead,
                     accounts_to_scan: msg.accounts_to_scan,
                 }).await;
 

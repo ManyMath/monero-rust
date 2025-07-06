@@ -92,6 +92,7 @@ pub struct StartContinuousScan {
     pub seed: String,
     pub network: String,
     pub account_lookahead: u32,
+    pub subaddress_lookahead: u32,
     pub accounts_to_scan: Option<Vec<u32>>,
 }
 
@@ -113,7 +114,8 @@ pub struct UpdateScanState {
     pub seed: String,
     pub network: String,
     pub account_lookahead: u32,
-    pub accounts_to_scan: Option<Vec<u32>>, // New: specific accounts to scan
+    pub subaddress_lookahead: u32,
+    pub accounts_to_scan: Option<Vec<u32>>,
 }
 
 #[derive(Debug, Clone)]
@@ -141,6 +143,7 @@ pub struct HandleReorg {
     pub seed: String,
     pub network: String,
     pub account_lookahead: u32,
+    pub subaddress_lookahead: u32,
 }
 
 #[derive(Debug, Clone)]

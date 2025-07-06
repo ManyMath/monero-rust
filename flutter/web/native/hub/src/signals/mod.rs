@@ -359,6 +359,8 @@ pub struct StartContinuousScanRequest {
     pub network: String,
     pub account_lookahead: u32,
     #[serde(default)]
+    pub subaddress_lookahead: u32,
+    #[serde(default)]
     pub accounts_to_scan: Option<Vec<u32>>,
     #[serde(default)]
     pub passphrase: String,
@@ -380,6 +382,8 @@ pub struct MempoolScanRequest {
     pub seed: String,
     pub network: String,
     pub account_lookahead: u32,
+    #[serde(default)]
+    pub subaddress_lookahead: u32,
     #[serde(default)]
     #[allow(dead_code)]
     pub accounts_to_scan: Option<Vec<u32>>,
@@ -473,6 +477,8 @@ pub struct WalletConfig {
     pub seed: String,
     pub network: String,
     pub account_lookahead: u32, // Keep for backwards compatibility
+    #[serde(default)]
+    pub subaddress_lookahead: u32,
     #[serde(default)]
     pub accounts_to_scan: Option<Vec<u32>>,
     #[serde(default)]
