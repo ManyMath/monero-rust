@@ -335,6 +335,8 @@ class _DebugViewState extends State<DebugView> {
                           getContinuousScanButtonLabel: ss.continuousScanButtonLabel,
                           getContinuousScanButtonColor: ss.continuousScanButtonColor,
                           connectionState: ss.connectionState,
+                          lookaheadMode: ss.lookaheadMode,
+                          onLookaheadModeChanged: ss.setLookaheadMode,
                         ),
                       ),
                       _buildPanel(

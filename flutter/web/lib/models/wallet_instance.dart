@@ -179,7 +179,7 @@ class WalletInstance {
     );
   }
 
-  WalletConfig toWalletConfig() {
+  WalletConfig toWalletConfig({int subaddressLookahead = 0}) {
     // Calculate the highest account index for lookahead
     final highestAccount = accounts.isEmpty ? 0 : accounts.reduce((a, b) => a > b ? a : b);
 
@@ -187,6 +187,7 @@ class WalletInstance {
       seed: seed,
       network: network,
       accountLookahead: highestAccount,
+      subaddressLookahead: subaddressLookahead,
       passphrase: '',
       bip39AccountIndex: 0,
     );

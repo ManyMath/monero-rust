@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../src/bindings/bindings.dart';
 import '../services/wallet_polling_service.dart';
+import '../state/scan_state.dart' show LookaheadMode;
 import 'common_widgets.dart';
 
 enum NodeConnectionState {
@@ -54,6 +55,8 @@ class ScanningPanel extends StatefulWidget {
   final String Function() getContinuousScanButtonLabel;
   final Color Function() getContinuousScanButtonColor;
   final NodeConnectionState connectionState;
+  final LookaheadMode lookaheadMode;
+  final ValueChanged<LookaheadMode> onLookaheadModeChanged;
 
   const ScanningPanel({
     super.key,
@@ -77,6 +80,8 @@ class ScanningPanel extends StatefulWidget {
     required this.onScanMempool,
     required this.getContinuousScanButtonLabel,
     required this.getContinuousScanButtonColor,
+    required this.lookaheadMode,
+    required this.onLookaheadModeChanged,
     this.restoreHeight,
     this.connectionState = NodeConnectionState.disconnected,
   });
@@ -85,19 +90,7 @@ class ScanningPanel extends StatefulWidget {
   State<ScanningPanel> createState() => _ScanningPanelState();
 }
 
-enum LookaheadMode {
-  none('No lookahead', 0, 0),
-  hardware('Hardware wallet', 5, 20),
-  compatibility('Compatibility', 50, 200);
-
-  final String label;
-  final int accounts;
-  final int subaddresses;
-  const LookaheadMode(this.label, this.accounts, this.subaddresses);
-}
-
 class _ScanningPanelState extends State<ScanningPanel> {
-  LookaheadMode _selectedLookahead = LookaheadMode.none;
 
   Widget _buildCountdownRow({
     required ValueNotifier<int> blockNotifier,
@@ -216,7 +209,7 @@ class _ScanningPanelState extends State<ScanningPanel> {
               const SizedBox(width: 16),
               Expanded(
                 child: DropdownButtonFormField<LookaheadMode>(
-                  value: _selectedLookahead,
+                  value: widget.lookaheadMode,
                   decoration: const InputDecoration(
                     labelText: 'Lookahead',
                     border: OutlineInputBorder(),
@@ -229,9 +222,7 @@ class _ScanningPanelState extends State<ScanningPanel> {
                       .toList(),
                   onChanged: (value) {
                     if (value != null) {
-                      setState(() {
-                        _selectedLookahead = value;
-                      });
+                      widget.onLookaheadModeChanged(value);
                     }
                   },
                 ),

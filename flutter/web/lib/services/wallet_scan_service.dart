@@ -107,9 +107,10 @@ class WalletScanService {
     String? seed,
     String? network,
     int accountLookahead = 0,
+    int subaddressLookahead = 0,
   }) {
     if (walletsToScan.length > 1) {
-      final walletConfigs = walletsToScan.map((w) => w.toWalletConfig()).toList();
+      final walletConfigs = walletsToScan.map((w) => w.toWalletConfig(subaddressLookahead: subaddressLookahead)).toList();
 
       StartMultiWalletScanRequest(
         nodeUrl: nodeUrl,
@@ -124,6 +125,7 @@ class WalletScanService {
         seed: wallet.seed,
         network: wallet.network,
         accountLookahead: accountLookahead,
+        subaddressLookahead: subaddressLookahead,
         passphrase: '',
         bip39AccountIndex: 0,
       ).sendSignalToRust();
@@ -134,6 +136,7 @@ class WalletScanService {
         seed: seed,
         network: network,
         accountLookahead: accountLookahead,
+        subaddressLookahead: subaddressLookahead,
         passphrase: '',
         bip39AccountIndex: 0,
       ).sendSignalToRust();
@@ -181,12 +184,15 @@ class WalletScanService {
     required String seed,
     required String nodeUrl,
     required String network,
+    int accountLookahead = 0,
+    int subaddressLookahead = 0,
   }) {
     MempoolScanRequest(
       nodeUrl: nodeUrl,
       seed: seed,
       network: network,
-      accountLookahead: 0,
+      accountLookahead: accountLookahead,
+      subaddressLookahead: subaddressLookahead,
       passphrase: '',
       bip39AccountIndex: 0,
     ).sendSignalToRust();

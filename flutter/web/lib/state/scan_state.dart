@@ -10,9 +10,22 @@ import '../widgets/scanning_panel.dart' show NodeConnectionState;
 import 'rinf_signal_hub.dart';
 import 'wallet_state.dart';
 
+enum LookaheadMode {
+  none('No lookahead', 0, 0),
+  hardware('Hardware wallet', 5, 20),
+  compatibility('Compatibility', 50, 200);
+
+  final String label;
+  final int accounts;
+  final int subaddresses;
+  const LookaheadMode(this.label, this.accounts, this.subaddresses);
+}
+
 class ScanState extends ChangeNotifier {
   final WalletState _walletState;
   final WalletPollingService pollingService;
+
+  LookaheadMode lookaheadMode = LookaheadMode.none;
 
   bool isScanning = false;
   bool isContinuousScanning = false;
@@ -66,6 +79,11 @@ class ScanState extends ChangeNotifier {
     _walletState.checkIsContinuousScanning = () => isContinuousScanning;
     _walletState.onWalletStateCleared = _onWalletStateCleared;
     _walletState.onDaemonHeightRestored = _onDaemonHeightRestored;
+  }
+
+  void setLookaheadMode(LookaheadMode mode) {
+    lookaheadMode = mode;
+    notifyListeners();
   }
 
   void _onWalletStateCleared() {
@@ -393,7 +411,8 @@ class ScanState extends ChangeNotifier {
         walletsToScan: walletsToScan,
         seed: result?.normalizedInput,
         network: walletsToScan.isEmpty ? _walletState.network : null,
-        accountLookahead: highestAccount,
+        accountLookahead: highestAccount + lookaheadMode.accounts,
+        subaddressLookahead: lookaheadMode.subaddresses,
       );
     }
 
@@ -428,10 +447,13 @@ class ScanState extends ChangeNotifier {
     scanError = null;
     notifyListeners();
 
+    final highestAccount = _walletState.accounts.isEmpty ? 0 : _walletState.accounts.reduce((a, b) => a > b ? a : b);
     WalletScanService.scanMempool(
       seed: validation.normalizedSeed!,
       nodeUrl: validation.nodeUrl!,
       network: _walletState.network,
+      accountLookahead: highestAccount + lookaheadMode.accounts,
+      subaddressLookahead: lookaheadMode.subaddresses,
     );
   }
 
@@ -476,7 +498,7 @@ class ScanState extends ChangeNotifier {
     WalletScanService.queryDaemonHeight(nodeUrl);
 
     if (walletsToScan.length > 1) {
-      final walletConfigs = walletsToScan.map((w) => w.toWalletConfig()).toList();
+      final walletConfigs = walletsToScan.map((w) => w.toWalletConfig(subaddressLookahead: lookaheadMode.subaddresses)).toList();
       StartMultiWalletScanRequest(
         nodeUrl: nodeUrl,
         startHeight: Uint64(BigInt.from(_walletState.continuousScanCurrentHeight)),
@@ -491,7 +513,8 @@ class ScanState extends ChangeNotifier {
         startHeight: Uint64(BigInt.from(_walletState.continuousScanCurrentHeight)),
         seed: wallet.seed,
         network: wallet.network,
-        accountLookahead: highestAccount,
+        accountLookahead: highestAccount + lookaheadMode.accounts,
+        subaddressLookahead: lookaheadMode.subaddresses,
         passphrase: '',
         bip39AccountIndex: 0,
       ).sendSignalToRust();
@@ -509,7 +532,8 @@ class ScanState extends ChangeNotifier {
       nodeUrl: nodeUrl,
       seed: seed,
       network: _walletState.network,
-      accountLookahead: highestAccount,
+      accountLookahead: highestAccount + lookaheadMode.accounts,
+      subaddressLookahead: lookaheadMode.subaddresses,
       passphrase: '',
       bip39AccountIndex: 0,
     ).sendSignalToRust();
