@@ -1606,6 +1606,13 @@ impl Notifiable<ContinueScan> for WalletActor {
                             .await;
                     }
 
+                    // If scan was cancelled (e.g. user paused) while we were
+                    // processing, don't re-enable scanning or continue the loop.
+                    // Outputs above were still stored so nothing is lost.
+                    if PREFETCH_GENERATION.with(|g| g.get()) != scan_gen {
+                        return;
+                    }
+
                     let progress = monero_rust::sync_progress(processed.batch_end_height, target_height);
                     SyncProgressResponse {
                         current_height: progress.current_height,
@@ -1858,6 +1865,11 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                             key_images: all_spent_key_images,
                             height: batch_end_height,
                         }).await;
+                    }
+
+                    // If scan was cancelled while we were processing, stop here.
+                    if PREFETCH_GENERATION.with(|g| g.get()) != scan_gen {
+                        return;
                     }
 
                     let wallet_accounts: Vec<Option<HashSet<u32>>> = wallets
