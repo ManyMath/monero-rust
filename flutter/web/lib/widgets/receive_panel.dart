@@ -66,13 +66,8 @@ class _ReceivePanelState extends State<ReceivePanel> {
       setState(() {
         // Check if a new account was added (list grew)
         if (widget.accounts.length > oldWidget.accounts.length && widget.accounts.isNotEmpty) {
-          // Expand the newly created account (the last one)
-          final newAccountIndex = widget.accounts.length - 1;
-          _expandedIndex = newAccountIndex;
-          // Trigger derivation for the newly created account
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            widget.onAccountSelected(widget.accounts[newAccountIndex]);
-          });
+          // Keep the current expanded index stable - don't auto-switch
+          // when scanner discovers new accounts via lookahead
         }
         // Clean up expanded index if it's out of bounds
         else if (_expandedIndex != null && _expandedIndex! >= widget.accounts.length) {

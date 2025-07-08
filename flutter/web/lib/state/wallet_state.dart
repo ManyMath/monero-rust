@@ -472,7 +472,7 @@ class WalletState extends ChangeNotifier {
     }
 
     if (aw != null) {
-      final updatedWallet = aw.createAccount(newAccountIndex).switchAccount(newAccountIndex);
+      final updatedWallet = aw.createAccount(newAccountIndex);
       lifecycle.openWallets[aw.walletId] = updatedWallet;
       notifyListeners();
       deriveSubaddresses();
