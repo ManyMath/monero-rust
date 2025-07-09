@@ -233,6 +233,8 @@ pub struct WalletState {
     pending_spends: HashMap<String, PendingSpend>,
     /// Transaction lifecycle tracking (tx_id -> TrackedTransaction).
     tracked_transactions: HashMap<String, TrackedTransaction>,
+    /// Maps key_image -> tx_hash of the transaction that spent it, for conflict dedup.
+    spent_by_tx: HashMap<String, String>,
 }
 
 impl WalletState {
@@ -246,6 +248,7 @@ impl WalletState {
             block_hashes: BlockHashChain::new(),
             pending_spends: HashMap::new(),
             tracked_transactions: HashMap::new(),
+            spent_by_tx: HashMap::new(),
         }
     }
 
@@ -342,6 +345,7 @@ impl WalletState {
         let height = self.current_height;
         self.add_outputs(outputs);
         self.current_height = height;
+        self.spent_by_tx.clear();
     }
 
     /// Mark outputs as spent by matching key images.
@@ -463,31 +467,56 @@ impl WalletState {
     }
 
     /// Like `mark_spent_by_key_images_at_height` but also detects conflicts:
-    /// an output already spent at a *different* height.
+    /// an output spent by a *different transaction*.
     ///
-    /// Not a conflict: `spent_height: None` (broadcast-marked) confirmed at any height,
-    /// or same height (idempotent).
+    /// `tx_hashes` is parallel to `key_images` — the tx that contains each key
+    /// image.  When a tx hash is known and matches the previously recorded
+    /// spending tx, the spend is treated as identical (rescan) regardless of
+    /// height.  A conflict is only raised when the spending tx differs.
+    ///
+    /// Not a conflict: broadcast-marked (`spent_height: None`) confirmed at any
+    /// height, or same spending transaction (idempotent rescan).
     ///
     /// Returns (newly_spent_count, conflicts).
-    pub fn mark_spent_detecting_conflicts(&mut self, key_images: &[String], height: u64) -> (usize, Vec<SpentConflict>) {
+    pub fn mark_spent_detecting_conflicts(
+        &mut self,
+        key_images: &[String],
+        tx_hashes: &[String],
+        height: u64,
+    ) -> (usize, Vec<SpentConflict>) {
         let mut count = 0;
         let mut conflicts = Vec::new();
-        for ki in key_images {
+        for (i, ki) in key_images.iter().enumerate() {
+            let tx_hash = tx_hashes.get(i).map(|s| s.as_str()).unwrap_or("");
             if let Some(&idx) = self.key_image_index.get(ki) {
                 let output = &mut self.outputs[idx];
                 if !output.spent {
                     output.spent = true;
                     output.spent_height = Some(height);
+                    if !tx_hash.is_empty() {
+                        self.spent_by_tx.insert(ki.clone(), tx_hash.to_string());
+                    }
                     count += 1;
                 } else if let Some(prev_h) = output.spent_height {
-                    if prev_h != height {
+                    // Check if same spending transaction (rescan)
+                    let same_tx = !tx_hash.is_empty()
+                        && self.spent_by_tx.get(ki).map_or(false, |prev| prev == tx_hash);
+                    if same_tx {
+                        // Idempotent rescan — update height to latest observation
+                        output.spent_height = Some(height);
+                    } else if prev_h != height {
+                        // Different tx or unknown tx at different height → conflict
                         conflicts.push(SpentConflict {
                             key_image: ki.clone(),
                             previous_spent_height: Some(prev_h),
                             new_height: height,
                         });
+                        // Update the recorded spending tx if we now know it
+                        if !tx_hash.is_empty() {
+                            self.spent_by_tx.insert(ki.clone(), tx_hash.to_string());
+                        }
                     }
-                    // Same height = idempotent, no conflict
+                    // Same height, unknown tx = idempotent, no conflict
                 }
                 // spent_height: None + already spent = broadcast confirmation, no conflict
             }
@@ -559,9 +588,10 @@ impl WalletState {
         self.rebuild_key_image_index();
         self.block_hashes.rollback_to(split_height);
 
-        // Clear pending spends whose key images were removed or unspent
+        // Clear pending spends and spending-tx records for removed/unspent key images
         for ki in removed_key_images.iter().chain(unspent_key_images.iter()) {
             self.pending_spends.remove(ki);
+            self.spent_by_tx.remove(ki);
         }
 
         if split_height > 0 {
@@ -1700,16 +1730,20 @@ mod tests {
     // ---- Double-spend conflict detection tests ----
 
     #[test]
-    fn test_conflict_different_height() {
+    fn test_conflict_different_tx() {
         let mut state = WalletState::new();
         state.add_outputs(vec![make_output(1_000_000_000_000, 50, "ki1")]);
 
-        let (count, conflicts) = state.mark_spent_detecting_conflicts(&["ki1".to_string()], 100);
+        let (count, conflicts) = state.mark_spent_detecting_conflicts(
+            &["ki1".to_string()], &["tx_a".to_string()], 100,
+        );
         assert_eq!(count, 1);
         assert!(conflicts.is_empty());
 
-        // Same key image at a different height -> conflict
-        let (count2, conflicts2) = state.mark_spent_detecting_conflicts(&["ki1".to_string()], 200);
+        // Same key image, different spending tx -> conflict
+        let (count2, conflicts2) = state.mark_spent_detecting_conflicts(
+            &["ki1".to_string()], &["tx_b".to_string()], 200,
+        );
         assert_eq!(count2, 0);
         assert_eq!(conflicts2.len(), 1);
         assert_eq!(conflicts2[0], SpentConflict {
@@ -1720,16 +1754,39 @@ mod tests {
     }
 
     #[test]
+    fn test_no_conflict_same_tx_different_height() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1_000_000_000_000, 50, "ki1")]);
+
+        let (count, conflicts) = state.mark_spent_detecting_conflicts(
+            &["ki1".to_string()], &["tx_a".to_string()], 100,
+        );
+        assert_eq!(count, 1);
+        assert!(conflicts.is_empty());
+
+        // Same spending tx at different height (rescan with different batch boundary) -> no conflict
+        let (count2, conflicts2) = state.mark_spent_detecting_conflicts(
+            &["ki1".to_string()], &["tx_a".to_string()], 200,
+        );
+        assert_eq!(count2, 0);
+        assert!(conflicts2.is_empty());
+    }
+
+    #[test]
     fn test_no_conflict_same_height() {
         let mut state = WalletState::new();
         state.add_outputs(vec![make_output(1_000_000_000_000, 50, "ki1")]);
 
-        let (count, conflicts) = state.mark_spent_detecting_conflicts(&["ki1".to_string()], 100);
+        let (count, conflicts) = state.mark_spent_detecting_conflicts(
+            &["ki1".to_string()], &["tx_a".to_string()], 100,
+        );
         assert_eq!(count, 1);
         assert!(conflicts.is_empty());
 
-        // Same height = idempotent, no conflict
-        let (count2, conflicts2) = state.mark_spent_detecting_conflicts(&["ki1".to_string()], 100);
+        // Same height = idempotent, no conflict (even with empty tx hash)
+        let (count2, conflicts2) = state.mark_spent_detecting_conflicts(
+            &["ki1".to_string()], &[], 100,
+        );
         assert_eq!(count2, 0);
         assert!(conflicts2.is_empty());
     }
@@ -1745,7 +1802,9 @@ mod tests {
         assert_eq!(state.outputs()[0].spent_height, None);
 
         // Now confirmed at some height -> NOT a conflict
-        let (count, conflicts) = state.mark_spent_detecting_conflicts(&["ki1".to_string()], 150);
+        let (count, conflicts) = state.mark_spent_detecting_conflicts(
+            &["ki1".to_string()], &["tx_a".to_string()], 150,
+        );
         assert_eq!(count, 0);
         assert!(conflicts.is_empty());
     }
