@@ -517,8 +517,13 @@ impl WalletState {
                         }
                     }
                     // Same height, unknown tx = idempotent, no conflict
+                } else {
+                    // spent_height: None = broadcast-marked, now confirmed on-chain
+                    output.spent_height = Some(height);
+                    if !tx_hash.is_empty() {
+                        self.spent_by_tx.insert(ki.clone(), tx_hash.to_string());
+                    }
                 }
-                // spent_height: None + already spent = broadcast confirmation, no conflict
             }
         }
         (count, conflicts)
@@ -1801,12 +1806,20 @@ mod tests {
         assert!(state.outputs()[0].spent);
         assert_eq!(state.outputs()[0].spent_height, None);
 
-        // Now confirmed at some height -> NOT a conflict
+        // Now confirmed at some height -> NOT a conflict, and updates spent_height
         let (count, conflicts) = state.mark_spent_detecting_conflicts(
             &["ki1".to_string()], &["tx_a".to_string()], 150,
         );
         assert_eq!(count, 0);
         assert!(conflicts.is_empty());
+        assert_eq!(state.outputs()[0].spent_height, Some(150));
+
+        // Subsequent rescan with same tx at different height -> still no conflict
+        let (count2, conflicts2) = state.mark_spent_detecting_conflicts(
+            &["ki1".to_string()], &["tx_a".to_string()], 200,
+        );
+        assert_eq!(count2, 0);
+        assert!(conflicts2.is_empty());
     }
 
     #[test]
