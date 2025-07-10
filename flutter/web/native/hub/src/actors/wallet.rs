@@ -593,6 +593,7 @@ impl WalletActor {
                     if !result.spent_key_images.is_empty() {
                         let _ = self_addr.notify(UpdateSpentStatus {
                             key_images: result.spent_key_images.clone(),
+                            tx_hashes: result.spent_key_image_tx_hashes.clone(),
                             height: result.block_height,
                         }).await;
                     }
@@ -1601,6 +1602,7 @@ impl Notifiable<ContinueScan> for WalletActor {
                         let _ = self_addr
                             .notify(UpdateSpentStatus {
                                 key_images: processed.spent_key_images,
+                                tx_hashes: processed.spent_key_image_tx_hashes,
                                 height: processed.batch_end_height,
                             })
                             .await;
@@ -1844,10 +1846,12 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                     // Collect block hashes and spent key images from this batch
                     let mut block_hashes = Vec::new();
                     let mut all_spent_key_images = Vec::new();
+                    let mut all_spent_tx_hashes = Vec::new();
                     let mut last_daemon_height = 0u64;
                     for result in &batch_results {
                         block_hashes.push((result.block_height, result.block_hash.clone()));
                         all_spent_key_images.extend(result.spent_key_images.iter().cloned());
+                        all_spent_tx_hashes.extend(result.spent_key_image_tx_hashes.iter().cloned());
                         if result.daemon_height > last_daemon_height {
                             last_daemon_height = result.daemon_height;
                         }
@@ -1863,6 +1867,7 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                     if !all_spent_key_images.is_empty() {
                         let _ = self_addr.notify(UpdateSpentStatus {
                             key_images: all_spent_key_images,
+                            tx_hashes: all_spent_tx_hashes,
                             height: batch_end_height,
                         }).await;
                     }
@@ -1988,7 +1993,7 @@ impl Notifiable<UpdateSpentStatus> for WalletActor {
         }
 
         let (updated_count, conflicts) = self.core_state.mark_spent_detecting_conflicts(
-            &msg.key_images, msg.height
+            &msg.key_images, &msg.tx_hashes, msg.height
         );
 
         if !conflicts.is_empty() {

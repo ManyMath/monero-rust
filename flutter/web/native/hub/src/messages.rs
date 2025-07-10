@@ -130,6 +130,7 @@ pub struct UpdateMultiWalletScanState {
 #[derive(Debug, Clone)]
 pub struct UpdateSpentStatus {
     pub key_images: Vec<String>,
+    pub tx_hashes: Vec<String>,
     pub height: u64,
 }
 
