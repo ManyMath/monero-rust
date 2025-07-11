@@ -2217,4 +2217,65 @@ mod tests {
         );
         assert!(conflicts.is_empty(), "expected no conflict after restore, got {:?}", conflicts);
     }
+
+    #[test]
+    fn test_rollback_clears_spent_by_tx() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1_000_000_000_000, 50, "ki1")]);
+        state.mark_spent_detecting_conflicts(
+            &["ki1".to_string()], &["tx_a".to_string()], 100,
+        );
+
+        // Rollback unspends ki1 and clears its spent_by_tx entry
+        state.rollback_to_height(90);
+        assert!(!state.outputs()[0].spent);
+
+        // Re-spend with a DIFFERENT tx should not conflict (clean slate)
+        let (count, conflicts) = state.mark_spent_detecting_conflicts(
+            &["ki1".to_string()], &["tx_b".to_string()], 95,
+        );
+        assert_eq!(count, 1);
+        assert!(conflicts.is_empty());
+    }
+
+    #[test]
+    fn test_replace_outputs_clears_spent_by_tx() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1_000_000_000_000, 50, "ki1")]);
+        state.mark_spent_detecting_conflicts(
+            &["ki1".to_string()], &["tx_a".to_string()], 100,
+        );
+
+        // Replace outputs clears spent_by_tx
+        state.replace_outputs(vec![make_output(1_000_000_000_000, 50, "ki1")]);
+
+        // First spend after replace works cleanly
+        let (count, conflicts) = state.mark_spent_detecting_conflicts(
+            &["ki1".to_string()], &["tx_a".to_string()], 100,
+        );
+        assert_eq!(count, 1);
+        assert!(conflicts.is_empty());
+    }
+
+    #[test]
+    fn test_conflict_after_conflict_updates_spent_by_tx() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1_000_000_000_000, 50, "ki1")]);
+
+        state.mark_spent_detecting_conflicts(
+            &["ki1".to_string()], &["tx_a".to_string()], 100,
+        );
+
+        // Different tx -> conflict, spent_by_tx updated to tx_b
+        let (_, conflicts) = state.mark_spent_detecting_conflicts(
+            &["ki1".to_string()], &["tx_b".to_string()], 200,
+        );
+        assert_eq!(conflicts.len(), 1);
+
+        // Same tx_b again at different height -> no conflict (idempotent)
+        let (_, conflicts2) = state.mark_spent_detecting_conflicts(
+            &["ki1".to_string()], &["tx_b".to_string()], 300,
+        );
+        assert!(conflicts2.is_empty());
+    }
 }
