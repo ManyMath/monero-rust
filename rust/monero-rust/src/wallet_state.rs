@@ -766,8 +766,16 @@ impl WalletState {
     }
 
     /// Restore tracked transactions from persistence.
+    ///
+    /// Also rebuilds `spent_by_tx` from confirmed transactions so that
+    /// subsequent rescans can identify idempotent key-image observations.
     pub fn restore_tracked_transactions(&mut self, txs: HashMap<String, TrackedTransaction>) {
         for (id, tx) in txs {
+            if matches!(tx.status, TxStatus::Confirmed { .. } | TxStatus::Broadcast) {
+                for ki in &tx.spent_key_images {
+                    self.spent_by_tx.insert(ki.clone(), tx.tx_id.clone());
+                }
+            }
             self.tracked_transactions.insert(id, tx);
         }
     }
@@ -2149,5 +2157,64 @@ mod tests {
         ]);
 
         assert_eq!(state.get_tracked_tx("tx1").unwrap().status, TxStatus::Broadcast);
+    }
+
+    #[test]
+    fn test_restore_tracked_transactions_rebuilds_spent_by_tx() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![
+            make_output(1_000_000_000_000, 50, "ki1"),
+            make_output(2_000_000_000_000, 60, "ki2"),
+        ]);
+
+        // Mark both as spent at height 100 with known tx hashes
+        state.mark_spent_detecting_conflicts(
+            &["ki1".to_string(), "ki2".to_string()],
+            &["tx_a".to_string(), "tx_b".to_string()],
+            100,
+        );
+
+        // Simulate save/restore: replace outputs (clears spent_by_tx), then restore tracked txs
+        let mut txs = HashMap::new();
+        txs.insert("tx_a".to_string(), TrackedTransaction {
+            tx_id: "tx_a".into(),
+            status: TxStatus::Confirmed { height: 100 },
+            spent_key_images: vec!["ki1".into()],
+            spent_output_keys: vec![],
+            change_outputs: vec![],
+            fee: 0,
+            created_at_secs: 1000,
+        });
+        txs.insert("tx_b".to_string(), TrackedTransaction {
+            tx_id: "tx_b".into(),
+            status: TxStatus::Broadcast,
+            spent_key_images: vec!["ki2".into()],
+            spent_output_keys: vec![],
+            change_outputs: vec![],
+            fee: 0,
+            created_at_secs: 1000,
+        });
+
+        // Clear and rebuild
+        state.replace_outputs(vec![
+            make_output(1_000_000_000_000, 50, "ki1"),
+            make_output(2_000_000_000_000, 60, "ki2"),
+        ]);
+        // Mark spent again (simulating output restore with spent flag)
+        state.mark_spent_detecting_conflicts(
+            &["ki1".to_string(), "ki2".to_string()],
+            &["tx_a".to_string(), "tx_b".to_string()],
+            100,
+        );
+
+        // Now clear spent_by_tx and restore from tracked txs
+        state.spent_by_tx.clear();
+        state.restore_tracked_transactions(txs);
+
+        // Rescan at different height should NOT produce conflict (spent_by_tx rebuilt)
+        let (_, conflicts) = state.mark_spent_detecting_conflicts(
+            &["ki1".to_string()], &["tx_a".to_string()], 200,
+        );
+        assert!(conflicts.is_empty(), "expected no conflict after restore, got {:?}", conflicts);
     }
 }
