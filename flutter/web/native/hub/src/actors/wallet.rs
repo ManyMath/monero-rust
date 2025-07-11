@@ -2115,8 +2115,10 @@ impl Notifiable<HandleReorg> for WalletActor {
                 }
                 self.core_state.block_hashes.compact();
                 if !processed.spent_key_images.is_empty() {
-                    self.core_state.mark_spent_by_key_images_at_height(
-                        &processed.spent_key_images, processed.batch_end_height
+                    self.core_state.mark_spent_detecting_conflicts(
+                        &processed.spent_key_images,
+                        &processed.spent_key_image_tx_hashes,
+                        processed.batch_end_height,
                     );
                 }
 
