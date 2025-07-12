@@ -316,7 +316,9 @@ fn expand_subaddresses_if_needed(
 
     // 2. Subaddress expansion within found_account
     let needed_address = found_address.saturating_add(lookahead.subaddress);
-    let current_max_address = watermark.max_minor_per_account[found_account as usize];
+    let Some(&current_max_address) = watermark.max_minor_per_account.get(found_account as usize) else {
+        return expanded;
+    };
 
     if needed_address > current_max_address {
         for addr in (current_max_address + 1)..=needed_address {
