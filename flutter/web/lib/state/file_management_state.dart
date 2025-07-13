@@ -220,25 +220,26 @@ class FileManagementState extends ChangeNotifier {
     }
   }
 
-  Future<void> loadWalletData(BuildContext context) async {
+  Future<void> loadWalletData(BuildContext context, {String? password}) async {
     isLoadingWallet = true;
     loadError = null;
     notifyListeners();
 
-    final password = await showDialog<String>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => PasswordDialog(
-        isUnlock: true,
-        title: 'Unlock Wallet Data',
-        submitLabel: 'Unlock',
-      ),
-    );
-
     if (password == null) {
-      isLoadingWallet = false;
-      notifyListeners();
-      return;
+      password = await showDialog<String>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => PasswordDialog(
+          isUnlock: true,
+          title: 'Unlock Wallet Data',
+          submitLabel: 'Unlock',
+        ),
+      );
+      if (password == null) {
+        isLoadingWallet = false;
+        notifyListeners();
+        return;
+      }
     }
 
     final loadResult = await WalletPersistenceBrowser.loadWalletData(
@@ -485,7 +486,8 @@ class FileManagementState extends ChangeNotifier {
 
       if (importResult.success) {
         if (!context.mounted) return;
-        await _walletState.switchWallet(walletId, loadWalletData: () => loadWalletData(context));
+        await _walletState.switchWallet(walletId,
+            loadWalletData: () => loadWalletData(context, password: password));
 
         final msg = shouldOverwrite
             ? 'Wallet "$walletId" overwritten successfully'
