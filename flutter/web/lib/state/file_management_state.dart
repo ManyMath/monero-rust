@@ -489,6 +489,16 @@ class FileManagementState extends ChangeNotifier {
         await _walletState.switchWallet(walletId,
             loadWalletData: () => loadWalletData(context, password: password));
 
+        // Only derive encryption key if load actually succeeded
+        if (loadError == null) {
+          final derived = await WalletPersistenceBrowser.deriveEncryptionKey(password);
+          if (derived != null) {
+            _cachedKeyHex = derived.keyHex;
+            _cachedSaltHex = derived.saltHex;
+            _startAutoSaveTimer();
+          }
+        }
+
         final msg = shouldOverwrite
             ? 'Wallet "$walletId" overwritten successfully'
             : 'Wallet "$walletId" imported successfully';
