@@ -253,6 +253,8 @@ class _DebugViewState extends State<DebugView> {
                             startScan: ss.startContinuousScan,
                             isContinuousScanning: ss.isContinuousScanning,
                           ),
+                          autoSaveEnabled: fs.autoSaveEnabled,
+                          onAutoSaveChanged: fs.setAutoSaveEnabled,
                         ),
                       ),
                       _buildPanel(

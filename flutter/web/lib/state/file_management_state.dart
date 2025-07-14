@@ -33,6 +33,7 @@ class FileManagementState extends ChangeNotifier {
   String? _cachedKeyHex;
   String? _cachedSaltHex;
   Timer? _autoSaveTimer;
+  bool autoSaveEnabled = false;
 
   FileManagementState({
     required WalletState walletState,
@@ -337,6 +338,14 @@ class FileManagementState extends ChangeNotifier {
 
     _walletState.deriveAddress();
 
+    // Cache encryption key so auto-save can work without a manual save
+    final derived = await WalletPersistenceBrowser.deriveEncryptionKey(password);
+    if (derived != null) {
+      _cachedKeyHex = derived.keyHex;
+      _cachedSaltHex = derived.saltHex;
+      _startAutoSaveTimer();
+    }
+
     _walletState.showSnackBar?.call('Wallet data loaded successfully');
   }
 
@@ -526,8 +535,19 @@ class FileManagementState extends ChangeNotifier {
     _walletState.showSnackBar?.call('Deleted wallet: $deletedWalletId');
   }
 
+  void setAutoSaveEnabled(bool enabled) {
+    autoSaveEnabled = enabled;
+    if (enabled && _cachedKeyHex != null) {
+      _startAutoSaveTimer();
+    } else if (!enabled) {
+      _autoSaveTimer?.cancel();
+    }
+    notifyListeners();
+  }
+
   void _startAutoSaveTimer() {
     _autoSaveTimer?.cancel();
+    if (!autoSaveEnabled) return;
     _autoSaveTimer = Timer.periodic(const Duration(minutes: 2), (_) {
       autoSaveIfReady();
     });
@@ -536,6 +556,7 @@ class FileManagementState extends ChangeNotifier {
   bool _isAutoSaving = false;
 
   Future<void> autoSaveIfReady() async {
+    if (!autoSaveEnabled) return;
     if (_cachedKeyHex == null || _walletState.walletId.isEmpty || _walletState.walletId == 'temp_wallet') return;
     if (_scanState.isContinuousScanning && !_scanState.isSynced) return;
     if (isSaving || _isAutoSaving) return;
@@ -578,6 +599,7 @@ class FileManagementState extends ChangeNotifier {
     _autoSaveTimer?.cancel();
     _cachedKeyHex = null;
     _cachedSaltHex = null;
+    autoSaveEnabled = false;
   }
 
   @override

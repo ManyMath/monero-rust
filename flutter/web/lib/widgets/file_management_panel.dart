@@ -29,6 +29,8 @@ class FileManagementPanel extends StatelessWidget {
   final VoidCallback onExport;
   final VoidCallback onImport;
   final Function(String) onCloseWallet;
+  final bool autoSaveEnabled;
+  final ValueChanged<bool> onAutoSaveChanged;
 
   const FileManagementPanel({
     super.key,
@@ -56,6 +58,8 @@ class FileManagementPanel extends StatelessWidget {
     required this.onExport,
     required this.onImport,
     required this.onCloseWallet,
+    required this.autoSaveEnabled,
+    required this.onAutoSaveChanged,
   });
 
   bool get hasWalletData =>
@@ -138,6 +142,34 @@ class FileManagementPanel extends StatelessWidget {
               ],
             ],
           ),
+          if (hasWalletData) ...[
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                SizedBox(
+                  height: 24,
+                  width: 24,
+                  child: Checkbox(
+                    value: autoSaveEnabled,
+                    onChanged: (v) => onAutoSaveChanged(v ?? false),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => onAutoSaveChanged(!autoSaveEnabled),
+                    child: Text(
+                      'Auto-save (every 2 min & after each transaction)',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey[400],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
           if (saveError != null) ...[
             const SizedBox(height: 12),
             ErrorMessageContainer(message: saveError!),
