@@ -533,37 +533,44 @@ class FileManagementState extends ChangeNotifier {
     });
   }
 
+  bool _isAutoSaving = false;
+
   Future<void> autoSaveIfReady() async {
     if (_cachedKeyHex == null || _walletState.walletId.isEmpty || _walletState.walletId == 'temp_wallet') return;
     if (_scanState.isContinuousScanning && !_scanState.isSynced) return;
-    if (isSaving) return;
+    if (isSaving || _isAutoSaving) return;
 
-    final activeWallet = _walletState.lifecycle.activeWallet;
-    final accounts = activeWallet?.accounts ?? [0];
-    final activeAccount = activeWallet?.activeAccount ?? _walletState.activeAccount;
-    final scanningAccounts = activeWallet?.scanningAccounts ?? {0};
+    _isAutoSaving = true;
+    try {
+      final activeWallet = _walletState.lifecycle.activeWallet;
+      final accounts = activeWallet?.accounts ?? [0];
+      final activeAccount = activeWallet?.activeAccount ?? _walletState.activeAccount;
+      final scanningAccounts = activeWallet?.scanningAccounts ?? {0};
 
-    final saveResult = await WalletPersistenceBrowser.saveWithDerivedKey(
-      walletId: _walletState.walletId,
-      keyHex: _cachedKeyHex!,
-      saltHex: _cachedSaltHex!,
-      seed: _walletState.seedController.text.trim(),
-      network: _walletState.network,
-      address: _walletState.derivedAddress,
-      nodeUrl: _walletState.nodeUrlController.text,
-      outputs: _walletState.allOutputs,
-      transactions: _walletState.allTransactions,
-      continuousScanCurrentHeight: _walletState.continuousScanCurrentHeight,
-      selectedOutputs: const {},
-      accounts: accounts,
-      activeAccount: activeAccount,
-      scanningAccounts: scanningAccounts,
-    );
+      final saveResult = await WalletPersistenceBrowser.saveWithDerivedKey(
+        walletId: _walletState.walletId,
+        keyHex: _cachedKeyHex!,
+        saltHex: _cachedSaltHex!,
+        seed: _walletState.seedController.text.trim(),
+        network: _walletState.network,
+        address: _walletState.derivedAddress,
+        nodeUrl: _walletState.nodeUrlController.text,
+        outputs: _walletState.allOutputs,
+        transactions: _walletState.allTransactions,
+        continuousScanCurrentHeight: _walletState.continuousScanCurrentHeight,
+        selectedOutputs: const {},
+        accounts: accounts,
+        activeAccount: activeAccount,
+        scanningAccounts: scanningAccounts,
+      );
 
-    if (saveResult.success) {
-      lastSaveTime = DateTime.now().toString().substring(0, 19);
-      _outputState.invalidateStorageBytesCache();
-      notifyListeners();
+      if (saveResult.success) {
+        lastSaveTime = DateTime.now().toString().substring(0, 19);
+        _outputState.invalidateStorageBytesCache();
+        notifyListeners();
+      }
+    } finally {
+      _isAutoSaving = false;
     }
   }
 
