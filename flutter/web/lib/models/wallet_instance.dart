@@ -79,6 +79,16 @@ class WalletInstance {
 
   double get totalBalance => confirmedBalance + unconfirmedBalance;
 
+  /// Balance across all accounts, ignoring activeAccount filter.
+  double get aggregateBalance {
+    int atomic = 0;
+    for (var output in outputs) {
+      if (output.spent) continue;
+      atomic += output.amount.toInt();
+    }
+    return atomic / 1e12;
+  }
+
   WalletInstance copyWith({
     String? walletId,
     String? seed,
