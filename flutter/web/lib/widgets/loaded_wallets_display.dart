@@ -110,7 +110,7 @@ class LoadedWalletsDisplay extends StatelessWidget {
                           ),
                         ),
                         Text(
-                          '${wallet.address.substring(0, 20)}... | ${wallet.totalBalance.toStringAsFixed(6)} XMR',
+                          '${wallet.address.substring(0, 20)}... | ${wallet.aggregateBalance.toStringAsFixed(6)} XMR',
                           style: TextStyle(
                             fontSize: 11,
                             color: Colors.grey.shade600,
