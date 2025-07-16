@@ -224,6 +224,7 @@ class FileManagementState extends ChangeNotifier {
   Future<void> loadWalletData(BuildContext context, {String? password}) async {
     isLoadingWallet = true;
     loadError = null;
+    lastSaveTime = null;
     notifyListeners();
 
     if (password == null) {
