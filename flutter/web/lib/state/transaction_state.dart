@@ -98,6 +98,12 @@ class TransactionState extends ChangeNotifier {
       }
       _walletState.notify();
       onBroadcastSuccess?.call();
+      for (var c in destinationControllers) {
+        c.clear();
+      }
+      for (var c in amountControllers) {
+        c.clear();
+      }
     } else {
       broadcastResult = null;
       broadcastError = msg.error ?? 'Unknown error during broadcast';
