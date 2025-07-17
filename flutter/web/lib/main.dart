@@ -1,5 +1,5 @@
-import 'package:rinf/rinf.dart';
-import 'src/bindings/bindings.dart';
+import 'src/ffi/web_ffi.dart';
+import 'src/ffi/signal_dispatch.dart';
 import 'package:flutter/material.dart';
 import 'views/debug_view.dart';
 import 'services/wallet_lifecycle_manager.dart';
@@ -14,7 +14,7 @@ import 'state/file_management_state.dart';
 import 'state/app_state_scope.dart';
 
 Future<void> main() async {
-  await initializeRust(assignRustSignal);
+  await initializeBareFfi(rustSignalHandlers);
   runApp(const AppStateHost(child: MyApp()));
 }
 

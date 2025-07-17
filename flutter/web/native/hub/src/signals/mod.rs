@@ -1,36 +1,35 @@
-use rinf::{DartSignal, RustSignal, SignalPiece};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, SignalPiece)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Recipient {
     pub address: String,
     pub amount: u64,
 }
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct MoneroTestRequest {}
 
-#[derive(Serialize, RustSignal)]
+#[derive(Serialize)]
 pub struct MoneroTestResponse {
     pub result: String,
 }
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct CreateWalletRequest {
     #[allow(dead_code)]
     pub password: String,
     pub network: String,
 }
 
-#[derive(Serialize, RustSignal)]
+#[derive(Serialize)]
 pub struct WalletCreatedResponse {
     pub address: String,
 }
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct StartSyncRequest {}
 
-#[derive(Serialize, RustSignal)]
+#[derive(Serialize)]
 pub struct SyncProgressResponse {
     pub current_height: u64,
     pub daemon_height: u64,
@@ -38,17 +37,17 @@ pub struct SyncProgressResponse {
     pub is_scanning: bool,
 }
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct GetBalanceRequest {}
 
-#[derive(Serialize, RustSignal)]
+#[derive(Serialize)]
 pub struct BalanceResponse {
     pub confirmed: u64,
     pub unconfirmed: u64,
     pub pending_spend: u64,
 }
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct CreateTransactionRequest {
     pub node_url: String,
     pub seed: String,
@@ -63,7 +62,7 @@ pub struct CreateTransactionRequest {
     pub subtract_fee: bool,
 }
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct SweepAllRequest {
     pub node_url: String,
     pub seed: String,
@@ -76,7 +75,7 @@ pub struct SweepAllRequest {
     pub bip39_account_index: u32,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, SignalPiece)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ChangeOutput {
     pub tx_hash: String,
     pub output_index: u8,
@@ -90,7 +89,7 @@ pub struct ChangeOutput {
     pub key_image: String,
 }
 
-#[derive(Serialize, RustSignal)]
+#[derive(Serialize)]
 pub struct TransactionCreatedResponse {
     pub success: bool,
     pub error: Option<String>,
@@ -106,12 +105,12 @@ pub struct TransactionCreatedResponse {
     pub change_outputs: Vec<ChangeOutput>,
 }
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct GenerateSeedRequest {
     pub seed_type: String,
 }
 
-#[derive(Serialize, RustSignal)]
+#[derive(Serialize)]
 pub struct SeedGeneratedResponse {
     pub seed: String,
     pub success: bool,
@@ -119,7 +118,7 @@ pub struct SeedGeneratedResponse {
     pub restore_height: Option<u64>,
 }
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct GetSeedBirthdayRequest {
     pub seed: String,
     #[serde(default)]
@@ -128,27 +127,27 @@ pub struct GetSeedBirthdayRequest {
     pub bip39_account_index: u32,
 }
 
-#[derive(Serialize, RustSignal)]
+#[derive(Serialize)]
 pub struct SeedBirthdayResponse {
     pub birthday: Option<u64>,
     pub success: bool,
     pub error: Option<String>,
 }
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct GetBlockHeightFromTimestampRequest {
     pub timestamp: u64,
     pub node_url: String,
 }
 
-#[derive(Serialize, RustSignal)]
+#[derive(Serialize)]
 pub struct BlockHeightFromTimestampResponse {
     pub block_height: u64,
     pub success: bool,
     pub error: Option<String>,
 }
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct DeriveAddressRequest {
     pub seed: String,
     pub network: String,
@@ -158,14 +157,14 @@ pub struct DeriveAddressRequest {
     pub bip39_account_index: u32,
 }
 
-#[derive(Serialize, RustSignal)]
+#[derive(Serialize)]
 pub struct AddressDerivedResponse {
     pub address: String,
     pub success: bool,
     pub error: Option<String>,
 }
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct DeriveSubaddressRequest {
     pub seed: String,
     pub network: String,
@@ -177,14 +176,14 @@ pub struct DeriveSubaddressRequest {
     pub bip39_account_index: u32,
 }
 
-#[derive(Serialize, RustSignal)]
+#[derive(Serialize)]
 pub struct SubaddressDerivedResponse {
     pub address: String,
     pub success: bool,
     pub error: Option<String>,
 }
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct DeriveKeysRequest {
     pub seed: String,
     pub network: String,
@@ -194,7 +193,7 @@ pub struct DeriveKeysRequest {
     pub bip39_account_index: u32,
 }
 
-#[derive(Serialize, RustSignal)]
+#[derive(Serialize)]
 pub struct KeysDerivedResponse {
     pub address: String,
     pub secret_spend_key: String,
@@ -205,7 +204,7 @@ pub struct KeysDerivedResponse {
     pub error: Option<String>,
 }
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct ScanBlockRequest {
     pub node_url: String,
     pub block_height: u64,
@@ -217,7 +216,7 @@ pub struct ScanBlockRequest {
     pub bip39_account_index: u32,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, SignalPiece)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct OwnedOutput {
     pub tx_hash: String,
     pub output_index: u8,
@@ -303,7 +302,7 @@ impl From<OwnedOutput> for monero_rust::WalletOutput {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, RustSignal)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct BlockScanResponse {
     pub success: bool,
     pub error: Option<String>,
@@ -317,7 +316,7 @@ pub struct BlockScanResponse {
     pub spent_key_image_tx_hashes: Vec<String>,
 }
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct BroadcastTransactionRequest {
     pub node_url: String,
     pub tx_blob: String,
@@ -328,7 +327,7 @@ pub struct BroadcastTransactionRequest {
     pub spent_key_images: Vec<String>,
 }
 
-#[derive(Serialize, RustSignal)]
+#[derive(Serialize)]
 pub struct TransactionBroadcastResponse {
     pub success: bool,
     pub error: Option<String>,
@@ -339,19 +338,19 @@ pub struct TransactionBroadcastResponse {
     pub is_double_spend: bool,
 }
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct QueryDaemonHeightRequest {
     pub node_url: String,
 }
 
-#[derive(Serialize, RustSignal)]
+#[derive(Serialize)]
 pub struct DaemonHeightResponse {
     pub success: bool,
     pub error: Option<String>,
     pub daemon_height: u64,
 }
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct StartContinuousScanRequest {
     pub node_url: String,
     pub start_height: u64,
@@ -368,15 +367,15 @@ pub struct StartContinuousScanRequest {
     pub bip39_account_index: u32,
 }
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct StopScanRequest {}
 
-#[derive(Serialize, RustSignal)]
+#[derive(Serialize)]
 pub struct SpentStatusUpdatedResponse {
     pub spent_key_images: Vec<String>,
 }
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct MempoolScanRequest {
     pub node_url: String,
     pub seed: String,
@@ -393,7 +392,7 @@ pub struct MempoolScanRequest {
     pub bip39_account_index: u32,
 }
 
-#[derive(Serialize, RustSignal)]
+#[derive(Serialize)]
 pub struct MempoolScanResponse {
     pub success: bool,
     pub error: Option<String>,
@@ -403,7 +402,7 @@ pub struct MempoolScanResponse {
     pub spent_key_image_tx_hashes: Vec<String>,
 }
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct GenerateOutProofRequest {
     pub tx_id: String,
     pub tx_key: String,
@@ -412,7 +411,7 @@ pub struct GenerateOutProofRequest {
     pub network: String,
 }
 
-#[derive(Serialize, RustSignal)]
+#[derive(Serialize)]
 pub struct OutProofGeneratedResponse {
     pub success: bool,
     pub error: Option<String>,
@@ -422,26 +421,26 @@ pub struct OutProofGeneratedResponse {
     pub formatted: Option<String>,
 }
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct SaveWalletDataRequest {
     pub password: String,
     pub wallet_data_json: String,
 }
 
-#[derive(Serialize, RustSignal)]
+#[derive(Serialize)]
 pub struct WalletDataSavedResponse {
     pub success: bool,
     pub error: Option<String>,
     pub encrypted_data: Option<String>,
 }
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct LoadWalletDataRequest {
     pub password: String,
     pub encrypted_data: String,
 }
 
-#[derive(Serialize, RustSignal)]
+#[derive(Serialize)]
 pub struct WalletDataLoadedResponse {
     pub success: bool,
     pub error: Option<String>,
@@ -450,12 +449,12 @@ pub struct WalletDataLoadedResponse {
 
 // --- Derived-key encryption signals (for auto-save without caching raw password) ---
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct DeriveEncryptionKeyRequest {
     pub password: String,
 }
 
-#[derive(Serialize, RustSignal)]
+#[derive(Serialize)]
 pub struct EncryptionKeyDerivedResponse {
     pub success: bool,
     pub error: Option<String>,
@@ -463,7 +462,7 @@ pub struct EncryptionKeyDerivedResponse {
     pub salt_hex: Option<String>,
 }
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct SaveWithDerivedKeyRequest {
     pub key_hex: String,
     pub salt_hex: String,
@@ -472,7 +471,7 @@ pub struct SaveWithDerivedKeyRequest {
 
 // Multi-wallet scanning signals
 
-#[derive(Deserialize, Debug, Clone, SignalPiece)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct WalletConfig {
     pub seed: String,
     pub network: String,
@@ -487,20 +486,20 @@ pub struct WalletConfig {
     pub bip39_account_index: u32,
 }
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct ScanBlockMultiWalletRequest {
     pub node_url: String,
     pub block_height: u64,
     pub wallets: Vec<WalletConfig>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, SignalPiece)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct WalletScanResult {
     pub address: String,
     pub outputs: Vec<OwnedOutput>,
 }
 
-#[derive(Serialize, RustSignal)]
+#[derive(Serialize)]
 pub struct MultiWalletScanResponse {
     pub success: bool,
     pub error: Option<String>,
@@ -514,14 +513,14 @@ pub struct MultiWalletScanResponse {
     pub wallet_results: Vec<WalletScanResult>,
 }
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct StartMultiWalletScanRequest {
     pub node_url: String,
     pub start_height: u64,
     pub wallets: Vec<WalletConfig>,
 }
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct RestoreWalletDataRequest {
     pub seed: String,
     pub network: String,
@@ -538,27 +537,27 @@ pub struct RestoreWalletDataRequest {
     pub bip39_account_index: u32,
 }
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct GetBlockHashesRequest {}
 
-#[derive(Serialize, RustSignal)]
+#[derive(Serialize)]
 pub struct BlockHashesResponse {
     pub success: bool,
     pub error: Option<String>,
     pub block_hashes_json: Option<String>,
 }
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct GetPendingStateRequest {}
 
-#[derive(Serialize, RustSignal)]
+#[derive(Serialize)]
 pub struct PendingStateResponse {
     pub success: bool,
     pub error: Option<String>,
     pub pending_state_json: Option<String>,
 }
 
-#[derive(Serialize, RustSignal)]
+#[derive(Serialize)]
 pub struct ReorgDetectedResponse {
     pub split_height: u64,
     pub blocks_detached: u64,
@@ -568,19 +567,19 @@ pub struct ReorgDetectedResponse {
     pub unspent_key_images: Vec<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, SignalPiece)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DoubleSpendConflict {
     pub key_image: String,
     pub previous_spent_height: u64, // 0 = unknown
     pub new_height: u64,            // 0 = mempool
 }
 
-#[derive(Serialize, RustSignal)]
+#[derive(Serialize)]
 pub struct DoubleSpendDetectedResponse {
     pub conflicts: Vec<DoubleSpendConflict>,
 }
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct ConvertBip39ToLegacyRequest {
     pub bip39_mnemonic: String,
     pub account_index: u32,
@@ -588,7 +587,7 @@ pub struct ConvertBip39ToLegacyRequest {
     pub passphrase: String,
 }
 
-#[derive(Serialize, RustSignal)]
+#[derive(Serialize)]
 pub struct Bip39LegacySeedResponse {
     pub legacy_seed: String,
     pub success: bool,
@@ -597,24 +596,24 @@ pub struct Bip39LegacySeedResponse {
 
 // --- Freeze/Thaw signals ---
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct FreezeOutputRequest {
     pub key_image: String,
 }
 
-#[derive(Deserialize, DartSignal)]
+#[derive(Deserialize)]
 pub struct ThawOutputRequest {
     pub key_image: String,
 }
 
-#[derive(Serialize, RustSignal)]
+#[derive(Serialize)]
 pub struct FreezeThawResponse {
     pub success: bool,
     pub key_image: String,
     pub frozen: bool,
 }
 
-#[derive(Serialize, RustSignal)]
+#[derive(Serialize)]
 pub struct TransactionStatusUpdate {
     pub tx_id: String,
     pub status: String,

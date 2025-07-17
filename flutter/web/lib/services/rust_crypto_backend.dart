@@ -7,10 +7,10 @@ class RustCryptoBackend implements CryptoBackend {
   Future<String?> encrypt(String password, String plaintext) async {
     final completer = Completer<String?>();
     final subscription =
-        WalletDataSavedResponse.rustSignalStream.listen((signal) {
+        WalletDataSavedResponse.stream.listen((msg) {
       if (!completer.isCompleted) {
-        if (signal.message.success && signal.message.encryptedData != null) {
-          completer.complete(signal.message.encryptedData);
+        if (msg.success && msg.encryptedData != null) {
+          completer.complete(msg.encryptedData);
         } else {
           completer.complete(null);
         }
@@ -35,14 +35,14 @@ class RustCryptoBackend implements CryptoBackend {
   Future<({String keyHex, String saltHex})?> deriveKey(String password) async {
     final completer = Completer<({String keyHex, String saltHex})?>();
     final subscription =
-        EncryptionKeyDerivedResponse.rustSignalStream.listen((signal) {
+        EncryptionKeyDerivedResponse.stream.listen((msg) {
       if (!completer.isCompleted) {
-        if (signal.message.success &&
-            signal.message.keyHex != null &&
-            signal.message.saltHex != null) {
+        if (msg.success &&
+            msg.keyHex != null &&
+            msg.saltHex != null) {
           completer.complete((
-            keyHex: signal.message.keyHex!,
-            saltHex: signal.message.saltHex!,
+            keyHex: msg.keyHex!,
+            saltHex: msg.saltHex!,
           ));
         } else {
           completer.complete(null);
@@ -68,10 +68,10 @@ class RustCryptoBackend implements CryptoBackend {
       String keyHex, String saltHex, String plaintext) async {
     final completer = Completer<String?>();
     final subscription =
-        WalletDataSavedResponse.rustSignalStream.listen((signal) {
+        WalletDataSavedResponse.stream.listen((msg) {
       if (!completer.isCompleted) {
-        if (signal.message.success && signal.message.encryptedData != null) {
-          completer.complete(signal.message.encryptedData);
+        if (msg.success && msg.encryptedData != null) {
+          completer.complete(msg.encryptedData);
         } else {
           completer.complete(null);
         }
@@ -97,10 +97,10 @@ class RustCryptoBackend implements CryptoBackend {
   Future<String?> decrypt(String password, String ciphertext) async {
     final completer = Completer<String?>();
     final subscription =
-        WalletDataLoadedResponse.rustSignalStream.listen((signal) {
+        WalletDataLoadedResponse.stream.listen((msg) {
       if (!completer.isCompleted) {
-        if (signal.message.success && signal.message.walletDataJson != null) {
-          completer.complete(signal.message.walletDataJson);
+        if (msg.success && msg.walletDataJson != null) {
+          completer.complete(msg.walletDataJson);
         } else {
           completer.complete(null);
         }

@@ -53,11 +53,10 @@ class PaymentProofDialog {
 
     // Subscribe to proof response
     StreamSubscription? sub;
-    sub = OutProofGeneratedResponse.rustSignalStream.listen((signal) {
+    sub = OutProofGeneratedResponse.stream.listen((response) {
       sub?.cancel();
       Navigator.of(context).pop();
 
-      final response = signal.message;
       if (response.success && response.formatted != null) {
         _showOutProofDialog(context, response.formatted!, txId, txKey, recipients);
       } else {

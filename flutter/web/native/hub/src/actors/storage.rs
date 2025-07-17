@@ -6,7 +6,7 @@ use crate::signals::{
 };
 use async_trait::async_trait;
 use messages::prelude::{Actor, Address, Context, Notifiable};
-use rinf::{DartSignal, RustSignal};
+use crate::ffi_web::SendToDart;
 
 pub struct StorageActor {}
 
@@ -22,9 +22,9 @@ impl StorageActor {
     }
 
     async fn listen_to_save_requests(mut self_addr: Address<Self>) {
-        let receiver = SaveWalletDataRequest::get_dart_signal_receiver();
-        while let Some(signal_pack) = receiver.recv().await {
-            let request = signal_pack.message;
+        let mut receiver = crate::ffi_web::get_save_wallet_data_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
+            let request = dart_msg;
             let _ = self_addr
                 .notify(SaveWalletData {
                     password: request.password,
@@ -35,9 +35,9 @@ impl StorageActor {
     }
 
     async fn listen_to_load_requests(mut self_addr: Address<Self>) {
-        let receiver = LoadWalletDataRequest::get_dart_signal_receiver();
-        while let Some(signal_pack) = receiver.recv().await {
-            let request = signal_pack.message;
+        let mut receiver = crate::ffi_web::get_load_wallet_data_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
+            let request = dart_msg;
             let _ = self_addr
                 .notify(LoadWalletData {
                     password: request.password,
@@ -48,20 +48,20 @@ impl StorageActor {
     }
 
     async fn listen_to_derive_key_requests(mut self_addr: Address<Self>) {
-        let receiver = DeriveEncryptionKeyRequest::get_dart_signal_receiver();
-        while let Some(signal_pack) = receiver.recv().await {
+        let mut receiver = crate::ffi_web::get_derive_encryption_key_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
             let _ = self_addr
                 .notify(DeriveKey {
-                    password: signal_pack.message.password,
+                    password: dart_msg.password,
                 })
                 .await;
         }
     }
 
     async fn listen_to_save_with_key_requests(mut self_addr: Address<Self>) {
-        let receiver = SaveWithDerivedKeyRequest::get_dart_signal_receiver();
-        while let Some(signal_pack) = receiver.recv().await {
-            let request = signal_pack.message;
+        let mut receiver = crate::ffi_web::get_save_with_derived_key_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
+            let request = dart_msg;
             let _ = self_addr
                 .notify(SaveWithKey {
                     key_hex: request.key_hex,

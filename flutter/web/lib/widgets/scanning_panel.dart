@@ -486,7 +486,7 @@ class _ScanningPanelState extends State<ScanningPanel> {
                   CommonWidgets.buildScanResultRow(label: 'Block Height', value: widget.scanResult!.blockHeight.toString()),
                   CommonWidgets.buildScanResultRow(label: 'Block Hash', value: widget.scanResult!.blockHash),
                   CommonWidgets.buildScanResultRow(label: 'Timestamp', value: DateTime.fromMillisecondsSinceEpoch(
-                    widget.scanResult!.blockTimestamp.toInt() * 1000,
+                    widget.scanResult!.blockTimestamp * 1000,
                   ).toString()),
                   CommonWidgets.buildScanResultRow(label: 'Transactions', value: widget.scanResult!.txCount.toString()),
                   CommonWidgets.buildScanResultRow(label: 'Outputs Found', value: widget.scanResult!.outputs.length.toString()),
@@ -522,7 +522,7 @@ class _ScanningPanelState extends State<ScanningPanel> {
                             Text('TX Hash: ${output.txHash}', style: const TextStyle(fontSize: 10, fontFamily: 'monospace')),
                             Text('Output Index: ${output.outputIndex}', style: const TextStyle(fontSize: 10)),
                             if (output.subaddressIndex != null)
-                              Text('Subaddress: ${output.subaddressIndex!.item1}/${output.subaddressIndex!.item2}', style: const TextStyle(fontSize: 10)),
+                              Text('Subaddress: ${output.subaddressIndex![0]}/${output.subaddressIndex![1]}', style: const TextStyle(fontSize: 10)),
                             if (output.paymentId != null)
                               Text('Payment ID: ${output.paymentId}', style: const TextStyle(fontSize: 10)),
                           ],

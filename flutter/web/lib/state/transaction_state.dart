@@ -83,7 +83,7 @@ class TransactionState extends ChangeNotifier {
         final alreadyExists = _walletState.allTransactions.any((tx) => tx.txHash == txId);
         if (!alreadyExists) {
           final ownedOutputs = _walletState.allOutputs.where((o) =>
-            o.txHash == txId && o.blockHeight.toInt() == 0).toList();
+            o.txHash == txId && o.blockHeight == 0).toList();
           _walletState.allTransactions = [
             ..._walletState.allTransactions,
             WalletTransaction(
@@ -117,7 +117,7 @@ class TransactionState extends ChangeNotifier {
     final spendableAccounts = <int>{};
     for (final output in _walletState.allOutputs) {
       if (!output.spent && !output.frozen) {
-        final account = output.subaddressIndex?.item1 ?? 0;
+        final account = output.subaddressIndex?[0] ?? 0;
         spendableAccounts.add(account);
       }
     }
@@ -134,7 +134,7 @@ class TransactionState extends ChangeNotifier {
     final spendableAccounts = <int>{};
     for (final output in _walletState.allOutputs) {
       if (!output.spent && !output.frozen) {
-        final account = output.subaddressIndex?.item1 ?? 0;
+        final account = output.subaddressIndex?[0] ?? 0;
         spendableAccounts.add(account);
       }
     }
@@ -153,8 +153,8 @@ class TransactionState extends ChangeNotifier {
       seed: seed,
       network: _walletState.network,
       outputs: _walletState.allOutputs,
-      daemonHeight: Uint64(BigInt.from(_scanState.daemonHeight ?? 0)),
-      currentHeight: Uint64(BigInt.from(_walletState.continuousScanCurrentHeight)),
+      daemonHeight: _scanState.daemonHeight ?? 0,
+      currentHeight: _walletState.continuousScanCurrentHeight,
       passphrase: '',
       bip39AccountIndex: 0,
     ).sendSignalToRust();
@@ -288,7 +288,7 @@ class TransactionState extends ChangeNotifier {
             output: output,
             currentHeight: _scanState.currentHeight,
           )) {
-        totalAtomic += output.amount.toInt();
+        totalAtomic += output.amount;
       }
     }
     final fullBalance = totalAtomic / 1e12;

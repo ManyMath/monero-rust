@@ -1,5 +1,5 @@
 import 'dart:async';
-import '../src/bindings/bindings.dart';
+import '../src/ffi/signal_types.dart';
 
 typedef SignalCallback<T> = void Function(T message);
 
@@ -27,24 +27,24 @@ class RinfSignalHub {
 
   void start() {
     _subscriptions.addAll([
-      KeysDerivedResponse.rustSignalStream.listen((s) => onKeysDerived?.call(s.message)),
-      SubaddressDerivedResponse.rustSignalStream.listen((s) => onSubaddressDerived?.call(s.message)),
-      SeedGeneratedResponse.rustSignalStream.listen((s) => onSeedGenerated?.call(s.message)),
-      SeedBirthdayResponse.rustSignalStream.listen((s) => onSeedBirthday?.call(s.message)),
-      BlockHeightFromTimestampResponse.rustSignalStream.listen((s) => onBlockHeightFromTimestamp?.call(s.message)),
-      BlockScanResponse.rustSignalStream.listen((s) => onBlockScan?.call(s.message)),
-      DaemonHeightResponse.rustSignalStream.listen((s) => onDaemonHeight?.call(s.message)),
-      SyncProgressResponse.rustSignalStream.listen((s) => onSyncProgress?.call(s.message)),
-      SpentStatusUpdatedResponse.rustSignalStream.listen((s) => onSpentStatusUpdated?.call(s.message)),
-      MempoolScanResponse.rustSignalStream.listen((s) => onMempoolScan?.call(s.message)),
-      MultiWalletScanResponse.rustSignalStream.listen((s) => onMultiWalletScan?.call(s.message)),
-      ReorgDetectedResponse.rustSignalStream.listen((s) => onReorgDetected?.call(s.message)),
-      DoubleSpendDetectedResponse.rustSignalStream.listen((s) => onDoubleSpendDetected?.call(s.message)),
-      TransactionCreatedResponse.rustSignalStream.listen((s) => onTransactionCreated?.call(s.message)),
-      TransactionBroadcastResponse.rustSignalStream.listen((s) => onTransactionBroadcast?.call(s.message)),
-      Bip39LegacySeedResponse.rustSignalStream.listen((s) => onBip39LegacySeed?.call(s.message)),
-      FreezeThawResponse.rustSignalStream.listen((s) => onFreezeThaw?.call(s.message)),
-      TransactionStatusUpdate.rustSignalStream.listen((s) => onTransactionStatusUpdate?.call(s.message)),
+      KeysDerivedResponse.stream.listen((msg) => onKeysDerived?.call(msg)),
+      SubaddressDerivedResponse.stream.listen((msg) => onSubaddressDerived?.call(msg)),
+      SeedGeneratedResponse.stream.listen((msg) => onSeedGenerated?.call(msg)),
+      SeedBirthdayResponse.stream.listen((msg) => onSeedBirthday?.call(msg)),
+      BlockHeightFromTimestampResponse.stream.listen((msg) => onBlockHeightFromTimestamp?.call(msg)),
+      BlockScanResponse.stream.listen((msg) => onBlockScan?.call(msg)),
+      DaemonHeightResponse.stream.listen((msg) => onDaemonHeight?.call(msg)),
+      SyncProgressResponse.stream.listen((msg) => onSyncProgress?.call(msg)),
+      SpentStatusUpdatedResponse.stream.listen((msg) => onSpentStatusUpdated?.call(msg)),
+      MempoolScanResponse.stream.listen((msg) => onMempoolScan?.call(msg)),
+      MultiWalletScanResponse.stream.listen((msg) => onMultiWalletScan?.call(msg)),
+      ReorgDetectedResponse.stream.listen((msg) => onReorgDetected?.call(msg)),
+      DoubleSpendDetectedResponse.stream.listen((msg) => onDoubleSpendDetected?.call(msg)),
+      TransactionCreatedResponse.stream.listen((msg) => onTransactionCreated?.call(msg)),
+      TransactionBroadcastResponse.stream.listen((msg) => onTransactionBroadcast?.call(msg)),
+      Bip39LegacySeedResponse.stream.listen((msg) => onBip39LegacySeed?.call(msg)),
+      FreezeThawResponse.stream.listen((msg) => onFreezeThaw?.call(msg)),
+      TransactionStatusUpdate.stream.listen((msg) => onTransactionStatusUpdate?.call(msg)),
     ]);
   }
 

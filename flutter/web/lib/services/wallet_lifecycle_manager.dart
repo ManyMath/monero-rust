@@ -234,12 +234,12 @@ class WalletLifecycleManager {
       final walletScanResponse = BlockScanResponse(
         success: true,
         error: null,
-        blockHeight: Uint64(BigInt.from(blockHeight)),
+        blockHeight: blockHeight,
         blockHash: '',
-        blockTimestamp: Uint64(BigInt.from(blockTimestamp)),
+        blockTimestamp: blockTimestamp,
         txCount: 0,
         outputs: walletResult.outputs,
-        daemonHeight: Uint64(BigInt.from(daemonHeight)),
+        daemonHeight: daemonHeight,
         spentKeyImages: spentKeyImages,
         spentKeyImageTxHashes: spentKeyImageTxHashes,
       );
@@ -259,12 +259,12 @@ class WalletLifecycleManager {
           final walletScanResponse = BlockScanResponse(
             success: true,
             error: null,
-            blockHeight: Uint64(BigInt.from(blockHeight)),
+            blockHeight: blockHeight,
             blockHash: '',
-            blockTimestamp: Uint64(BigInt.from(blockTimestamp)),
+            blockTimestamp: blockTimestamp,
             txCount: 0,
             outputs: [],
-            daemonHeight: Uint64(BigInt.from(daemonHeight)),
+            daemonHeight: daemonHeight,
             spentKeyImages: spentKeyImages,
             spentKeyImageTxHashes: spentKeyImageTxHashes,
           );
@@ -304,11 +304,11 @@ class WalletLifecycleManager {
       TransactionUtils.buildKeyImageMap(walletInstance.outputs),
     );
 
-    final blockHeight = scanResult.blockHeight.toInt();
+    final blockHeight = scanResult.blockHeight;
     if (blockHeight > walletInstance.currentHeight) {
       walletInstance.currentHeight = blockHeight;
     }
-    walletInstance.daemonHeight = scanResult.daemonHeight.toInt();
+    walletInstance.daemonHeight = scanResult.daemonHeight;
 
     var updatedWallet = _ensureAccountsExist(walletInstance, scanResult.outputs);
     bool accountsUpdated = !identical(updatedWallet, walletInstance);
@@ -387,7 +387,7 @@ class WalletLifecycleManager {
     }
     wallet.transactions = outputsByTx.entries.map((e) => WalletTransaction(
       txHash: e.key,
-      blockHeight: e.value.first.blockHeight.toInt(),
+      blockHeight: e.value.first.blockHeight,
       blockTimestamp: 0,
       receivedOutputs: e.value,
       spentKeyImages: [],
@@ -404,7 +404,7 @@ class WalletLifecycleManager {
     int highestAccountIndex = 0;
     for (var output in outputs) {
       if (output.subaddressIndex != null) {
-        final accountIndex = output.subaddressIndex!.item1;
+        final accountIndex = output.subaddressIndex![0];
         if (accountIndex > highestAccountIndex) {
           highestAccountIndex = accountIndex;
         }

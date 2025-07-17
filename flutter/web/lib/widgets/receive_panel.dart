@@ -88,14 +88,14 @@ class _ReceivePanelState extends State<ReceivePanel> {
     for (var output in widget.allOutputs) {
       if (output.subaddressIndex != null) {
         final subIdx = output.subaddressIndex!;
-        final outputAccount = subIdx.item1;
-        final addressIndex = subIdx.item2;
+        final outputAccount = subIdx[0];
+        final addressIndex = subIdx[1];
         final accountMap = grouped.putIfAbsent(outputAccount, () => <int, _SubaddressInfo>{});
         // Store the first output found for this subaddress
         if (!accountMap.containsKey(addressIndex)) {
           accountMap[addressIndex] = _SubaddressInfo(
             txHash: output.txHash,
-            blockHeight: output.blockHeight.toInt(),
+            blockHeight: output.blockHeight,
           );
         }
       }

@@ -41,7 +41,7 @@ class BalanceUtils {
     int frozenCount = 0;
     for (var output in allOutputs) {
       if (!output.spent && !pendingSpentKeyImages.contains(output.keyImage)) {
-        final amount = output.amount.toInt();
+        final amount = output.amount;
         totalAtomicBalance += amount;
         if (output.frozen) {
           frozenAtomicBalance += amount;

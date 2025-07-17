@@ -49,7 +49,7 @@ class WalletScanService {
   }) {
     ScanBlockRequest(
       nodeUrl: nodeUrl,
-      blockHeight: Uint64(BigInt.from(blockHeight)),
+      blockHeight: blockHeight,
       seed: seed,
       network: network,
       passphrase: '',
@@ -114,14 +114,14 @@ class WalletScanService {
 
       StartMultiWalletScanRequest(
         nodeUrl: nodeUrl,
-        startHeight: Uint64(BigInt.from(startHeight)),
+        startHeight: startHeight,
         wallets: walletConfigs,
       ).sendSignalToRust();
     } else if (walletsToScan.isNotEmpty) {
       final wallet = walletsToScan.first;
       StartContinuousScanRequest(
         nodeUrl: nodeUrl,
-        startHeight: Uint64(BigInt.from(startHeight)),
+        startHeight: startHeight,
         seed: wallet.seed,
         network: wallet.network,
         accountLookahead: accountLookahead,
@@ -132,7 +132,7 @@ class WalletScanService {
     } else if (seed != null && network != null) {
       StartContinuousScanRequest(
         nodeUrl: nodeUrl,
-        startHeight: Uint64(BigInt.from(startHeight)),
+        startHeight: startHeight,
         seed: seed,
         network: network,
         accountLookahead: accountLookahead,

@@ -35,7 +35,7 @@ class OutputUtils {
           output: output,
           currentHeight: currentHeight,
         )) {
-          total += output.amount.toInt();
+          total += output.amount;
         }
       }
     }
@@ -77,7 +77,7 @@ class OutputUtils {
       if (idx == null) {
         indexMap[key] = existing.length;
         existing.add(output);
-      } else if (existing[idx].blockHeight.toInt() == 0) {
+      } else if (existing[idx].blockHeight == 0) {
         existing[idx] = output;
       }
     }
@@ -100,8 +100,8 @@ class OutputUtils {
       if (idx == null) {
         indexMap[key] = existing.length;
         existing.add(output);
-      } else if (existing[idx].blockHeight.toInt() == 0 &&
-          output.blockHeight.toInt() != 0) {
+      } else if (existing[idx].blockHeight == 0 &&
+          output.blockHeight != 0) {
         existing[idx] = output;
       }
     }
@@ -120,7 +120,7 @@ class OutputUtils {
       subaddressIndex: change.subaddressIndex,
       paymentId: null,
       receivedOutputBytes: change.receivedOutputBytes,
-      blockHeight: Uint64(BigInt.zero),
+      blockHeight: 0,
       spent: false,
       keyImage: change.keyImage,
       isCoinbase: false, // Change outputs are never coinbase

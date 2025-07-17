@@ -69,7 +69,7 @@ class TransactionService {
       totalAtomic += amountAtomic;
       validatedRecipients.add(Recipient(
         address: destination,
-        amount: Uint64(BigInt.from(amountAtomic)),
+        amount: amountAtomic,
       ));
     }
 
@@ -312,7 +312,7 @@ class TransactionService {
           output: output,
           currentHeight: currentHeight,
         )) {
-          total += output.amount.toInt();
+          total += output.amount;
         }
       }
     }

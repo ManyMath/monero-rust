@@ -144,7 +144,7 @@ class WalletState extends ChangeNotifier {
       derivedAddress = null;
 
       if (msg.restoreHeight != null) {
-        final timestamp = msg.restoreHeight!.toInt();
+        final timestamp = msg.restoreHeight!;
         if (timestamp > 0) {
           final genesisTimestamp = _getGenesisTimestamp(network);
           final approxHeight = ((timestamp - genesisTimestamp) / 120).toInt();
@@ -157,7 +157,7 @@ class WalletState extends ChangeNotifier {
           final nodeUrl = NetworkUtils.normalizeNodeUrl(nodeUrlController.text);
           if (nodeUrl.isNotEmpty) {
             GetBlockHeightFromTimestampRequest(
-              timestamp: Uint64(BigInt.from(timestamp)),
+              timestamp: timestamp,
               nodeUrl: nodeUrl,
             ).sendSignalToRust();
           }
@@ -176,7 +176,7 @@ class WalletState extends ChangeNotifier {
 
   void _handleSeedBirthday(SeedBirthdayResponse msg) {
     if (msg.success && msg.birthday != null) {
-      final timestamp = msg.birthday!.toInt();
+      final timestamp = msg.birthday!;
       if (timestamp > 0) {
         final genesisTimestamp = _getGenesisTimestamp(network);
         final approxHeight = ((timestamp - genesisTimestamp) / 120).toInt();
@@ -186,7 +186,7 @@ class WalletState extends ChangeNotifier {
         final nodeUrl = NetworkUtils.normalizeNodeUrl(nodeUrlController.text);
         if (nodeUrl.isNotEmpty) {
           GetBlockHeightFromTimestampRequest(
-            timestamp: Uint64(BigInt.from(timestamp)),
+            timestamp: timestamp,
             nodeUrl: nodeUrl,
           ).sendSignalToRust();
         }
@@ -201,7 +201,7 @@ class WalletState extends ChangeNotifier {
 
   void _handleBlockHeightFromTimestamp(BlockHeightFromTimestampResponse msg) {
     if (msg.success) {
-      final blockHeight = msg.blockHeight.toInt();
+      final blockHeight = msg.blockHeight;
       final safeHeight = (blockHeight - 720).clamp(0, blockHeight);
       polyseedRestoreHeight = safeHeight;
       blockHeightController.text = safeHeight.toString();
@@ -353,8 +353,8 @@ class WalletState extends ChangeNotifier {
     for (var output in allOutputs) {
       if (output.subaddressIndex != null) {
         final subIdx = output.subaddressIndex!;
-        if (subIdx.item1 == account) {
-          used.add(subIdx.item2);
+        if (subIdx[0] == account) {
+          used.add(subIdx[1]);
         }
       }
     }
@@ -420,7 +420,7 @@ class WalletState extends ChangeNotifier {
     int highestAccountIndex = 0;
     for (var output in outputs) {
       if (output.subaddressIndex != null) {
-        final accountIndex = output.subaddressIndex!.item1;
+        final accountIndex = output.subaddressIndex![0];
         if (accountIndex > highestAccountIndex) {
           highestAccountIndex = accountIndex;
         }
@@ -628,7 +628,7 @@ class WalletState extends ChangeNotifier {
   Map<int, List<OwnedOutput>> reconstructOutputsByAccount(List<OwnedOutput> outputs) {
     final map = <int, List<OwnedOutput>>{};
     for (final output in outputs) {
-      final account = output.subaddressIndex?.item1 ?? 0;
+      final account = output.subaddressIndex?[0] ?? 0;
       (map[account] ??= []).add(output);
     }
     if (map.isEmpty) {

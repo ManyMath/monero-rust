@@ -12,8 +12,8 @@ class TransactionUtils {
     Map<String, OwnedOutput> keyImageMap,
   ) {
     final transactions = List<WalletTransaction>.from(existingTransactions);
-    final blockHeight = scan.blockHeight.toInt();
-    final blockTimestamp = scan.blockTimestamp.toInt();
+    final blockHeight = scan.blockHeight;
+    final blockTimestamp = scan.blockTimestamp;
 
     // Build O(1) lookup: txHash → index in transactions list
     final txIndexMap = <String, int>{};
@@ -146,11 +146,11 @@ class TransactionUtils {
     filtered.sort((a, b) {
       int comparison;
       if (sortBy == 'confirms') {
-        final aConf = currentHeight - a.blockHeight.toInt();
-        final bConf = currentHeight - b.blockHeight.toInt();
+        final aConf = currentHeight - a.blockHeight;
+        final bConf = currentHeight - b.blockHeight;
         comparison = aConf.compareTo(bConf);
       } else {
-        comparison = a.amount.toInt().compareTo(b.amount.toInt());
+        comparison = a.amount.compareTo(b.amount);
       }
       return ascending ? comparison : -comparison;
     });

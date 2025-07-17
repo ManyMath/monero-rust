@@ -52,7 +52,7 @@ class OutputState extends ChangeNotifier {
         if (output.subaddressIndex == null) {
           return account == 0;
         }
-        return output.subaddressIndex!.item1 == account;
+        return output.subaddressIndex![0] == account;
       }).toList();
     }
     return _cachedFilteredOutputs!;
@@ -68,13 +68,13 @@ class OutputState extends ChangeNotifier {
       _cachedFilteredTransactions = allTransactionsAllAccounts.where((tx) {
         final hasReceivedOutputs = tx.receivedOutputs.any((output) {
           if (output.subaddressIndex == null) return account == 0;
-          return output.subaddressIndex!.item1 == account;
+          return output.subaddressIndex![0] == account;
         });
         final hasSpentOutputs = tx.spentKeyImages.any((keyImage) {
           final spentOutput = kim[keyImage];
           if (spentOutput == null) return false;
           if (spentOutput.subaddressIndex == null) return account == 0;
-          return spentOutput.subaddressIndex!.item1 == account;
+          return spentOutput.subaddressIndex![0] == account;
         });
         return hasReceivedOutputs || hasSpentOutputs;
       }).toList();

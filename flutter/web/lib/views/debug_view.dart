@@ -177,10 +177,10 @@ class _DebugViewState extends State<DebugView> {
                     Padding(
                       padding: const EdgeInsets.only(bottom: 12),
                       child: ReorgNotificationDisplay(
-                        splitHeight: ss.reorgInfo!.splitHeight.toInt(),
-                        blocksDetached: ss.reorgInfo!.blocksDetached.toInt(),
-                        outputsRemoved: ss.reorgInfo!.outputsRemoved.toInt(),
-                        outputsUnspent: ss.reorgInfo!.outputsUnspent.toInt(),
+                        splitHeight: ss.reorgInfo!.splitHeight,
+                        blocksDetached: ss.reorgInfo!.blocksDetached,
+                        outputsRemoved: ss.reorgInfo!.outputsRemoved,
+                        outputsUnspent: ss.reorgInfo!.outputsUnspent,
                         onDismiss: () => setState(() => ss.reorgInfo = null),
                       ),
                     ),

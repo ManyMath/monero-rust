@@ -1,4 +1,3 @@
-import 'package:tuple/tuple.dart';
 import '../src/bindings/bindings.dart';
 import '../utils/output_lock_utils.dart';
 import './wallet_transaction.dart';
@@ -55,7 +54,7 @@ class WalletInstance {
         // Outputs without subaddress belong to account 0
         return activeAccount == 0;
       }
-      return output.subaddressIndex!.item1 == activeAccount;
+      return output.subaddressIndex![0] == activeAccount;
     }).toList();
   }
 
@@ -69,9 +68,9 @@ class WalletInstance {
     for (var output in activeAccountOutputs) {
       if (output.spent) continue;
       if (OutputLockUtils.isOutputUnlocked(output: output, currentHeight: daemonHeight)) {
-        confirmedAtomic += output.amount.toInt();
+        confirmedAtomic += output.amount;
       } else {
-        unconfirmedAtomic += output.amount.toInt();
+        unconfirmedAtomic += output.amount;
       }
     }
     return (confirmedAtomic / 1e12, unconfirmedAtomic / 1e12);
@@ -84,7 +83,7 @@ class WalletInstance {
     int atomic = 0;
     for (var output in outputs) {
       if (output.spent) continue;
-      atomic += output.amount.toInt();
+      atomic += output.amount;
     }
     return atomic / 1e12;
   }
@@ -217,7 +216,7 @@ class WalletInstance {
       'keyOffset': o.keyOffset,
       'commitmentMask': o.commitmentMask,
       'subaddressIndex': o.subaddressIndex != null
-          ? [o.subaddressIndex!.item1, o.subaddressIndex!.item2]
+          ? [o.subaddressIndex![0], o.subaddressIndex![1]]
           : null,
       'paymentId': o.paymentId,
       'receivedOutputBytes': o.receivedOutputBytes,
@@ -247,7 +246,7 @@ class WalletInstance {
           'keyOffset': o.keyOffset,
           'commitmentMask': o.commitmentMask,
           'subaddressIndex': o.subaddressIndex != null
-              ? [o.subaddressIndex!.item1, o.subaddressIndex!.item2]
+              ? [o.subaddressIndex![0], o.subaddressIndex![1]]
               : null,
           'paymentId': o.paymentId,
           'receivedOutputBytes': o.receivedOutputBytes,
@@ -272,20 +271,20 @@ class WalletInstance {
         return OwnedOutput(
           txHash: outputData['txHash'] as String,
           outputIndex: outputData['outputIndex'] as int,
-          amount: Uint64(BigInt.parse(outputData['amount'] as String)),
+          amount: int.parse(outputData['amount'] as String),
           amountXmr: outputData['amountXmr'] as String,
           key: outputData['key'] as String,
           keyOffset: outputData['keyOffset'] as String,
           commitmentMask: outputData['commitmentMask'] as String,
           subaddressIndex: outputData['subaddressIndex'] != null
-              ? Tuple2<int, int>(
+              ? [
                   outputData['subaddressIndex'][0] as int,
                   outputData['subaddressIndex'][1] as int,
-                )
+                ]
               : null,
           paymentId: outputData['paymentId'] as String?,
           receivedOutputBytes: outputData['receivedOutputBytes'] as String,
-          blockHeight: Uint64(BigInt.parse(outputData['blockHeight'] as String)),
+          blockHeight: int.parse(outputData['blockHeight'] as String),
           // Handle backward compatibility: these fields were added later
           spent: outputData.containsKey('spent') && outputData['spent'] != null
               ? outputData['spent'] as bool
@@ -317,20 +316,20 @@ class WalletInstance {
             return OwnedOutput(
               txHash: outputData['txHash'] as String,
               outputIndex: outputData['outputIndex'] as int,
-              amount: Uint64(BigInt.parse(outputData['amount'] as String)),
+              amount: int.parse(outputData['amount'] as String),
               amountXmr: outputData['amountXmr'] as String,
               key: outputData['key'] as String,
               keyOffset: outputData['keyOffset'] as String,
               commitmentMask: outputData['commitmentMask'] as String,
               subaddressIndex: outputData['subaddressIndex'] != null
-                  ? Tuple2<int, int>(
+                  ? [
                       outputData['subaddressIndex'][0] as int,
                       outputData['subaddressIndex'][1] as int,
-                    )
+                    ]
                   : null,
               paymentId: outputData['paymentId'] as String?,
               receivedOutputBytes: outputData['receivedOutputBytes'] as String,
-              blockHeight: Uint64(BigInt.parse(outputData['blockHeight'] as String)),
+              blockHeight: int.parse(outputData['blockHeight'] as String),
               // Handle backward compatibility: these fields were added later
               spent: outputData.containsKey('spent') && outputData['spent'] != null
                   ? outputData['spent'] as bool

@@ -1,4 +1,3 @@
-import 'package:tuple/tuple.dart';
 import '../src/bindings/bindings.dart';
 
 class WalletTransaction {
@@ -21,13 +20,13 @@ class WalletTransaction {
   double balanceChange(Map<String, OwnedOutput> keyImageMap) {
     int receivedAtomic = 0;
     for (var output in receivedOutputs) {
-      receivedAtomic += output.amount.toInt();
+      receivedAtomic += output.amount;
     }
     int spentAtomic = 0;
     for (var keyImage in spentKeyImages) {
       final spentOutput = keyImageMap[keyImage];
       if (spentOutput != null) {
-        spentAtomic += spentOutput.amount.toInt();
+        spentAtomic += spentOutput.amount;
       }
     }
     return (receivedAtomic - spentAtomic) / 1e12;
@@ -48,7 +47,7 @@ class WalletTransaction {
       'keyOffset': o.keyOffset,
       'commitmentMask': o.commitmentMask,
       'subaddressIndex': o.subaddressIndex != null
-          ? [o.subaddressIndex!.item1, o.subaddressIndex!.item2]
+          ? [o.subaddressIndex![0], o.subaddressIndex![1]]
           : null,
       'paymentId': o.paymentId,
       'receivedOutputBytes': o.receivedOutputBytes,
@@ -110,20 +109,20 @@ class WalletTransaction {
         return OwnedOutput(
           txHash: outputData['txHash'] as String,
           outputIndex: outputData['outputIndex'] as int,
-          amount: Uint64(BigInt.parse(outputData['amount'] as String)),
+          amount: int.parse(outputData['amount'] as String),
           amountXmr: outputData['amountXmr'] as String,
           key: outputData['key'] as String,
           keyOffset: outputData['keyOffset'] as String,
           commitmentMask: outputData['commitmentMask'] as String,
           subaddressIndex: outputData['subaddressIndex'] != null
-              ? Tuple2<int, int>(
+              ? [
                   outputData['subaddressIndex'][0] as int,
                   outputData['subaddressIndex'][1] as int,
-                )
+                ]
               : null,
           paymentId: outputData['paymentId'] as String?,
           receivedOutputBytes: outputData['receivedOutputBytes'] as String,
-          blockHeight: Uint64(BigInt.parse(outputData['blockHeight'] as String)),
+          blockHeight: int.parse(outputData['blockHeight'] as String),
           // Handle backward compatibility: these fields were added later
           spent: outputData.containsKey('spent') && outputData['spent'] != null
               ? outputData['spent'] as bool

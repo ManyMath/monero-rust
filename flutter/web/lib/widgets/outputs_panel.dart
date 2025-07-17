@@ -52,8 +52,8 @@ class OutputsPanel extends StatelessWidget {
     outputs.sort((a, b) {
       int comparison;
       if (sortBy == 'confirms') {
-        final aHeight = a.blockHeight.toInt();
-        final bHeight = b.blockHeight.toInt();
+        final aHeight = a.blockHeight;
+        final bHeight = b.blockHeight;
         final aConfirms = aHeight > 0 ? currentHeight - aHeight : 0;
         final bConfirms = bHeight > 0 ? currentHeight - bHeight : 0;
         comparison = aConfirms.compareTo(bConfirms);
@@ -133,7 +133,7 @@ class OutputsPanel extends StatelessWidget {
             itemCount: sortedOutputs.length,
             itemBuilder: (context, index) {
             final output = sortedOutputs[index];
-            final outputHeight = output.blockHeight.toInt();
+            final outputHeight = output.blockHeight;
             final confirmations = outputHeight > 0
                 ? currentHeight - outputHeight
                 : 0;
@@ -225,7 +225,7 @@ class OutputsPanel extends StatelessWidget {
                     if (activeAccount == -1 && output.subaddressIndex != null)
                       CommonWidgets.buildOutputDetailRow(
                         label: 'Account',
-                        value: '${output.subaddressIndex!.item1}',
+                        value: '${output.subaddressIndex![0]}',
                       ),
                     if (activeAccount == -1 && output.subaddressIndex == null)
                       CommonWidgets.buildOutputDetailRow(
@@ -238,7 +238,7 @@ class OutputsPanel extends StatelessWidget {
                     if (output.subaddressIndex != null)
                       CommonWidgets.buildOutputDetailRow(
                         label: 'Subaddress',
-                        value: '${output.subaddressIndex!.item1}/${output.subaddressIndex!.item2}',
+                        value: '${output.subaddressIndex![0]}/${output.subaddressIndex![1]}',
                       ),
                     if (output.paymentId != null)
                       CommonWidgets.buildOutputDetailRow(label: 'Payment ID', value: output.paymentId!, mono: true),

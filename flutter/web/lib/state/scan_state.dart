@@ -41,7 +41,7 @@ class ScanState extends ChangeNotifier {
   ReorgDetectedResponse? reorgInfo;
   List<DoubleSpendConflict>? doubleSpendConflicts;
 
-  int get currentHeight => daemonHeight ?? scanResult?.blockHeight.toInt() ?? 0;
+  int get currentHeight => daemonHeight ?? scanResult?.blockHeight ?? 0;
   int get continuousScanCurrentHeight => _walletState.continuousScanCurrentHeight;
 
   NodeConnectionState get connectionState {
@@ -109,7 +109,7 @@ class ScanState extends ChangeNotifier {
     if (msg.success) {
       scanResult = msg;
       scanError = null;
-      daemonHeight = msg.daemonHeight.toInt();
+      daemonHeight = msg.daemonHeight;
       hasConnectedOnce = true;
       _walletState.lifecycle.integrateSingleBlockScanResults(msg);
       _walletState.deriveSubaddresses();
@@ -123,7 +123,7 @@ class ScanState extends ChangeNotifier {
 
   void _handleDaemonHeight(DaemonHeightResponse msg) {
     if (msg.success) {
-      daemonHeight = msg.daemonHeight.toInt();
+      daemonHeight = msg.daemonHeight;
       hasConnectedOnce = true;
     } else {
       scanError = msg.error ?? 'Failed to get daemon height';
@@ -149,8 +149,8 @@ class ScanState extends ChangeNotifier {
     final wasSynced = isSynced;
     final wasScanning = isContinuousScanning;
 
-    _walletState.continuousScanCurrentHeight = msg.currentHeight.toInt();
-    continuousScanTargetHeight = msg.daemonHeight.toInt();
+    _walletState.continuousScanCurrentHeight = msg.currentHeight;
+    continuousScanTargetHeight = msg.daemonHeight;
     isSynced = msg.isSynced;
     if (!isContinuousPaused) {
       isContinuousScanning = msg.isScanning;
@@ -243,14 +243,14 @@ class ScanState extends ChangeNotifier {
       return;
     }
 
-    daemonHeight = msg.daemonHeight.toInt();
+    daemonHeight = msg.daemonHeight;
     _walletState.lifecycle.distributeMultiWalletScanResults(
       walletResults: msg.walletResults,
-      blockHeight: msg.blockHeight.toInt(),
-      daemonHeight: msg.daemonHeight.toInt(),
+      blockHeight: msg.blockHeight,
+      daemonHeight: msg.daemonHeight,
       spentKeyImages: msg.spentKeyImages,
       spentKeyImageTxHashes: msg.spentKeyImageTxHashes,
-      blockTimestamp: msg.blockTimestamp.toInt(),
+      blockTimestamp: msg.blockTimestamp,
     );
     _walletState.deriveSubaddresses();
     _walletState.notify();
@@ -261,7 +261,7 @@ class ScanState extends ChangeNotifier {
   void _handleReorgDetected(ReorgDetectedResponse msg) {
     reorgInfo = msg;
     _walletState.lifecycle.handleReorgDetected(
-      splitHeight: msg.splitHeight.toInt(),
+      splitHeight: msg.splitHeight,
       removedKeyImages: msg.removedKeyImages,
       unspentKeyImages: msg.unspentKeyImages,
     );
@@ -285,7 +285,7 @@ class ScanState extends ChangeNotifier {
 
   void _handleTransactionStatusUpdate(TransactionStatusUpdate msg) {
     if (msg.status == 'confirmed' && msg.confirmedHeight != null) {
-      final confirmedHeight = msg.confirmedHeight!.toInt();
+      final confirmedHeight = msg.confirmedHeight!;
 
       final txList = _walletState.allTransactions;
       final idx = txList.indexWhere((tx) => tx.txHash == msg.txId);
@@ -306,7 +306,7 @@ class ScanState extends ChangeNotifier {
       final outputs = _walletState.allOutputs;
       for (int i = 0; i < outputs.length; i++) {
         final o = outputs[i];
-        if (o.txHash == msg.txId && o.blockHeight.toInt() == 0) {
+        if (o.txHash == msg.txId && o.blockHeight == 0) {
           outputs[i] = OwnedOutput(
             txHash: o.txHash,
             outputIndex: o.outputIndex,
@@ -318,7 +318,7 @@ class ScanState extends ChangeNotifier {
             subaddressIndex: o.subaddressIndex,
             paymentId: o.paymentId,
             receivedOutputBytes: o.receivedOutputBytes,
-            blockHeight: Uint64(BigInt.from(confirmedHeight)),
+            blockHeight: confirmedHeight,
             spent: o.spent,
             keyImage: o.keyImage,
             isCoinbase: o.isCoinbase,
@@ -501,7 +501,7 @@ class ScanState extends ChangeNotifier {
       final walletConfigs = walletsToScan.map((w) => w.toWalletConfig(subaddressLookahead: lookaheadMode.subaddresses)).toList();
       StartMultiWalletScanRequest(
         nodeUrl: nodeUrl,
-        startHeight: Uint64(BigInt.from(_walletState.continuousScanCurrentHeight)),
+        startHeight: _walletState.continuousScanCurrentHeight,
         wallets: walletConfigs,
       ).sendSignalToRust();
     } else {
@@ -510,7 +510,7 @@ class ScanState extends ChangeNotifier {
       final highestAccount = walletAccounts.isEmpty ? 0 : walletAccounts.reduce((a, b) => a > b ? a : b);
       StartContinuousScanRequest(
         nodeUrl: nodeUrl,
-        startHeight: Uint64(BigInt.from(_walletState.continuousScanCurrentHeight)),
+        startHeight: _walletState.continuousScanCurrentHeight,
         seed: wallet.seed,
         network: wallet.network,
         accountLookahead: highestAccount + lookaheadMode.accounts,

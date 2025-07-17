@@ -2,7 +2,7 @@ use crate::messages::*;
 use crate::signals::*;
 use async_trait::async_trait;
 use messages::prelude::{Actor, Address, Context, Handler, Notifiable};
-use rinf::{DartSignal, RustSignal};
+use crate::ffi_web::SendToDart;
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use tokio::task::JoinSet;
@@ -234,32 +234,32 @@ impl WalletActor {
     }
 
     async fn listen_to_create_wallet(mut self_addr: Address<Self>) {
-        let receiver = CreateWalletRequest::get_dart_signal_receiver();
-        while let Some(signal_pack) = receiver.recv().await {
-            let request = signal_pack.message;
+        let mut receiver = crate::ffi_web::get_create_wallet_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
+            let request = dart_msg;
             let _ = self_addr.notify(request).await;
         }
     }
 
     async fn listen_to_balance_requests(mut self_addr: Address<Self>) {
-        let receiver = GetBalanceRequest::get_dart_signal_receiver();
-        while let Some(_signal_pack) = receiver.recv().await {
+        let mut receiver = crate::ffi_web::get_get_balance_request_receiver();
+        while let Some(_dart_msg) = receiver.recv().await {
             let _ = self_addr.notify(GetBalanceRequest {}).await;
         }
     }
 
     async fn listen_to_test(_self_addr: Address<Self>) {
-        let receiver = MoneroTestRequest::get_dart_signal_receiver();
-        while let Some(_signal_pack) = receiver.recv().await {
+        let mut receiver = crate::ffi_web::get_monero_test_request_receiver();
+        while let Some(_dart_msg) = receiver.recv().await {
             let result = monero_rust::test_integration();
             MoneroTestResponse { result }.send_signal_to_dart();
         }
     }
 
     async fn listen_to_generate_seed(_self_addr: Address<Self>) {
-        let receiver = GenerateSeedRequest::get_dart_signal_receiver();
-        while let Some(signal_pack) = receiver.recv().await {
-            let request = signal_pack.message;
+        let mut receiver = crate::ffi_web::get_generate_seed_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
+            let request = dart_msg;
             match monero_rust::generate_seed(&request.seed_type) {
                 Ok(seed) => {
                     let restore_height = if request.seed_type == "polyseed" {
@@ -289,9 +289,9 @@ impl WalletActor {
     }
 
     async fn listen_to_get_seed_birthday(_self_addr: Address<Self>) {
-        let receiver = GetSeedBirthdayRequest::get_dart_signal_receiver();
-        while let Some(signal_pack) = receiver.recv().await {
-            let request = signal_pack.message;
+        let mut receiver = crate::ffi_web::get_get_seed_birthday_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
+            let request = dart_msg;
             let resolved = match pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
                 Ok(s) => s,
                 Err(e) => {
@@ -310,9 +310,9 @@ impl WalletActor {
     }
 
     async fn listen_to_get_block_height_from_timestamp(_self_addr: Address<Self>) {
-        let receiver = GetBlockHeightFromTimestampRequest::get_dart_signal_receiver();
-        while let Some(signal_pack) = receiver.recv().await {
-            let request = signal_pack.message;
+        let mut receiver = crate::ffi_web::get_get_block_height_from_timestamp_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
+            let request = dart_msg;
             match Self::find_block_height_for_timestamp(&request.node_url, request.timestamp).await {
                 Ok(block_height) => {
                     BlockHeightFromTimestampResponse {
@@ -434,9 +434,9 @@ impl WalletActor {
     }
 
     async fn listen_to_derive_address(_self_addr: Address<Self>) {
-        let receiver = DeriveAddressRequest::get_dart_signal_receiver();
-        while let Some(signal_pack) = receiver.recv().await {
-            let request = signal_pack.message;
+        let mut receiver = crate::ffi_web::get_derive_address_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
+            let request = dart_msg;
             let resolved = match pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
                 Ok(s) => s,
                 Err(e) => {
@@ -466,9 +466,9 @@ impl WalletActor {
     }
 
     async fn listen_to_derive_subaddress(_self_addr: Address<Self>) {
-        let receiver = DeriveSubaddressRequest::get_dart_signal_receiver();
-        while let Some(signal_pack) = receiver.recv().await {
-            let request = signal_pack.message;
+        let mut receiver = crate::ffi_web::get_derive_subaddress_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
+            let request = dart_msg;
             let resolved = match pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
                 Ok(s) => s,
                 Err(e) => {
@@ -503,9 +503,9 @@ impl WalletActor {
     }
 
     async fn listen_to_derive_keys(_self_addr: Address<Self>) {
-        let receiver = DeriveKeysRequest::get_dart_signal_receiver();
-        while let Some(signal_pack) = receiver.recv().await {
-            let request = signal_pack.message;
+        let mut receiver = crate::ffi_web::get_derive_keys_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
+            let request = dart_msg;
             let resolved = match pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
                 Ok(s) => s,
                 Err(e) => {
@@ -547,9 +547,9 @@ impl WalletActor {
     }
 
     async fn listen_to_scan_block(mut self_addr: Address<Self>) {
-        let receiver = ScanBlockRequest::get_dart_signal_receiver();
-        while let Some(signal_pack) = receiver.recv().await {
-            let request = signal_pack.message;
+        let mut receiver = crate::ffi_web::get_scan_block_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
+            let request = dart_msg;
 
             let seed = match pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
                 Ok(s) => s,
@@ -632,9 +632,9 @@ impl WalletActor {
     }
 
     async fn listen_to_query_daemon_height(mut self_addr: Address<Self>) {
-        let receiver = QueryDaemonHeightRequest::get_dart_signal_receiver();
-        while let Some(signal_pack) = receiver.recv().await {
-            let request = signal_pack.message;
+        let mut receiver = crate::ffi_web::get_query_daemon_height_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
+            let request = dart_msg;
 
             match monero_rust::get_daemon_height(&request.node_url).await {
                 Ok(height) => {
@@ -660,9 +660,9 @@ impl WalletActor {
     }
 
     async fn listen_to_start_continuous_scan(mut self_addr: Address<Self>) {
-        let receiver = StartContinuousScanRequest::get_dart_signal_receiver();
-        while let Some(signal_pack) = receiver.recv().await {
-            let request = signal_pack.message;
+        let mut receiver = crate::ffi_web::get_start_continuous_scan_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
+            let request = dart_msg;
             let resolved_seed = match pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
                 Ok(s) => s,
                 Err(e) => {
@@ -690,16 +690,16 @@ impl WalletActor {
     }
 
     async fn listen_to_stop_scan(mut self_addr: Address<Self>) {
-        let receiver = StopScanRequest::get_dart_signal_receiver();
-        while let Some(_signal_pack) = receiver.recv().await {
+        let mut receiver = crate::ffi_web::get_stop_scan_request_receiver();
+        while let Some(_dart_msg) = receiver.recv().await {
             let _ = self_addr.notify(StopScan).await;
         }
     }
 
     async fn listen_to_mempool_scan(self_addr: Address<Self>) {
-        let receiver = MempoolScanRequest::get_dart_signal_receiver();
-        while let Some(signal_pack) = receiver.recv().await {
-            let request = signal_pack.message;
+        let mut receiver = crate::ffi_web::get_mempool_scan_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
+            let request = dart_msg;
             let resolved_seed = match pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
                 Ok(s) => s,
                 Err(e) => {
@@ -773,9 +773,9 @@ impl WalletActor {
     }
 
     async fn listen_to_scan_block_multi_wallet() {
-        let receiver = ScanBlockMultiWalletRequest::get_dart_signal_receiver();
-        while let Some(signal_pack) = receiver.recv().await {
-            let request = signal_pack.message;
+        let mut receiver = crate::ffi_web::get_scan_block_multi_wallet_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
+            let request = dart_msg;
 
             // Pre-resolve all wallet seeds before spawning async task
             let mut resolved_seeds = Vec::new();
@@ -871,9 +871,9 @@ impl WalletActor {
     }
 
     async fn listen_to_start_multi_wallet_scan(self_addr: Address<Self>) {
-        let receiver = StartMultiWalletScanRequest::get_dart_signal_receiver();
-        while let Some(signal_pack) = receiver.recv().await {
-            let request = signal_pack.message;
+        let mut receiver = crate::ffi_web::get_start_multi_wallet_scan_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
+            let request = dart_msg;
 
             // Pre-resolve all wallet seeds
             let mut resolved_wallets = Vec::new();
@@ -957,9 +957,9 @@ impl WalletActor {
     }
 
     async fn listen_to_restore_wallet_data(mut self_addr: Address<Self>) {
-        let receiver = RestoreWalletDataRequest::get_dart_signal_receiver();
-        while let Some(signal_pack) = receiver.recv().await {
-            let msg = signal_pack.message;
+        let mut receiver = crate::ffi_web::get_restore_wallet_data_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
+            let msg = dart_msg;
             let resolved_seed = match pre_resolve_bip39(&msg.seed, &msg.passphrase, msg.bip39_account_index) {
                 Ok(s) => s,
                 Err(_e) => msg.seed.clone(), // Fall through; RestoreOutputs just stores seed
@@ -978,23 +978,23 @@ impl WalletActor {
     }
 
     async fn listen_to_get_block_hashes(mut self_addr: Address<Self>) {
-        let receiver = GetBlockHashesRequest::get_dart_signal_receiver();
-        while let Some(_signal_pack) = receiver.recv().await {
+        let mut receiver = crate::ffi_web::get_get_block_hashes_request_receiver();
+        while let Some(_dart_msg) = receiver.recv().await {
             let _ = self_addr.notify(GetBlockHashesMsg).await;
         }
     }
 
     async fn listen_to_get_pending_state(mut self_addr: Address<Self>) {
-        let receiver = GetPendingStateRequest::get_dart_signal_receiver();
-        while let Some(_signal_pack) = receiver.recv().await {
+        let mut receiver = crate::ffi_web::get_get_pending_state_request_receiver();
+        while let Some(_dart_msg) = receiver.recv().await {
             let _ = self_addr.notify(GetPendingStateMsg).await;
         }
     }
 
     async fn listen_to_convert_bip39_to_legacy(_self_addr: Address<Self>) {
-        let receiver = ConvertBip39ToLegacyRequest::get_dart_signal_receiver();
-        while let Some(signal_pack) = receiver.recv().await {
-            let request = signal_pack.message;
+        let mut receiver = crate::ffi_web::get_convert_bip39_to_legacy_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
+            let request = dart_msg;
             match monero_rust::bip39_to_legacy_mnemonic(
                 &request.bip39_mnemonic,
                 &request.passphrase,
@@ -2274,16 +2274,16 @@ impl Notifiable<AddMempoolPendingSpends> for WalletActor {
 
 impl WalletActor {
     async fn listen_to_freeze_output(mut self_addr: Address<Self>) {
-        let receiver = FreezeOutputRequest::get_dart_signal_receiver();
-        while let Some(signal_pack) = receiver.recv().await {
-            let _ = self_addr.notify(signal_pack.message).await;
+        let mut receiver = crate::ffi_web::get_freeze_output_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
+            let _ = self_addr.notify(dart_msg).await;
         }
     }
 
     async fn listen_to_thaw_output(mut self_addr: Address<Self>) {
-        let receiver = ThawOutputRequest::get_dart_signal_receiver();
-        while let Some(signal_pack) = receiver.recv().await {
-            let _ = self_addr.notify(signal_pack.message).await;
+        let mut receiver = crate::ffi_web::get_thaw_output_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
+            let _ = self_addr.notify(dart_msg).await;
         }
     }
 }

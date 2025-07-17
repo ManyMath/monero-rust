@@ -73,9 +73,8 @@ class DoubleSpendAlertDisplay extends StatelessWidget {
     );
   }
 
-  String _heightLabel(Uint64 height) {
-    final h = height.toInt();
-    return h == 0 ? 'mempool' : h.toString();
+  String _heightLabel(int height) {
+    return height == 0 ? 'mempool' : height.toString();
   }
 
   String _truncate(String s, int maxLen) {

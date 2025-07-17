@@ -2,7 +2,7 @@ use crate::messages::*;
 use crate::signals::*;
 use async_trait::async_trait;
 use messages::prelude::{Actor, Address, Context, Notifiable};
-use rinf::{DartSignal, RustSignal};
+use crate::ffi_web::SendToDart;
 use tokio::task::JoinSet;
 use tokio_with_wasm::alias as tokio;
 
@@ -32,9 +32,9 @@ impl TxBuilderActor {
     }
 
     async fn listen_to_tx_requests(mut self_addr: Address<Self>) {
-        let receiver = CreateTransactionRequest::get_dart_signal_receiver();
-        while let Some(signal_pack) = receiver.recv().await {
-            let request = signal_pack.message;
+        let mut receiver = crate::ffi_web::get_create_transaction_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
+            let request = dart_msg;
             let resolved_seed = match super::wallet::pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
                 Ok(s) => s,
                 Err(e) => {
@@ -66,9 +66,9 @@ impl TxBuilderActor {
     }
 
     async fn listen_to_sweep_requests(mut self_addr: Address<Self>) {
-        let receiver = SweepAllRequest::get_dart_signal_receiver();
-        while let Some(signal_pack) = receiver.recv().await {
-            let request = signal_pack.message;
+        let mut receiver = crate::ffi_web::get_sweep_all_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
+            let request = dart_msg;
             let resolved_seed = match super::wallet::pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
                 Ok(s) => s,
                 Err(e) => {
@@ -93,9 +93,9 @@ impl TxBuilderActor {
     }
 
     async fn listen_to_broadcast_requests(mut self_addr: Address<Self>) {
-        let receiver = BroadcastTransactionRequest::get_dart_signal_receiver();
-        while let Some(signal_pack) = receiver.recv().await {
-            let request = signal_pack.message;
+        let mut receiver = crate::ffi_web::get_broadcast_transaction_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
+            let request = dart_msg;
             let _ = self_addr.notify(BroadcastTransaction {
                 node_url: request.node_url,
                 tx_blob: request.tx_blob,
@@ -107,9 +107,9 @@ impl TxBuilderActor {
     }
 
     async fn listen_to_proof_requests(_self_addr: Address<Self>) {
-        let receiver = GenerateOutProofRequest::get_dart_signal_receiver();
-        while let Some(signal_pack) = receiver.recv().await {
-            let request = signal_pack.message;
+        let mut receiver = crate::ffi_web::get_generate_out_proof_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
+            let request = dart_msg;
 
             // Generate the proof (network is passed as string)
             match monero_rust::tx_proof::generate_out_proof_v2(

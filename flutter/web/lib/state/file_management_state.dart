@@ -91,7 +91,7 @@ class FileManagementState extends ChangeNotifier {
     final Set<int> derivedAccounts = {0};
     for (var output in _outputState.filteredOutputs) {
       if (output.subaddressIndex != null) {
-        derivedAccounts.add(output.subaddressIndex!.item1);
+        derivedAccounts.add(output.subaddressIndex![0]);
       }
     }
 
@@ -103,13 +103,12 @@ class FileManagementState extends ChangeNotifier {
     String? blockHashesJson;
     try {
       final completer = Completer<String?>();
-      final sub = BlockHashesResponse.rustSignalStream.listen((signal) {
+      final sub = BlockHashesResponse.stream.listen((msg) {
         if (!completer.isCompleted) {
-          final msg = signal.message;
           completer.complete(msg.success ? msg.blockHashesJson : null);
         }
       });
-      const GetBlockHashesRequest().sendSignalToRust();
+      GetBlockHashesRequest().sendSignalToRust();
       blockHashesJson = await completer.future.timeout(
         const Duration(seconds: 5),
         onTimeout: () => null,
@@ -121,13 +120,12 @@ class FileManagementState extends ChangeNotifier {
     String? pendingStateJson;
     try {
       final completer = Completer<String?>();
-      final sub = PendingStateResponse.rustSignalStream.listen((signal) {
+      final sub = PendingStateResponse.stream.listen((msg) {
         if (!completer.isCompleted) {
-          final msg = signal.message;
           completer.complete(msg.success ? msg.pendingStateJson : null);
         }
       });
-      const GetPendingStateRequest().sendSignalToRust();
+      GetPendingStateRequest().sendSignalToRust();
       pendingStateJson = await completer.future.timeout(
         const Duration(seconds: 5),
         onTimeout: () => null,
@@ -319,8 +317,8 @@ class FileManagementState extends ChangeNotifier {
       seed: seed,
       network: network,
       outputs: loadedOutputs,
-      daemonHeight: Uint64(BigInt.from(_scanState.daemonHeight ?? 0)),
-      currentHeight: Uint64(BigInt.from(loadedHeight)),
+      daemonHeight: _scanState.daemonHeight ?? 0,
+      currentHeight: loadedHeight,
       blockHashesJson: loadResult.blockHashesJson,
       pendingStateJson: loadResult.pendingStateJson,
       passphrase: '',

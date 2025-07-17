@@ -4,6 +4,9 @@ name = "hub"
 version = "0.1.0"
 edition = "2024"
 
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
 [lib]
 # `lib` is required for non-library targets,
 # such as tests and benchmarks.
@@ -17,9 +20,9 @@ expect_used = "deny"
 wildcard_imports = "deny"
 
 [dependencies]
-rinf = "8.7.1"
+paste = "1.0"
 serde = { version = "1.0.219", features = ["derive"] }
-tokio = { version = "1.45.0", features = ["rt", "macros", "time"] }
+tokio = { version = "1.45.0", features = ["rt", "macros", "time", "sync"] }
 async-trait = "0.1.87"
 messages = "0.3.1"
 monero-rust = { path = "../../../../rust/monero-rust" }

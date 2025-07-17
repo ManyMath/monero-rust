@@ -39,7 +39,7 @@ class TransactionsPanel extends StatelessWidget {
 
     // Add accounts from received outputs
     for (var output in tx.receivedOutputs) {
-      final account = output.subaddressIndex?.item1 ?? 0;
+      final account = output.subaddressIndex?[0] ?? 0;
       accounts.add(account);
     }
 
@@ -47,7 +47,7 @@ class TransactionsPanel extends StatelessWidget {
     for (var keyImage in tx.spentKeyImages) {
       final spentOutput = keyImageMap[keyImage];
       if (spentOutput != null) {
-        final account = spentOutput.subaddressIndex?.item1 ?? 0;
+        final account = spentOutput.subaddressIndex?[0] ?? 0;
         accounts.add(account);
       }
     }
@@ -235,7 +235,7 @@ class TransactionsPanel extends StatelessWidget {
                           const SizedBox(height: 4),
                           ...tx.receivedOutputs.map((output) {
                             final isSpent = output.spent;
-                            final accountIndex = output.subaddressIndex?.item1 ?? 0;
+                            final accountIndex = output.subaddressIndex?[0] ?? 0;
                             final showAccount = activeAccount == -1;
 
                             return Container(
@@ -307,7 +307,7 @@ class TransactionsPanel extends StatelessWidget {
                           ...tx.spentKeyImages.map((keyImage) {
                             final spentOutput = keyImageMap[keyImage];
                             final amountStr = spentOutput?.amountXmr ?? 'Unknown';
-                            final accountIndex = spentOutput?.subaddressIndex?.item1 ?? 0;
+                            final accountIndex = spentOutput?.subaddressIndex?[0] ?? 0;
                             final showAccount = activeAccount == -1;
 
                             return Container(

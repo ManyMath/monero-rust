@@ -1,4 +1,3 @@
-import 'package:tuple/tuple.dart';
 import '../src/bindings/bindings.dart';
 import '../models/wallet_transaction.dart';
 
@@ -42,7 +41,7 @@ class WalletSerializer {
                 'keyOffset': o.keyOffset,
                 'commitmentMask': o.commitmentMask,
                 'subaddressIndex': o.subaddressIndex != null
-                    ? [o.subaddressIndex!.item1, o.subaddressIndex!.item2]
+                    ? [o.subaddressIndex![0], o.subaddressIndex![1]]
                     : null,
                 'paymentId': o.paymentId,
                 'receivedOutputBytes': o.receivedOutputBytes,
@@ -137,20 +136,20 @@ class WalletSerializer {
       return OwnedOutput(
         txHash: d['txHash'] as String,
         outputIndex: d['outputIndex'] as int,
-        amount: Uint64(BigInt.parse(d['amount'] as String)),
+        amount: int.parse(d['amount'] as String),
         amountXmr: d['amountXmr'] as String,
         key: d['key'] as String,
         keyOffset: d['keyOffset'] as String,
         commitmentMask: d['commitmentMask'] as String,
         subaddressIndex: d['subaddressIndex'] != null
-            ? Tuple2<int, int>(
+            ? [
                 d['subaddressIndex'][0] as int,
                 d['subaddressIndex'][1] as int,
-              )
+              ]
             : null,
         paymentId: d['paymentId'] as String?,
         receivedOutputBytes: d['receivedOutputBytes'] as String,
-        blockHeight: Uint64(BigInt.parse(d['blockHeight'] as String)),
+        blockHeight: int.parse(d['blockHeight'] as String),
         spent: spentValue,
         keyImage: d['keyImage'] as String,
         isCoinbase: isCoinbaseValue,
@@ -186,7 +185,7 @@ class WalletSerializer {
     // Derive outputsByAccount from the flat outputs list (no longer stored separately)
     final Map<int, List<OwnedOutput>> outputsByAccount = {};
     for (var output in outputs) {
-      final account = output.subaddressIndex?.item1 ?? 0;
+      final account = output.subaddressIndex?[0] ?? 0;
       outputsByAccount.putIfAbsent(account, () => []).add(output);
     }
 

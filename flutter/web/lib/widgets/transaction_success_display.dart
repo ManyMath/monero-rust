@@ -17,13 +17,12 @@ class TransactionSuccessDisplay extends StatelessWidget {
   static const int _feeAnomalyThreshold = 10000000000; // 0.01 XMR
 
   bool get _isFeeAnomaly {
-    final fee = txResult.fee.toInt();
-    return fee > _feeAnomalyThreshold;
+    return txResult.fee > _feeAnomalyThreshold;
   }
 
   @override
   Widget build(BuildContext context) {
-    final feeXmr = (txResult.fee.toInt() / 1e12).toStringAsFixed(12);
+    final feeXmr = (txResult.fee / 1e12).toStringAsFixed(12);
     final feeAnomaly = _isFeeAnomaly;
 
     return Container(
