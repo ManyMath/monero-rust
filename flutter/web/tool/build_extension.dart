@@ -23,6 +23,7 @@ class ExtensionBuilder {
   late final String buildDir;
   late final String extensionDir;
   late final String webBuildDir;
+  late final String hubCrateDir;
 
   ExtensionBuilder() {
     final scriptDir = path.dirname(Platform.script.toFilePath());
@@ -30,17 +31,18 @@ class ExtensionBuilder {
     buildDir = path.join(projectRoot, 'build');
     extensionDir = path.join(buildDir, 'extension');
     webBuildDir = path.join(buildDir, 'web');
+    hubCrateDir = path.join(projectRoot, 'native', 'hub');
   }
 
   Future<void> build() async {
     await _checkPrerequisites();
-    await _generateBindings();
     await _buildWasm();
     await _buildFlutterWeb();
     await _createExtensionDirectory();
     await _copyFlutterBuild();
+    await _copyWasmPkg();
     await _copyManifest();
-    await _patchForExtension(); // patch for CSP compliance
+    await _patchForExtension();
     await _verifyBuild();
     await _createPackage();
     _printSuccess();
@@ -54,25 +56,21 @@ class ExtensionBuilder {
       throw Exception('Flutter is not installed or not in PATH');
     }
 
-    final rinfResult = await _runCommand('rinf', ['--help'], silent: true);
-    if (!rinfResult) {
-      throw Exception('rinf CLI is not installed. Install with: cargo install rinf_cli');
+    final wasmPackResult = await _runCommand('wasm-pack', ['--version'], silent: true);
+    if (!wasmPackResult) {
+      throw Exception('wasm-pack is not installed. Install with: cargo install wasm-pack');
     }
 
     print('Prerequisites OK');
   }
 
-  Future<void> _generateBindings() async {
-    print('\nGenerating bindings...');
-    final success = await _runCommand('rinf', ['gen'], workingDir: projectRoot);
-    if (!success) {
-      throw Exception('Failed to generate bindings');
-    }
-  }
-
   Future<void> _buildWasm() async {
-    print('\nBuilding WASM...');
-    final success = await _runCommand('rinf', ['wasm', '--release'], workingDir: projectRoot);
+    print('\nBuilding WASM with wasm-pack...');
+    final success = await _runCommand(
+      'wasm-pack',
+      ['build', '--target', 'web', '--release', '--out-dir', path.join(projectRoot, 'build', 'pkg')],
+      workingDir: hubCrateDir,
+    );
     if (!success) {
       throw Exception('Failed to build WASM modules');
     }
@@ -112,6 +110,28 @@ class ExtensionBuilder {
     await _copyDirectory(webBuild, Directory(extensionDir));
   }
 
+  Future<void> _copyWasmPkg() async {
+    print('Copying WASM package...');
+
+    final pkgSource = Directory(path.join(buildDir, 'pkg'));
+    if (!await pkgSource.exists()) {
+      throw Exception('build/pkg directory not found. Did wasm-pack build succeed?');
+    }
+
+    final pkgDest = Directory(path.join(extensionDir, 'pkg'));
+    await pkgDest.create(recursive: true);
+
+    // Copy the essential wasm-pack artifacts
+    for (final name in ['hub_bg.wasm', 'hub.js']) {
+      final src = File(path.join(pkgSource.path, name));
+      if (await src.exists()) {
+        await src.copy(path.join(pkgDest.path, name));
+      } else {
+        throw Exception('Required WASM artifact missing: $name');
+      }
+    }
+  }
+
   Future<void> _copyManifest() async {
     print('Copying manifest...');
 
@@ -143,7 +163,6 @@ class ExtensionBuilder {
     await _removeServiceWorker();
     await _copyDisableServiceWorker();
     await _patchIndexHtml();
-    await _patchMainDartJs();
   }
 
   Future<void> _removeServiceWorker() async {
@@ -213,66 +232,40 @@ class ExtensionBuilder {
 
     content = content.replaceAll('</head>', style);
 
-    // Add loading indicator and inject scripts
+    // Replace body: load wasm-bindgen glue via external module script
+    // (inline scripts are blocked by extension CSP).
     const bodyScripts = '''<body>
   <div id="loading">Loading Monero Wallet...</div>
 
   <script src="extension_bridge.js"></script>
   <script src="disable_service_worker.js"></script>
-  <script src="flutter_bootstrap.js"></script>
+  <script src="wasm_loader.js" type="module"></script>
 </body>''';
 
-    final bodyPattern = RegExp(r'<body>\s*<script src="flutter_bootstrap\.js"( async)?></script>\s*</body>', dotAll: true);
+    final bodyPattern = RegExp(
+      r'<body>\s*<script src="flutter_bootstrap\.js"( async)?></script>\s*</body>',
+      dotAll: true,
+    );
     content = content.replaceAll(bodyPattern, bodyScripts);
 
     await indexFile.writeAsString(content);
-  }
 
-  Future<void> _patchMainDartJs() async {
-    final mainDartPath = path.join(extensionDir, 'main.dart.js');
-    final mainDartFile = File(mainDartPath);
-
-    if (!await mainDartFile.exists()) {
-      print('  Warning: main.dart.js not found');
-      return;
-    }
-
-    String content = await mainDartFile.readAsString();
-
-    // replace innerHTML with external script
-    final patternString = r"l\.innerHTML='import init, \* as wasmBindings from " +
-        r'''"'\+n\.k\(0\)\+'";\s*\\nglobalThis\.wasmBindings = wasmBindings;\s*''' +
-        r'\\nawait init\(\);\s*\\nrinfBindings\.completeRinfLoad\(\);\s*' +
-        r"\\ndelete rinfBindings\.completeRinfLoad;\s*\\n'";
-    final pattern = RegExp(patternString);
-
-    final replacement = r"l.textContent='';l.src=n.k(0).replace('.js','_loader.js')";
-    final newContent = content.replaceAll(pattern, replacement);
-
-    if (newContent != content) {
-      await _createWasmLoader();
-      await mainDartFile.writeAsString(newContent);
-    }
+    // Create the external wasm_loader.js module
+    await _createWasmLoader();
   }
 
   Future<void> _createWasmLoader() async {
-    const wasmLoaderContent = '''// WASM loader
-const wasmPath = new URL(import.meta.url).pathname.replace('_loader.js', '.js');
-const module = await import(wasmPath);
-const init = module.default;
-globalThis.wasmBindings = module;
-await init();
-if (window.rinfBindings && window.rinfBindings.completeRinfLoad) {
-  window.rinfBindings.completeRinfLoad();
-  delete window.rinfBindings.completeRinfLoad;
-}
+    final loaderPath = path.join(extensionDir, 'wasm_loader.js');
+    const loaderContent = '''import init, * as wasmBindings from './pkg/hub.js';
+// Spread into a plain object — ES module namespace objects are frozen,
+// so Dart @JS() annotations can't reliably access properties on them.
+globalThis.wasm_bindgen = { ...wasmBindings, default: init };
+// Start Flutter after wasm_bindgen is on the global scope
+const s = document.createElement('script');
+s.src = 'flutter_bootstrap.js';
+document.body.appendChild(s);
 ''';
-
-    final wasmLoaderPath = path.join(extensionDir, 'pkg', 'hub_loader.js');
-    final wasmLoaderFile = File(wasmLoaderPath);
-
-    await wasmLoaderFile.parent.create(recursive: true);
-    await wasmLoaderFile.writeAsString(wasmLoaderContent);
+    await File(loaderPath).writeAsString(loaderContent);
   }
 
   Future<void> _verifyBuild() async {
@@ -282,6 +275,9 @@ if (window.rinfBindings && window.rinfBindings.completeRinfLoad) {
       'manifest.json',
       'index.html',
       'flutter.js',
+      'pkg/hub_bg.wasm',
+      'pkg/hub.js',
+      'wasm_loader.js',
     ];
 
     for (final fileName in requiredFiles) {
