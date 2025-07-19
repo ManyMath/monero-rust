@@ -1,7 +1,7 @@
 //! Integration tests verifying BIP39 12-word seeds work through the same
-//! monero_rust function calls that the hub actors make.
+//! monero_rust function calls that the WASM actors make.
 //!
-//! Each test mirrors a specific hub actor calling pattern from wallet.rs
+//! Each test mirrors a specific actor calling pattern from wallet.rs
 //! or tx_builder.rs, ensuring BIP39 input produces correct results at
 //! the integration boundary.
 
@@ -11,14 +11,14 @@ const BIP39_EXPECTED_ADDRESS: &str =
     "49MggvPosJugF8Zq7WAKbsSchz6vbyL6YiUxM4ryfGQDXphs6wiWiXLFWCSshnLPcceGTWUaKfWWMHQAAKESV3TQJVQsL9a";
 
 #[test]
-fn test_hub_seed_birthday_with_bip39() {
+fn test_wasm_seed_birthday_with_bip39() {
     let birthday = monero_rust::seed_birthday(BIP39_SEED);
     // Legacy seeds (converted from BIP39) don't encode a birthday
     assert_eq!(birthday, None);
 }
 
 #[test]
-fn test_hub_seed_birthday_with_polyseed() {
+fn test_wasm_seed_birthday_with_polyseed() {
     let polyseed = monero_rust::generate_seed("polyseed").unwrap();
     let birthday = monero_rust::seed_birthday(&polyseed);
     // Polyseeds encode a birthday timestamp
@@ -27,7 +27,7 @@ fn test_hub_seed_birthday_with_polyseed() {
 }
 
 #[test]
-fn test_hub_seed_birthday_with_classic() {
+fn test_wasm_seed_birthday_with_classic() {
     let classic = monero_rust::generate_seed("classic").unwrap();
     let birthday = monero_rust::seed_birthday(&classic);
     // Classic seeds don't encode a birthday
@@ -35,16 +35,16 @@ fn test_hub_seed_birthday_with_classic() {
 }
 
 #[test]
-fn test_hub_generate_bip39_then_birthday() {
+fn test_wasm_generate_bip39_then_birthday() {
     let seed = monero_rust::generate_seed("bip39").unwrap();
     assert_eq!(seed.split_whitespace().count(), 12);
-    // Hub only calls seed_birthday for polyseed, but BIP39 should not panic
+    // Only polyseed encodes a birthday, but BIP39 should not panic
     let birthday = monero_rust::seed_birthday(&seed);
     assert_eq!(birthday, None);
 }
 
 #[test]
-fn test_hub_generate_polyseed_then_birthday() {
+fn test_wasm_generate_polyseed_then_birthday() {
     let seed = monero_rust::generate_seed("polyseed").unwrap();
     assert_eq!(seed.split_whitespace().count(), 16);
     let birthday = monero_rust::seed_birthday(&seed);
@@ -52,13 +52,13 @@ fn test_hub_generate_polyseed_then_birthday() {
 }
 
 #[test]
-fn test_hub_derive_address_with_bip39() {
+fn test_wasm_derive_address_with_bip39() {
     let address = monero_rust::derive_address(BIP39_SEED, "mainnet").unwrap();
     assert_eq!(address, BIP39_EXPECTED_ADDRESS);
 }
 
 #[test]
-fn test_hub_derive_subaddress_with_bip39() {
+fn test_wasm_derive_subaddress_with_bip39() {
     let primary = monero_rust::derive_subaddress(BIP39_SEED, "mainnet", 0, 0).unwrap();
     assert_eq!(primary, BIP39_EXPECTED_ADDRESS);
 
@@ -68,7 +68,7 @@ fn test_hub_derive_subaddress_with_bip39() {
 }
 
 #[test]
-fn test_hub_derive_keys_with_bip39() {
+fn test_wasm_derive_keys_with_bip39() {
     let keys = monero_rust::derive_keys(BIP39_SEED, "mainnet").unwrap();
     assert_eq!(keys.address, BIP39_EXPECTED_ADDRESS);
     assert!(!keys.secret_spend_key.is_empty());
@@ -78,12 +78,12 @@ fn test_hub_derive_keys_with_bip39() {
 }
 
 #[test]
-fn test_hub_validate_seed_bip39() {
+fn test_wasm_validate_seed_bip39() {
     monero_rust::validate_seed(BIP39_SEED).unwrap();
 }
 
 #[test]
-fn test_hub_validate_seed_invalid_bip39_rejected() {
+fn test_wasm_validate_seed_invalid_bip39_rejected() {
     let result = monero_rust::validate_seed(
         "color ranch color remove subway public water embrace before begin liberty zzzzz",
     );
@@ -91,7 +91,7 @@ fn test_hub_validate_seed_invalid_bip39_rejected() {
 }
 
 #[test]
-fn test_hub_bip39_to_legacy_conversion() {
+fn test_wasm_bip39_to_legacy_conversion() {
     let legacy = monero_rust::bip39_to_legacy_mnemonic(BIP39_SEED, "", 0).unwrap();
     assert_eq!(legacy.split_whitespace().count(), 25);
     // Legacy seed should derive the same address
@@ -100,7 +100,7 @@ fn test_hub_bip39_to_legacy_conversion() {
 }
 
 #[test]
-fn test_hub_resolve_seed_bip39_consistency() {
+fn test_wasm_resolve_seed_bip39_consistency() {
     let seed = monero_rust::resolve_seed(BIP39_SEED).unwrap();
     // The resolved seed should produce the same keys as direct derive_keys
     let keys = monero_rust::derive_keys(BIP39_SEED, "mainnet").unwrap();
@@ -108,7 +108,7 @@ fn test_hub_resolve_seed_bip39_consistency() {
 }
 
 #[test]
-fn test_hub_resolve_seed_all_types() {
+fn test_wasm_resolve_seed_all_types() {
     // BIP39
     monero_rust::resolve_seed(BIP39_SEED).unwrap();
     // Classic
@@ -120,7 +120,7 @@ fn test_hub_resolve_seed_all_types() {
 }
 
 #[test]
-fn test_hub_full_bip39_restore_pipeline() {
+fn test_wasm_full_bip39_restore_pipeline() {
     // 1. Validate the seed (UI validation step)
     monero_rust::validate_seed(BIP39_SEED).unwrap();
 

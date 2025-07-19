@@ -150,7 +150,7 @@ void sendDartSignalJson(String snakeName, String json) {
 Future<void> initializeBareFfi(
     Map<String, void Function(String json)> handlers) async {
   // 1. Load the WASM module
-  await _initWasm('pkg/hub_bg.wasm'.toJS).toDart;
+  await _initWasm('pkg/monero_wasm_bg.wasm'.toJS).toDart;
 
   // 2. Register the Rust → Dart callback
   void onRustSignal(JSString type, JSString json) {

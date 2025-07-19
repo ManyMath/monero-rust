@@ -5,4 +5,4 @@
 
 [workspace]
 resolver = "3"
-members = ["native/hub"]
+members = ["native/monero_wasm"]

@@ -1,5 +1,4 @@
-//! This `hub` crate is the
-//! entry point of the Rust logic.
+//! WASM entry point for the Monero wallet extension.
 
 mod actors;
 pub mod ffi_web;

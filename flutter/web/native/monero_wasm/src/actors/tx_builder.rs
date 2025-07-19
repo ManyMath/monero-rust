@@ -869,7 +869,7 @@ mod tests {
         // Test when we have an output that exactly matches (or very close to) the needed amount
         let outputs = vec![
             create_output(5_000_000_000_000, "tx1", 0, 100),      // 5 XMR
-            create_output(1_035_000_000_000, "tx2", 0, 101),      // 1.035 XMR (≈ 1 XMR + fee)
+            create_output(1_035_000_000_000, "tx2", 0, 101),      // 1.035 XMR (~1 XMR + fee)
             create_output(500_000_000_000, "tx3", 0, 102),        // 0.5 XMR
         ];
 

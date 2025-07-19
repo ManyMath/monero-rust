@@ -23,7 +23,7 @@ class ExtensionBuilder {
   late final String buildDir;
   late final String extensionDir;
   late final String webBuildDir;
-  late final String hubCrateDir;
+  late final String wasmCrateDir;
 
   ExtensionBuilder() {
     final scriptDir = path.dirname(Platform.script.toFilePath());
@@ -31,7 +31,7 @@ class ExtensionBuilder {
     buildDir = path.join(projectRoot, 'build');
     extensionDir = path.join(buildDir, 'extension');
     webBuildDir = path.join(buildDir, 'web');
-    hubCrateDir = path.join(projectRoot, 'native', 'hub');
+    wasmCrateDir = path.join(projectRoot, 'native', 'monero_wasm');
   }
 
   Future<void> build() async {
@@ -69,7 +69,7 @@ class ExtensionBuilder {
     final success = await _runCommand(
       'wasm-pack',
       ['build', '--target', 'web', '--release', '--out-dir', path.join(projectRoot, 'build', 'pkg')],
-      workingDir: hubCrateDir,
+      workingDir: wasmCrateDir,
     );
     if (!success) {
       throw Exception('Failed to build WASM modules');
@@ -122,7 +122,7 @@ class ExtensionBuilder {
     await pkgDest.create(recursive: true);
 
     // Copy the essential wasm-pack artifacts
-    for (final name in ['hub_bg.wasm', 'hub.js']) {
+    for (final name in ['monero_wasm_bg.wasm', 'monero_wasm.js']) {
       final src = File(path.join(pkgSource.path, name));
       if (await src.exists()) {
         await src.copy(path.join(pkgDest.path, name));
@@ -256,7 +256,7 @@ class ExtensionBuilder {
 
   Future<void> _createWasmLoader() async {
     final loaderPath = path.join(extensionDir, 'wasm_loader.js');
-    const loaderContent = '''import init, * as wasmBindings from './pkg/hub.js';
+    const loaderContent = '''import init, * as wasmBindings from './pkg/monero_wasm.js';
 // Spread into a plain object — ES module namespace objects are frozen,
 // so Dart @JS() annotations can't reliably access properties on them.
 globalThis.wasm_bindgen = { ...wasmBindings, default: init };
@@ -275,8 +275,8 @@ document.body.appendChild(s);
       'manifest.json',
       'index.html',
       'flutter.js',
-      'pkg/hub_bg.wasm',
-      'pkg/hub.js',
+      'pkg/monero_wasm_bg.wasm',
+      'pkg/monero_wasm.js',
       'wasm_loader.js',
     ];
 
