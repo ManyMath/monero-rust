@@ -1,7 +1,6 @@
 #![cfg(target_arch = "wasm32")]
 
 use async_trait::async_trait;
-use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{Request, RequestInit, RequestMode, Response};
 
@@ -23,7 +22,6 @@ impl monero_serai::rpc::RpcConnection for WasmRpcAdapter {
     async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
         use web_sys::console;
 
-        let window = web_sys::window().ok_or(RpcError::ConnectionError)?;
         let full_url = format!("{}/{}", self.url, route);
 
         let opts = RequestInit::new();
@@ -44,7 +42,7 @@ impl monero_serai::rpc::RpcConnection for WasmRpcAdapter {
         };
         headers.set("Content-Type", content_type).map_err(|_| RpcError::ConnectionError)?;
 
-        let resp_value = JsFuture::from(window.fetch_with_request(&request))
+        let resp: Response = crate::wasm_fetch::fetch_with_request(&request)
             .await
             .map_err(|e| {
                 if let Some(s) = e.as_string() {
@@ -52,8 +50,6 @@ impl monero_serai::rpc::RpcConnection for WasmRpcAdapter {
                 }
                 RpcError::ConnectionError
             })?;
-
-        let resp: Response = resp_value.dyn_into().map_err(|_| RpcError::ConnectionError)?;
         let status = resp.status();
 
         if status < 200 || status >= 300 {

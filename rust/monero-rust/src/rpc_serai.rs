@@ -5,7 +5,7 @@ use monero_serai::rpc::{RpcConnection, RpcError};
 use monero_serai::rpc::Rpc;
 
 #[cfg(target_arch = "wasm32")]
-use wasm_bindgen::{JsValue, JsCast};
+use wasm_bindgen::JsValue;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::JsFuture;
 #[cfg(target_arch = "wasm32")]
@@ -27,9 +27,6 @@ impl WasmRpcConnection {
 #[async_trait(?Send)]
 impl RpcConnection for WasmRpcConnection {
     async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
-        let window = web_sys::window()
-            .ok_or(RpcError::ConnectionError)?;
-
         let url = format!("{}/{}", self.url, route);
 
         let opts = RequestInit::new();
@@ -53,12 +50,8 @@ impl RpcConnection for WasmRpcConnection {
             .set("Content-Type", content_type)
             .map_err(|_| RpcError::ConnectionError)?;
 
-        let resp_value = JsFuture::from(window.fetch_with_request(&request))
+        let resp: Response = crate::wasm_fetch::fetch_with_request(&request)
             .await
-            .map_err(|_| RpcError::ConnectionError)?;
-
-        let resp: Response = resp_value
-            .dyn_into()
             .map_err(|_| RpcError::ConnectionError)?;
 
         let status = resp.status();

@@ -96,6 +96,8 @@ pub use abstractions::{
 
 // -- Platform-specific implementations --
 #[cfg(target_arch = "wasm32")]
+pub mod wasm_fetch;
+#[cfg(target_arch = "wasm32")]
 pub mod wasm_impl;
 #[cfg(target_arch = "wasm32")]
 pub mod rpc_adapter;

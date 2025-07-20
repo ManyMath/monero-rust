@@ -12,7 +12,6 @@ use js_sys::Date;
 use serde::Deserialize;
 use serde_json::Value;
 use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{Request, RequestInit, RequestMode, RequestCredentials, Response, Storage};
 
@@ -190,9 +189,6 @@ impl WasmRpcClient {
     }
 
     async fn fetch_json(&self, method: &str, params: Value) -> AbResult<Value> {
-        let window = web_sys::window()
-            .ok_or_else(|| AbError::Network("No window object available".into()))?;
-
         let request_body = serde_json::json!({
             "jsonrpc": "2.0",
             "id": "0",
@@ -219,13 +215,9 @@ impl WasmRpcClient {
             .set("Content-Type", "application/json")
             .map_err(|e| AbError::Network(format!("Failed to set headers: {:?}", e)))?;
 
-        let resp_value = JsFuture::from(window.fetch_with_request(&request))
+        let resp: Response = crate::wasm_fetch::fetch_with_request(&request)
             .await
             .map_err(|e| AbError::Network(format!("Fetch failed: {:?}", e)))?;
-
-        let resp: Response = resp_value
-            .dyn_into()
-            .map_err(|e| AbError::Network(format!("Invalid response type: {:?}", e)))?;
 
         // Capture HTTP status code for better error context
         let status = resp.status();
