@@ -1,9 +1,9 @@
 import 'dart:async';
-import '../src/ffi/signal_types.dart';
+import 'signal_types.dart';
 
 typedef SignalCallback<T> = void Function(T message);
 
-class RinfSignalHub {
+class SignalHub {
   SignalCallback<KeysDerivedResponse>? onKeysDerived;
   SignalCallback<SubaddressDerivedResponse>? onSubaddressDerived;
   SignalCallback<SeedGeneratedResponse>? onSeedGenerated;

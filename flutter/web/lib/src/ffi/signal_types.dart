@@ -1,31 +1,25 @@
-// Auto-generated signal types for monero-rust FFI.
-// Replaces rinf-generated bincode-based signal classes with JSON-based ones.
-
 import 'dart:async';
 import 'dart:convert';
-import 'web_ffi.dart' as ffi;
+import 'signal_sender.dart';
 
-// ===========================================================================
-// Shared / sub-struct types (both toJson and fromJson)
-// ===========================================================================
+export 'signal_sender.dart' show setSignalSender;
+
+// ---------------------------------------------------------------------------
+// Sub-structs (shared between multiple signals)
+// ---------------------------------------------------------------------------
 
 class Recipient {
   final String address;
   final int amount;
 
-  Recipient({required this.address, required this.amount});
+  const Recipient({required this.address, required this.amount});
 
-  factory Recipient.fromJson(Map<String, dynamic> json) {
-    return Recipient(
-      address: json['address'] as String,
-      amount: json['amount'] as int,
-    );
-  }
+  Map<String, dynamic> toJson() => {'address': address, 'amount': amount};
 
-  Map<String, dynamic> toJson() => {
-        'address': address,
-        'amount': amount,
-      };
+  factory Recipient.fromJson(Map<String, dynamic> json) => Recipient(
+    address: json['address'] as String,
+    amount: json['amount'] as int,
+  );
 }
 
 class OwnedOutput {
@@ -36,7 +30,7 @@ class OwnedOutput {
   final String key;
   final String keyOffset;
   final String commitmentMask;
-  final List<int>? subaddressIndex;
+  final (int, int)? subaddressIndex;
   final String? paymentId;
   final String receivedOutputBytes;
   final int blockHeight;
@@ -45,7 +39,7 @@ class OwnedOutput {
   final bool isCoinbase;
   final bool frozen;
 
-  OwnedOutput({
+  const OwnedOutput({
     required this.txHash,
     required this.outputIndex,
     required this.amount,
@@ -63,7 +57,27 @@ class OwnedOutput {
     required this.frozen,
   });
 
+  Map<String, dynamic> toJson() => {
+    'tx_hash': txHash,
+    'output_index': outputIndex,
+    'amount': amount,
+    'amount_xmr': amountXmr,
+    'key': key,
+    'key_offset': keyOffset,
+    'commitment_mask': commitmentMask,
+    if (subaddressIndex != null)
+      'subaddress_index': [subaddressIndex!.$1, subaddressIndex!.$2],
+    if (paymentId != null) 'payment_id': paymentId,
+    'received_output_bytes': receivedOutputBytes,
+    'block_height': blockHeight,
+    'spent': spent,
+    'key_image': keyImage,
+    'is_coinbase': isCoinbase,
+    'frozen': frozen,
+  };
+
   factory OwnedOutput.fromJson(Map<String, dynamic> json) {
+    final si = json['subaddress_index'];
     return OwnedOutput(
       txHash: json['tx_hash'] as String,
       outputIndex: json['output_index'] as int,
@@ -72,9 +86,8 @@ class OwnedOutput {
       key: json['key'] as String,
       keyOffset: json['key_offset'] as String,
       commitmentMask: json['commitment_mask'] as String,
-      subaddressIndex: json['subaddress_index'] != null
-          ? (json['subaddress_index'] as List).cast<int>()
-          : null,
+      subaddressIndex:
+          si != null ? ((si as List)[0] as int, (si as List)[1] as int) : null,
       paymentId: json['payment_id'] as String?,
       receivedOutputBytes: json['received_output_bytes'] as String,
       blockHeight: json['block_height'] as int,
@@ -85,59 +98,23 @@ class OwnedOutput {
     );
   }
 
-  Map<String, dynamic> toJson() => {
-        'tx_hash': txHash,
-        'output_index': outputIndex,
-        'amount': amount,
-        'amount_xmr': amountXmr,
-        'key': key,
-        'key_offset': keyOffset,
-        'commitment_mask': commitmentMask,
-        'subaddress_index': subaddressIndex,
-        'payment_id': paymentId,
-        'received_output_bytes': receivedOutputBytes,
-        'block_height': blockHeight,
-        'spent': spent,
-        'key_image': keyImage,
-        'is_coinbase': isCoinbase,
-        'frozen': frozen,
-      };
-
-  OwnedOutput copyWith({
-    String? txHash,
-    int? outputIndex,
-    int? amount,
-    String? amountXmr,
-    String? key,
-    String? keyOffset,
-    String? commitmentMask,
-    List<int>? subaddressIndex,
-    String? paymentId,
-    String? receivedOutputBytes,
-    int? blockHeight,
-    bool? spent,
-    String? keyImage,
-    bool? isCoinbase,
-    bool? frozen,
-  }) {
-    return OwnedOutput(
-      txHash: txHash ?? this.txHash,
-      outputIndex: outputIndex ?? this.outputIndex,
-      amount: amount ?? this.amount,
-      amountXmr: amountXmr ?? this.amountXmr,
-      key: key ?? this.key,
-      keyOffset: keyOffset ?? this.keyOffset,
-      commitmentMask: commitmentMask ?? this.commitmentMask,
-      subaddressIndex: subaddressIndex ?? this.subaddressIndex,
-      paymentId: paymentId ?? this.paymentId,
-      receivedOutputBytes: receivedOutputBytes ?? this.receivedOutputBytes,
-      blockHeight: blockHeight ?? this.blockHeight,
-      spent: spent ?? this.spent,
-      keyImage: keyImage ?? this.keyImage,
-      isCoinbase: isCoinbase ?? this.isCoinbase,
-      frozen: frozen ?? this.frozen,
-    );
-  }
+  OwnedOutput copyWith({bool? spent, bool? frozen}) => OwnedOutput(
+    txHash: txHash,
+    outputIndex: outputIndex,
+    amount: amount,
+    amountXmr: amountXmr,
+    key: key,
+    keyOffset: keyOffset,
+    commitmentMask: commitmentMask,
+    subaddressIndex: subaddressIndex,
+    paymentId: paymentId,
+    receivedOutputBytes: receivedOutputBytes,
+    blockHeight: blockHeight,
+    spent: spent ?? this.spent,
+    keyImage: keyImage,
+    isCoinbase: isCoinbase,
+    frozen: frozen ?? this.frozen,
+  );
 }
 
 class ChangeOutput {
@@ -148,11 +125,11 @@ class ChangeOutput {
   final String key;
   final String keyOffset;
   final String commitmentMask;
-  final List<int>? subaddressIndex;
+  final (int, int)? subaddressIndex;
   final String receivedOutputBytes;
   final String keyImage;
 
-  ChangeOutput({
+  const ChangeOutput({
     required this.txHash,
     required this.outputIndex,
     required this.amount,
@@ -165,7 +142,22 @@ class ChangeOutput {
     required this.keyImage,
   });
 
+  Map<String, dynamic> toJson() => {
+    'tx_hash': txHash,
+    'output_index': outputIndex,
+    'amount': amount,
+    'amount_xmr': amountXmr,
+    'key': key,
+    'key_offset': keyOffset,
+    'commitment_mask': commitmentMask,
+    if (subaddressIndex != null)
+      'subaddress_index': [subaddressIndex!.$1, subaddressIndex!.$2],
+    'received_output_bytes': receivedOutputBytes,
+    'key_image': keyImage,
+  };
+
   factory ChangeOutput.fromJson(Map<String, dynamic> json) {
+    final si = json['subaddress_index'];
     return ChangeOutput(
       txHash: json['tx_hash'] as String,
       outputIndex: json['output_index'] as int,
@@ -174,26 +166,12 @@ class ChangeOutput {
       key: json['key'] as String,
       keyOffset: json['key_offset'] as String,
       commitmentMask: json['commitment_mask'] as String,
-      subaddressIndex: json['subaddress_index'] != null
-          ? (json['subaddress_index'] as List).cast<int>()
-          : null,
+      subaddressIndex:
+          si != null ? ((si as List)[0] as int, (si as List)[1] as int) : null,
       receivedOutputBytes: json['received_output_bytes'] as String,
       keyImage: json['key_image'] as String,
     );
   }
-
-  Map<String, dynamic> toJson() => {
-        'tx_hash': txHash,
-        'output_index': outputIndex,
-        'amount': amount,
-        'amount_xmr': amountXmr,
-        'key': key,
-        'key_offset': keyOffset,
-        'commitment_mask': commitmentMask,
-        'subaddress_index': subaddressIndex,
-        'received_output_bytes': receivedOutputBytes,
-        'key_image': keyImage,
-      };
 }
 
 class WalletConfig {
@@ -205,7 +183,7 @@ class WalletConfig {
   final String passphrase;
   final int bip39AccountIndex;
 
-  WalletConfig({
+  const WalletConfig({
     required this.seed,
     required this.network,
     required this.accountLookahead,
@@ -215,50 +193,30 @@ class WalletConfig {
     this.bip39AccountIndex = 0,
   });
 
-  factory WalletConfig.fromJson(Map<String, dynamic> json) {
-    return WalletConfig(
-      seed: json['seed'] as String,
-      network: json['network'] as String,
-      accountLookahead: json['account_lookahead'] as int,
-      subaddressLookahead: (json['subaddress_lookahead'] as int?) ?? 0,
-      accountsToScan: json['accounts_to_scan'] != null
-          ? (json['accounts_to_scan'] as List).cast<int>()
-          : null,
-      passphrase: (json['passphrase'] as String?) ?? '',
-      bip39AccountIndex: (json['bip39_account_index'] as int?) ?? 0,
-    );
-  }
-
   Map<String, dynamic> toJson() => {
-        'seed': seed,
-        'network': network,
-        'account_lookahead': accountLookahead,
-        'subaddress_lookahead': subaddressLookahead,
-        'accounts_to_scan': accountsToScan,
-        'passphrase': passphrase,
-        'bip39_account_index': bip39AccountIndex,
-      };
+    'seed': seed,
+    'network': network,
+    'account_lookahead': accountLookahead,
+    'subaddress_lookahead': subaddressLookahead,
+    if (accountsToScan != null) 'accounts_to_scan': accountsToScan,
+    'passphrase': passphrase,
+    'bip39_account_index': bip39AccountIndex,
+  };
 }
 
 class WalletScanResult {
   final String address;
   final List<OwnedOutput> outputs;
 
-  WalletScanResult({required this.address, required this.outputs});
+  const WalletScanResult({required this.address, required this.outputs});
 
-  factory WalletScanResult.fromJson(Map<String, dynamic> json) {
-    return WalletScanResult(
-      address: json['address'] as String,
-      outputs: (json['outputs'] as List)
-          .map((e) => OwnedOutput.fromJson(e as Map<String, dynamic>))
-          .toList(),
-    );
-  }
-
-  Map<String, dynamic> toJson() => {
-        'address': address,
-        'outputs': outputs.map((e) => e.toJson()).toList(),
-      };
+  factory WalletScanResult.fromJson(Map<String, dynamic> json) =>
+      WalletScanResult(
+        address: json['address'] as String,
+        outputs: (json['outputs'] as List)
+            .map((e) => OwnedOutput.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
 }
 
 class DoubleSpendConflict {
@@ -266,75 +224,55 @@ class DoubleSpendConflict {
   final int previousSpentHeight;
   final int newHeight;
 
-  DoubleSpendConflict({
+  const DoubleSpendConflict({
     required this.keyImage,
     required this.previousSpentHeight,
     required this.newHeight,
   });
 
-  factory DoubleSpendConflict.fromJson(Map<String, dynamic> json) {
-    return DoubleSpendConflict(
-      keyImage: json['key_image'] as String,
-      previousSpentHeight: json['previous_spent_height'] as int,
-      newHeight: json['new_height'] as int,
-    );
-  }
-
-  Map<String, dynamic> toJson() => {
-        'key_image': keyImage,
-        'previous_spent_height': previousSpentHeight,
-        'new_height': newHeight,
-      };
+  factory DoubleSpendConflict.fromJson(Map<String, dynamic> json) =>
+      DoubleSpendConflict(
+        keyImage: json['key_image'] as String,
+        previousSpentHeight: json['previous_spent_height'] as int,
+        newHeight: json['new_height'] as int,
+      );
 }
 
-// ===========================================================================
-// DartSignal types (Dart → Rust requests)
-// ===========================================================================
+// ---------------------------------------------------------------------------
+// Helper: send a DartSignal to the worker
+// ---------------------------------------------------------------------------
+
+void _send(String fnName, Map<String, dynamic> data) {
+  signalSender.sendSignal(fnName, data);
+}
+
+// ---------------------------------------------------------------------------
+// DartSignal types (Dart -> Rust, 35 total)
+// Each has toJson() and sendSignalToRust().
+// ---------------------------------------------------------------------------
 
 class MoneroTestRequest {
-  MoneroTestRequest();
-
-  Map<String, dynamic> toJson() => {};
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson('monero_test_request', jsonEncode(toJson()));
-  }
+  const MoneroTestRequest();
+  void sendSignalToRust() => _send('send_monero_test_request', {});
 }
 
 class CreateWalletRequest {
   final String password;
   final String network;
-
-  CreateWalletRequest({required this.password, required this.network});
-
-  Map<String, dynamic> toJson() => {
-        'password': password,
-        'network': network,
-      };
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson('create_wallet_request', jsonEncode(toJson()));
-  }
+  const CreateWalletRequest({required this.password, required this.network});
+  void sendSignalToRust() => _send('send_create_wallet_request', {
+    'password': password, 'network': network,
+  });
 }
 
 class StartSyncRequest {
-  StartSyncRequest();
-
-  Map<String, dynamic> toJson() => {};
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson('start_sync_request', jsonEncode(toJson()));
-  }
+  const StartSyncRequest();
+  void sendSignalToRust() => _send('send_start_sync_request', {});
 }
 
 class GetBalanceRequest {
-  GetBalanceRequest();
-
-  Map<String, dynamic> toJson() => {};
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson('get_balance_request', jsonEncode(toJson()));
-  }
+  const GetBalanceRequest();
+  void sendSignalToRust() => _send('send_get_balance_request', {});
 }
 
 class CreateTransactionRequest {
@@ -347,7 +285,7 @@ class CreateTransactionRequest {
   final int bip39AccountIndex;
   final bool subtractFee;
 
-  CreateTransactionRequest({
+  const CreateTransactionRequest({
     required this.nodeUrl,
     required this.seed,
     required this.network,
@@ -358,21 +296,16 @@ class CreateTransactionRequest {
     this.subtractFee = false,
   });
 
-  Map<String, dynamic> toJson() => {
-        'node_url': nodeUrl,
-        'seed': seed,
-        'network': network,
-        'recipients': recipients.map((e) => e.toJson()).toList(),
-        'selected_outputs': selectedOutputs,
-        'passphrase': passphrase,
-        'bip39_account_index': bip39AccountIndex,
-        'subtract_fee': subtractFee,
-      };
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson(
-        'create_transaction_request', jsonEncode(toJson()));
-  }
+  void sendSignalToRust() => _send('send_create_transaction_request', {
+    'node_url': nodeUrl,
+    'seed': seed,
+    'network': network,
+    'recipients': recipients.map((r) => r.toJson()).toList(),
+    if (selectedOutputs != null) 'selected_outputs': selectedOutputs,
+    'passphrase': passphrase,
+    'bip39_account_index': bip39AccountIndex,
+    'subtract_fee': subtractFee,
+  });
 }
 
 class SweepAllRequest {
@@ -384,7 +317,7 @@ class SweepAllRequest {
   final String passphrase;
   final int bip39AccountIndex;
 
-  SweepAllRequest({
+  const SweepAllRequest({
     required this.nodeUrl,
     required this.seed,
     required this.network,
@@ -394,76 +327,52 @@ class SweepAllRequest {
     this.bip39AccountIndex = 0,
   });
 
-  Map<String, dynamic> toJson() => {
-        'node_url': nodeUrl,
-        'seed': seed,
-        'network': network,
-        'destination_address': destinationAddress,
-        'selected_outputs': selectedOutputs,
-        'passphrase': passphrase,
-        'bip39_account_index': bip39AccountIndex,
-      };
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson('sweep_all_request', jsonEncode(toJson()));
-  }
+  void sendSignalToRust() => _send('send_sweep_all_request', {
+    'node_url': nodeUrl,
+    'seed': seed,
+    'network': network,
+    'destination_address': destinationAddress,
+    if (selectedOutputs != null) 'selected_outputs': selectedOutputs,
+    'passphrase': passphrase,
+    'bip39_account_index': bip39AccountIndex,
+  });
 }
 
 class GenerateSeedRequest {
   final String seedType;
-
-  GenerateSeedRequest({required this.seedType});
-
-  Map<String, dynamic> toJson() => {
-        'seed_type': seedType,
-      };
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson('generate_seed_request', jsonEncode(toJson()));
-  }
+  const GenerateSeedRequest({required this.seedType});
+  void sendSignalToRust() =>
+      _send('send_generate_seed_request', {'seed_type': seedType});
 }
 
 class GetSeedBirthdayRequest {
   final String seed;
   final String passphrase;
   final int bip39AccountIndex;
-
-  GetSeedBirthdayRequest({
+  const GetSeedBirthdayRequest({
     required this.seed,
     this.passphrase = '',
     this.bip39AccountIndex = 0,
   });
-
-  Map<String, dynamic> toJson() => {
-        'seed': seed,
-        'passphrase': passphrase,
-        'bip39_account_index': bip39AccountIndex,
-      };
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson(
-        'get_seed_birthday_request', jsonEncode(toJson()));
-  }
+  void sendSignalToRust() => _send('send_get_seed_birthday_request', {
+    'seed': seed,
+    'passphrase': passphrase,
+    'bip39_account_index': bip39AccountIndex,
+  });
 }
 
 class GetBlockHeightFromTimestampRequest {
   final int timestamp;
   final String nodeUrl;
-
-  GetBlockHeightFromTimestampRequest({
+  const GetBlockHeightFromTimestampRequest({
     required this.timestamp,
     required this.nodeUrl,
   });
-
-  Map<String, dynamic> toJson() => {
-        'timestamp': timestamp,
-        'node_url': nodeUrl,
-      };
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson(
-        'get_block_height_from_timestamp_request', jsonEncode(toJson()));
-  }
+  void sendSignalToRust() =>
+      _send('send_get_block_height_from_timestamp_request', {
+    'timestamp': timestamp,
+    'node_url': nodeUrl,
+  });
 }
 
 class DeriveAddressRequest {
@@ -471,24 +380,18 @@ class DeriveAddressRequest {
   final String network;
   final String passphrase;
   final int bip39AccountIndex;
-
-  DeriveAddressRequest({
+  const DeriveAddressRequest({
     required this.seed,
     required this.network,
     this.passphrase = '',
     this.bip39AccountIndex = 0,
   });
-
-  Map<String, dynamic> toJson() => {
-        'seed': seed,
-        'network': network,
-        'passphrase': passphrase,
-        'bip39_account_index': bip39AccountIndex,
-      };
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson('derive_address_request', jsonEncode(toJson()));
-  }
+  void sendSignalToRust() => _send('send_derive_address_request', {
+    'seed': seed,
+    'network': network,
+    'passphrase': passphrase,
+    'bip39_account_index': bip39AccountIndex,
+  });
 }
 
 class DeriveSubaddressRequest {
@@ -498,8 +401,7 @@ class DeriveSubaddressRequest {
   final int addressIndex;
   final String passphrase;
   final int bip39AccountIndex;
-
-  DeriveSubaddressRequest({
+  const DeriveSubaddressRequest({
     required this.seed,
     required this.network,
     required this.account,
@@ -507,20 +409,14 @@ class DeriveSubaddressRequest {
     this.passphrase = '',
     this.bip39AccountIndex = 0,
   });
-
-  Map<String, dynamic> toJson() => {
-        'seed': seed,
-        'network': network,
-        'account': account,
-        'address_index': addressIndex,
-        'passphrase': passphrase,
-        'bip39_account_index': bip39AccountIndex,
-      };
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson(
-        'derive_subaddress_request', jsonEncode(toJson()));
-  }
+  void sendSignalToRust() => _send('send_derive_subaddress_request', {
+    'seed': seed,
+    'network': network,
+    'account': account,
+    'address_index': addressIndex,
+    'passphrase': passphrase,
+    'bip39_account_index': bip39AccountIndex,
+  });
 }
 
 class DeriveKeysRequest {
@@ -528,24 +424,18 @@ class DeriveKeysRequest {
   final String network;
   final String passphrase;
   final int bip39AccountIndex;
-
-  DeriveKeysRequest({
+  const DeriveKeysRequest({
     required this.seed,
     required this.network,
     this.passphrase = '',
     this.bip39AccountIndex = 0,
   });
-
-  Map<String, dynamic> toJson() => {
-        'seed': seed,
-        'network': network,
-        'passphrase': passphrase,
-        'bip39_account_index': bip39AccountIndex,
-      };
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson('derive_keys_request', jsonEncode(toJson()));
-  }
+  void sendSignalToRust() => _send('send_derive_keys_request', {
+    'seed': seed,
+    'network': network,
+    'passphrase': passphrase,
+    'bip39_account_index': bip39AccountIndex,
+  });
 }
 
 class ScanBlockRequest {
@@ -555,8 +445,7 @@ class ScanBlockRequest {
   final String network;
   final String passphrase;
   final int bip39AccountIndex;
-
-  ScanBlockRequest({
+  const ScanBlockRequest({
     required this.nodeUrl,
     required this.blockHeight,
     required this.seed,
@@ -564,19 +453,14 @@ class ScanBlockRequest {
     this.passphrase = '',
     this.bip39AccountIndex = 0,
   });
-
-  Map<String, dynamic> toJson() => {
-        'node_url': nodeUrl,
-        'block_height': blockHeight,
-        'seed': seed,
-        'network': network,
-        'passphrase': passphrase,
-        'bip39_account_index': bip39AccountIndex,
-      };
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson('scan_block_request', jsonEncode(toJson()));
-  }
+  void sendSignalToRust() => _send('send_scan_block_request', {
+    'node_url': nodeUrl,
+    'block_height': blockHeight,
+    'seed': seed,
+    'network': network,
+    'passphrase': passphrase,
+    'bip39_account_index': bip39AccountIndex,
+  });
 }
 
 class BroadcastTransactionRequest {
@@ -585,42 +469,27 @@ class BroadcastTransactionRequest {
   final List<String> spentOutputHashes;
   final String txId;
   final List<String> spentKeyImages;
-
-  BroadcastTransactionRequest({
+  const BroadcastTransactionRequest({
     required this.nodeUrl,
     required this.txBlob,
     required this.spentOutputHashes,
     this.txId = '',
     this.spentKeyImages = const [],
   });
-
-  Map<String, dynamic> toJson() => {
-        'node_url': nodeUrl,
-        'tx_blob': txBlob,
-        'spent_output_hashes': spentOutputHashes,
-        'tx_id': txId,
-        'spent_key_images': spentKeyImages,
-      };
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson(
-        'broadcast_transaction_request', jsonEncode(toJson()));
-  }
+  void sendSignalToRust() => _send('send_broadcast_transaction_request', {
+    'node_url': nodeUrl,
+    'tx_blob': txBlob,
+    'spent_output_hashes': spentOutputHashes,
+    'tx_id': txId,
+    'spent_key_images': spentKeyImages,
+  });
 }
 
 class QueryDaemonHeightRequest {
   final String nodeUrl;
-
-  QueryDaemonHeightRequest({required this.nodeUrl});
-
-  Map<String, dynamic> toJson() => {
-        'node_url': nodeUrl,
-      };
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson(
-        'query_daemon_height_request', jsonEncode(toJson()));
-  }
+  const QueryDaemonHeightRequest({required this.nodeUrl});
+  void sendSignalToRust() =>
+      _send('send_query_daemon_height_request', {'node_url': nodeUrl});
 }
 
 class StartContinuousScanRequest {
@@ -633,8 +502,7 @@ class StartContinuousScanRequest {
   final List<int>? accountsToScan;
   final String passphrase;
   final int bip39AccountIndex;
-
-  StartContinuousScanRequest({
+  const StartContinuousScanRequest({
     required this.nodeUrl,
     required this.startHeight,
     required this.seed,
@@ -645,33 +513,22 @@ class StartContinuousScanRequest {
     this.passphrase = '',
     this.bip39AccountIndex = 0,
   });
-
-  Map<String, dynamic> toJson() => {
-        'node_url': nodeUrl,
-        'start_height': startHeight,
-        'seed': seed,
-        'network': network,
-        'account_lookahead': accountLookahead,
-        'subaddress_lookahead': subaddressLookahead,
-        'accounts_to_scan': accountsToScan,
-        'passphrase': passphrase,
-        'bip39_account_index': bip39AccountIndex,
-      };
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson(
-        'start_continuous_scan_request', jsonEncode(toJson()));
-  }
+  void sendSignalToRust() => _send('send_start_continuous_scan_request', {
+    'node_url': nodeUrl,
+    'start_height': startHeight,
+    'seed': seed,
+    'network': network,
+    'account_lookahead': accountLookahead,
+    'subaddress_lookahead': subaddressLookahead,
+    if (accountsToScan != null) 'accounts_to_scan': accountsToScan,
+    'passphrase': passphrase,
+    'bip39_account_index': bip39AccountIndex,
+  });
 }
 
 class StopScanRequest {
-  StopScanRequest();
-
-  Map<String, dynamic> toJson() => {};
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson('stop_scan_request', jsonEncode(toJson()));
-  }
+  const StopScanRequest();
+  void sendSignalToRust() => _send('send_stop_scan_request', {});
 }
 
 class MempoolScanRequest {
@@ -683,8 +540,7 @@ class MempoolScanRequest {
   final List<int>? accountsToScan;
   final String passphrase;
   final int bip39AccountIndex;
-
-  MempoolScanRequest({
+  const MempoolScanRequest({
     required this.nodeUrl,
     required this.seed,
     required this.network,
@@ -694,21 +550,16 @@ class MempoolScanRequest {
     this.passphrase = '',
     this.bip39AccountIndex = 0,
   });
-
-  Map<String, dynamic> toJson() => {
-        'node_url': nodeUrl,
-        'seed': seed,
-        'network': network,
-        'account_lookahead': accountLookahead,
-        'subaddress_lookahead': subaddressLookahead,
-        'accounts_to_scan': accountsToScan,
-        'passphrase': passphrase,
-        'bip39_account_index': bip39AccountIndex,
-      };
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson('mempool_scan_request', jsonEncode(toJson()));
-  }
+  void sendSignalToRust() => _send('send_mempool_scan_request', {
+    'node_url': nodeUrl,
+    'seed': seed,
+    'network': network,
+    'account_lookahead': accountLookahead,
+    'subaddress_lookahead': subaddressLookahead,
+    if (accountsToScan != null) 'accounts_to_scan': accountsToScan,
+    'passphrase': passphrase,
+    'bip39_account_index': bip39AccountIndex,
+  });
 }
 
 class GenerateOutProofRequest {
@@ -717,151 +568,101 @@ class GenerateOutProofRequest {
   final String recipientAddress;
   final String message;
   final String network;
-
-  GenerateOutProofRequest({
+  const GenerateOutProofRequest({
     required this.txId,
     required this.txKey,
     required this.recipientAddress,
     required this.message,
     required this.network,
   });
-
-  Map<String, dynamic> toJson() => {
-        'tx_id': txId,
-        'tx_key': txKey,
-        'recipient_address': recipientAddress,
-        'message': message,
-        'network': network,
-      };
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson(
-        'generate_out_proof_request', jsonEncode(toJson()));
-  }
+  void sendSignalToRust() => _send('send_generate_out_proof_request', {
+    'tx_id': txId,
+    'tx_key': txKey,
+    'recipient_address': recipientAddress,
+    'message': message,
+    'network': network,
+  });
 }
 
 class SaveWalletDataRequest {
   final String password;
   final String walletDataJson;
-
-  SaveWalletDataRequest({
+  const SaveWalletDataRequest({
     required this.password,
     required this.walletDataJson,
   });
-
-  Map<String, dynamic> toJson() => {
-        'password': password,
-        'wallet_data_json': walletDataJson,
-      };
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson(
-        'save_wallet_data_request', jsonEncode(toJson()));
-  }
+  void sendSignalToRust() => _send('send_save_wallet_data_request', {
+    'password': password,
+    'wallet_data_json': walletDataJson,
+  });
 }
 
 class LoadWalletDataRequest {
   final String password;
   final String encryptedData;
-
-  LoadWalletDataRequest({
+  const LoadWalletDataRequest({
     required this.password,
     required this.encryptedData,
   });
-
-  Map<String, dynamic> toJson() => {
-        'password': password,
-        'encrypted_data': encryptedData,
-      };
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson(
-        'load_wallet_data_request', jsonEncode(toJson()));
-  }
+  void sendSignalToRust() => _send('send_load_wallet_data_request', {
+    'password': password,
+    'encrypted_data': encryptedData,
+  });
 }
 
 class DeriveEncryptionKeyRequest {
   final String password;
-
-  DeriveEncryptionKeyRequest({required this.password});
-
-  Map<String, dynamic> toJson() => {
-        'password': password,
-      };
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson(
-        'derive_encryption_key_request', jsonEncode(toJson()));
-  }
+  const DeriveEncryptionKeyRequest({required this.password});
+  void sendSignalToRust() =>
+      _send('send_derive_encryption_key_request', {'password': password});
 }
 
 class SaveWithDerivedKeyRequest {
   final String keyHex;
   final String saltHex;
   final String walletDataJson;
-
-  SaveWithDerivedKeyRequest({
+  const SaveWithDerivedKeyRequest({
     required this.keyHex,
     required this.saltHex,
     required this.walletDataJson,
   });
-
-  Map<String, dynamic> toJson() => {
-        'key_hex': keyHex,
-        'salt_hex': saltHex,
-        'wallet_data_json': walletDataJson,
-      };
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson(
-        'save_with_derived_key_request', jsonEncode(toJson()));
-  }
+  void sendSignalToRust() => _send('send_save_with_derived_key_request', {
+    'key_hex': keyHex,
+    'salt_hex': saltHex,
+    'wallet_data_json': walletDataJson,
+  });
 }
 
 class ScanBlockMultiWalletRequest {
   final String nodeUrl;
   final int blockHeight;
   final List<WalletConfig> wallets;
-
-  ScanBlockMultiWalletRequest({
+  const ScanBlockMultiWalletRequest({
     required this.nodeUrl,
     required this.blockHeight,
     required this.wallets,
   });
-
-  Map<String, dynamic> toJson() => {
-        'node_url': nodeUrl,
-        'block_height': blockHeight,
-        'wallets': wallets.map((e) => e.toJson()).toList(),
-      };
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson(
-        'scan_block_multi_wallet_request', jsonEncode(toJson()));
-  }
+  void sendSignalToRust() => _send('send_scan_block_multi_wallet_request', {
+    'node_url': nodeUrl,
+    'block_height': blockHeight,
+    'wallets': wallets.map((w) => w.toJson()).toList(),
+  });
 }
 
 class StartMultiWalletScanRequest {
   final String nodeUrl;
   final int startHeight;
   final List<WalletConfig> wallets;
-
-  StartMultiWalletScanRequest({
+  const StartMultiWalletScanRequest({
     required this.nodeUrl,
     required this.startHeight,
     required this.wallets,
   });
-
-  Map<String, dynamic> toJson() => {
-        'node_url': nodeUrl,
-        'start_height': startHeight,
-        'wallets': wallets.map((e) => e.toJson()).toList(),
-      };
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson(
-        'start_multi_wallet_scan_request', jsonEncode(toJson()));
-  }
+  void sendSignalToRust() => _send('send_start_multi_wallet_scan_request', {
+    'node_url': nodeUrl,
+    'start_height': startHeight,
+    'wallets': wallets.map((w) => w.toJson()).toList(),
+  });
 }
 
 class RestoreWalletDataRequest {
@@ -874,8 +675,7 @@ class RestoreWalletDataRequest {
   final String? pendingStateJson;
   final String passphrase;
   final int bip39AccountIndex;
-
-  RestoreWalletDataRequest({
+  const RestoreWalletDataRequest({
     required this.seed,
     required this.network,
     required this.outputs,
@@ -886,96 +686,57 @@ class RestoreWalletDataRequest {
     this.passphrase = '',
     this.bip39AccountIndex = 0,
   });
-
-  Map<String, dynamic> toJson() => {
-        'seed': seed,
-        'network': network,
-        'outputs': outputs.map((e) => e.toJson()).toList(),
-        'daemon_height': daemonHeight,
-        'current_height': currentHeight,
-        'block_hashes_json': blockHashesJson,
-        'pending_state_json': pendingStateJson,
-        'passphrase': passphrase,
-        'bip39_account_index': bip39AccountIndex,
-      };
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson(
-        'restore_wallet_data_request', jsonEncode(toJson()));
-  }
+  void sendSignalToRust() => _send('send_restore_wallet_data_request', {
+    'seed': seed,
+    'network': network,
+    'outputs': outputs.map((o) => o.toJson()).toList(),
+    'daemon_height': daemonHeight,
+    'current_height': currentHeight,
+    if (blockHashesJson != null) 'block_hashes_json': blockHashesJson,
+    if (pendingStateJson != null) 'pending_state_json': pendingStateJson,
+    'passphrase': passphrase,
+    'bip39_account_index': bip39AccountIndex,
+  });
 }
 
 class GetBlockHashesRequest {
-  GetBlockHashesRequest();
-
-  Map<String, dynamic> toJson() => {};
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson(
-        'get_block_hashes_request', jsonEncode(toJson()));
-  }
+  const GetBlockHashesRequest();
+  void sendSignalToRust() => _send('send_get_block_hashes_request', {});
 }
 
 class GetPendingStateRequest {
-  GetPendingStateRequest();
-
-  Map<String, dynamic> toJson() => {};
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson(
-        'get_pending_state_request', jsonEncode(toJson()));
-  }
+  const GetPendingStateRequest();
+  void sendSignalToRust() => _send('send_get_pending_state_request', {});
 }
 
 class ConvertBip39ToLegacyRequest {
   final String bip39Mnemonic;
   final int accountIndex;
   final String passphrase;
-
-  ConvertBip39ToLegacyRequest({
+  const ConvertBip39ToLegacyRequest({
     required this.bip39Mnemonic,
     required this.accountIndex,
     this.passphrase = '',
   });
-
-  Map<String, dynamic> toJson() => {
-        'bip39_mnemonic': bip39Mnemonic,
-        'account_index': accountIndex,
-        'passphrase': passphrase,
-      };
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson(
-        'convert_bip39_to_legacy_request', jsonEncode(toJson()));
-  }
+  void sendSignalToRust() => _send('send_convert_bip39_to_legacy_request', {
+    'bip39_mnemonic': bip39Mnemonic,
+    'account_index': accountIndex,
+    'passphrase': passphrase,
+  });
 }
 
 class FreezeOutputRequest {
   final String keyImage;
-
-  FreezeOutputRequest({required this.keyImage});
-
-  Map<String, dynamic> toJson() => {
-        'key_image': keyImage,
-      };
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson('freeze_output_request', jsonEncode(toJson()));
-  }
+  const FreezeOutputRequest({required this.keyImage});
+  void sendSignalToRust() =>
+      _send('send_freeze_output_request', {'key_image': keyImage});
 }
 
 class ThawOutputRequest {
   final String keyImage;
-
-  ThawOutputRequest({required this.keyImage});
-
-  Map<String, dynamic> toJson() => {
-        'key_image': keyImage,
-      };
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson('thaw_output_request', jsonEncode(toJson()));
-  }
+  const ThawOutputRequest({required this.keyImage});
+  void sendSignalToRust() =>
+      _send('send_thaw_output_request', {'key_image': keyImage});
 }
 
 class CreateUnsignedTransactionRequest {
@@ -985,8 +746,7 @@ class CreateUnsignedTransactionRequest {
   final String network;
   final List<Recipient> recipients;
   final List<String>? selectedOutputs;
-
-  CreateUnsignedTransactionRequest({
+  const CreateUnsignedTransactionRequest({
     required this.nodeUrl,
     required this.viewKeyHex,
     required this.pubSpendKeyHex,
@@ -994,20 +754,15 @@ class CreateUnsignedTransactionRequest {
     required this.recipients,
     this.selectedOutputs,
   });
-
-  Map<String, dynamic> toJson() => {
-        'node_url': nodeUrl,
-        'view_key_hex': viewKeyHex,
-        'pub_spend_key_hex': pubSpendKeyHex,
-        'network': network,
-        'recipients': recipients.map((e) => e.toJson()).toList(),
-        'selected_outputs': selectedOutputs,
-      };
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson(
-        'create_unsigned_transaction_request', jsonEncode(toJson()));
-  }
+  void sendSignalToRust() =>
+      _send('send_create_unsigned_transaction_request', {
+    'node_url': nodeUrl,
+    'view_key_hex': viewKeyHex,
+    'pub_spend_key_hex': pubSpendKeyHex,
+    'network': network,
+    'recipients': recipients.map((r) => r.toJson()).toList(),
+    if (selectedOutputs != null) 'selected_outputs': selectedOutputs,
+  });
 }
 
 class SignUnsignedTransactionRequest {
@@ -1016,27 +771,21 @@ class SignUnsignedTransactionRequest {
   final String network;
   final String passphrase;
   final int bip39AccountIndex;
-
-  SignUnsignedTransactionRequest({
+  const SignUnsignedTransactionRequest({
     required this.seed,
     required this.unsignedTxHex,
     required this.network,
     this.passphrase = '',
     this.bip39AccountIndex = 0,
   });
-
-  Map<String, dynamic> toJson() => {
-        'seed': seed,
-        'unsigned_tx_hex': unsignedTxHex,
-        'network': network,
-        'passphrase': passphrase,
-        'bip39_account_index': bip39AccountIndex,
-      };
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson(
-        'sign_unsigned_transaction_request', jsonEncode(toJson()));
-  }
+  void sendSignalToRust() =>
+      _send('send_sign_unsigned_transaction_request', {
+    'seed': seed,
+    'unsigned_tx_hex': unsignedTxHex,
+    'network': network,
+    'passphrase': passphrase,
+    'bip39_account_index': bip39AccountIndex,
+  });
 }
 
 class ExportKeyImagesRequest {
@@ -1044,84 +793,56 @@ class ExportKeyImagesRequest {
   final String network;
   final String passphrase;
   final int bip39AccountIndex;
-
-  ExportKeyImagesRequest({
+  const ExportKeyImagesRequest({
     required this.seed,
     required this.network,
     this.passphrase = '',
     this.bip39AccountIndex = 0,
   });
-
-  Map<String, dynamic> toJson() => {
-        'seed': seed,
-        'network': network,
-        'passphrase': passphrase,
-        'bip39_account_index': bip39AccountIndex,
-      };
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson(
-        'export_key_images_request', jsonEncode(toJson()));
-  }
+  void sendSignalToRust() => _send('send_export_key_images_request', {
+    'seed': seed,
+    'network': network,
+    'passphrase': passphrase,
+    'bip39_account_index': bip39AccountIndex,
+  });
 }
 
 class ImportKeyImagesRequest {
   final String dataHex;
   final String nodeUrl;
-
-  ImportKeyImagesRequest({required this.dataHex, required this.nodeUrl});
-
-  Map<String, dynamic> toJson() => {
-        'data_hex': dataHex,
-        'node_url': nodeUrl,
-      };
-
-  void sendSignalToRust() {
-    ffi.sendDartSignalJson(
-        'import_key_images_request', jsonEncode(toJson()));
-  }
+  const ImportKeyImagesRequest({
+    required this.dataHex,
+    required this.nodeUrl,
+  });
+  void sendSignalToRust() => _send('send_import_key_images_request', {
+    'data_hex': dataHex,
+    'node_url': nodeUrl,
+  });
 }
 
-// ===========================================================================
-// RustSignal types (Rust → Dart responses)
-// ===========================================================================
+// ---------------------------------------------------------------------------
+// RustSignal types (Rust -> Dart, 32 total)
+// Each has fromJson() and a static stream getter.
+// ---------------------------------------------------------------------------
 
 class MoneroTestResponse {
   final String result;
+  const MoneroTestResponse({required this.result});
+  factory MoneroTestResponse.fromJson(Map<String, dynamic> json) =>
+      MoneroTestResponse(result: json['result'] as String);
 
-  MoneroTestResponse({required this.result});
-
-  factory MoneroTestResponse.fromJson(Map<String, dynamic> json) {
-    return MoneroTestResponse(result: json['result'] as String);
-  }
-
-  static final _controller =
-      StreamController<MoneroTestResponse>.broadcast();
-  static Stream<MoneroTestResponse> get stream => _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(
-        MoneroTestResponse.fromJson(jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+  static Stream<MoneroTestResponse> get stream =>
+      signalSender.onRawSignal('MoneroTestResponse').map(MoneroTestResponse.fromJson);
 }
 
 class WalletCreatedResponse {
   final String address;
+  const WalletCreatedResponse({required this.address});
+  factory WalletCreatedResponse.fromJson(Map<String, dynamic> json) =>
+      WalletCreatedResponse(address: json['address'] as String);
 
-  WalletCreatedResponse({required this.address});
-
-  factory WalletCreatedResponse.fromJson(Map<String, dynamic> json) {
-    return WalletCreatedResponse(address: json['address'] as String);
-  }
-
-  static final _controller =
-      StreamController<WalletCreatedResponse>.broadcast();
-  static Stream<WalletCreatedResponse> get stream => _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(WalletCreatedResponse.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+  static Stream<WalletCreatedResponse> get stream =>
+      signalSender.onRawSignal('WalletCreatedResponse').map(WalletCreatedResponse.fromJson);
 }
 
 class SyncProgressResponse {
@@ -1129,60 +850,42 @@ class SyncProgressResponse {
   final int daemonHeight;
   final bool isSynced;
   final bool isScanning;
-
-  SyncProgressResponse({
+  const SyncProgressResponse({
     required this.currentHeight,
     required this.daemonHeight,
     required this.isSynced,
     required this.isScanning,
   });
+  factory SyncProgressResponse.fromJson(Map<String, dynamic> json) =>
+      SyncProgressResponse(
+        currentHeight: json['current_height'] as int,
+        daemonHeight: json['daemon_height'] as int,
+        isSynced: json['is_synced'] as bool,
+        isScanning: json['is_scanning'] as bool,
+      );
 
-  factory SyncProgressResponse.fromJson(Map<String, dynamic> json) {
-    return SyncProgressResponse(
-      currentHeight: json['current_height'] as int,
-      daemonHeight: json['daemon_height'] as int,
-      isSynced: json['is_synced'] as bool,
-      isScanning: json['is_scanning'] as bool,
-    );
-  }
-
-  static final _controller =
-      StreamController<SyncProgressResponse>.broadcast();
-  static Stream<SyncProgressResponse> get stream => _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(SyncProgressResponse.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+  static Stream<SyncProgressResponse> get stream =>
+      signalSender.onRawSignal('SyncProgressResponse').map(SyncProgressResponse.fromJson);
 }
 
 class BalanceResponse {
   final int confirmed;
   final int unconfirmed;
   final int pendingSpend;
-
-  BalanceResponse({
+  const BalanceResponse({
     required this.confirmed,
     required this.unconfirmed,
     required this.pendingSpend,
   });
+  factory BalanceResponse.fromJson(Map<String, dynamic> json) =>
+      BalanceResponse(
+        confirmed: json['confirmed'] as int,
+        unconfirmed: json['unconfirmed'] as int,
+        pendingSpend: json['pending_spend'] as int,
+      );
 
-  factory BalanceResponse.fromJson(Map<String, dynamic> json) {
-    return BalanceResponse(
-      confirmed: json['confirmed'] as int,
-      unconfirmed: json['unconfirmed'] as int,
-      pendingSpend: json['pending_spend'] as int,
-    );
-  }
-
-  static final _controller =
-      StreamController<BalanceResponse>.broadcast();
-  static Stream<BalanceResponse> get stream => _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(
-        BalanceResponse.fromJson(jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+  static Stream<BalanceResponse> get stream =>
+      signalSender.onRawSignal('BalanceResponse').map(BalanceResponse.fromJson);
 }
 
 class TransactionCreatedResponse {
@@ -1196,7 +899,7 @@ class TransactionCreatedResponse {
   final List<String> spentOutputHashes;
   final List<ChangeOutput> changeOutputs;
 
-  TransactionCreatedResponse({
+  const TransactionCreatedResponse({
     required this.success,
     this.error,
     required this.txId,
@@ -1208,33 +911,23 @@ class TransactionCreatedResponse {
     required this.changeOutputs,
   });
 
-  factory TransactionCreatedResponse.fromJson(Map<String, dynamic> json) {
-    return TransactionCreatedResponse(
-      success: json['success'] as bool,
-      error: json['error'] as String?,
-      txId: json['tx_id'] as String,
-      fee: json['fee'] as int,
-      txBlob: json['tx_blob'] as String?,
-      txKey: json['tx_key'] as String?,
-      txKeyAdditional:
-          (json['tx_key_additional'] as List).cast<String>(),
-      spentOutputHashes:
-          (json['spent_output_hashes'] as List).cast<String>(),
-      changeOutputs: (json['change_outputs'] as List)
-          .map((e) => ChangeOutput.fromJson(e as Map<String, dynamic>))
-          .toList(),
-    );
-  }
+  factory TransactionCreatedResponse.fromJson(Map<String, dynamic> json) =>
+      TransactionCreatedResponse(
+        success: json['success'] as bool,
+        error: json['error'] as String?,
+        txId: json['tx_id'] as String,
+        fee: json['fee'] as int,
+        txBlob: json['tx_blob'] as String?,
+        txKey: json['tx_key'] as String?,
+        txKeyAdditional: (json['tx_key_additional'] as List).cast<String>(),
+        spentOutputHashes: (json['spent_output_hashes'] as List).cast<String>(),
+        changeOutputs: (json['change_outputs'] as List)
+            .map((e) => ChangeOutput.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
 
-  static final _controller =
-      StreamController<TransactionCreatedResponse>.broadcast();
   static Stream<TransactionCreatedResponse> get stream =>
-      _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(TransactionCreatedResponse.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+      signalSender.onRawSignal('TransactionCreatedResponse').map(TransactionCreatedResponse.fromJson);
 }
 
 class SeedGeneratedResponse {
@@ -1242,150 +935,98 @@ class SeedGeneratedResponse {
   final bool success;
   final String? error;
   final int? restoreHeight;
-
-  SeedGeneratedResponse({
+  const SeedGeneratedResponse({
     required this.seed,
     required this.success,
     this.error,
     this.restoreHeight,
   });
+  factory SeedGeneratedResponse.fromJson(Map<String, dynamic> json) =>
+      SeedGeneratedResponse(
+        seed: json['seed'] as String,
+        success: json['success'] as bool,
+        error: json['error'] as String?,
+        restoreHeight: json['restore_height'] as int?,
+      );
 
-  factory SeedGeneratedResponse.fromJson(Map<String, dynamic> json) {
-    return SeedGeneratedResponse(
-      seed: json['seed'] as String,
-      success: json['success'] as bool,
-      error: json['error'] as String?,
-      restoreHeight: json['restore_height'] as int?,
-    );
-  }
-
-  static final _controller =
-      StreamController<SeedGeneratedResponse>.broadcast();
-  static Stream<SeedGeneratedResponse> get stream => _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(SeedGeneratedResponse.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+  static Stream<SeedGeneratedResponse> get stream =>
+      signalSender.onRawSignal('SeedGeneratedResponse').map(SeedGeneratedResponse.fromJson);
 }
 
 class SeedBirthdayResponse {
   final int? birthday;
   final bool success;
   final String? error;
+  const SeedBirthdayResponse({this.birthday, required this.success, this.error});
+  factory SeedBirthdayResponse.fromJson(Map<String, dynamic> json) =>
+      SeedBirthdayResponse(
+        birthday: json['birthday'] as int?,
+        success: json['success'] as bool,
+        error: json['error'] as String?,
+      );
 
-  SeedBirthdayResponse({
-    this.birthday,
-    required this.success,
-    this.error,
-  });
-
-  factory SeedBirthdayResponse.fromJson(Map<String, dynamic> json) {
-    return SeedBirthdayResponse(
-      birthday: json['birthday'] as int?,
-      success: json['success'] as bool,
-      error: json['error'] as String?,
-    );
-  }
-
-  static final _controller =
-      StreamController<SeedBirthdayResponse>.broadcast();
-  static Stream<SeedBirthdayResponse> get stream => _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(SeedBirthdayResponse.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+  static Stream<SeedBirthdayResponse> get stream =>
+      signalSender.onRawSignal('SeedBirthdayResponse').map(SeedBirthdayResponse.fromJson);
 }
 
 class BlockHeightFromTimestampResponse {
   final int blockHeight;
   final bool success;
   final String? error;
-
-  BlockHeightFromTimestampResponse({
+  const BlockHeightFromTimestampResponse({
     required this.blockHeight,
     required this.success,
     this.error,
   });
+  factory BlockHeightFromTimestampResponse.fromJson(Map<String, dynamic> json) =>
+      BlockHeightFromTimestampResponse(
+        blockHeight: json['block_height'] as int,
+        success: json['success'] as bool,
+        error: json['error'] as String?,
+      );
 
-  factory BlockHeightFromTimestampResponse.fromJson(
-      Map<String, dynamic> json) {
-    return BlockHeightFromTimestampResponse(
-      blockHeight: json['block_height'] as int,
-      success: json['success'] as bool,
-      error: json['error'] as String?,
-    );
-  }
-
-  static final _controller =
-      StreamController<BlockHeightFromTimestampResponse>.broadcast();
   static Stream<BlockHeightFromTimestampResponse> get stream =>
-      _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(BlockHeightFromTimestampResponse.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+      signalSender.onRawSignal('BlockHeightFromTimestampResponse').map(BlockHeightFromTimestampResponse.fromJson);
 }
 
 class AddressDerivedResponse {
   final String address;
   final bool success;
   final String? error;
-
-  AddressDerivedResponse({
+  const AddressDerivedResponse({
     required this.address,
     required this.success,
     this.error,
   });
+  factory AddressDerivedResponse.fromJson(Map<String, dynamic> json) =>
+      AddressDerivedResponse(
+        address: json['address'] as String,
+        success: json['success'] as bool,
+        error: json['error'] as String?,
+      );
 
-  factory AddressDerivedResponse.fromJson(Map<String, dynamic> json) {
-    return AddressDerivedResponse(
-      address: json['address'] as String,
-      success: json['success'] as bool,
-      error: json['error'] as String?,
-    );
-  }
-
-  static final _controller =
-      StreamController<AddressDerivedResponse>.broadcast();
-  static Stream<AddressDerivedResponse> get stream => _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(AddressDerivedResponse.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+  static Stream<AddressDerivedResponse> get stream =>
+      signalSender.onRawSignal('AddressDerivedResponse').map(AddressDerivedResponse.fromJson);
 }
 
 class SubaddressDerivedResponse {
   final String address;
   final bool success;
   final String? error;
-
-  SubaddressDerivedResponse({
+  const SubaddressDerivedResponse({
     required this.address,
     required this.success,
     this.error,
   });
+  factory SubaddressDerivedResponse.fromJson(Map<String, dynamic> json) =>
+      SubaddressDerivedResponse(
+        address: json['address'] as String,
+        success: json['success'] as bool,
+        error: json['error'] as String?,
+      );
 
-  factory SubaddressDerivedResponse.fromJson(Map<String, dynamic> json) {
-    return SubaddressDerivedResponse(
-      address: json['address'] as String,
-      success: json['success'] as bool,
-      error: json['error'] as String?,
-    );
-  }
-
-  static final _controller =
-      StreamController<SubaddressDerivedResponse>.broadcast();
   static Stream<SubaddressDerivedResponse> get stream =>
-      _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(SubaddressDerivedResponse.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+      signalSender.onRawSignal('SubaddressDerivedResponse').map(SubaddressDerivedResponse.fromJson);
 }
 
 class KeysDerivedResponse {
@@ -1396,8 +1037,7 @@ class KeysDerivedResponse {
   final String publicViewKey;
   final bool success;
   final String? error;
-
-  KeysDerivedResponse({
+  const KeysDerivedResponse({
     required this.address,
     required this.secretSpendKey,
     required this.secretViewKey,
@@ -1406,27 +1046,19 @@ class KeysDerivedResponse {
     required this.success,
     this.error,
   });
+  factory KeysDerivedResponse.fromJson(Map<String, dynamic> json) =>
+      KeysDerivedResponse(
+        address: json['address'] as String,
+        secretSpendKey: json['secret_spend_key'] as String,
+        secretViewKey: json['secret_view_key'] as String,
+        publicSpendKey: json['public_spend_key'] as String,
+        publicViewKey: json['public_view_key'] as String,
+        success: json['success'] as bool,
+        error: json['error'] as String?,
+      );
 
-  factory KeysDerivedResponse.fromJson(Map<String, dynamic> json) {
-    return KeysDerivedResponse(
-      address: json['address'] as String,
-      secretSpendKey: json['secret_spend_key'] as String,
-      secretViewKey: json['secret_view_key'] as String,
-      publicSpendKey: json['public_spend_key'] as String,
-      publicViewKey: json['public_view_key'] as String,
-      success: json['success'] as bool,
-      error: json['error'] as String?,
-    );
-  }
-
-  static final _controller =
-      StreamController<KeysDerivedResponse>.broadcast();
-  static Stream<KeysDerivedResponse> get stream => _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(KeysDerivedResponse.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+  static Stream<KeysDerivedResponse> get stream =>
+      signalSender.onRawSignal('KeysDerivedResponse').map(KeysDerivedResponse.fromJson);
 }
 
 class BlockScanResponse {
@@ -1441,7 +1073,7 @@ class BlockScanResponse {
   final List<String> spentKeyImages;
   final List<String> spentKeyImageTxHashes;
 
-  BlockScanResponse({
+  const BlockScanResponse({
     required this.success,
     this.error,
     required this.blockHeight,
@@ -1454,46 +1086,25 @@ class BlockScanResponse {
     required this.spentKeyImageTxHashes,
   });
 
-  factory BlockScanResponse.fromJson(Map<String, dynamic> json) {
-    return BlockScanResponse(
-      success: json['success'] as bool,
-      error: json['error'] as String?,
-      blockHeight: json['block_height'] as int,
-      blockHash: json['block_hash'] as String,
-      blockTimestamp: json['block_timestamp'] as int,
-      txCount: json['tx_count'] as int,
-      outputs: (json['outputs'] as List)
-          .map((e) => OwnedOutput.fromJson(e as Map<String, dynamic>))
-          .toList(),
-      daemonHeight: json['daemon_height'] as int,
-      spentKeyImages:
-          (json['spent_key_images'] as List).cast<String>(),
-      spentKeyImageTxHashes:
-          (json['spent_key_image_tx_hashes'] as List).cast<String>(),
-    );
-  }
+  factory BlockScanResponse.fromJson(Map<String, dynamic> json) =>
+      BlockScanResponse(
+        success: json['success'] as bool,
+        error: json['error'] as String?,
+        blockHeight: json['block_height'] as int,
+        blockHash: json['block_hash'] as String,
+        blockTimestamp: json['block_timestamp'] as int,
+        txCount: json['tx_count'] as int,
+        outputs: (json['outputs'] as List)
+            .map((e) => OwnedOutput.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        daemonHeight: json['daemon_height'] as int,
+        spentKeyImages: (json['spent_key_images'] as List).cast<String>(),
+        spentKeyImageTxHashes:
+            (json['spent_key_image_tx_hashes'] as List).cast<String>(),
+      );
 
-  Map<String, dynamic> toJson() => {
-        'success': success,
-        'error': error,
-        'block_height': blockHeight,
-        'block_hash': blockHash,
-        'block_timestamp': blockTimestamp,
-        'tx_count': txCount,
-        'outputs': outputs.map((e) => e.toJson()).toList(),
-        'daemon_height': daemonHeight,
-        'spent_key_images': spentKeyImages,
-        'spent_key_image_tx_hashes': spentKeyImageTxHashes,
-      };
-
-  static final _controller =
-      StreamController<BlockScanResponse>.broadcast();
-  static Stream<BlockScanResponse> get stream => _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(BlockScanResponse.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+  static Stream<BlockScanResponse> get stream =>
+      signalSender.onRawSignal('BlockScanResponse').map(BlockScanResponse.fromJson);
 }
 
 class TransactionBroadcastResponse {
@@ -1503,7 +1114,7 @@ class TransactionBroadcastResponse {
   final bool isRetryable;
   final bool isDoubleSpend;
 
-  TransactionBroadcastResponse({
+  const TransactionBroadcastResponse({
     required this.success,
     this.error,
     this.txId,
@@ -1511,78 +1122,49 @@ class TransactionBroadcastResponse {
     this.isDoubleSpend = false,
   });
 
-  factory TransactionBroadcastResponse.fromJson(
-      Map<String, dynamic> json) {
-    return TransactionBroadcastResponse(
-      success: json['success'] as bool,
-      error: json['error'] as String?,
-      txId: json['tx_id'] as String?,
-      isRetryable: (json['is_retryable'] as bool?) ?? false,
-      isDoubleSpend: (json['is_double_spend'] as bool?) ?? false,
-    );
-  }
+  factory TransactionBroadcastResponse.fromJson(Map<String, dynamic> json) =>
+      TransactionBroadcastResponse(
+        success: json['success'] as bool,
+        error: json['error'] as String?,
+        txId: json['tx_id'] as String?,
+        isRetryable: json['is_retryable'] as bool? ?? false,
+        isDoubleSpend: json['is_double_spend'] as bool? ?? false,
+      );
 
-  static final _controller =
-      StreamController<TransactionBroadcastResponse>.broadcast();
   static Stream<TransactionBroadcastResponse> get stream =>
-      _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(TransactionBroadcastResponse.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+      signalSender.onRawSignal('TransactionBroadcastResponse').map(TransactionBroadcastResponse.fromJson);
 }
 
 class DaemonHeightResponse {
   final bool success;
   final String? error;
   final int daemonHeight;
-
-  DaemonHeightResponse({
+  const DaemonHeightResponse({
     required this.success,
     this.error,
     required this.daemonHeight,
   });
+  factory DaemonHeightResponse.fromJson(Map<String, dynamic> json) =>
+      DaemonHeightResponse(
+        success: json['success'] as bool,
+        error: json['error'] as String?,
+        daemonHeight: json['daemon_height'] as int,
+      );
 
-  factory DaemonHeightResponse.fromJson(Map<String, dynamic> json) {
-    return DaemonHeightResponse(
-      success: json['success'] as bool,
-      error: json['error'] as String?,
-      daemonHeight: json['daemon_height'] as int,
-    );
-  }
-
-  static final _controller =
-      StreamController<DaemonHeightResponse>.broadcast();
-  static Stream<DaemonHeightResponse> get stream => _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(DaemonHeightResponse.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+  static Stream<DaemonHeightResponse> get stream =>
+      signalSender.onRawSignal('DaemonHeightResponse').map(DaemonHeightResponse.fromJson);
 }
 
 class SpentStatusUpdatedResponse {
   final List<String> spentKeyImages;
+  const SpentStatusUpdatedResponse({required this.spentKeyImages});
+  factory SpentStatusUpdatedResponse.fromJson(Map<String, dynamic> json) =>
+      SpentStatusUpdatedResponse(
+        spentKeyImages: (json['spent_key_images'] as List).cast<String>(),
+      );
 
-  SpentStatusUpdatedResponse({required this.spentKeyImages});
-
-  factory SpentStatusUpdatedResponse.fromJson(Map<String, dynamic> json) {
-    return SpentStatusUpdatedResponse(
-      spentKeyImages:
-          (json['spent_key_images'] as List).cast<String>(),
-    );
-  }
-
-  static final _controller =
-      StreamController<SpentStatusUpdatedResponse>.broadcast();
   static Stream<SpentStatusUpdatedResponse> get stream =>
-      _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(SpentStatusUpdatedResponse.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+      signalSender.onRawSignal('SpentStatusUpdatedResponse').map(SpentStatusUpdatedResponse.fromJson);
 }
 
 class MempoolScanResponse {
@@ -1593,7 +1175,7 @@ class MempoolScanResponse {
   final List<String> spentKeyImages;
   final List<String> spentKeyImageTxHashes;
 
-  MempoolScanResponse({
+  const MempoolScanResponse({
     required this.success,
     this.error,
     required this.txCount,
@@ -1602,29 +1184,21 @@ class MempoolScanResponse {
     required this.spentKeyImageTxHashes,
   });
 
-  factory MempoolScanResponse.fromJson(Map<String, dynamic> json) {
-    return MempoolScanResponse(
-      success: json['success'] as bool,
-      error: json['error'] as String?,
-      txCount: json['tx_count'] as int,
-      outputs: (json['outputs'] as List)
-          .map((e) => OwnedOutput.fromJson(e as Map<String, dynamic>))
-          .toList(),
-      spentKeyImages:
-          (json['spent_key_images'] as List).cast<String>(),
-      spentKeyImageTxHashes:
-          (json['spent_key_image_tx_hashes'] as List).cast<String>(),
-    );
-  }
+  factory MempoolScanResponse.fromJson(Map<String, dynamic> json) =>
+      MempoolScanResponse(
+        success: json['success'] as bool,
+        error: json['error'] as String?,
+        txCount: json['tx_count'] as int,
+        outputs: (json['outputs'] as List)
+            .map((e) => OwnedOutput.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        spentKeyImages: (json['spent_key_images'] as List).cast<String>(),
+        spentKeyImageTxHashes:
+            (json['spent_key_image_tx_hashes'] as List).cast<String>(),
+      );
 
-  static final _controller =
-      StreamController<MempoolScanResponse>.broadcast();
-  static Stream<MempoolScanResponse> get stream => _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(MempoolScanResponse.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+  static Stream<MempoolScanResponse> get stream =>
+      signalSender.onRawSignal('MempoolScanResponse').map(MempoolScanResponse.fromJson);
 }
 
 class OutProofGeneratedResponse {
@@ -1632,92 +1206,62 @@ class OutProofGeneratedResponse {
   final String? error;
   final String? signature;
   final String? formatted;
-
-  OutProofGeneratedResponse({
+  const OutProofGeneratedResponse({
     required this.success,
     this.error,
     this.signature,
     this.formatted,
   });
+  factory OutProofGeneratedResponse.fromJson(Map<String, dynamic> json) =>
+      OutProofGeneratedResponse(
+        success: json['success'] as bool,
+        error: json['error'] as String?,
+        signature: json['signature'] as String?,
+        formatted: json['formatted'] as String?,
+      );
 
-  factory OutProofGeneratedResponse.fromJson(Map<String, dynamic> json) {
-    return OutProofGeneratedResponse(
-      success: json['success'] as bool,
-      error: json['error'] as String?,
-      signature: json['signature'] as String?,
-      formatted: json['formatted'] as String?,
-    );
-  }
-
-  static final _controller =
-      StreamController<OutProofGeneratedResponse>.broadcast();
   static Stream<OutProofGeneratedResponse> get stream =>
-      _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(OutProofGeneratedResponse.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+      signalSender.onRawSignal('OutProofGeneratedResponse').map(OutProofGeneratedResponse.fromJson);
 }
 
 class WalletDataSavedResponse {
   final bool success;
   final String? error;
   final String? encryptedData;
-
-  WalletDataSavedResponse({
+  const WalletDataSavedResponse({
     required this.success,
     this.error,
     this.encryptedData,
   });
+  factory WalletDataSavedResponse.fromJson(Map<String, dynamic> json) =>
+      WalletDataSavedResponse(
+        success: json['success'] as bool,
+        error: json['error'] as String?,
+        encryptedData: json['encrypted_data'] as String?,
+      );
 
-  factory WalletDataSavedResponse.fromJson(Map<String, dynamic> json) {
-    return WalletDataSavedResponse(
-      success: json['success'] as bool,
-      error: json['error'] as String?,
-      encryptedData: json['encrypted_data'] as String?,
-    );
-  }
-
-  static final _controller =
-      StreamController<WalletDataSavedResponse>.broadcast();
   static Stream<WalletDataSavedResponse> get stream =>
-      _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(WalletDataSavedResponse.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+      signalSender.onRawSignal('WalletDataSavedResponse').map(WalletDataSavedResponse.fromJson);
 }
 
 class WalletDataLoadedResponse {
   final bool success;
   final String? error;
   final String? walletDataJson;
-
-  WalletDataLoadedResponse({
+  const WalletDataLoadedResponse({
     required this.success,
     this.error,
     this.walletDataJson,
   });
+  factory WalletDataLoadedResponse.fromJson(Map<String, dynamic> json) =>
+      WalletDataLoadedResponse(
+        success: json['success'] as bool,
+        error: json['error'] as String?,
+        walletDataJson: json['wallet_data_json'] as String?,
+      );
 
-  factory WalletDataLoadedResponse.fromJson(Map<String, dynamic> json) {
-    return WalletDataLoadedResponse(
-      success: json['success'] as bool,
-      error: json['error'] as String?,
-      walletDataJson: json['wallet_data_json'] as String?,
-    );
-  }
-
-  static final _controller =
-      StreamController<WalletDataLoadedResponse>.broadcast();
   static Stream<WalletDataLoadedResponse> get stream =>
-      _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(WalletDataLoadedResponse.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+      signalSender.onRawSignal('WalletDataLoadedResponse').map(WalletDataLoadedResponse.fromJson);
 }
 
 class EncryptionKeyDerivedResponse {
@@ -1725,33 +1269,22 @@ class EncryptionKeyDerivedResponse {
   final String? error;
   final String? keyHex;
   final String? saltHex;
-
-  EncryptionKeyDerivedResponse({
+  const EncryptionKeyDerivedResponse({
     required this.success,
     this.error,
     this.keyHex,
     this.saltHex,
   });
+  factory EncryptionKeyDerivedResponse.fromJson(Map<String, dynamic> json) =>
+      EncryptionKeyDerivedResponse(
+        success: json['success'] as bool,
+        error: json['error'] as String?,
+        keyHex: json['key_hex'] as String?,
+        saltHex: json['salt_hex'] as String?,
+      );
 
-  factory EncryptionKeyDerivedResponse.fromJson(
-      Map<String, dynamic> json) {
-    return EncryptionKeyDerivedResponse(
-      success: json['success'] as bool,
-      error: json['error'] as String?,
-      keyHex: json['key_hex'] as String?,
-      saltHex: json['salt_hex'] as String?,
-    );
-  }
-
-  static final _controller =
-      StreamController<EncryptionKeyDerivedResponse>.broadcast();
   static Stream<EncryptionKeyDerivedResponse> get stream =>
-      _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(EncryptionKeyDerivedResponse.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+      signalSender.onRawSignal('EncryptionKeyDerivedResponse').map(EncryptionKeyDerivedResponse.fromJson);
 }
 
 class MultiWalletScanResponse {
@@ -1766,7 +1299,7 @@ class MultiWalletScanResponse {
   final List<String> spentKeyImageTxHashes;
   final List<WalletScanResult> walletResults;
 
-  MultiWalletScanResponse({
+  const MultiWalletScanResponse({
     required this.success,
     this.error,
     required this.blockHeight,
@@ -1779,93 +1312,65 @@ class MultiWalletScanResponse {
     required this.walletResults,
   });
 
-  factory MultiWalletScanResponse.fromJson(Map<String, dynamic> json) {
-    return MultiWalletScanResponse(
-      success: json['success'] as bool,
-      error: json['error'] as String?,
-      blockHeight: json['block_height'] as int,
-      blockHash: json['block_hash'] as String,
-      blockTimestamp: json['block_timestamp'] as int,
-      txCount: json['tx_count'] as int,
-      daemonHeight: json['daemon_height'] as int,
-      spentKeyImages:
-          (json['spent_key_images'] as List).cast<String>(),
-      spentKeyImageTxHashes:
-          (json['spent_key_image_tx_hashes'] as List).cast<String>(),
-      walletResults: (json['wallet_results'] as List)
-          .map((e) =>
-              WalletScanResult.fromJson(e as Map<String, dynamic>))
-          .toList(),
-    );
-  }
+  factory MultiWalletScanResponse.fromJson(Map<String, dynamic> json) =>
+      MultiWalletScanResponse(
+        success: json['success'] as bool,
+        error: json['error'] as String?,
+        blockHeight: json['block_height'] as int,
+        blockHash: json['block_hash'] as String,
+        blockTimestamp: json['block_timestamp'] as int,
+        txCount: json['tx_count'] as int,
+        daemonHeight: json['daemon_height'] as int,
+        spentKeyImages: (json['spent_key_images'] as List).cast<String>(),
+        spentKeyImageTxHashes:
+            (json['spent_key_image_tx_hashes'] as List).cast<String>(),
+        walletResults: (json['wallet_results'] as List)
+            .map((e) => WalletScanResult.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
 
-  static final _controller =
-      StreamController<MultiWalletScanResponse>.broadcast();
   static Stream<MultiWalletScanResponse> get stream =>
-      _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(MultiWalletScanResponse.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+      signalSender.onRawSignal('MultiWalletScanResponse').map(MultiWalletScanResponse.fromJson);
 }
 
 class BlockHashesResponse {
   final bool success;
   final String? error;
   final String? blockHashesJson;
-
-  BlockHashesResponse({
+  const BlockHashesResponse({
     required this.success,
     this.error,
     this.blockHashesJson,
   });
+  factory BlockHashesResponse.fromJson(Map<String, dynamic> json) =>
+      BlockHashesResponse(
+        success: json['success'] as bool,
+        error: json['error'] as String?,
+        blockHashesJson: json['block_hashes_json'] as String?,
+      );
 
-  factory BlockHashesResponse.fromJson(Map<String, dynamic> json) {
-    return BlockHashesResponse(
-      success: json['success'] as bool,
-      error: json['error'] as String?,
-      blockHashesJson: json['block_hashes_json'] as String?,
-    );
-  }
-
-  static final _controller =
-      StreamController<BlockHashesResponse>.broadcast();
-  static Stream<BlockHashesResponse> get stream => _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(BlockHashesResponse.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+  static Stream<BlockHashesResponse> get stream =>
+      signalSender.onRawSignal('BlockHashesResponse').map(BlockHashesResponse.fromJson);
 }
 
 class PendingStateResponse {
   final bool success;
   final String? error;
   final String? pendingStateJson;
-
-  PendingStateResponse({
+  const PendingStateResponse({
     required this.success,
     this.error,
     this.pendingStateJson,
   });
+  factory PendingStateResponse.fromJson(Map<String, dynamic> json) =>
+      PendingStateResponse(
+        success: json['success'] as bool,
+        error: json['error'] as String?,
+        pendingStateJson: json['pending_state_json'] as String?,
+      );
 
-  factory PendingStateResponse.fromJson(Map<String, dynamic> json) {
-    return PendingStateResponse(
-      success: json['success'] as bool,
-      error: json['error'] as String?,
-      pendingStateJson: json['pending_state_json'] as String?,
-    );
-  }
-
-  static final _controller =
-      StreamController<PendingStateResponse>.broadcast();
-  static Stream<PendingStateResponse> get stream => _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(PendingStateResponse.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+  static Stream<PendingStateResponse> get stream =>
+      signalSender.onRawSignal('PendingStateResponse').map(PendingStateResponse.fromJson);
 }
 
 class ReorgDetectedResponse {
@@ -1875,8 +1380,7 @@ class ReorgDetectedResponse {
   final int outputsUnspent;
   final List<String> removedKeyImages;
   final List<String> unspentKeyImages;
-
-  ReorgDetectedResponse({
+  const ReorgDetectedResponse({
     required this.splitHeight,
     required this.blocksDetached,
     required this.outputsRemoved,
@@ -1884,143 +1388,93 @@ class ReorgDetectedResponse {
     required this.removedKeyImages,
     required this.unspentKeyImages,
   });
+  factory ReorgDetectedResponse.fromJson(Map<String, dynamic> json) =>
+      ReorgDetectedResponse(
+        splitHeight: json['split_height'] as int,
+        blocksDetached: json['blocks_detached'] as int,
+        outputsRemoved: json['outputs_removed'] as int,
+        outputsUnspent: json['outputs_unspent'] as int,
+        removedKeyImages: (json['removed_key_images'] as List).cast<String>(),
+        unspentKeyImages: (json['unspent_key_images'] as List).cast<String>(),
+      );
 
-  factory ReorgDetectedResponse.fromJson(Map<String, dynamic> json) {
-    return ReorgDetectedResponse(
-      splitHeight: json['split_height'] as int,
-      blocksDetached: json['blocks_detached'] as int,
-      outputsRemoved: json['outputs_removed'] as int,
-      outputsUnspent: json['outputs_unspent'] as int,
-      removedKeyImages:
-          (json['removed_key_images'] as List).cast<String>(),
-      unspentKeyImages:
-          (json['unspent_key_images'] as List).cast<String>(),
-    );
-  }
-
-  static final _controller =
-      StreamController<ReorgDetectedResponse>.broadcast();
-  static Stream<ReorgDetectedResponse> get stream => _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(ReorgDetectedResponse.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+  static Stream<ReorgDetectedResponse> get stream =>
+      signalSender.onRawSignal('ReorgDetectedResponse').map(ReorgDetectedResponse.fromJson);
 }
 
 class DoubleSpendDetectedResponse {
   final List<DoubleSpendConflict> conflicts;
+  const DoubleSpendDetectedResponse({required this.conflicts});
+  factory DoubleSpendDetectedResponse.fromJson(Map<String, dynamic> json) =>
+      DoubleSpendDetectedResponse(
+        conflicts: (json['conflicts'] as List)
+            .map((e) =>
+                DoubleSpendConflict.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
 
-  DoubleSpendDetectedResponse({required this.conflicts});
-
-  factory DoubleSpendDetectedResponse.fromJson(
-      Map<String, dynamic> json) {
-    return DoubleSpendDetectedResponse(
-      conflicts: (json['conflicts'] as List)
-          .map((e) =>
-              DoubleSpendConflict.fromJson(e as Map<String, dynamic>))
-          .toList(),
-    );
-  }
-
-  static final _controller =
-      StreamController<DoubleSpendDetectedResponse>.broadcast();
   static Stream<DoubleSpendDetectedResponse> get stream =>
-      _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(DoubleSpendDetectedResponse.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+      signalSender.onRawSignal('DoubleSpendDetectedResponse').map(DoubleSpendDetectedResponse.fromJson);
 }
 
 class Bip39LegacySeedResponse {
   final String legacySeed;
   final bool success;
   final String? error;
-
-  Bip39LegacySeedResponse({
+  const Bip39LegacySeedResponse({
     required this.legacySeed,
     required this.success,
     this.error,
   });
+  factory Bip39LegacySeedResponse.fromJson(Map<String, dynamic> json) =>
+      Bip39LegacySeedResponse(
+        legacySeed: json['legacy_seed'] as String,
+        success: json['success'] as bool,
+        error: json['error'] as String?,
+      );
 
-  factory Bip39LegacySeedResponse.fromJson(Map<String, dynamic> json) {
-    return Bip39LegacySeedResponse(
-      legacySeed: json['legacy_seed'] as String,
-      success: json['success'] as bool,
-      error: json['error'] as String?,
-    );
-  }
-
-  static final _controller =
-      StreamController<Bip39LegacySeedResponse>.broadcast();
   static Stream<Bip39LegacySeedResponse> get stream =>
-      _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(Bip39LegacySeedResponse.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+      signalSender.onRawSignal('Bip39LegacySeedResponse').map(Bip39LegacySeedResponse.fromJson);
 }
 
 class FreezeThawResponse {
   final bool success;
   final String keyImage;
   final bool frozen;
-
-  FreezeThawResponse({
+  const FreezeThawResponse({
     required this.success,
     required this.keyImage,
     required this.frozen,
   });
+  factory FreezeThawResponse.fromJson(Map<String, dynamic> json) =>
+      FreezeThawResponse(
+        success: json['success'] as bool,
+        keyImage: json['key_image'] as String,
+        frozen: json['frozen'] as bool,
+      );
 
-  factory FreezeThawResponse.fromJson(Map<String, dynamic> json) {
-    return FreezeThawResponse(
-      success: json['success'] as bool,
-      keyImage: json['key_image'] as String,
-      frozen: json['frozen'] as bool,
-    );
-  }
-
-  static final _controller =
-      StreamController<FreezeThawResponse>.broadcast();
-  static Stream<FreezeThawResponse> get stream => _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(FreezeThawResponse.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+  static Stream<FreezeThawResponse> get stream =>
+      signalSender.onRawSignal('FreezeThawResponse').map(FreezeThawResponse.fromJson);
 }
 
 class TransactionStatusUpdate {
   final String txId;
   final String status;
   final int? confirmedHeight;
-
-  TransactionStatusUpdate({
+  const TransactionStatusUpdate({
     required this.txId,
     required this.status,
     this.confirmedHeight,
   });
+  factory TransactionStatusUpdate.fromJson(Map<String, dynamic> json) =>
+      TransactionStatusUpdate(
+        txId: json['tx_id'] as String,
+        status: json['status'] as String,
+        confirmedHeight: json['confirmed_height'] as int?,
+      );
 
-  factory TransactionStatusUpdate.fromJson(Map<String, dynamic> json) {
-    return TransactionStatusUpdate(
-      txId: json['tx_id'] as String,
-      status: json['status'] as String,
-      confirmedHeight: json['confirmed_height'] as int?,
-    );
-  }
-
-  static final _controller =
-      StreamController<TransactionStatusUpdate>.broadcast();
   static Stream<TransactionStatusUpdate> get stream =>
-      _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(TransactionStatusUpdate.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+      signalSender.onRawSignal('TransactionStatusUpdate').map(TransactionStatusUpdate.fromJson);
 }
 
 class UnsignedTransactionCreatedResponse {
@@ -2029,37 +1483,27 @@ class UnsignedTransactionCreatedResponse {
   final String? unsignedTxHex;
   final int fee;
   final List<Recipient> recipients;
-
-  UnsignedTransactionCreatedResponse({
+  const UnsignedTransactionCreatedResponse({
     required this.success,
     this.error,
     this.unsignedTxHex,
     required this.fee,
     required this.recipients,
   });
-
   factory UnsignedTransactionCreatedResponse.fromJson(
-      Map<String, dynamic> json) {
-    return UnsignedTransactionCreatedResponse(
-      success: json['success'] as bool,
-      error: json['error'] as String?,
-      unsignedTxHex: json['unsigned_tx_hex'] as String?,
-      fee: json['fee'] as int,
-      recipients: (json['recipients'] as List)
-          .map((e) => Recipient.fromJson(e as Map<String, dynamic>))
-          .toList(),
-    );
-  }
+          Map<String, dynamic> json) =>
+      UnsignedTransactionCreatedResponse(
+        success: json['success'] as bool,
+        error: json['error'] as String?,
+        unsignedTxHex: json['unsigned_tx_hex'] as String?,
+        fee: json['fee'] as int,
+        recipients: (json['recipients'] as List)
+            .map((e) => Recipient.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
 
-  static final _controller =
-      StreamController<UnsignedTransactionCreatedResponse>.broadcast();
   static Stream<UnsignedTransactionCreatedResponse> get stream =>
-      _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(UnsignedTransactionCreatedResponse.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+      signalSender.onRawSignal('UnsignedTransactionCreatedResponse').map(UnsignedTransactionCreatedResponse.fromJson);
 }
 
 class TransactionSignedOfflineResponse {
@@ -2071,8 +1515,7 @@ class TransactionSignedOfflineResponse {
   final String? txKey;
   final List<String> txKeyAdditional;
   final List<ChangeOutput> changeOutputs;
-
-  TransactionSignedOfflineResponse({
+  const TransactionSignedOfflineResponse({
     required this.success,
     this.error,
     this.txId,
@@ -2082,33 +1525,23 @@ class TransactionSignedOfflineResponse {
     required this.txKeyAdditional,
     required this.changeOutputs,
   });
-
   factory TransactionSignedOfflineResponse.fromJson(
-      Map<String, dynamic> json) {
-    return TransactionSignedOfflineResponse(
-      success: json['success'] as bool,
-      error: json['error'] as String?,
-      txId: json['tx_id'] as String?,
-      fee: json['fee'] as int,
-      txBlob: json['tx_blob'] as String?,
-      txKey: json['tx_key'] as String?,
-      txKeyAdditional:
-          (json['tx_key_additional'] as List).cast<String>(),
-      changeOutputs: (json['change_outputs'] as List)
-          .map((e) => ChangeOutput.fromJson(e as Map<String, dynamic>))
-          .toList(),
-    );
-  }
+          Map<String, dynamic> json) =>
+      TransactionSignedOfflineResponse(
+        success: json['success'] as bool,
+        error: json['error'] as String?,
+        txId: json['tx_id'] as String?,
+        fee: json['fee'] as int,
+        txBlob: json['tx_blob'] as String?,
+        txKey: json['tx_key'] as String?,
+        txKeyAdditional: (json['tx_key_additional'] as List).cast<String>(),
+        changeOutputs: (json['change_outputs'] as List)
+            .map((e) => ChangeOutput.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
 
-  static final _controller =
-      StreamController<TransactionSignedOfflineResponse>.broadcast();
   static Stream<TransactionSignedOfflineResponse> get stream =>
-      _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(TransactionSignedOfflineResponse.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+      signalSender.onRawSignal('TransactionSignedOfflineResponse').map(TransactionSignedOfflineResponse.fromJson);
 }
 
 class KeyImagesExportedResponse {
@@ -2116,32 +1549,22 @@ class KeyImagesExportedResponse {
   final String? error;
   final String? keyImagesHex;
   final int count;
-
-  KeyImagesExportedResponse({
+  const KeyImagesExportedResponse({
     required this.success,
     this.error,
     this.keyImagesHex,
     required this.count,
   });
+  factory KeyImagesExportedResponse.fromJson(Map<String, dynamic> json) =>
+      KeyImagesExportedResponse(
+        success: json['success'] as bool,
+        error: json['error'] as String?,
+        keyImagesHex: json['key_images_hex'] as String?,
+        count: json['count'] as int,
+      );
 
-  factory KeyImagesExportedResponse.fromJson(Map<String, dynamic> json) {
-    return KeyImagesExportedResponse(
-      success: json['success'] as bool,
-      error: json['error'] as String?,
-      keyImagesHex: json['key_images_hex'] as String?,
-      count: json['count'] as int,
-    );
-  }
-
-  static final _controller =
-      StreamController<KeyImagesExportedResponse>.broadcast();
   static Stream<KeyImagesExportedResponse> get stream =>
-      _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(KeyImagesExportedResponse.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+      signalSender.onRawSignal('KeyImagesExportedResponse').map(KeyImagesExportedResponse.fromJson);
 }
 
 class KeyImagesImportedResponse {
@@ -2149,30 +1572,20 @@ class KeyImagesImportedResponse {
   final String? error;
   final int importedCount;
   final int spentCount;
-
-  KeyImagesImportedResponse({
+  const KeyImagesImportedResponse({
     required this.success,
     this.error,
     required this.importedCount,
     required this.spentCount,
   });
+  factory KeyImagesImportedResponse.fromJson(Map<String, dynamic> json) =>
+      KeyImagesImportedResponse(
+        success: json['success'] as bool,
+        error: json['error'] as String?,
+        importedCount: json['imported_count'] as int,
+        spentCount: json['spent_count'] as int,
+      );
 
-  factory KeyImagesImportedResponse.fromJson(Map<String, dynamic> json) {
-    return KeyImagesImportedResponse(
-      success: json['success'] as bool,
-      error: json['error'] as String?,
-      importedCount: json['imported_count'] as int,
-      spentCount: json['spent_count'] as int,
-    );
-  }
-
-  static final _controller =
-      StreamController<KeyImagesImportedResponse>.broadcast();
   static Stream<KeyImagesImportedResponse> get stream =>
-      _controller.stream;
-
-  static void handleFromRust(String jsonStr) {
-    _controller.add(KeyImagesImportedResponse.fromJson(
-        jsonDecode(jsonStr) as Map<String, dynamic>));
-  }
+      signalSender.onRawSignal('KeyImagesImportedResponse').map(KeyImagesImportedResponse.fromJson);
 }

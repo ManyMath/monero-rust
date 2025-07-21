@@ -1,11 +1,11 @@
-import 'src/ffi/web_ffi.dart';
-import 'src/ffi/signal_dispatch.dart';
 import 'package:flutter/material.dart';
+import 'src/ffi/worker_bridge.dart';
+import 'src/ffi/signal_sender.dart';
+import 'src/ffi/signal_hub.dart';
 import 'views/debug_view.dart';
 import 'services/wallet_lifecycle_manager.dart';
 import 'services/wallet_persistence_browser.dart';
 import 'services/wallet_polling_service.dart';
-import 'state/rinf_signal_hub.dart';
 import 'state/wallet_state.dart';
 import 'state/output_state.dart';
 import 'state/scan_state.dart';
@@ -14,7 +14,9 @@ import 'state/file_management_state.dart';
 import 'state/app_state_scope.dart';
 
 Future<void> main() async {
-  await initializeBareFfi(rustSignalHandlers);
+  final bridge = WorkerBridge();
+  await bridge.init();
+  setSignalSender(bridge);
   runApp(const AppStateHost(child: MyApp()));
 }
 
@@ -27,7 +29,7 @@ class AppStateHost extends StatefulWidget {
 }
 
 class _AppStateHostState extends State<AppStateHost> {
-  late final RinfSignalHub _signalHub;
+  late final SignalHub _signalHub;
   late final WalletState _walletState;
   late final OutputState _outputState;
   late final ScanState _scanState;
@@ -43,7 +45,7 @@ class _AppStateHostState extends State<AppStateHost> {
     );
     final pollingService = WalletPollingService();
 
-    _signalHub = RinfSignalHub();
+    _signalHub = SignalHub();
 
     _walletState = WalletState(
       lifecycle: lifecycle,
