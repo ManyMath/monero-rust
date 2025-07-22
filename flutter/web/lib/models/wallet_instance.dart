@@ -1,4 +1,4 @@
-import '../src/bindings/bindings.dart';
+import '../src/ffi/signal_types.dart';
 import '../utils/output_lock_utils.dart';
 import './wallet_transaction.dart';
 
@@ -54,7 +54,7 @@ class WalletInstance {
         // Outputs without subaddress belong to account 0
         return activeAccount == 0;
       }
-      return output.subaddressIndex![0] == activeAccount;
+      return output.subaddressIndex!.$1 == activeAccount;
     }).toList();
   }
 
@@ -216,7 +216,7 @@ class WalletInstance {
       'keyOffset': o.keyOffset,
       'commitmentMask': o.commitmentMask,
       'subaddressIndex': o.subaddressIndex != null
-          ? [o.subaddressIndex![0], o.subaddressIndex![1]]
+          ? [o.subaddressIndex!.$1, o.subaddressIndex!.$2]
           : null,
       'paymentId': o.paymentId,
       'receivedOutputBytes': o.receivedOutputBytes,
@@ -246,7 +246,7 @@ class WalletInstance {
           'keyOffset': o.keyOffset,
           'commitmentMask': o.commitmentMask,
           'subaddressIndex': o.subaddressIndex != null
-              ? [o.subaddressIndex![0], o.subaddressIndex![1]]
+              ? [o.subaddressIndex!.$1, o.subaddressIndex!.$2]
               : null,
           'paymentId': o.paymentId,
           'receivedOutputBytes': o.receivedOutputBytes,
@@ -277,10 +277,10 @@ class WalletInstance {
           keyOffset: outputData['keyOffset'] as String,
           commitmentMask: outputData['commitmentMask'] as String,
           subaddressIndex: outputData['subaddressIndex'] != null
-              ? [
+              ? (
                   outputData['subaddressIndex'][0] as int,
                   outputData['subaddressIndex'][1] as int,
-                ]
+                )
               : null,
           paymentId: outputData['paymentId'] as String?,
           receivedOutputBytes: outputData['receivedOutputBytes'] as String,
@@ -322,10 +322,10 @@ class WalletInstance {
               keyOffset: outputData['keyOffset'] as String,
               commitmentMask: outputData['commitmentMask'] as String,
               subaddressIndex: outputData['subaddressIndex'] != null
-                  ? [
+                  ? (
                       outputData['subaddressIndex'][0] as int,
                       outputData['subaddressIndex'][1] as int,
-                    ]
+                    )
                   : null,
               paymentId: outputData['paymentId'] as String?,
               receivedOutputBytes: outputData['receivedOutputBytes'] as String,

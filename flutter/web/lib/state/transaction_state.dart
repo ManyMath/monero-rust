@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
-import '../src/bindings/bindings.dart';
+import '../src/ffi/signal_types.dart';
 import '../utils/output_utils.dart';
 import '../utils/output_lock_utils.dart';
 import '../models/wallet_transaction.dart';
 import '../services/transaction_service.dart';
-import 'rinf_signal_hub.dart';
+import '../src/ffi/signal_hub.dart';
 import 'wallet_state.dart';
 import 'output_state.dart';
 import 'scan_state.dart';
@@ -35,7 +35,7 @@ class TransactionState extends ChangeNotifier {
     required WalletState walletState,
     required OutputState outputState,
     required ScanState scanState,
-    required RinfSignalHub signalHub,
+    required SignalHub signalHub,
   })  : _walletState = walletState,
         _outputState = outputState,
         _scanState = scanState {
@@ -117,7 +117,7 @@ class TransactionState extends ChangeNotifier {
     final spendableAccounts = <int>{};
     for (final output in _walletState.allOutputs) {
       if (!output.spent && !output.frozen) {
-        final account = output.subaddressIndex?[0] ?? 0;
+        final account = output.subaddressIndex?.$1 ?? 0;
         spendableAccounts.add(account);
       }
     }
@@ -134,7 +134,7 @@ class TransactionState extends ChangeNotifier {
     final spendableAccounts = <int>{};
     for (final output in _walletState.allOutputs) {
       if (!output.spent && !output.frozen) {
-        final account = output.subaddressIndex?[0] ?? 0;
+        final account = output.subaddressIndex?.$1 ?? 0;
         spendableAccounts.add(account);
       }
     }

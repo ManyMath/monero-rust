@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../src/bindings/bindings.dart';
+import '../src/ffi/signal_types.dart';
 import '../widgets/common_widgets.dart';
 
 class TransactionSuccessDisplay extends StatelessWidget {
@@ -17,7 +17,8 @@ class TransactionSuccessDisplay extends StatelessWidget {
   static const int _feeAnomalyThreshold = 10000000000; // 0.01 XMR
 
   bool get _isFeeAnomaly {
-    return txResult.fee > _feeAnomalyThreshold;
+    final fee = txResult.fee;
+    return fee > _feeAnomalyThreshold;
   }
 
   @override

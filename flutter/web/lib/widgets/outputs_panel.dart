@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../src/bindings/bindings.dart';
+import '../src/ffi/signal_types.dart';
 import '../utils/output_lock_utils.dart';
 import 'common_widgets.dart';
 
@@ -225,7 +225,7 @@ class OutputsPanel extends StatelessWidget {
                     if (activeAccount == -1 && output.subaddressIndex != null)
                       CommonWidgets.buildOutputDetailRow(
                         label: 'Account',
-                        value: '${output.subaddressIndex![0]}',
+                        value: '${output.subaddressIndex!.$1}',
                       ),
                     if (activeAccount == -1 && output.subaddressIndex == null)
                       CommonWidgets.buildOutputDetailRow(
@@ -238,7 +238,7 @@ class OutputsPanel extends StatelessWidget {
                     if (output.subaddressIndex != null)
                       CommonWidgets.buildOutputDetailRow(
                         label: 'Subaddress',
-                        value: '${output.subaddressIndex![0]}/${output.subaddressIndex![1]}',
+                        value: '${output.subaddressIndex!.$1}/${output.subaddressIndex!.$2}',
                       ),
                     if (output.paymentId != null)
                       CommonWidgets.buildOutputDetailRow(label: 'Payment ID', value: output.paymentId!, mono: true),

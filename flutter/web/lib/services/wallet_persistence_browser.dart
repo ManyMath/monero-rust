@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:html' as html;
 import 'dart:js_util' as js_util;
-import '../src/bindings/bindings.dart';
+import '../src/ffi/signal_types.dart';
 import '../models/wallet_transaction.dart';
 import 'wallet_persistence_service.dart';
 import 'local_storage_backend.dart';

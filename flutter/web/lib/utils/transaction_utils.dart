@@ -1,4 +1,4 @@
-import '../src/bindings/bindings.dart';
+import '../src/ffi/signal_types.dart';
 import '../models/wallet_transaction.dart';
 
 class TransactionUtils {

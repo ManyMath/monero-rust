@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../src/bindings/bindings.dart';
+import '../src/ffi/signal_types.dart';
 import '../utils/output_utils.dart';
 import 'recipient_form.dart';
 import 'transaction_success_display.dart';

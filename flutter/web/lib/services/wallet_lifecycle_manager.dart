@@ -1,4 +1,4 @@
-import '../src/bindings/bindings.dart';
+import '../src/ffi/signal_types.dart';
 import '../models/wallet_instance.dart';
 import '../models/wallet_transaction.dart';
 import '../utils/output_utils.dart';
@@ -304,9 +304,8 @@ class WalletLifecycleManager {
       TransactionUtils.buildKeyImageMap(walletInstance.outputs),
     );
 
-    final blockHeight = scanResult.blockHeight;
-    if (blockHeight > walletInstance.currentHeight) {
-      walletInstance.currentHeight = blockHeight;
+    if (scanResult.blockHeight > walletInstance.currentHeight) {
+      walletInstance.currentHeight = scanResult.blockHeight;
     }
     walletInstance.daemonHeight = scanResult.daemonHeight;
 
@@ -404,7 +403,7 @@ class WalletLifecycleManager {
     int highestAccountIndex = 0;
     for (var output in outputs) {
       if (output.subaddressIndex != null) {
-        final accountIndex = output.subaddressIndex![0];
+        final accountIndex = output.subaddressIndex!.$1;
         if (accountIndex > highestAccountIndex) {
           highestAccountIndex = accountIndex;
         }

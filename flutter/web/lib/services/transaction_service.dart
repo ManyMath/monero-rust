@@ -1,4 +1,4 @@
-import '../src/bindings/bindings.dart';
+import '../src/ffi/signal_types.dart';
 import '../utils/key_parser.dart';
 import '../utils/network_utils.dart';
 import '../utils/output_lock_utils.dart';

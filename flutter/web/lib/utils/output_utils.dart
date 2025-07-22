@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../src/bindings/bindings.dart';
+import '../src/ffi/signal_types.dart';
 import 'output_lock_utils.dart';
 
 class OutputUtils {

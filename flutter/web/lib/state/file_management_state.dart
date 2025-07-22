@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
-import '../src/bindings/bindings.dart';
+import '../src/ffi/signal_types.dart';
 import '../models/wallet_instance.dart';
 import '../services/wallet_persistence_browser.dart';
 import '../services/wallet_scan_service.dart';
@@ -91,7 +91,7 @@ class FileManagementState extends ChangeNotifier {
     final Set<int> derivedAccounts = {0};
     for (var output in _outputState.filteredOutputs) {
       if (output.subaddressIndex != null) {
-        derivedAccounts.add(output.subaddressIndex![0]);
+        derivedAccounts.add(output.subaddressIndex!.$1);
       }
     }
 
@@ -103,12 +103,12 @@ class FileManagementState extends ChangeNotifier {
     String? blockHashesJson;
     try {
       final completer = Completer<String?>();
-      final sub = BlockHashesResponse.stream.listen((msg) {
+      final sub = BlockHashesResponse.stream.listen((response) {
         if (!completer.isCompleted) {
-          completer.complete(msg.success ? msg.blockHashesJson : null);
+          completer.complete(response.success ? response.blockHashesJson : null);
         }
       });
-      GetBlockHashesRequest().sendSignalToRust();
+      const GetBlockHashesRequest().sendSignalToRust();
       blockHashesJson = await completer.future.timeout(
         const Duration(seconds: 5),
         onTimeout: () => null,
@@ -120,12 +120,12 @@ class FileManagementState extends ChangeNotifier {
     String? pendingStateJson;
     try {
       final completer = Completer<String?>();
-      final sub = PendingStateResponse.stream.listen((msg) {
+      final sub = PendingStateResponse.stream.listen((response) {
         if (!completer.isCompleted) {
-          completer.complete(msg.success ? msg.pendingStateJson : null);
+          completer.complete(response.success ? response.pendingStateJson : null);
         }
       });
-      GetPendingStateRequest().sendSignalToRust();
+      const GetPendingStateRequest().sendSignalToRust();
       pendingStateJson = await completer.future.timeout(
         const Duration(seconds: 5),
         onTimeout: () => null,

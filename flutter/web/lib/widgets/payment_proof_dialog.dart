@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../src/bindings/bindings.dart';
+import '../src/ffi/signal_types.dart';
 import 'common_widgets.dart';
 
 /// A dialog for generating and displaying payment proofs (OutProof or Tx Key).

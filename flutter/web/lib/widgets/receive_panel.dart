@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../src/bindings/bindings.dart';
+import '../src/ffi/signal_types.dart';
 
 /// Widget that displays receive addresses interface.
 ///
@@ -88,8 +88,8 @@ class _ReceivePanelState extends State<ReceivePanel> {
     for (var output in widget.allOutputs) {
       if (output.subaddressIndex != null) {
         final subIdx = output.subaddressIndex!;
-        final outputAccount = subIdx[0];
-        final addressIndex = subIdx[1];
+        final outputAccount = subIdx.$1;
+        final addressIndex = subIdx.$2;
         final accountMap = grouped.putIfAbsent(outputAccount, () => <int, _SubaddressInfo>{});
         // Store the first output found for this subaddress
         if (!accountMap.containsKey(addressIndex)) {

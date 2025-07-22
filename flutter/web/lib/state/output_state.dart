@@ -1,6 +1,6 @@
 import 'dart:html' as html;
 import 'package:flutter/foundation.dart';
-import '../src/bindings/bindings.dart';
+import '../src/ffi/signal_types.dart';
 import '../models/wallet_transaction.dart';
 import '../utils/transaction_utils.dart';
 import 'wallet_state.dart';
@@ -52,7 +52,7 @@ class OutputState extends ChangeNotifier {
         if (output.subaddressIndex == null) {
           return account == 0;
         }
-        return output.subaddressIndex![0] == account;
+        return output.subaddressIndex!.$1 == account;
       }).toList();
     }
     return _cachedFilteredOutputs!;
@@ -68,13 +68,13 @@ class OutputState extends ChangeNotifier {
       _cachedFilteredTransactions = allTransactionsAllAccounts.where((tx) {
         final hasReceivedOutputs = tx.receivedOutputs.any((output) {
           if (output.subaddressIndex == null) return account == 0;
-          return output.subaddressIndex![0] == account;
+          return output.subaddressIndex!.$1 == account;
         });
         final hasSpentOutputs = tx.spentKeyImages.any((keyImage) {
           final spentOutput = kim[keyImage];
           if (spentOutput == null) return false;
           if (spentOutput.subaddressIndex == null) return account == 0;
-          return spentOutput.subaddressIndex![0] == account;
+          return spentOutput.subaddressIndex!.$1 == account;
         });
         return hasReceivedOutputs || hasSpentOutputs;
       }).toList();

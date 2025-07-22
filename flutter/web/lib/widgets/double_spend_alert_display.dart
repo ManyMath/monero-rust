@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../src/bindings/bindings.dart';
+import '../src/ffi/signal_types.dart';
 import 'common_widgets.dart';
 
 class DoubleSpendAlertDisplay extends StatelessWidget {

@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../src/bindings/bindings.dart';
+import '../src/ffi/signal_types.dart';
 import '../services/extension_service.dart';
 import '../services/wallet_persistence_browser.dart';
 import '../utils/clipboard_utils.dart';

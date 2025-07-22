@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:monero_extension/utils/network_utils.dart';
-import '../src/bindings/bindings.dart';
+import '../src/ffi/signal_types.dart';
 import '../utils/key_parser.dart';
 import '../utils/output_utils.dart';
 import '../models/wallet_transaction.dart';
 import '../services/wallet_scan_service.dart';
 import '../services/wallet_polling_service.dart';
 import '../widgets/scanning_panel.dart' show NodeConnectionState;
-import 'rinf_signal_hub.dart';
+import '../src/ffi/signal_hub.dart';
 import 'wallet_state.dart';
 
 enum LookaheadMode {
@@ -63,7 +63,7 @@ class ScanState extends ChangeNotifier {
   ScanState({
     required WalletState walletState,
     required WalletPollingService pollingService,
-    required RinfSignalHub signalHub,
+    required SignalHub signalHub,
   })  : _walletState = walletState,
         pollingService = pollingService {
     signalHub.onBlockScan = _handleBlockScan;

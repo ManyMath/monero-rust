@@ -1,4 +1,4 @@
-import '../src/bindings/bindings.dart';
+import '../src/ffi/signal_types.dart';
 
 // These constants must stay in sync with rust/monero-rust/src/wallet_state.rs
 // (CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE and CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW).

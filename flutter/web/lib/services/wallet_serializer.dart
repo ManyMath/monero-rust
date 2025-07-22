@@ -1,4 +1,4 @@
-import '../src/bindings/bindings.dart';
+import '../src/ffi/signal_types.dart';
 import '../models/wallet_transaction.dart';
 
 /// Pure serialization/deserialization for wallet data.
@@ -41,7 +41,7 @@ class WalletSerializer {
                 'keyOffset': o.keyOffset,
                 'commitmentMask': o.commitmentMask,
                 'subaddressIndex': o.subaddressIndex != null
-                    ? [o.subaddressIndex![0], o.subaddressIndex![1]]
+                    ? [o.subaddressIndex!.$1, o.subaddressIndex!.$2]
                     : null,
                 'paymentId': o.paymentId,
                 'receivedOutputBytes': o.receivedOutputBytes,
@@ -142,10 +142,10 @@ class WalletSerializer {
         keyOffset: d['keyOffset'] as String,
         commitmentMask: d['commitmentMask'] as String,
         subaddressIndex: d['subaddressIndex'] != null
-            ? [
+            ? (
                 d['subaddressIndex'][0] as int,
                 d['subaddressIndex'][1] as int,
-              ]
+              )
             : null,
         paymentId: d['paymentId'] as String?,
         receivedOutputBytes: d['receivedOutputBytes'] as String,
@@ -185,7 +185,7 @@ class WalletSerializer {
     // Derive outputsByAccount from the flat outputs list (no longer stored separately)
     final Map<int, List<OwnedOutput>> outputsByAccount = {};
     for (var output in outputs) {
-      final account = output.subaddressIndex?[0] ?? 0;
+      final account = output.subaddressIndex?.$1 ?? 0;
       outputsByAccount.putIfAbsent(account, () => []).add(output);
     }
 

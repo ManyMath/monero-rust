@@ -1,4 +1,4 @@
-import '../src/bindings/bindings.dart';
+import '../src/ffi/signal_types.dart';
 
 class WalletTransaction {
   final String txHash;
@@ -47,7 +47,7 @@ class WalletTransaction {
       'keyOffset': o.keyOffset,
       'commitmentMask': o.commitmentMask,
       'subaddressIndex': o.subaddressIndex != null
-          ? [o.subaddressIndex![0], o.subaddressIndex![1]]
+          ? [o.subaddressIndex!.$1, o.subaddressIndex!.$2]
           : null,
       'paymentId': o.paymentId,
       'receivedOutputBytes': o.receivedOutputBytes,
@@ -115,10 +115,10 @@ class WalletTransaction {
           keyOffset: outputData['keyOffset'] as String,
           commitmentMask: outputData['commitmentMask'] as String,
           subaddressIndex: outputData['subaddressIndex'] != null
-              ? [
+              ? (
                   outputData['subaddressIndex'][0] as int,
                   outputData['subaddressIndex'][1] as int,
-                ]
+                )
               : null,
           paymentId: outputData['paymentId'] as String?,
           receivedOutputBytes: outputData['receivedOutputBytes'] as String,

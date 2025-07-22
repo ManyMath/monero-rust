@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../src/bindings/bindings.dart';
+import '../src/ffi/signal_types.dart';
 import '../services/wallet_polling_service.dart';
 import '../state/scan_state.dart' show LookaheadMode;
 import 'common_widgets.dart';
@@ -522,7 +522,7 @@ class _ScanningPanelState extends State<ScanningPanel> {
                             Text('TX Hash: ${output.txHash}', style: const TextStyle(fontSize: 10, fontFamily: 'monospace')),
                             Text('Output Index: ${output.outputIndex}', style: const TextStyle(fontSize: 10)),
                             if (output.subaddressIndex != null)
-                              Text('Subaddress: ${output.subaddressIndex![0]}/${output.subaddressIndex![1]}', style: const TextStyle(fontSize: 10)),
+                              Text('Subaddress: ${output.subaddressIndex!.$1}/${output.subaddressIndex!.$2}', style: const TextStyle(fontSize: 10)),
                             if (output.paymentId != null)
                               Text('Payment ID: ${output.paymentId}', style: const TextStyle(fontSize: 10)),
                           ],

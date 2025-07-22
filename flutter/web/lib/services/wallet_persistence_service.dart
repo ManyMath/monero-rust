@@ -1,5 +1,5 @@
 import 'dart:convert';
-import '../src/bindings/bindings.dart';
+import '../src/ffi/signal_types.dart';
 import '../models/wallet_instance.dart';
 import '../models/wallet_transaction.dart';
 import 'wallet_storage_service.dart';

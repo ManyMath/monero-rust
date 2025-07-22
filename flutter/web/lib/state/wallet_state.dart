@@ -1,18 +1,18 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:monero_extension/utils/network_utils.dart';
-import '../src/bindings/bindings.dart';
+import '../src/ffi/signal_types.dart';
 import '../utils/key_parser.dart';
 import '../models/wallet_instance.dart';
 import '../models/wallet_transaction.dart';
 import '../services/wallet_lifecycle_manager.dart';
 import '../services/wallet_persistence_browser.dart';
 import '../widgets/close_wallet_dialog.dart';
-import 'rinf_signal_hub.dart';
+import '../src/ffi/signal_hub.dart';
 
 class WalletState extends ChangeNotifier {
   final WalletLifecycleManager lifecycle;
-  final RinfSignalHub _signalHub;
+  final SignalHub _signalHub;
 
   final seedController = TextEditingController();
   final nodeUrlController = TextEditingController(text: 'http://127.0.0.1:38081');
@@ -48,7 +48,7 @@ class WalletState extends ChangeNotifier {
 
   WalletState({
     required WalletLifecycleManager lifecycle,
-    required RinfSignalHub signalHub,
+    required SignalHub signalHub,
   })  : lifecycle = lifecycle,
         _signalHub = signalHub {
     seedController.addListener(_onSeedChanged);
@@ -353,8 +353,8 @@ class WalletState extends ChangeNotifier {
     for (var output in allOutputs) {
       if (output.subaddressIndex != null) {
         final subIdx = output.subaddressIndex!;
-        if (subIdx[0] == account) {
-          used.add(subIdx[1]);
+        if (subIdx.$1 == account) {
+          used.add(subIdx.$2);
         }
       }
     }
@@ -420,7 +420,7 @@ class WalletState extends ChangeNotifier {
     int highestAccountIndex = 0;
     for (var output in outputs) {
       if (output.subaddressIndex != null) {
-        final accountIndex = output.subaddressIndex![0];
+        final accountIndex = output.subaddressIndex!.$1;
         if (accountIndex > highestAccountIndex) {
           highestAccountIndex = accountIndex;
         }
@@ -628,7 +628,7 @@ class WalletState extends ChangeNotifier {
   Map<int, List<OwnedOutput>> reconstructOutputsByAccount(List<OwnedOutput> outputs) {
     final map = <int, List<OwnedOutput>>{};
     for (final output in outputs) {
-      final account = output.subaddressIndex?[0] ?? 0;
+      final account = output.subaddressIndex?.$1 ?? 0;
       (map[account] ??= []).add(output);
     }
     if (map.isEmpty) {
