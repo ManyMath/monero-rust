@@ -619,3 +619,79 @@ pub struct TransactionStatusUpdate {
     pub status: String,
     pub confirmed_height: Option<u64>,
 }
+
+// --- Offline signing signals ---
+
+#[derive(Deserialize)]
+pub struct CreateUnsignedTransactionRequest {
+    pub node_url: String,
+    pub view_key_hex: String,
+    pub pub_spend_key_hex: String,
+    pub network: String,
+    pub recipients: Vec<Recipient>,
+    pub selected_outputs: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+pub struct SignUnsignedTransactionRequest {
+    pub seed: String,
+    pub unsigned_tx_hex: String,
+    pub network: String,
+    #[serde(default)]
+    pub passphrase: String,
+    #[serde(default)]
+    pub bip39_account_index: u32,
+}
+
+#[derive(Deserialize)]
+pub struct ExportKeyImagesRequest {
+    pub seed: String,
+    pub network: String,
+    #[serde(default)]
+    pub passphrase: String,
+    #[serde(default)]
+    pub bip39_account_index: u32,
+}
+
+#[derive(Deserialize)]
+pub struct ImportKeyImagesRequest {
+    pub data_hex: String,
+    pub node_url: String,
+}
+
+#[derive(Serialize)]
+pub struct UnsignedTransactionCreatedResponse {
+    pub success: bool,
+    pub error: Option<String>,
+    pub unsigned_tx_hex: Option<String>,
+    pub fee: u64,
+    pub recipients: Vec<Recipient>,
+}
+
+#[derive(Serialize)]
+pub struct TransactionSignedOfflineResponse {
+    pub success: bool,
+    pub error: Option<String>,
+    pub tx_id: Option<String>,
+    pub fee: u64,
+    pub tx_blob: Option<String>,
+    pub tx_key: Option<String>,
+    pub tx_key_additional: Vec<String>,
+    pub change_outputs: Vec<ChangeOutput>,
+}
+
+#[derive(Serialize)]
+pub struct KeyImagesExportedResponse {
+    pub success: bool,
+    pub error: Option<String>,
+    pub key_images_hex: Option<String>,
+    pub count: u64,
+}
+
+#[derive(Serialize)]
+pub struct KeyImagesImportedResponse {
+    pub success: bool,
+    pub error: Option<String>,
+    pub imported_count: u64,
+    pub spent_count: u64,
+}

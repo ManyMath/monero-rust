@@ -74,6 +74,10 @@ dart_signal!(GetPendingStateRequest, get_pending_state_request);
 dart_signal!(ConvertBip39ToLegacyRequest, convert_bip39_to_legacy_request);
 dart_signal!(FreezeOutputRequest, freeze_output_request);
 dart_signal!(ThawOutputRequest, thaw_output_request);
+dart_signal!(CreateUnsignedTransactionRequest, create_unsigned_transaction_request);
+dart_signal!(SignUnsignedTransactionRequest, sign_unsigned_transaction_request);
+dart_signal!(ExportKeyImagesRequest, export_key_images_request);
+dart_signal!(ImportKeyImagesRequest, import_key_images_request);
 
 // ---------------------------------------------------------------------------
 // Rust -> Dart callback
@@ -160,6 +164,10 @@ impl_send_to_dart! {
     Bip39LegacySeedResponse => "Bip39LegacySeedResponse",
     FreezeThawResponse => "FreezeThawResponse",
     TransactionStatusUpdate => "TransactionStatusUpdate",
+    UnsignedTransactionCreatedResponse => "UnsignedTransactionCreatedResponse",
+    TransactionSignedOfflineResponse => "TransactionSignedOfflineResponse",
+    KeyImagesExportedResponse => "KeyImagesExportedResponse",
+    KeyImagesImportedResponse => "KeyImagesImportedResponse",
 }
 
 // ---------------------------------------------------------------------------
