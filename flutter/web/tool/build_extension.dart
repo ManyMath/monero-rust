@@ -5,7 +5,7 @@ import 'dart:io';
 import 'package:archive/archive_io.dart';
 import 'package:path/path.dart' as path;
 
-/// Build script for browser extension
+/// Build script for browser extension (bare FFI + Web Worker architecture)
 void main() async {
   print('\nBuilding extension...');
 
@@ -68,7 +68,7 @@ class ExtensionBuilder {
     print('\nBuilding WASM with wasm-pack...');
     final success = await _runCommand(
       'wasm-pack',
-      ['build', '--target', 'web', '--release', '--out-dir', path.join(projectRoot, 'build', 'pkg')],
+      ['build', '--target', 'web', '--release', '--out-dir', path.join(projectRoot, 'web', 'pkg')],
       workingDir: wasmCrateDir,
     );
     if (!success) {
@@ -111,25 +111,16 @@ class ExtensionBuilder {
   }
 
   Future<void> _copyWasmPkg() async {
-    print('Copying WASM package...');
+    print('Copying WASM pkg...');
 
-    final pkgSource = Directory(path.join(buildDir, 'pkg'));
-    if (!await pkgSource.exists()) {
-      throw Exception('build/pkg directory not found. Did wasm-pack build succeed?');
-    }
-
+    final pkgSource = Directory(path.join(projectRoot, 'web', 'pkg'));
     final pkgDest = Directory(path.join(extensionDir, 'pkg'));
-    await pkgDest.create(recursive: true);
 
-    // Copy the essential wasm-pack artifacts
-    for (final name in ['monero_wasm_bg.wasm', 'monero_wasm.js']) {
-      final src = File(path.join(pkgSource.path, name));
-      if (await src.exists()) {
-        await src.copy(path.join(pkgDest.path, name));
-      } else {
-        throw Exception('Required WASM artifact missing: $name');
-      }
+    if (!await pkgSource.exists()) {
+      throw Exception('web/pkg directory not found. Did wasm-pack build succeed?');
     }
+
+    await _copyDirectory(pkgSource, pkgDest);
   }
 
   Future<void> _copyManifest() async {
@@ -162,6 +153,7 @@ class ExtensionBuilder {
 
     await _removeServiceWorker();
     await _copyDisableServiceWorker();
+    await _patchFlutterBootstrap();
     await _patchIndexHtml();
   }
 
@@ -195,6 +187,26 @@ class ExtensionBuilder {
     } else {
       print('  Warning: extension_bridge.js not found at: $bridgeSource');
     }
+  }
+
+  Future<void> _patchFlutterBootstrap() async {
+    final bootstrapPath = path.join(extensionDir, 'flutter_bootstrap.js');
+    final bootstrapFile = File(bootstrapPath);
+
+    if (!await bootstrapFile.exists()) {
+      print('  Warning: flutter_bootstrap.js not found');
+      return;
+    }
+
+    String content = await bootstrapFile.readAsString();
+
+    // Strip serviceWorkerSettings from the load() call
+    content = content.replaceAll(
+      RegExp(r',?\s*serviceWorkerSettings:\s*\{[^}]*\}'),
+      '',
+    );
+
+    await bootstrapFile.writeAsString(content);
   }
 
   Future<void> _patchIndexHtml() async {
@@ -232,40 +244,20 @@ class ExtensionBuilder {
 
     content = content.replaceAll('</head>', style);
 
-    // Replace body: load wasm-bindgen glue via external module script
-    // (inline scripts are blocked by extension CSP).
+    // Add loading indicator and inject scripts
+    // No wasm_loader.js needed — the worker handles WASM init
     const bodyScripts = '''<body>
   <div id="loading">Loading Monero Wallet...</div>
 
   <script src="extension_bridge.js"></script>
   <script src="disable_service_worker.js"></script>
-  <script src="wasm_loader.js" type="module"></script>
+  <script src="flutter_bootstrap.js"></script>
 </body>''';
 
-    final bodyPattern = RegExp(
-      r'<body>\s*<script src="flutter_bootstrap\.js"( async)?></script>\s*</body>',
-      dotAll: true,
-    );
+    final bodyPattern = RegExp(r'<body>\s*<script src="flutter_bootstrap\.js"( async)?></script>\s*</body>', dotAll: true);
     content = content.replaceAll(bodyPattern, bodyScripts);
 
     await indexFile.writeAsString(content);
-
-    // Create the external wasm_loader.js module
-    await _createWasmLoader();
-  }
-
-  Future<void> _createWasmLoader() async {
-    final loaderPath = path.join(extensionDir, 'wasm_loader.js');
-    const loaderContent = '''import init, * as wasmBindings from './pkg/monero_wasm.js';
-// Spread into a plain object — ES module namespace objects are frozen,
-// so Dart @JS() annotations can't reliably access properties on them.
-globalThis.wasm_bindgen = { ...wasmBindings, default: init };
-// Start Flutter after wasm_bindgen is on the global scope
-const s = document.createElement('script');
-s.src = 'flutter_bootstrap.js';
-document.body.appendChild(s);
-''';
-    await File(loaderPath).writeAsString(loaderContent);
   }
 
   Future<void> _verifyBuild() async {
@@ -275,9 +267,9 @@ document.body.appendChild(s);
       'manifest.json',
       'index.html',
       'flutter.js',
+      'pkg/monero_wasm_worker.js',
       'pkg/monero_wasm_bg.wasm',
       'pkg/monero_wasm.js',
-      'wasm_loader.js',
     ];
 
     for (final fileName in requiredFiles) {
