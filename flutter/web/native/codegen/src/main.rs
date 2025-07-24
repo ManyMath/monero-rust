@@ -36,10 +36,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Generate
-    let signal_types = dart_gen::generate(&signals);
     let ffi_web = rust_gen::generate_ffi_web(&signals);
     let signal_ids = rust_gen::generate_signal_ids(&signals);
-    let hub_signal_ids = rust_gen::generate_hub_signal_ids(&signals);
+    // Dart outputs are formatted before use so --check compares formatted content
+    let signal_types = dart_fmt(dart_gen::generate(&signals))?;
+    let hub_signal_ids = dart_fmt(rust_gen::generate_hub_signal_ids(&signals))?;
 
     let outputs: Vec<(&PathBuf, &str)> = vec![
         (&signal_types_path, &signal_types),
@@ -73,6 +74,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+/// Run `dart format` on a Dart source string and return the formatted result.
+/// Writes to a temp file, formats in place, reads back.
+/// If `dart` is not in PATH the original content is returned unchanged with a warning.
+fn dart_fmt(content: String) -> Result<String, Box<dyn std::error::Error>> {
+    let tmp = std::env::temp_dir().join("codegen_dart_fmt.dart");
+    std::fs::write(&tmp, &content)?;
+    let out = std::process::Command::new("dart").args(["format", tmp.to_str().unwrap()]).output();
+    match out {
+        Ok(o) if o.status.success() => Ok(std::fs::read_to_string(&tmp)?),
+        Ok(o) => Err(format!("dart format failed:\n{}", String::from_utf8_lossy(&o.stderr)).into()),
+        Err(_) => {
+            eprintln!("warning: dart not found in PATH, skipping dart format");
+            Ok(content)
+        }
+    }
 }
 
 /// Print a simple line-diff to stderr

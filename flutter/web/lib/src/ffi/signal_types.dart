@@ -16,11 +16,10 @@ class Recipient {
 
   Map<String, dynamic> toJson() => {'address': address, 'amount': amount};
 
-  factory Recipient.fromJson(Map<String, dynamic> json) =>
-      Recipient(
-        address: json['address'] as String,
-        amount: json['amount'] as int,
-      );
+  factory Recipient.fromJson(Map<String, dynamic> json) => Recipient(
+    address: json['address'] as String,
+    amount: json['amount'] as int,
+  );
 }
 
 class ChangeOutput {
@@ -72,8 +71,9 @@ class ChangeOutput {
       key: json['key'] as String,
       keyOffset: json['key_offset'] as String,
       commitmentMask: json['commitment_mask'] as String,
-      subaddressIndex:
-          si != null ? ((si as List)[0] as int, (si as List)[1] as int) : null,
+      subaddressIndex: si != null
+          ? ((si as List)[0] as int, (si as List)[1] as int)
+          : null,
       receivedOutputBytes: json['received_output_bytes'] as String,
       keyImage: json['key_image'] as String,
     );
@@ -144,8 +144,9 @@ class OwnedOutput {
       key: json['key'] as String,
       keyOffset: json['key_offset'] as String,
       commitmentMask: json['commitment_mask'] as String,
-      subaddressIndex:
-          si != null ? ((si as List)[0] as int, (si as List)[1] as int) : null,
+      subaddressIndex: si != null
+          ? ((si as List)[0] as int, (si as List)[1] as int)
+          : null,
       paymentId: json['payment_id'] as String?,
       receivedOutputBytes: json['received_output_bytes'] as String,
       blockHeight: json['block_height'] as int,
@@ -211,7 +212,10 @@ class WalletScanResult {
 
   const WalletScanResult({required this.address, required this.outputs});
 
-  Map<String, dynamic> toJson() => {'address': address, 'outputs': outputs.map((e) => e.toJson()).toList()};
+  Map<String, dynamic> toJson() => {
+    'address': address,
+    'outputs': outputs.map((e) => e.toJson()).toList(),
+  };
 
   factory WalletScanResult.fromJson(Map<String, dynamic> json) =>
       WalletScanResult(
@@ -378,12 +382,15 @@ class GetSeedBirthdayRequest {
 class GetBlockHeightFromTimestampRequest {
   final int timestamp;
   final String nodeUrl;
-  const GetBlockHeightFromTimestampRequest({required this.timestamp, required this.nodeUrl});
-
-  void sendSignalToRust() => _send('send_get_block_height_from_timestamp_request', {
-    'timestamp': timestamp,
-    'node_url': nodeUrl,
+  const GetBlockHeightFromTimestampRequest({
+    required this.timestamp,
+    required this.nodeUrl,
   });
+
+  void sendSignalToRust() => _send(
+    'send_get_block_height_from_timestamp_request',
+    {'timestamp': timestamp, 'node_url': nodeUrl},
+  );
 }
 
 class DeriveAddressRequest {
@@ -608,7 +615,10 @@ class GenerateOutProofRequest {
 class SaveWalletDataRequest {
   final String password;
   final String walletDataJson;
-  const SaveWalletDataRequest({required this.password, required this.walletDataJson});
+  const SaveWalletDataRequest({
+    required this.password,
+    required this.walletDataJson,
+  });
 
   void sendSignalToRust() => _send('send_save_wallet_data_request', {
     'password': password,
@@ -619,7 +629,10 @@ class SaveWalletDataRequest {
 class LoadWalletDataRequest {
   final String password;
   final String encryptedData;
-  const LoadWalletDataRequest({required this.password, required this.encryptedData});
+  const LoadWalletDataRequest({
+    required this.password,
+    required this.encryptedData,
+  });
 
   void sendSignalToRust() => _send('send_load_wallet_data_request', {
     'password': password,
@@ -859,8 +872,9 @@ class MoneroTestResponse {
   factory MoneroTestResponse.fromJson(Map<String, dynamic> json) =>
       MoneroTestResponse(result: json['result'] as String);
 
-  static Stream<MoneroTestResponse> get stream =>
-      signalSender.onRawSignal('MoneroTestResponse').map(MoneroTestResponse.fromJson);
+  static Stream<MoneroTestResponse> get stream => signalSender
+      .onRawSignal('MoneroTestResponse')
+      .map(MoneroTestResponse.fromJson);
 }
 
 class WalletCreatedResponse {
@@ -871,8 +885,9 @@ class WalletCreatedResponse {
   factory WalletCreatedResponse.fromJson(Map<String, dynamic> json) =>
       WalletCreatedResponse(address: json['address'] as String);
 
-  static Stream<WalletCreatedResponse> get stream =>
-      signalSender.onRawSignal('WalletCreatedResponse').map(WalletCreatedResponse.fromJson);
+  static Stream<WalletCreatedResponse> get stream => signalSender
+      .onRawSignal('WalletCreatedResponse')
+      .map(WalletCreatedResponse.fromJson);
 }
 
 class SyncProgressResponse {
@@ -896,8 +911,9 @@ class SyncProgressResponse {
         isScanning: json['is_scanning'] as bool,
       );
 
-  static Stream<SyncProgressResponse> get stream =>
-      signalSender.onRawSignal('SyncProgressResponse').map(SyncProgressResponse.fromJson);
+  static Stream<SyncProgressResponse> get stream => signalSender
+      .onRawSignal('SyncProgressResponse')
+      .map(SyncProgressResponse.fromJson);
 }
 
 class BalanceResponse {
@@ -960,8 +976,9 @@ class TransactionCreatedResponse {
             .toList(),
       );
 
-  static Stream<TransactionCreatedResponse> get stream =>
-      signalSender.onRawSignal('TransactionCreatedResponse').map(TransactionCreatedResponse.fromJson);
+  static Stream<TransactionCreatedResponse> get stream => signalSender
+      .onRawSignal('TransactionCreatedResponse')
+      .map(TransactionCreatedResponse.fromJson);
 }
 
 class SeedGeneratedResponse {
@@ -985,8 +1002,9 @@ class SeedGeneratedResponse {
         restoreHeight: json['restore_height'] as int?,
       );
 
-  static Stream<SeedGeneratedResponse> get stream =>
-      signalSender.onRawSignal('SeedGeneratedResponse').map(SeedGeneratedResponse.fromJson);
+  static Stream<SeedGeneratedResponse> get stream => signalSender
+      .onRawSignal('SeedGeneratedResponse')
+      .map(SeedGeneratedResponse.fromJson);
 }
 
 class SeedBirthdayResponse {
@@ -1007,8 +1025,9 @@ class SeedBirthdayResponse {
         error: json['error'] as String?,
       );
 
-  static Stream<SeedBirthdayResponse> get stream =>
-      signalSender.onRawSignal('SeedBirthdayResponse').map(SeedBirthdayResponse.fromJson);
+  static Stream<SeedBirthdayResponse> get stream => signalSender
+      .onRawSignal('SeedBirthdayResponse')
+      .map(SeedBirthdayResponse.fromJson);
 }
 
 class BlockHeightFromTimestampResponse {
@@ -1022,15 +1041,17 @@ class BlockHeightFromTimestampResponse {
     this.error,
   });
 
-  factory BlockHeightFromTimestampResponse.fromJson(Map<String, dynamic> json) =>
-      BlockHeightFromTimestampResponse(
-        blockHeight: json['block_height'] as int,
-        success: json['success'] as bool,
-        error: json['error'] as String?,
-      );
+  factory BlockHeightFromTimestampResponse.fromJson(
+    Map<String, dynamic> json,
+  ) => BlockHeightFromTimestampResponse(
+    blockHeight: json['block_height'] as int,
+    success: json['success'] as bool,
+    error: json['error'] as String?,
+  );
 
-  static Stream<BlockHeightFromTimestampResponse> get stream =>
-      signalSender.onRawSignal('BlockHeightFromTimestampResponse').map(BlockHeightFromTimestampResponse.fromJson);
+  static Stream<BlockHeightFromTimestampResponse> get stream => signalSender
+      .onRawSignal('BlockHeightFromTimestampResponse')
+      .map(BlockHeightFromTimestampResponse.fromJson);
 }
 
 class AddressDerivedResponse {
@@ -1051,8 +1072,9 @@ class AddressDerivedResponse {
         error: json['error'] as String?,
       );
 
-  static Stream<AddressDerivedResponse> get stream =>
-      signalSender.onRawSignal('AddressDerivedResponse').map(AddressDerivedResponse.fromJson);
+  static Stream<AddressDerivedResponse> get stream => signalSender
+      .onRawSignal('AddressDerivedResponse')
+      .map(AddressDerivedResponse.fromJson);
 }
 
 class SubaddressDerivedResponse {
@@ -1073,8 +1095,9 @@ class SubaddressDerivedResponse {
         error: json['error'] as String?,
       );
 
-  static Stream<SubaddressDerivedResponse> get stream =>
-      signalSender.onRawSignal('SubaddressDerivedResponse').map(SubaddressDerivedResponse.fromJson);
+  static Stream<SubaddressDerivedResponse> get stream => signalSender
+      .onRawSignal('SubaddressDerivedResponse')
+      .map(SubaddressDerivedResponse.fromJson);
 }
 
 class KeysDerivedResponse {
@@ -1107,8 +1130,9 @@ class KeysDerivedResponse {
         error: json['error'] as String?,
       );
 
-  static Stream<KeysDerivedResponse> get stream =>
-      signalSender.onRawSignal('KeysDerivedResponse').map(KeysDerivedResponse.fromJson);
+  static Stream<KeysDerivedResponse> get stream => signalSender
+      .onRawSignal('KeysDerivedResponse')
+      .map(KeysDerivedResponse.fromJson);
 }
 
 class BlockScanResponse {
@@ -1149,11 +1173,13 @@ class BlockScanResponse {
             .toList(),
         daemonHeight: json['daemon_height'] as int,
         spentKeyImages: (json['spent_key_images'] as List).cast<String>(),
-        spentKeyImageTxHashes: (json['spent_key_image_tx_hashes'] as List).cast<String>(),
+        spentKeyImageTxHashes: (json['spent_key_image_tx_hashes'] as List)
+            .cast<String>(),
       );
 
-  static Stream<BlockScanResponse> get stream =>
-      signalSender.onRawSignal('BlockScanResponse').map(BlockScanResponse.fromJson);
+  static Stream<BlockScanResponse> get stream => signalSender
+      .onRawSignal('BlockScanResponse')
+      .map(BlockScanResponse.fromJson);
 }
 
 class TransactionBroadcastResponse {
@@ -1180,8 +1206,9 @@ class TransactionBroadcastResponse {
         isDoubleSpend: json['is_double_spend'] as bool? ?? false,
       );
 
-  static Stream<TransactionBroadcastResponse> get stream =>
-      signalSender.onRawSignal('TransactionBroadcastResponse').map(TransactionBroadcastResponse.fromJson);
+  static Stream<TransactionBroadcastResponse> get stream => signalSender
+      .onRawSignal('TransactionBroadcastResponse')
+      .map(TransactionBroadcastResponse.fromJson);
 }
 
 class DaemonHeightResponse {
@@ -1202,8 +1229,9 @@ class DaemonHeightResponse {
         daemonHeight: json['daemon_height'] as int,
       );
 
-  static Stream<DaemonHeightResponse> get stream =>
-      signalSender.onRawSignal('DaemonHeightResponse').map(DaemonHeightResponse.fromJson);
+  static Stream<DaemonHeightResponse> get stream => signalSender
+      .onRawSignal('DaemonHeightResponse')
+      .map(DaemonHeightResponse.fromJson);
 }
 
 class SpentStatusUpdatedResponse {
@@ -1212,10 +1240,13 @@ class SpentStatusUpdatedResponse {
   const SpentStatusUpdatedResponse({required this.spentKeyImages});
 
   factory SpentStatusUpdatedResponse.fromJson(Map<String, dynamic> json) =>
-      SpentStatusUpdatedResponse(spentKeyImages: (json['spent_key_images'] as List).cast<String>());
+      SpentStatusUpdatedResponse(
+        spentKeyImages: (json['spent_key_images'] as List).cast<String>(),
+      );
 
-  static Stream<SpentStatusUpdatedResponse> get stream =>
-      signalSender.onRawSignal('SpentStatusUpdatedResponse').map(SpentStatusUpdatedResponse.fromJson);
+  static Stream<SpentStatusUpdatedResponse> get stream => signalSender
+      .onRawSignal('SpentStatusUpdatedResponse')
+      .map(SpentStatusUpdatedResponse.fromJson);
 }
 
 class MempoolScanResponse {
@@ -1244,11 +1275,13 @@ class MempoolScanResponse {
             .map((e) => OwnedOutput.fromJson(e as Map<String, dynamic>))
             .toList(),
         spentKeyImages: (json['spent_key_images'] as List).cast<String>(),
-        spentKeyImageTxHashes: (json['spent_key_image_tx_hashes'] as List).cast<String>(),
+        spentKeyImageTxHashes: (json['spent_key_image_tx_hashes'] as List)
+            .cast<String>(),
       );
 
-  static Stream<MempoolScanResponse> get stream =>
-      signalSender.onRawSignal('MempoolScanResponse').map(MempoolScanResponse.fromJson);
+  static Stream<MempoolScanResponse> get stream => signalSender
+      .onRawSignal('MempoolScanResponse')
+      .map(MempoolScanResponse.fromJson);
 }
 
 class OutProofGeneratedResponse {
@@ -1272,8 +1305,9 @@ class OutProofGeneratedResponse {
         formatted: json['formatted'] as String?,
       );
 
-  static Stream<OutProofGeneratedResponse> get stream =>
-      signalSender.onRawSignal('OutProofGeneratedResponse').map(OutProofGeneratedResponse.fromJson);
+  static Stream<OutProofGeneratedResponse> get stream => signalSender
+      .onRawSignal('OutProofGeneratedResponse')
+      .map(OutProofGeneratedResponse.fromJson);
 }
 
 class WalletDataSavedResponse {
@@ -1294,8 +1328,9 @@ class WalletDataSavedResponse {
         encryptedData: json['encrypted_data'] as String?,
       );
 
-  static Stream<WalletDataSavedResponse> get stream =>
-      signalSender.onRawSignal('WalletDataSavedResponse').map(WalletDataSavedResponse.fromJson);
+  static Stream<WalletDataSavedResponse> get stream => signalSender
+      .onRawSignal('WalletDataSavedResponse')
+      .map(WalletDataSavedResponse.fromJson);
 }
 
 class WalletDataLoadedResponse {
@@ -1316,8 +1351,9 @@ class WalletDataLoadedResponse {
         walletDataJson: json['wallet_data_json'] as String?,
       );
 
-  static Stream<WalletDataLoadedResponse> get stream =>
-      signalSender.onRawSignal('WalletDataLoadedResponse').map(WalletDataLoadedResponse.fromJson);
+  static Stream<WalletDataLoadedResponse> get stream => signalSender
+      .onRawSignal('WalletDataLoadedResponse')
+      .map(WalletDataLoadedResponse.fromJson);
 }
 
 class EncryptionKeyDerivedResponse {
@@ -1341,8 +1377,9 @@ class EncryptionKeyDerivedResponse {
         saltHex: json['salt_hex'] as String?,
       );
 
-  static Stream<EncryptionKeyDerivedResponse> get stream =>
-      signalSender.onRawSignal('EncryptionKeyDerivedResponse').map(EncryptionKeyDerivedResponse.fromJson);
+  static Stream<EncryptionKeyDerivedResponse> get stream => signalSender
+      .onRawSignal('EncryptionKeyDerivedResponse')
+      .map(EncryptionKeyDerivedResponse.fromJson);
 }
 
 class MultiWalletScanResponse {
@@ -1380,14 +1417,16 @@ class MultiWalletScanResponse {
         txCount: json['tx_count'] as int,
         daemonHeight: json['daemon_height'] as int,
         spentKeyImages: (json['spent_key_images'] as List).cast<String>(),
-        spentKeyImageTxHashes: (json['spent_key_image_tx_hashes'] as List).cast<String>(),
+        spentKeyImageTxHashes: (json['spent_key_image_tx_hashes'] as List)
+            .cast<String>(),
         walletResults: (json['wallet_results'] as List)
             .map((e) => WalletScanResult.fromJson(e as Map<String, dynamic>))
             .toList(),
       );
 
-  static Stream<MultiWalletScanResponse> get stream =>
-      signalSender.onRawSignal('MultiWalletScanResponse').map(MultiWalletScanResponse.fromJson);
+  static Stream<MultiWalletScanResponse> get stream => signalSender
+      .onRawSignal('MultiWalletScanResponse')
+      .map(MultiWalletScanResponse.fromJson);
 }
 
 class BlockHashesResponse {
@@ -1408,8 +1447,9 @@ class BlockHashesResponse {
         blockHashesJson: json['block_hashes_json'] as String?,
       );
 
-  static Stream<BlockHashesResponse> get stream =>
-      signalSender.onRawSignal('BlockHashesResponse').map(BlockHashesResponse.fromJson);
+  static Stream<BlockHashesResponse> get stream => signalSender
+      .onRawSignal('BlockHashesResponse')
+      .map(BlockHashesResponse.fromJson);
 }
 
 class PendingStateResponse {
@@ -1430,8 +1470,9 @@ class PendingStateResponse {
         pendingStateJson: json['pending_state_json'] as String?,
       );
 
-  static Stream<PendingStateResponse> get stream =>
-      signalSender.onRawSignal('PendingStateResponse').map(PendingStateResponse.fromJson);
+  static Stream<PendingStateResponse> get stream => signalSender
+      .onRawSignal('PendingStateResponse')
+      .map(PendingStateResponse.fromJson);
 }
 
 class ReorgDetectedResponse {
@@ -1461,8 +1502,9 @@ class ReorgDetectedResponse {
         unspentKeyImages: (json['unspent_key_images'] as List).cast<String>(),
       );
 
-  static Stream<ReorgDetectedResponse> get stream =>
-      signalSender.onRawSignal('ReorgDetectedResponse').map(ReorgDetectedResponse.fromJson);
+  static Stream<ReorgDetectedResponse> get stream => signalSender
+      .onRawSignal('ReorgDetectedResponse')
+      .map(ReorgDetectedResponse.fromJson);
 }
 
 class DoubleSpendDetectedResponse {
@@ -1477,8 +1519,9 @@ class DoubleSpendDetectedResponse {
             .toList(),
       );
 
-  static Stream<DoubleSpendDetectedResponse> get stream =>
-      signalSender.onRawSignal('DoubleSpendDetectedResponse').map(DoubleSpendDetectedResponse.fromJson);
+  static Stream<DoubleSpendDetectedResponse> get stream => signalSender
+      .onRawSignal('DoubleSpendDetectedResponse')
+      .map(DoubleSpendDetectedResponse.fromJson);
 }
 
 class Bip39LegacySeedResponse {
@@ -1499,8 +1542,9 @@ class Bip39LegacySeedResponse {
         error: json['error'] as String?,
       );
 
-  static Stream<Bip39LegacySeedResponse> get stream =>
-      signalSender.onRawSignal('Bip39LegacySeedResponse').map(Bip39LegacySeedResponse.fromJson);
+  static Stream<Bip39LegacySeedResponse> get stream => signalSender
+      .onRawSignal('Bip39LegacySeedResponse')
+      .map(Bip39LegacySeedResponse.fromJson);
 }
 
 class FreezeThawResponse {
@@ -1521,8 +1565,9 @@ class FreezeThawResponse {
         frozen: json['frozen'] as bool,
       );
 
-  static Stream<FreezeThawResponse> get stream =>
-      signalSender.onRawSignal('FreezeThawResponse').map(FreezeThawResponse.fromJson);
+  static Stream<FreezeThawResponse> get stream => signalSender
+      .onRawSignal('FreezeThawResponse')
+      .map(FreezeThawResponse.fromJson);
 }
 
 class TransactionStatusUpdate {
@@ -1543,8 +1588,9 @@ class TransactionStatusUpdate {
         confirmedHeight: json['confirmed_height'] as int?,
       );
 
-  static Stream<TransactionStatusUpdate> get stream =>
-      signalSender.onRawSignal('TransactionStatusUpdate').map(TransactionStatusUpdate.fromJson);
+  static Stream<TransactionStatusUpdate> get stream => signalSender
+      .onRawSignal('TransactionStatusUpdate')
+      .map(TransactionStatusUpdate.fromJson);
 }
 
 class UnsignedTransactionCreatedResponse {
@@ -1562,19 +1608,21 @@ class UnsignedTransactionCreatedResponse {
     required this.recipients,
   });
 
-  factory UnsignedTransactionCreatedResponse.fromJson(Map<String, dynamic> json) =>
-      UnsignedTransactionCreatedResponse(
-        success: json['success'] as bool,
-        error: json['error'] as String?,
-        unsignedTxHex: json['unsigned_tx_hex'] as String?,
-        fee: json['fee'] as int,
-        recipients: (json['recipients'] as List)
-            .map((e) => Recipient.fromJson(e as Map<String, dynamic>))
-            .toList(),
-      );
+  factory UnsignedTransactionCreatedResponse.fromJson(
+    Map<String, dynamic> json,
+  ) => UnsignedTransactionCreatedResponse(
+    success: json['success'] as bool,
+    error: json['error'] as String?,
+    unsignedTxHex: json['unsigned_tx_hex'] as String?,
+    fee: json['fee'] as int,
+    recipients: (json['recipients'] as List)
+        .map((e) => Recipient.fromJson(e as Map<String, dynamic>))
+        .toList(),
+  );
 
-  static Stream<UnsignedTransactionCreatedResponse> get stream =>
-      signalSender.onRawSignal('UnsignedTransactionCreatedResponse').map(UnsignedTransactionCreatedResponse.fromJson);
+  static Stream<UnsignedTransactionCreatedResponse> get stream => signalSender
+      .onRawSignal('UnsignedTransactionCreatedResponse')
+      .map(UnsignedTransactionCreatedResponse.fromJson);
 }
 
 class TransactionSignedOfflineResponse {
@@ -1598,22 +1646,24 @@ class TransactionSignedOfflineResponse {
     required this.changeOutputs,
   });
 
-  factory TransactionSignedOfflineResponse.fromJson(Map<String, dynamic> json) =>
-      TransactionSignedOfflineResponse(
-        success: json['success'] as bool,
-        error: json['error'] as String?,
-        txId: json['tx_id'] as String?,
-        fee: json['fee'] as int,
-        txBlob: json['tx_blob'] as String?,
-        txKey: json['tx_key'] as String?,
-        txKeyAdditional: (json['tx_key_additional'] as List).cast<String>(),
-        changeOutputs: (json['change_outputs'] as List)
-            .map((e) => ChangeOutput.fromJson(e as Map<String, dynamic>))
-            .toList(),
-      );
+  factory TransactionSignedOfflineResponse.fromJson(
+    Map<String, dynamic> json,
+  ) => TransactionSignedOfflineResponse(
+    success: json['success'] as bool,
+    error: json['error'] as String?,
+    txId: json['tx_id'] as String?,
+    fee: json['fee'] as int,
+    txBlob: json['tx_blob'] as String?,
+    txKey: json['tx_key'] as String?,
+    txKeyAdditional: (json['tx_key_additional'] as List).cast<String>(),
+    changeOutputs: (json['change_outputs'] as List)
+        .map((e) => ChangeOutput.fromJson(e as Map<String, dynamic>))
+        .toList(),
+  );
 
-  static Stream<TransactionSignedOfflineResponse> get stream =>
-      signalSender.onRawSignal('TransactionSignedOfflineResponse').map(TransactionSignedOfflineResponse.fromJson);
+  static Stream<TransactionSignedOfflineResponse> get stream => signalSender
+      .onRawSignal('TransactionSignedOfflineResponse')
+      .map(TransactionSignedOfflineResponse.fromJson);
 }
 
 class KeyImagesExportedResponse {
@@ -1637,8 +1687,9 @@ class KeyImagesExportedResponse {
         count: json['count'] as int,
       );
 
-  static Stream<KeyImagesExportedResponse> get stream =>
-      signalSender.onRawSignal('KeyImagesExportedResponse').map(KeyImagesExportedResponse.fromJson);
+  static Stream<KeyImagesExportedResponse> get stream => signalSender
+      .onRawSignal('KeyImagesExportedResponse')
+      .map(KeyImagesExportedResponse.fromJson);
 }
 
 class KeyImagesImportedResponse {
@@ -1662,7 +1713,7 @@ class KeyImagesImportedResponse {
         spentCount: json['spent_count'] as int,
       );
 
-  static Stream<KeyImagesImportedResponse> get stream =>
-      signalSender.onRawSignal('KeyImagesImportedResponse').map(KeyImagesImportedResponse.fromJson);
+  static Stream<KeyImagesImportedResponse> get stream => signalSender
+      .onRawSignal('KeyImagesImportedResponse')
+      .map(KeyImagesImportedResponse.fromJson);
 }
-
