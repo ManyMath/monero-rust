@@ -16,10 +16,68 @@ class Recipient {
 
   Map<String, dynamic> toJson() => {'address': address, 'amount': amount};
 
-  factory Recipient.fromJson(Map<String, dynamic> json) => Recipient(
-    address: json['address'] as String,
-    amount: json['amount'] as int,
-  );
+  factory Recipient.fromJson(Map<String, dynamic> json) =>
+      Recipient(
+        address: json['address'] as String,
+        amount: json['amount'] as int,
+      );
+}
+
+class ChangeOutput {
+  final String txHash;
+  final int outputIndex;
+  final int amount;
+  final String amountXmr;
+  final String key;
+  final String keyOffset;
+  final String commitmentMask;
+  final (int, int)? subaddressIndex;
+  final String receivedOutputBytes;
+  final String keyImage;
+
+  const ChangeOutput({
+    required this.txHash,
+    required this.outputIndex,
+    required this.amount,
+    required this.amountXmr,
+    required this.key,
+    required this.keyOffset,
+    required this.commitmentMask,
+    this.subaddressIndex,
+    required this.receivedOutputBytes,
+    required this.keyImage,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'tx_hash': txHash,
+    'output_index': outputIndex,
+    'amount': amount,
+    'amount_xmr': amountXmr,
+    'key': key,
+    'key_offset': keyOffset,
+    'commitment_mask': commitmentMask,
+    if (subaddressIndex != null)
+      'subaddress_index': [subaddressIndex!.$1, subaddressIndex!.$2],
+    'received_output_bytes': receivedOutputBytes,
+    'key_image': keyImage,
+  };
+
+  factory ChangeOutput.fromJson(Map<String, dynamic> json) {
+    final si = json['subaddress_index'];
+    return ChangeOutput(
+      txHash: json['tx_hash'] as String,
+      outputIndex: json['output_index'] as int,
+      amount: json['amount'] as int,
+      amountXmr: json['amount_xmr'] as String,
+      key: json['key'] as String,
+      keyOffset: json['key_offset'] as String,
+      commitmentMask: json['commitment_mask'] as String,
+      subaddressIndex:
+          si != null ? ((si as List)[0] as int, (si as List)[1] as int) : null,
+      receivedOutputBytes: json['received_output_bytes'] as String,
+      keyImage: json['key_image'] as String,
+    );
+  }
 }
 
 class OwnedOutput {
@@ -117,63 +175,6 @@ class OwnedOutput {
   );
 }
 
-class ChangeOutput {
-  final String txHash;
-  final int outputIndex;
-  final int amount;
-  final String amountXmr;
-  final String key;
-  final String keyOffset;
-  final String commitmentMask;
-  final (int, int)? subaddressIndex;
-  final String receivedOutputBytes;
-  final String keyImage;
-
-  const ChangeOutput({
-    required this.txHash,
-    required this.outputIndex,
-    required this.amount,
-    required this.amountXmr,
-    required this.key,
-    required this.keyOffset,
-    required this.commitmentMask,
-    this.subaddressIndex,
-    required this.receivedOutputBytes,
-    required this.keyImage,
-  });
-
-  Map<String, dynamic> toJson() => {
-    'tx_hash': txHash,
-    'output_index': outputIndex,
-    'amount': amount,
-    'amount_xmr': amountXmr,
-    'key': key,
-    'key_offset': keyOffset,
-    'commitment_mask': commitmentMask,
-    if (subaddressIndex != null)
-      'subaddress_index': [subaddressIndex!.$1, subaddressIndex!.$2],
-    'received_output_bytes': receivedOutputBytes,
-    'key_image': keyImage,
-  };
-
-  factory ChangeOutput.fromJson(Map<String, dynamic> json) {
-    final si = json['subaddress_index'];
-    return ChangeOutput(
-      txHash: json['tx_hash'] as String,
-      outputIndex: json['output_index'] as int,
-      amount: json['amount'] as int,
-      amountXmr: json['amount_xmr'] as String,
-      key: json['key'] as String,
-      keyOffset: json['key_offset'] as String,
-      commitmentMask: json['commitment_mask'] as String,
-      subaddressIndex:
-          si != null ? ((si as List)[0] as int, (si as List)[1] as int) : null,
-      receivedOutputBytes: json['received_output_bytes'] as String,
-      keyImage: json['key_image'] as String,
-    );
-  }
-}
-
 class WalletConfig {
   final String seed;
   final String network;
@@ -210,6 +211,8 @@ class WalletScanResult {
 
   const WalletScanResult({required this.address, required this.outputs});
 
+  Map<String, dynamic> toJson() => {'address': address, 'outputs': outputs.map((e) => e.toJson()).toList()};
+
   factory WalletScanResult.fromJson(Map<String, dynamic> json) =>
       WalletScanResult(
         address: json['address'] as String,
@@ -230,6 +233,12 @@ class DoubleSpendConflict {
     required this.newHeight,
   });
 
+  Map<String, dynamic> toJson() => {
+    'key_image': keyImage,
+    'previous_spent_height': previousSpentHeight,
+    'new_height': newHeight,
+  };
+
   factory DoubleSpendConflict.fromJson(Map<String, dynamic> json) =>
       DoubleSpendConflict(
         keyImage: json['key_image'] as String,
@@ -248,11 +257,12 @@ void _send(String fnName, Map<String, dynamic> data) {
 
 // ---------------------------------------------------------------------------
 // DartSignal types (Dart -> Rust, 35 total)
-// Each has toJson() and sendSignalToRust().
+// Each has sendSignalToRust().
 // ---------------------------------------------------------------------------
 
 class MoneroTestRequest {
   const MoneroTestRequest();
+
   void sendSignalToRust() => _send('send_monero_test_request', {});
 }
 
@@ -260,18 +270,22 @@ class CreateWalletRequest {
   final String password;
   final String network;
   const CreateWalletRequest({required this.password, required this.network});
+
   void sendSignalToRust() => _send('send_create_wallet_request', {
-    'password': password, 'network': network,
+    'password': password,
+    'network': network,
   });
 }
 
 class StartSyncRequest {
   const StartSyncRequest();
+
   void sendSignalToRust() => _send('send_start_sync_request', {});
 }
 
 class GetBalanceRequest {
   const GetBalanceRequest();
+
   void sendSignalToRust() => _send('send_get_balance_request', {});
 }
 
@@ -284,7 +298,6 @@ class CreateTransactionRequest {
   final String passphrase;
   final int bip39AccountIndex;
   final bool subtractFee;
-
   const CreateTransactionRequest({
     required this.nodeUrl,
     required this.seed,
@@ -300,7 +313,7 @@ class CreateTransactionRequest {
     'node_url': nodeUrl,
     'seed': seed,
     'network': network,
-    'recipients': recipients.map((r) => r.toJson()).toList(),
+    'recipients': recipients.map((e) => e.toJson()).toList(),
     if (selectedOutputs != null) 'selected_outputs': selectedOutputs,
     'passphrase': passphrase,
     'bip39_account_index': bip39AccountIndex,
@@ -316,7 +329,6 @@ class SweepAllRequest {
   final List<String>? selectedOutputs;
   final String passphrase;
   final int bip39AccountIndex;
-
   const SweepAllRequest({
     required this.nodeUrl,
     required this.seed,
@@ -341,6 +353,7 @@ class SweepAllRequest {
 class GenerateSeedRequest {
   final String seedType;
   const GenerateSeedRequest({required this.seedType});
+
   void sendSignalToRust() =>
       _send('send_generate_seed_request', {'seed_type': seedType});
 }
@@ -354,6 +367,7 @@ class GetSeedBirthdayRequest {
     this.passphrase = '',
     this.bip39AccountIndex = 0,
   });
+
   void sendSignalToRust() => _send('send_get_seed_birthday_request', {
     'seed': seed,
     'passphrase': passphrase,
@@ -364,12 +378,9 @@ class GetSeedBirthdayRequest {
 class GetBlockHeightFromTimestampRequest {
   final int timestamp;
   final String nodeUrl;
-  const GetBlockHeightFromTimestampRequest({
-    required this.timestamp,
-    required this.nodeUrl,
-  });
-  void sendSignalToRust() =>
-      _send('send_get_block_height_from_timestamp_request', {
+  const GetBlockHeightFromTimestampRequest({required this.timestamp, required this.nodeUrl});
+
+  void sendSignalToRust() => _send('send_get_block_height_from_timestamp_request', {
     'timestamp': timestamp,
     'node_url': nodeUrl,
   });
@@ -386,6 +397,7 @@ class DeriveAddressRequest {
     this.passphrase = '',
     this.bip39AccountIndex = 0,
   });
+
   void sendSignalToRust() => _send('send_derive_address_request', {
     'seed': seed,
     'network': network,
@@ -409,6 +421,7 @@ class DeriveSubaddressRequest {
     this.passphrase = '',
     this.bip39AccountIndex = 0,
   });
+
   void sendSignalToRust() => _send('send_derive_subaddress_request', {
     'seed': seed,
     'network': network,
@@ -430,6 +443,7 @@ class DeriveKeysRequest {
     this.passphrase = '',
     this.bip39AccountIndex = 0,
   });
+
   void sendSignalToRust() => _send('send_derive_keys_request', {
     'seed': seed,
     'network': network,
@@ -453,6 +467,7 @@ class ScanBlockRequest {
     this.passphrase = '',
     this.bip39AccountIndex = 0,
   });
+
   void sendSignalToRust() => _send('send_scan_block_request', {
     'node_url': nodeUrl,
     'block_height': blockHeight,
@@ -476,6 +491,7 @@ class BroadcastTransactionRequest {
     this.txId = '',
     this.spentKeyImages = const [],
   });
+
   void sendSignalToRust() => _send('send_broadcast_transaction_request', {
     'node_url': nodeUrl,
     'tx_blob': txBlob,
@@ -488,6 +504,7 @@ class BroadcastTransactionRequest {
 class QueryDaemonHeightRequest {
   final String nodeUrl;
   const QueryDaemonHeightRequest({required this.nodeUrl});
+
   void sendSignalToRust() =>
       _send('send_query_daemon_height_request', {'node_url': nodeUrl});
 }
@@ -513,6 +530,7 @@ class StartContinuousScanRequest {
     this.passphrase = '',
     this.bip39AccountIndex = 0,
   });
+
   void sendSignalToRust() => _send('send_start_continuous_scan_request', {
     'node_url': nodeUrl,
     'start_height': startHeight,
@@ -528,6 +546,7 @@ class StartContinuousScanRequest {
 
 class StopScanRequest {
   const StopScanRequest();
+
   void sendSignalToRust() => _send('send_stop_scan_request', {});
 }
 
@@ -550,6 +569,7 @@ class MempoolScanRequest {
     this.passphrase = '',
     this.bip39AccountIndex = 0,
   });
+
   void sendSignalToRust() => _send('send_mempool_scan_request', {
     'node_url': nodeUrl,
     'seed': seed,
@@ -575,6 +595,7 @@ class GenerateOutProofRequest {
     required this.message,
     required this.network,
   });
+
   void sendSignalToRust() => _send('send_generate_out_proof_request', {
     'tx_id': txId,
     'tx_key': txKey,
@@ -587,10 +608,8 @@ class GenerateOutProofRequest {
 class SaveWalletDataRequest {
   final String password;
   final String walletDataJson;
-  const SaveWalletDataRequest({
-    required this.password,
-    required this.walletDataJson,
-  });
+  const SaveWalletDataRequest({required this.password, required this.walletDataJson});
+
   void sendSignalToRust() => _send('send_save_wallet_data_request', {
     'password': password,
     'wallet_data_json': walletDataJson,
@@ -600,10 +619,8 @@ class SaveWalletDataRequest {
 class LoadWalletDataRequest {
   final String password;
   final String encryptedData;
-  const LoadWalletDataRequest({
-    required this.password,
-    required this.encryptedData,
-  });
+  const LoadWalletDataRequest({required this.password, required this.encryptedData});
+
   void sendSignalToRust() => _send('send_load_wallet_data_request', {
     'password': password,
     'encrypted_data': encryptedData,
@@ -613,6 +630,7 @@ class LoadWalletDataRequest {
 class DeriveEncryptionKeyRequest {
   final String password;
   const DeriveEncryptionKeyRequest({required this.password});
+
   void sendSignalToRust() =>
       _send('send_derive_encryption_key_request', {'password': password});
 }
@@ -626,6 +644,7 @@ class SaveWithDerivedKeyRequest {
     required this.saltHex,
     required this.walletDataJson,
   });
+
   void sendSignalToRust() => _send('send_save_with_derived_key_request', {
     'key_hex': keyHex,
     'salt_hex': saltHex,
@@ -642,10 +661,11 @@ class ScanBlockMultiWalletRequest {
     required this.blockHeight,
     required this.wallets,
   });
+
   void sendSignalToRust() => _send('send_scan_block_multi_wallet_request', {
     'node_url': nodeUrl,
     'block_height': blockHeight,
-    'wallets': wallets.map((w) => w.toJson()).toList(),
+    'wallets': wallets.map((e) => e.toJson()).toList(),
   });
 }
 
@@ -658,10 +678,11 @@ class StartMultiWalletScanRequest {
     required this.startHeight,
     required this.wallets,
   });
+
   void sendSignalToRust() => _send('send_start_multi_wallet_scan_request', {
     'node_url': nodeUrl,
     'start_height': startHeight,
-    'wallets': wallets.map((w) => w.toJson()).toList(),
+    'wallets': wallets.map((e) => e.toJson()).toList(),
   });
 }
 
@@ -686,10 +707,11 @@ class RestoreWalletDataRequest {
     this.passphrase = '',
     this.bip39AccountIndex = 0,
   });
+
   void sendSignalToRust() => _send('send_restore_wallet_data_request', {
     'seed': seed,
     'network': network,
-    'outputs': outputs.map((o) => o.toJson()).toList(),
+    'outputs': outputs.map((e) => e.toJson()).toList(),
     'daemon_height': daemonHeight,
     'current_height': currentHeight,
     if (blockHashesJson != null) 'block_hashes_json': blockHashesJson,
@@ -701,11 +723,13 @@ class RestoreWalletDataRequest {
 
 class GetBlockHashesRequest {
   const GetBlockHashesRequest();
+
   void sendSignalToRust() => _send('send_get_block_hashes_request', {});
 }
 
 class GetPendingStateRequest {
   const GetPendingStateRequest();
+
   void sendSignalToRust() => _send('send_get_pending_state_request', {});
 }
 
@@ -718,6 +742,7 @@ class ConvertBip39ToLegacyRequest {
     required this.accountIndex,
     this.passphrase = '',
   });
+
   void sendSignalToRust() => _send('send_convert_bip39_to_legacy_request', {
     'bip39_mnemonic': bip39Mnemonic,
     'account_index': accountIndex,
@@ -728,6 +753,7 @@ class ConvertBip39ToLegacyRequest {
 class FreezeOutputRequest {
   final String keyImage;
   const FreezeOutputRequest({required this.keyImage});
+
   void sendSignalToRust() =>
       _send('send_freeze_output_request', {'key_image': keyImage});
 }
@@ -735,6 +761,7 @@ class FreezeOutputRequest {
 class ThawOutputRequest {
   final String keyImage;
   const ThawOutputRequest({required this.keyImage});
+
   void sendSignalToRust() =>
       _send('send_thaw_output_request', {'key_image': keyImage});
 }
@@ -754,13 +781,13 @@ class CreateUnsignedTransactionRequest {
     required this.recipients,
     this.selectedOutputs,
   });
-  void sendSignalToRust() =>
-      _send('send_create_unsigned_transaction_request', {
+
+  void sendSignalToRust() => _send('send_create_unsigned_transaction_request', {
     'node_url': nodeUrl,
     'view_key_hex': viewKeyHex,
     'pub_spend_key_hex': pubSpendKeyHex,
     'network': network,
-    'recipients': recipients.map((r) => r.toJson()).toList(),
+    'recipients': recipients.map((e) => e.toJson()).toList(),
     if (selectedOutputs != null) 'selected_outputs': selectedOutputs,
   });
 }
@@ -778,8 +805,8 @@ class SignUnsignedTransactionRequest {
     this.passphrase = '',
     this.bip39AccountIndex = 0,
   });
-  void sendSignalToRust() =>
-      _send('send_sign_unsigned_transaction_request', {
+
+  void sendSignalToRust() => _send('send_sign_unsigned_transaction_request', {
     'seed': seed,
     'unsigned_tx_hex': unsignedTxHex,
     'network': network,
@@ -799,6 +826,7 @@ class ExportKeyImagesRequest {
     this.passphrase = '',
     this.bip39AccountIndex = 0,
   });
+
   void sendSignalToRust() => _send('send_export_key_images_request', {
     'seed': seed,
     'network': network,
@@ -810,10 +838,8 @@ class ExportKeyImagesRequest {
 class ImportKeyImagesRequest {
   final String dataHex;
   final String nodeUrl;
-  const ImportKeyImagesRequest({
-    required this.dataHex,
-    required this.nodeUrl,
-  });
+  const ImportKeyImagesRequest({required this.dataHex, required this.nodeUrl});
+
   void sendSignalToRust() => _send('send_import_key_images_request', {
     'data_hex': dataHex,
     'node_url': nodeUrl,
@@ -827,7 +853,9 @@ class ImportKeyImagesRequest {
 
 class MoneroTestResponse {
   final String result;
+
   const MoneroTestResponse({required this.result});
+
   factory MoneroTestResponse.fromJson(Map<String, dynamic> json) =>
       MoneroTestResponse(result: json['result'] as String);
 
@@ -837,7 +865,9 @@ class MoneroTestResponse {
 
 class WalletCreatedResponse {
   final String address;
+
   const WalletCreatedResponse({required this.address});
+
   factory WalletCreatedResponse.fromJson(Map<String, dynamic> json) =>
       WalletCreatedResponse(address: json['address'] as String);
 
@@ -850,12 +880,14 @@ class SyncProgressResponse {
   final int daemonHeight;
   final bool isSynced;
   final bool isScanning;
+
   const SyncProgressResponse({
     required this.currentHeight,
     required this.daemonHeight,
     required this.isSynced,
     required this.isScanning,
   });
+
   factory SyncProgressResponse.fromJson(Map<String, dynamic> json) =>
       SyncProgressResponse(
         currentHeight: json['current_height'] as int,
@@ -872,11 +904,13 @@ class BalanceResponse {
   final int confirmed;
   final int unconfirmed;
   final int pendingSpend;
+
   const BalanceResponse({
     required this.confirmed,
     required this.unconfirmed,
     required this.pendingSpend,
   });
+
   factory BalanceResponse.fromJson(Map<String, dynamic> json) =>
       BalanceResponse(
         confirmed: json['confirmed'] as int,
@@ -935,12 +969,14 @@ class SeedGeneratedResponse {
   final bool success;
   final String? error;
   final int? restoreHeight;
+
   const SeedGeneratedResponse({
     required this.seed,
     required this.success,
     this.error,
     this.restoreHeight,
   });
+
   factory SeedGeneratedResponse.fromJson(Map<String, dynamic> json) =>
       SeedGeneratedResponse(
         seed: json['seed'] as String,
@@ -957,7 +993,13 @@ class SeedBirthdayResponse {
   final int? birthday;
   final bool success;
   final String? error;
-  const SeedBirthdayResponse({this.birthday, required this.success, this.error});
+
+  const SeedBirthdayResponse({
+    this.birthday,
+    required this.success,
+    this.error,
+  });
+
   factory SeedBirthdayResponse.fromJson(Map<String, dynamic> json) =>
       SeedBirthdayResponse(
         birthday: json['birthday'] as int?,
@@ -973,11 +1015,13 @@ class BlockHeightFromTimestampResponse {
   final int blockHeight;
   final bool success;
   final String? error;
+
   const BlockHeightFromTimestampResponse({
     required this.blockHeight,
     required this.success,
     this.error,
   });
+
   factory BlockHeightFromTimestampResponse.fromJson(Map<String, dynamic> json) =>
       BlockHeightFromTimestampResponse(
         blockHeight: json['block_height'] as int,
@@ -993,11 +1037,13 @@ class AddressDerivedResponse {
   final String address;
   final bool success;
   final String? error;
+
   const AddressDerivedResponse({
     required this.address,
     required this.success,
     this.error,
   });
+
   factory AddressDerivedResponse.fromJson(Map<String, dynamic> json) =>
       AddressDerivedResponse(
         address: json['address'] as String,
@@ -1013,11 +1059,13 @@ class SubaddressDerivedResponse {
   final String address;
   final bool success;
   final String? error;
+
   const SubaddressDerivedResponse({
     required this.address,
     required this.success,
     this.error,
   });
+
   factory SubaddressDerivedResponse.fromJson(Map<String, dynamic> json) =>
       SubaddressDerivedResponse(
         address: json['address'] as String,
@@ -1037,6 +1085,7 @@ class KeysDerivedResponse {
   final String publicViewKey;
   final bool success;
   final String? error;
+
   const KeysDerivedResponse({
     required this.address,
     required this.secretSpendKey,
@@ -1046,6 +1095,7 @@ class KeysDerivedResponse {
     required this.success,
     this.error,
   });
+
   factory KeysDerivedResponse.fromJson(Map<String, dynamic> json) =>
       KeysDerivedResponse(
         address: json['address'] as String,
@@ -1099,8 +1149,7 @@ class BlockScanResponse {
             .toList(),
         daemonHeight: json['daemon_height'] as int,
         spentKeyImages: (json['spent_key_images'] as List).cast<String>(),
-        spentKeyImageTxHashes:
-            (json['spent_key_image_tx_hashes'] as List).cast<String>(),
+        spentKeyImageTxHashes: (json['spent_key_image_tx_hashes'] as List).cast<String>(),
       );
 
   static Stream<BlockScanResponse> get stream =>
@@ -1139,11 +1188,13 @@ class DaemonHeightResponse {
   final bool success;
   final String? error;
   final int daemonHeight;
+
   const DaemonHeightResponse({
     required this.success,
     this.error,
     required this.daemonHeight,
   });
+
   factory DaemonHeightResponse.fromJson(Map<String, dynamic> json) =>
       DaemonHeightResponse(
         success: json['success'] as bool,
@@ -1157,11 +1208,11 @@ class DaemonHeightResponse {
 
 class SpentStatusUpdatedResponse {
   final List<String> spentKeyImages;
+
   const SpentStatusUpdatedResponse({required this.spentKeyImages});
+
   factory SpentStatusUpdatedResponse.fromJson(Map<String, dynamic> json) =>
-      SpentStatusUpdatedResponse(
-        spentKeyImages: (json['spent_key_images'] as List).cast<String>(),
-      );
+      SpentStatusUpdatedResponse(spentKeyImages: (json['spent_key_images'] as List).cast<String>());
 
   static Stream<SpentStatusUpdatedResponse> get stream =>
       signalSender.onRawSignal('SpentStatusUpdatedResponse').map(SpentStatusUpdatedResponse.fromJson);
@@ -1193,8 +1244,7 @@ class MempoolScanResponse {
             .map((e) => OwnedOutput.fromJson(e as Map<String, dynamic>))
             .toList(),
         spentKeyImages: (json['spent_key_images'] as List).cast<String>(),
-        spentKeyImageTxHashes:
-            (json['spent_key_image_tx_hashes'] as List).cast<String>(),
+        spentKeyImageTxHashes: (json['spent_key_image_tx_hashes'] as List).cast<String>(),
       );
 
   static Stream<MempoolScanResponse> get stream =>
@@ -1206,12 +1256,14 @@ class OutProofGeneratedResponse {
   final String? error;
   final String? signature;
   final String? formatted;
+
   const OutProofGeneratedResponse({
     required this.success,
     this.error,
     this.signature,
     this.formatted,
   });
+
   factory OutProofGeneratedResponse.fromJson(Map<String, dynamic> json) =>
       OutProofGeneratedResponse(
         success: json['success'] as bool,
@@ -1228,11 +1280,13 @@ class WalletDataSavedResponse {
   final bool success;
   final String? error;
   final String? encryptedData;
+
   const WalletDataSavedResponse({
     required this.success,
     this.error,
     this.encryptedData,
   });
+
   factory WalletDataSavedResponse.fromJson(Map<String, dynamic> json) =>
       WalletDataSavedResponse(
         success: json['success'] as bool,
@@ -1248,11 +1302,13 @@ class WalletDataLoadedResponse {
   final bool success;
   final String? error;
   final String? walletDataJson;
+
   const WalletDataLoadedResponse({
     required this.success,
     this.error,
     this.walletDataJson,
   });
+
   factory WalletDataLoadedResponse.fromJson(Map<String, dynamic> json) =>
       WalletDataLoadedResponse(
         success: json['success'] as bool,
@@ -1269,12 +1325,14 @@ class EncryptionKeyDerivedResponse {
   final String? error;
   final String? keyHex;
   final String? saltHex;
+
   const EncryptionKeyDerivedResponse({
     required this.success,
     this.error,
     this.keyHex,
     this.saltHex,
   });
+
   factory EncryptionKeyDerivedResponse.fromJson(Map<String, dynamic> json) =>
       EncryptionKeyDerivedResponse(
         success: json['success'] as bool,
@@ -1322,8 +1380,7 @@ class MultiWalletScanResponse {
         txCount: json['tx_count'] as int,
         daemonHeight: json['daemon_height'] as int,
         spentKeyImages: (json['spent_key_images'] as List).cast<String>(),
-        spentKeyImageTxHashes:
-            (json['spent_key_image_tx_hashes'] as List).cast<String>(),
+        spentKeyImageTxHashes: (json['spent_key_image_tx_hashes'] as List).cast<String>(),
         walletResults: (json['wallet_results'] as List)
             .map((e) => WalletScanResult.fromJson(e as Map<String, dynamic>))
             .toList(),
@@ -1337,11 +1394,13 @@ class BlockHashesResponse {
   final bool success;
   final String? error;
   final String? blockHashesJson;
+
   const BlockHashesResponse({
     required this.success,
     this.error,
     this.blockHashesJson,
   });
+
   factory BlockHashesResponse.fromJson(Map<String, dynamic> json) =>
       BlockHashesResponse(
         success: json['success'] as bool,
@@ -1357,11 +1416,13 @@ class PendingStateResponse {
   final bool success;
   final String? error;
   final String? pendingStateJson;
+
   const PendingStateResponse({
     required this.success,
     this.error,
     this.pendingStateJson,
   });
+
   factory PendingStateResponse.fromJson(Map<String, dynamic> json) =>
       PendingStateResponse(
         success: json['success'] as bool,
@@ -1380,6 +1441,7 @@ class ReorgDetectedResponse {
   final int outputsUnspent;
   final List<String> removedKeyImages;
   final List<String> unspentKeyImages;
+
   const ReorgDetectedResponse({
     required this.splitHeight,
     required this.blocksDetached,
@@ -1388,6 +1450,7 @@ class ReorgDetectedResponse {
     required this.removedKeyImages,
     required this.unspentKeyImages,
   });
+
   factory ReorgDetectedResponse.fromJson(Map<String, dynamic> json) =>
       ReorgDetectedResponse(
         splitHeight: json['split_height'] as int,
@@ -1404,12 +1467,13 @@ class ReorgDetectedResponse {
 
 class DoubleSpendDetectedResponse {
   final List<DoubleSpendConflict> conflicts;
+
   const DoubleSpendDetectedResponse({required this.conflicts});
+
   factory DoubleSpendDetectedResponse.fromJson(Map<String, dynamic> json) =>
       DoubleSpendDetectedResponse(
         conflicts: (json['conflicts'] as List)
-            .map((e) =>
-                DoubleSpendConflict.fromJson(e as Map<String, dynamic>))
+            .map((e) => DoubleSpendConflict.fromJson(e as Map<String, dynamic>))
             .toList(),
       );
 
@@ -1421,11 +1485,13 @@ class Bip39LegacySeedResponse {
   final String legacySeed;
   final bool success;
   final String? error;
+
   const Bip39LegacySeedResponse({
     required this.legacySeed,
     required this.success,
     this.error,
   });
+
   factory Bip39LegacySeedResponse.fromJson(Map<String, dynamic> json) =>
       Bip39LegacySeedResponse(
         legacySeed: json['legacy_seed'] as String,
@@ -1441,11 +1507,13 @@ class FreezeThawResponse {
   final bool success;
   final String keyImage;
   final bool frozen;
+
   const FreezeThawResponse({
     required this.success,
     required this.keyImage,
     required this.frozen,
   });
+
   factory FreezeThawResponse.fromJson(Map<String, dynamic> json) =>
       FreezeThawResponse(
         success: json['success'] as bool,
@@ -1461,11 +1529,13 @@ class TransactionStatusUpdate {
   final String txId;
   final String status;
   final int? confirmedHeight;
+
   const TransactionStatusUpdate({
     required this.txId,
     required this.status,
     this.confirmedHeight,
   });
+
   factory TransactionStatusUpdate.fromJson(Map<String, dynamic> json) =>
       TransactionStatusUpdate(
         txId: json['tx_id'] as String,
@@ -1483,6 +1553,7 @@ class UnsignedTransactionCreatedResponse {
   final String? unsignedTxHex;
   final int fee;
   final List<Recipient> recipients;
+
   const UnsignedTransactionCreatedResponse({
     required this.success,
     this.error,
@@ -1490,8 +1561,8 @@ class UnsignedTransactionCreatedResponse {
     required this.fee,
     required this.recipients,
   });
-  factory UnsignedTransactionCreatedResponse.fromJson(
-          Map<String, dynamic> json) =>
+
+  factory UnsignedTransactionCreatedResponse.fromJson(Map<String, dynamic> json) =>
       UnsignedTransactionCreatedResponse(
         success: json['success'] as bool,
         error: json['error'] as String?,
@@ -1515,6 +1586,7 @@ class TransactionSignedOfflineResponse {
   final String? txKey;
   final List<String> txKeyAdditional;
   final List<ChangeOutput> changeOutputs;
+
   const TransactionSignedOfflineResponse({
     required this.success,
     this.error,
@@ -1525,8 +1597,8 @@ class TransactionSignedOfflineResponse {
     required this.txKeyAdditional,
     required this.changeOutputs,
   });
-  factory TransactionSignedOfflineResponse.fromJson(
-          Map<String, dynamic> json) =>
+
+  factory TransactionSignedOfflineResponse.fromJson(Map<String, dynamic> json) =>
       TransactionSignedOfflineResponse(
         success: json['success'] as bool,
         error: json['error'] as String?,
@@ -1549,12 +1621,14 @@ class KeyImagesExportedResponse {
   final String? error;
   final String? keyImagesHex;
   final int count;
+
   const KeyImagesExportedResponse({
     required this.success,
     this.error,
     this.keyImagesHex,
     required this.count,
   });
+
   factory KeyImagesExportedResponse.fromJson(Map<String, dynamic> json) =>
       KeyImagesExportedResponse(
         success: json['success'] as bool,
@@ -1572,12 +1646,14 @@ class KeyImagesImportedResponse {
   final String? error;
   final int importedCount;
   final int spentCount;
+
   const KeyImagesImportedResponse({
     required this.success,
     this.error,
     required this.importedCount,
     required this.spentCount,
   });
+
   factory KeyImagesImportedResponse.fromJson(Map<String, dynamic> json) =>
       KeyImagesImportedResponse(
         success: json['success'] as bool,
@@ -1589,3 +1665,4 @@ class KeyImagesImportedResponse {
   static Stream<KeyImagesImportedResponse> get stream =>
       signalSender.onRawSignal('KeyImagesImportedResponse').map(KeyImagesImportedResponse.fromJson);
 }
+
