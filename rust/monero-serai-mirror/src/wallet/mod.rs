@@ -34,9 +34,9 @@ pub use send::{TransactionError, Fee};
 // Transaction building types now available without reqwest for WASM support
 pub use send::{
   Change, SignableTransaction, SignableTransactionBuilder, Eventuality,
+  UnsignedTransaction, UnsignedInput, sign_offline,
 };
-#[cfg(all(feature = "multisig", feature = "reqwest"))]
-pub(crate) use send::InternalPayment;
+pub use send::InternalPayment;
 #[cfg(all(feature = "multisig", feature = "reqwest"))]
 pub use send::TransactionMachine;
 

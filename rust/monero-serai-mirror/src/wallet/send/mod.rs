@@ -48,6 +48,9 @@ use crate::rpc::{RpcError, RpcConnection, Rpc};
 mod builder;
 pub use builder::SignableTransactionBuilder;
 
+pub mod offline;
+pub use offline::{UnsignedTransaction, UnsignedInput, sign_offline};
+
 #[cfg(feature = "multisig")]
 mod multisig;
 #[cfg(feature = "multisig")]
@@ -214,7 +217,7 @@ impl Fee {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Zeroize)]
-pub(crate) enum InternalPayment {
+pub enum InternalPayment {
   Payment((MoneroAddress, u64)),
   Change(Change, u64),
 }
@@ -259,6 +262,18 @@ impl fmt::Debug for Change {
 }
 
 impl Change {
+  pub fn from_raw(address: MoneroAddress, view: Option<Zeroizing<Scalar>>) -> Change {
+    Change { address, view }
+  }
+
+  pub fn address(&self) -> &MoneroAddress {
+    &self.address
+  }
+
+  pub fn view(&self) -> Option<&Scalar> {
+    self.view.as_deref()
+  }
+
   /// Create a change output specification from a ViewPair, as needed to maintain privacy.
   pub fn new(view: &ViewPair, guaranteed: bool) -> Change {
     Change {
@@ -391,6 +406,17 @@ impl SignableTransaction {
 
   pub fn fee(&self) -> u64 {
     self.fee
+  }
+
+  pub(crate) fn from_parts(
+    protocol: Protocol,
+    r_seed: Option<Zeroizing<[u8; 32]>>,
+    inputs: Vec<SpendableOutput>,
+    payments: Vec<InternalPayment>,
+    data: Vec<Vec<u8>>,
+    fee: u64,
+  ) -> SignableTransaction {
+    SignableTransaction { protocol, r_seed, inputs, payments, data, fee }
   }
 
   #[allow(clippy::type_complexity)]
@@ -593,7 +619,7 @@ impl SignableTransaction {
     })
   }
 
-  fn prepare_transaction<R: RngCore + CryptoRng>(
+  pub(crate) fn prepare_transaction<R: RngCore + CryptoRng>(
     &mut self,
     rng: &mut R,
     uniqueness: [u8; 32],
@@ -667,6 +693,45 @@ impl SignableTransaction {
       },
       sum,
     )
+  }
+
+  pub async fn prepare_unsigned<R: RngCore + CryptoRng, RPC: RpcConnection>(
+    self,
+    rng: &mut R,
+    rpc: &Rpc<RPC>,
+  ) -> Result<UnsignedTransaction, TransactionError> {
+    let r_seed = self.r_seed.clone().unwrap_or_else(|| {
+      let mut res = Zeroizing::new([0; 32]);
+      rng.fill_bytes(res.as_mut());
+      res
+    });
+
+    let height = rpc.get_height().await.map_err(TransactionError::RpcError)? - 1;
+    let decoys = Decoys::select(
+      rng,
+      rpc,
+      self.protocol.ring_len(),
+      height,
+      &self.inputs,
+    )
+    .await
+    .map_err(TransactionError::RpcError)?;
+
+    let inputs = self
+      .inputs
+      .iter()
+      .zip(decoys.into_iter())
+      .map(|(output, decoys)| UnsignedInput { output: output.clone(), decoys })
+      .collect();
+
+    Ok(UnsignedTransaction {
+      protocol: self.protocol,
+      r_seed,
+      fee: self.fee,
+      payments: self.payments.clone(),
+      data: self.data.clone(),
+      inputs,
+    })
   }
 
   /// Sign this transaction.

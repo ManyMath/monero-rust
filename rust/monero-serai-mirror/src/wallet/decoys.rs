@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::io::{self, Read, Write};
 
 use futures::lock::{Mutex, MutexGuard};
 
@@ -11,6 +12,10 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use curve25519_dalek::edwards::EdwardsPoint;
 
+use crate::serialize::{
+  write_byte, write_varint, write_point,
+  read_byte, read_varint, read_point,
+};
 use crate::wallet::SpendableOutput;
 
 use crate::rpc::{RpcError, RpcConnection, Rpc};
@@ -133,6 +138,41 @@ pub struct Decoys {
 impl Decoys {
   pub fn len(&self) -> usize {
     self.offsets.len()
+  }
+
+  pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
+    write_byte(&self.i, w)?;
+    write_varint(&(self.offsets.len() as u64), w)?;
+    for offset in &self.offsets {
+      write_varint(offset, w)?;
+    }
+    write_varint(&(self.ring.len() as u64), w)?;
+    for pair in &self.ring {
+      write_point(&pair[0], w)?;
+      write_point(&pair[1], w)?;
+    }
+    Ok(())
+  }
+
+  pub fn serialize(&self) -> Vec<u8> {
+    let mut buf = Vec::new();
+    self.write(&mut buf).unwrap();
+    buf
+  }
+
+  pub fn read<R: Read>(r: &mut R) -> io::Result<Decoys> {
+    let i = read_byte(r)?;
+    let offsets_len: usize = read_varint(r)?.try_into().unwrap();
+    let mut offsets = Vec::with_capacity(offsets_len);
+    for _ in 0 .. offsets_len {
+      offsets.push(read_varint(r)?);
+    }
+    let ring_len: usize = read_varint(r)?.try_into().unwrap();
+    let mut ring = Vec::with_capacity(ring_len);
+    for _ in 0 .. ring_len {
+      ring.push([read_point(r)?, read_point(r)?]);
+    }
+    Ok(Decoys { i, offsets, ring })
   }
 
   /// Select decoys using the same distribution as Monero.
