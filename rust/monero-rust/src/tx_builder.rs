@@ -3,13 +3,14 @@
 pub mod native {
     use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
     use monero_serai::{
-        rpc::{Rpc, RpcConnection},
+        rpc::{Rpc, RpcConnection, DEFAULT_MAX_FEE_PER_BYTE},
         transaction::Transaction,
         wallet::{
             address::{MoneroAddress, Network},
             seed::Seed,
             Change, Decoys, ReceivedOutput, Scanner, SignableTransactionBuilder, SpendableOutput,
             ViewPair, Fee,
+            UnsignedTransaction, sign_offline,
         },
     };
     use rand_core::RngCore;
@@ -312,7 +313,7 @@ pub mod native {
         let protocol = rpc.get_protocol().await
             .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
 
-        let fee_rate: Fee = rpc.get_fee().await
+        let fee_rate: Fee = rpc.get_fee_checked(DEFAULT_MAX_FEE_PER_BYTE).await
             .map_err(|e| format!("Failed to get fee rate: {:?}", e))?;
 
         // Worst-case extra: assume payment ID and additional keys
@@ -471,7 +472,7 @@ pub mod native {
             .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
 
         let fee = rpc
-            .get_fee()
+            .get_fee_checked(DEFAULT_MAX_FEE_PER_BYTE)
             .await
             .map_err(|e| format!("Failed to get fee: {:?}", e))?;
 
@@ -633,7 +634,7 @@ pub mod native {
             .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
 
         let fee = rpc
-            .get_fee()
+            .get_fee_checked(DEFAULT_MAX_FEE_PER_BYTE)
             .await
             .map_err(|e| format!("Failed to get fee: {:?}", e))?;
 
@@ -866,6 +867,201 @@ pub mod native {
 
         Ok(received_outputs)
     }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct UnsignedTransactionResult {
+        pub unsigned_tx_hex: String,
+        pub fee: u64,
+        pub recipients: Vec<(String, u64)>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct OfflineSignResult {
+        pub tx_id: String,
+        pub fee: u64,
+        pub tx_blob: String,
+        pub tx_key: String,
+        pub tx_key_additional: Vec<String>,
+        pub change_outputs: Vec<ChangeOutputInfo>,
+    }
+
+    pub async fn create_unsigned_transaction(
+        node_url: &str,
+        view_key_hex: &str,
+        pub_spend_key_hex: &str,
+        network_str: &str,
+        stored_outputs: Vec<StoredOutputData>,
+        recipients: &[(String, u64)],
+    ) -> Result<UnsignedTransactionResult, String> {
+        if stored_outputs.is_empty() {
+            return Err("No outputs provided".to_string());
+        }
+        if recipients.is_empty() {
+            return Err("No recipients provided".to_string());
+        }
+        if recipients.len() > 15 {
+            return Err("Maximum 15 recipients allowed (16 outputs - 1 change)".to_string());
+        }
+
+        let network = parse_network(network_str)?;
+
+        let view_bytes = hex::decode(view_key_hex)
+            .map_err(|e| format!("Invalid view key hex: {:?}", e))?;
+        if view_bytes.len() != 32 {
+            return Err("View key must be 32 bytes".to_string());
+        }
+        let mut view_arr = [0u8; 32];
+        view_arr.copy_from_slice(&view_bytes);
+        let view_scalar = Scalar::from_bytes_mod_order(view_arr);
+
+        let spend_bytes = hex::decode(pub_spend_key_hex)
+            .map_err(|e| format!("Invalid public spend key hex: {:?}", e))?;
+        if spend_bytes.len() != 32 {
+            return Err("Public spend key must be 32 bytes".to_string());
+        }
+        let mut spend_arr = [0u8; 32];
+        spend_arr.copy_from_slice(&spend_bytes);
+        let spend_point = curve25519_dalek::edwards::CompressedEdwardsY(spend_arr)
+            .decompress()
+            .ok_or("Invalid public spend key point")?;
+
+        let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let rpc = HttpRpc::new(node_url.to_string())
+            .map_err(|e| format!("RPC error: {:?}", e))?;
+
+        #[cfg(target_arch = "wasm32")]
+        let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
+
+        let protocol = rpc.get_protocol().await
+            .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
+        let fee_rate: Fee = rpc.get_fee_checked(DEFAULT_MAX_FEE_PER_BYTE).await
+            .map_err(|e| format!("Failed to get fee: {:?}", e))?;
+
+        let mut dest_addrs = Vec::with_capacity(recipients.len());
+        for (addr_str, _) in recipients {
+            let dest_addr = MoneroAddress::from_str(network, addr_str)
+                .map_err(|e| format!("Invalid destination '{}': {:?}", addr_str, e))?;
+            dest_addrs.push(dest_addr);
+        }
+
+        use std::io::Cursor;
+        let mut spendable_outputs = Vec::with_capacity(stored_outputs.len());
+        for stored in &stored_outputs {
+            let output_bytes = hex::decode(&stored.received_output_bytes)
+                .map_err(|e| format!("Invalid output bytes: {:?}", e))?;
+            let mut cursor = Cursor::new(output_bytes);
+            let received = ReceivedOutput::read(&mut cursor)
+                .map_err(|e| format!("Failed to parse output: {:?}", e))?;
+            let spendable = create_spendable_output(&rpc, received).await?;
+            spendable_outputs.push(spendable);
+        }
+
+        let total_input: u64 = spendable_outputs.iter()
+            .map(|o| o.commitment().amount).sum();
+        let total_send: u64 = recipients.iter().map(|(_, amt)| *amt).sum();
+        let num_out_with_change = recipients.len() + 1;
+        let extra_wc = extra_weight(num_out_with_change, true, &[]);
+        let weight_wc = Transaction::fee_weight(
+            protocol, spendable_outputs.len(), num_out_with_change, extra_wc,
+        );
+        let fee_wc = fee_rate.calculate(weight_wc);
+        let expected_change = total_input.saturating_sub(total_send + fee_wc);
+
+        let change_decision = decide_change(expected_change, recipients.len());
+        match change_decision {
+            ChangeDecision::DustError => {
+                return Err(
+                    "Change amount is dust; use sweep_all for single-recipient send-max"
+                        .to_string(),
+                );
+            }
+            _ => {}
+        }
+
+        let change_opt = match change_decision {
+            ChangeDecision::IncludeChange => Some(Change::new(&view_pair, true)),
+            ChangeDecision::AbsorbDust => None,
+            ChangeDecision::DustError => unreachable!(),
+        };
+
+        let mut builder = SignableTransactionBuilder::new(protocol, fee_rate, change_opt);
+
+        let mut rng = rand::rngs::OsRng;
+        let mut r_seed = Zeroizing::new([0u8; 32]);
+        rng.fill_bytes(r_seed.as_mut());
+        builder.set_r_seed(r_seed);
+
+        for output in spendable_outputs {
+            builder.add_input(output);
+        }
+        for (dest_addr, (_, amount)) in dest_addrs.into_iter().zip(recipients.iter()) {
+            builder.add_payment(dest_addr, *amount);
+        }
+
+        let signable = builder.build()
+            .map_err(|e| format!("Failed to build transaction: {:?}", e))?;
+        let fee = signable.fee();
+
+        let unsigned = signable.prepare_unsigned(&mut rng, &rpc).await
+            .map_err(|e| format!("Failed to prepare unsigned tx: {:?}", e))?;
+
+        let unsigned_bytes = unsigned.serialize();
+
+        Ok(UnsignedTransactionResult {
+            unsigned_tx_hex: hex::encode(unsigned_bytes),
+            fee,
+            recipients: recipients.to_vec(),
+        })
+    }
+
+    pub fn sign_unsigned_transaction(
+        seed_phrase: &str,
+        unsigned_tx_hex: &str,
+        network_str: &str,
+    ) -> Result<OfflineSignResult, String> {
+        let seed = resolve_seed(seed_phrase)?;
+        let spend_key = spend_key_from_seed(&seed);
+        let view_pair = view_pair_from_seed(&seed);
+
+        let unsigned_bytes = hex::decode(unsigned_tx_hex)
+            .map_err(|e| format!("Invalid unsigned tx hex: {:?}", e))?;
+        let unsigned = UnsignedTransaction::read(&mut std::io::Cursor::new(unsigned_bytes))
+            .map_err(|e| format!("Failed to parse unsigned tx: {:?}", e))?;
+
+        let fee = unsigned.fee;
+
+        let mut rng = rand::rngs::OsRng;
+        let (tx, tx_key, tx_key_additional) =
+            sign_offline(&mut rng, &Zeroizing::new(spend_key), unsigned)
+                .map_err(|e| format!("Failed to sign offline: {:?}", e))?;
+
+        let tx_id = hex::encode(tx.hash());
+        let tx_blob = hex::encode(tx.serialize());
+
+        let max_account = 0u32;  // offline signer doesn't have stored output metadata
+        let lookahead = Lookahead {
+            account: max_account,
+            subaddress: DEFAULT_LOOKAHEAD.subaddress,
+        };
+        let change_outputs = scan_transaction_outputs(&tx, &tx_id, view_pair, spend_key, lookahead);
+
+        let _ = parse_network(network_str)?;
+
+        Ok(OfflineSignResult {
+            tx_id,
+            fee,
+            tx_blob,
+            tx_key: hex::encode(tx_key.to_bytes()),
+            tx_key_additional: tx_key_additional
+                .iter()
+                .map(|k| hex::encode(k.to_bytes()))
+                .collect(),
+            change_outputs,
+        })
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
