@@ -35,6 +35,7 @@ hex = { version = "0.4", default-features = false, features = ["alloc"] }
 rand_core = { version = "0.6", default-features = false }
 rand = { version = "0.8", default-features = false, features = ["getrandom"] }
 js-sys = "0.3"
+monero-epee-bin-serde = { path = "../monero-epee-bin-serde" }
 
 # WASM
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -56,7 +57,6 @@ tokio = { version = "1.29", features = ["rt", "macros"] }
 
 [dev-dependencies]
 monero-serai = { path = "../monero-serai-mirror", features = ["http-rpc", "test-helpers"] }
-monero-epee-bin-serde = { path = "../monero-epee-bin-serde" }
 reqwest = "0.11"
 
 # Tokio is only needed for native tests
