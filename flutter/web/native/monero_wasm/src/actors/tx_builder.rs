@@ -19,7 +19,11 @@ impl TxBuilderActor {
         _owned_tasks.spawn(Self::listen_to_tx_requests(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_sweep_requests(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_broadcast_requests(self_addr.clone()));
-        _owned_tasks.spawn(Self::listen_to_proof_requests(self_addr));
+        _owned_tasks.spawn(Self::listen_to_proof_requests(self_addr.clone()));
+        _owned_tasks.spawn(Self::listen_to_unsigned_tx_requests(self_addr.clone()));
+        _owned_tasks.spawn(Self::listen_to_sign_unsigned_requests(self_addr.clone()));
+        _owned_tasks.spawn(Self::listen_to_export_key_images(self_addr.clone()));
+        _owned_tasks.spawn(Self::listen_to_import_key_images(self_addr));
 
         TxBuilderActor {
             wallet_actor: None,
@@ -138,6 +142,82 @@ impl TxBuilderActor {
                     .send_signal_to_dart();
                 }
             }
+        }
+    }
+
+    async fn listen_to_unsigned_tx_requests(mut self_addr: Address<Self>) {
+        let mut receiver = crate::ffi_web::get_create_unsigned_transaction_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
+            let request = dart_msg;
+            let recipients: Vec<(String, u64)> = request.recipients.iter()
+                .map(|r| (r.address.clone(), r.amount))
+                .collect();
+            let _ = self_addr.notify(CreateUnsignedTx {
+                node_url: request.node_url,
+                view_key_hex: request.view_key_hex,
+                pub_spend_key_hex: request.pub_spend_key_hex,
+                network: request.network,
+                recipients,
+                selected_outputs: request.selected_outputs,
+            }).await;
+        }
+    }
+
+    async fn listen_to_sign_unsigned_requests(mut self_addr: Address<Self>) {
+        let mut receiver = crate::ffi_web::get_sign_unsigned_transaction_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
+            let request = dart_msg;
+            let resolved_seed = match super::wallet::pre_resolve_bip39(
+                &request.seed, &request.passphrase, request.bip39_account_index,
+            ) {
+                Ok(s) => s,
+                Err(e) => {
+                    TransactionSignedOfflineResponse {
+                        success: false, error: Some(e), tx_id: None, fee: 0,
+                        tx_blob: None, tx_key: None, tx_key_additional: vec![],
+                        change_outputs: vec![],
+                    }.send_signal_to_dart();
+                    continue;
+                }
+            };
+            let _ = self_addr.notify(SignUnsignedTx {
+                seed: resolved_seed,
+                unsigned_tx_hex: request.unsigned_tx_hex,
+                network: request.network,
+            }).await;
+        }
+    }
+
+    async fn listen_to_export_key_images(mut self_addr: Address<Self>) {
+        let mut receiver = crate::ffi_web::get_export_key_images_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
+            let request = dart_msg;
+            let resolved_seed = match super::wallet::pre_resolve_bip39(
+                &request.seed, &request.passphrase, request.bip39_account_index,
+            ) {
+                Ok(s) => s,
+                Err(e) => {
+                    KeyImagesExportedResponse {
+                        success: false, error: Some(e), key_images_hex: None, count: 0,
+                    }.send_signal_to_dart();
+                    continue;
+                }
+            };
+            let _ = self_addr.notify(ExportKeyImages {
+                seed: resolved_seed,
+                network: request.network,
+            }).await;
+        }
+    }
+
+    async fn listen_to_import_key_images(mut self_addr: Address<Self>) {
+        let mut receiver = crate::ffi_web::get_import_key_images_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
+            let request = dart_msg;
+            let _ = self_addr.notify(ImportKeyImages {
+                data_hex: request.data_hex,
+                node_url: request.node_url,
+            }).await;
         }
     }
 }
@@ -488,10 +568,10 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                         }
                     });
                 }
-                _ => {
+                (Err(e), _) | (_, Err(e)) => {
                     TransactionCreatedResponse {
                         success: false,
-                        error: Some("Failed to get wallet data or height".to_string()),
+                        error: Some(format!("Failed to get wallet data or height: {:?}", e)),
                         tx_id: String::new(),
                         fee: 0,
                         tx_blob: None,
@@ -727,6 +807,297 @@ impl Notifiable<BroadcastTransaction> for TxBuilderActor {
                 }
             }
         });
+    }
+}
+
+#[async_trait]
+impl Notifiable<CreateUnsignedTx> for TxBuilderActor {
+    async fn notify(&mut self, msg: CreateUnsignedTx, _ctx: &Context<Self>) {
+        if let Some(wallet_addr) = &mut self.wallet_actor {
+            let wallet_data_result = wallet_addr.send(GetWalletData).await;
+            let wallet_height_result = wallet_addr.send(GetWalletHeight).await;
+
+            match (wallet_data_result, wallet_height_result) {
+                (Ok(wallet_data), Ok(wallet_height)) => {
+                    let node_url = msg.node_url;
+                    let view_key_hex = msg.view_key_hex;
+                    let pub_spend_key_hex = msg.pub_spend_key_hex;
+                    let network = msg.network;
+                    let recipients = msg.recipients;
+                    let selected_outputs = msg.selected_outputs;
+                    let daemon_height = wallet_height.daemon_height;
+
+                    wasm_bindgen_futures::spawn_local(async move {
+                        let fresh_daemon_height =
+                            match monero_rust::get_daemon_height(&node_url).await {
+                                Ok(h) => h.max(daemon_height),
+                                Err(_) => daemon_height,
+                            };
+
+                        let stored_outputs: Vec<monero_rust::tx_builder::StoredOutputData> =
+                            wallet_data.outputs.iter()
+                                .filter(|o| {
+                                    if o.spent { return false; }
+                                    if o.frozen { return false; }
+                                    if !monero_rust::is_spendable(o, fresh_daemon_height) {
+                                        return false;
+                                    }
+                                    if wallet_data.pending_key_images.contains(&o.key_image) {
+                                        return false;
+                                    }
+                                    if let Some(ref sel) = selected_outputs {
+                                        let key = format!("{}:{}", o.tx_hash, o.output_index);
+                                        return sel.contains(&key);
+                                    }
+                                    true
+                                })
+                                .map(|o| monero_rust::tx_builder::StoredOutputData {
+                                    tx_hash: o.tx_hash.clone(),
+                                    output_index: o.output_index,
+                                    amount: o.amount,
+                                    key: o.key.clone(),
+                                    key_offset: o.key_offset.clone(),
+                                    commitment_mask: o.commitment_mask.clone(),
+                                    subaddress: o.subaddress_index,
+                                    payment_id: o.payment_id.clone(),
+                                    received_output_bytes: o.received_output_bytes.clone(),
+                                })
+                                .collect();
+
+                        if stored_outputs.is_empty() {
+                            UnsignedTransactionCreatedResponse {
+                                success: false,
+                                error: Some("No spendable outputs available".to_string()),
+                                unsigned_tx_hex: None,
+                                fee: 0,
+                                recipients: vec![],
+                            }.send_signal_to_dart();
+                            return;
+                        }
+
+                        match monero_rust::tx_builder::create_unsigned_transaction(
+                            &node_url,
+                            &view_key_hex,
+                            &pub_spend_key_hex,
+                            &network,
+                            stored_outputs,
+                            &recipients,
+                        ).await {
+                            Ok(result) => {
+                                UnsignedTransactionCreatedResponse {
+                                    success: true,
+                                    error: None,
+                                    unsigned_tx_hex: Some(result.unsigned_tx_hex),
+                                    fee: result.fee,
+                                    recipients: result.recipients.iter()
+                                        .map(|(addr, amt)| Recipient {
+                                            address: addr.clone(),
+                                            amount: *amt,
+                                        }).collect(),
+                                }.send_signal_to_dart();
+                            }
+                            Err(e) => {
+                                UnsignedTransactionCreatedResponse {
+                                    success: false,
+                                    error: Some(e),
+                                    unsigned_tx_hex: None,
+                                    fee: 0,
+                                    recipients: vec![],
+                                }.send_signal_to_dart();
+                            }
+                        }
+                    });
+                }
+                _ => {
+                    UnsignedTransactionCreatedResponse {
+                        success: false,
+                        error: Some("Failed to get wallet data".to_string()),
+                        unsigned_tx_hex: None,
+                        fee: 0,
+                        recipients: vec![],
+                    }.send_signal_to_dart();
+                }
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl Notifiable<SignUnsignedTx> for TxBuilderActor {
+    async fn notify(&mut self, msg: SignUnsignedTx, _ctx: &Context<Self>) {
+        let seed = msg.seed;
+        let unsigned_tx_hex = msg.unsigned_tx_hex;
+        let network = msg.network;
+
+        wasm_bindgen_futures::spawn_local(async move {
+            match monero_rust::tx_builder::sign_unsigned_transaction(
+                &seed,
+                &unsigned_tx_hex,
+                &network,
+            ) {
+                Ok(result) => {
+                    TransactionSignedOfflineResponse {
+                        success: true,
+                        error: None,
+                        tx_id: Some(result.tx_id),
+                        fee: result.fee,
+                        tx_blob: Some(result.tx_blob),
+                        tx_key: Some(result.tx_key),
+                        tx_key_additional: result.tx_key_additional,
+                        change_outputs: result.change_outputs.into_iter().map(|co| {
+                            ChangeOutput {
+                                tx_hash: co.tx_hash,
+                                output_index: co.output_index,
+                                amount: co.amount,
+                                amount_xmr: co.amount_xmr,
+                                key: co.key,
+                                key_offset: co.key_offset,
+                                commitment_mask: co.commitment_mask,
+                                subaddress_index: co.subaddress_index,
+                                received_output_bytes: co.received_output_bytes,
+                                key_image: co.key_image,
+                            }
+                        }).collect(),
+                    }.send_signal_to_dart();
+                }
+                Err(e) => {
+                    TransactionSignedOfflineResponse {
+                        success: false,
+                        error: Some(e),
+                        tx_id: None,
+                        fee: 0,
+                        tx_blob: None,
+                        tx_key: None,
+                        tx_key_additional: vec![],
+                        change_outputs: vec![],
+                    }.send_signal_to_dart();
+                }
+            }
+        });
+    }
+}
+
+#[async_trait]
+impl Notifiable<ExportKeyImages> for TxBuilderActor {
+    async fn notify(&mut self, _msg: ExportKeyImages, _ctx: &Context<Self>) {
+        if let Some(wallet_addr) = &mut self.wallet_actor {
+            let wallet_data_result = wallet_addr.send(GetWalletData).await;
+            match wallet_data_result {
+                Ok(wallet_data) => {
+                    let key_images: Vec<monero_rust::epee_compat::ExportedKeyImage> = wallet_data.outputs.iter()
+                        .filter(|o| !o.key_image.is_empty())
+                        .map(|o| monero_rust::epee_compat::ExportedKeyImage {
+                            key_image: o.key_image.clone(),
+                            tx_hash: o.tx_hash.clone(),
+                            output_index: o.output_index,
+                        })
+                        .collect();
+
+                    let count = key_images.len() as u64;
+
+                    match monero_rust::epee_compat::export_key_images(&key_images) {
+                        Ok(data) => {
+                            KeyImagesExportedResponse {
+                                success: true,
+                                error: None,
+                                key_images_hex: Some(hex::encode(data)),
+                                count,
+                            }.send_signal_to_dart();
+                        }
+                        Err(e) => {
+                            KeyImagesExportedResponse {
+                                success: false,
+                                error: Some(e),
+                                key_images_hex: None,
+                                count: 0,
+                            }.send_signal_to_dart();
+                        }
+                    }
+                }
+                Err(_) => {
+                    KeyImagesExportedResponse {
+                        success: false,
+                        error: Some("Failed to get wallet data".to_string()),
+                        key_images_hex: None,
+                        count: 0,
+                    }.send_signal_to_dart();
+                }
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl Notifiable<ImportKeyImages> for TxBuilderActor {
+    async fn notify(&mut self, msg: ImportKeyImages, _ctx: &Context<Self>) {
+        if let Some(wallet_addr) = &mut self.wallet_actor {
+            let data = match hex::decode(&msg.data_hex) {
+                Ok(d) => d,
+                Err(e) => {
+                    KeyImagesImportedResponse {
+                        success: false,
+                        error: Some(format!("Invalid hex data: {:?}", e)),
+                        imported_count: 0,
+                        spent_count: 0,
+                    }.send_signal_to_dart();
+                    return;
+                }
+            };
+
+            let key_images = match monero_rust::epee_compat::import_key_images(&data) {
+                Ok(kis) => kis,
+                Err(e) => {
+                    KeyImagesImportedResponse {
+                        success: false,
+                        error: Some(format!("Failed to parse key images: {}", e)),
+                        imported_count: 0,
+                        spent_count: 0,
+                    }.send_signal_to_dart();
+                    return;
+                }
+            };
+
+            let count = key_images.len() as u64;
+
+            let wallet_data_result = wallet_addr.send(GetWalletData).await;
+            match wallet_data_result {
+                Ok(wallet_data) => {
+                    let mut spent_count = 0u64;
+                    let mut spent_key_images = Vec::new();
+                    for ki in &key_images {
+                        for output in &wallet_data.outputs {
+                            if output.key_image == *ki && !output.spent {
+                                spent_count += 1;
+                                spent_key_images.push(ki.clone());
+                            }
+                        }
+                    }
+
+                    if !spent_key_images.is_empty() {
+                        let _ = wallet_addr.notify(UpdateSpentStatus {
+                            key_images: spent_key_images,
+                            tx_hashes: vec![],
+                            height: 0,
+                        }).await;
+                    }
+
+                    KeyImagesImportedResponse {
+                        success: true,
+                        error: None,
+                        imported_count: count,
+                        spent_count,
+                    }.send_signal_to_dart();
+                }
+                Err(_) => {
+                    KeyImagesImportedResponse {
+                        success: false,
+                        error: Some("Failed to get wallet data".to_string()),
+                        imported_count: 0,
+                        spent_count: 0,
+                    }.send_signal_to_dart();
+                }
+            }
+        }
     }
 }
 

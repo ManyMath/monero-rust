@@ -190,3 +190,33 @@ pub struct AddMempoolPendingSpends {
     pub key_images: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct CreateUnsignedTx {
+    pub node_url: String,
+    pub view_key_hex: String,
+    pub pub_spend_key_hex: String,
+    pub network: String,
+    pub recipients: Vec<(String, u64)>,
+    pub selected_outputs: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SignUnsignedTx {
+    pub seed: String,
+    pub unsigned_tx_hex: String,
+    pub network: String,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct ExportKeyImages {
+    pub seed: String,
+    pub network: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ImportKeyImages {
+    pub data_hex: String,
+    pub node_url: String,
+}
+
