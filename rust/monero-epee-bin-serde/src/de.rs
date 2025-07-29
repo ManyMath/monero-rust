@@ -514,17 +514,20 @@ impl<'de, 'a, 'b> serde::Deserializer<'de> for &'a mut Deserializer<'b> {
         Err(Error::enums_are_not_supported())
     }
 
-    fn deserialize_identifier<V>(self, _: V) -> Result<<V as Visitor<'de>>::Value>
+    fn deserialize_identifier<V>(self, visitor: V) -> Result<<V as Visitor<'de>>::Value>
     where
         V: Visitor<'de>,
     {
-        todo!("Unsure what should be done here?")
+        self.deserialize_any(visitor)
     }
 
-    fn deserialize_ignored_any<V>(self, _: V) -> Result<<V as Visitor<'de>>::Value>
+    fn deserialize_ignored_any<V>(self, visitor: V) -> Result<<V as Visitor<'de>>::Value>
     where
         V: Visitor<'de>,
     {
-        todo!("Unsure what should be done here?")
+        // Skip the current field value by reading and discarding it.
+        // Delegating to deserialize_any correctly consumes the marker
+        // and value bytes from the stream.
+        self.deserialize_any(visitor)
     }
 }
