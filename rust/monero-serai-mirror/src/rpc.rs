@@ -58,7 +58,16 @@ pub enum RpcError {
   PrunedTransaction,
   #[error("invalid transaction ({0:?})")]
   InvalidTransaction([u8; 32]),
+  #[error("fee exceeds limit (per_weight: {per_weight}, limit: {limit})")]
+  FeeExceedsLimit { per_weight: u64, limit: u64 },
+  #[error("zero fee returned by node")]
+  ZeroFee,
 }
+
+/// A generous upper bound for fee per byte in atomic units.
+/// Monero's typical max is ~20000, but we use 100000 to avoid false positives
+/// on congested networks or unusual fee conditions.
+pub const DEFAULT_MAX_FEE_PER_BYTE: u64 = 100_000;
 
 fn rpc_hex(value: &str) -> Result<Vec<u8>, RpcError> {
   hex::decode(value).map_err(|_| RpcError::InvalidNode)
@@ -546,6 +555,29 @@ impl<R: RpcConnection> Rpc<R> {
 
     let res: FeeResponse = self.json_rpc_call("get_fee_estimate", None).await?;
     Ok(Fee { per_weight: res.fee, mask: res.quantization_mask })
+  }
+
+  /// Get the currently estimated fee from the node with a sanity check.
+  ///
+  /// Returns an error if the fee per weight is zero (indicating a bug) or exceeds
+  /// `max_fee_per_byte` (indicating a malicious or malfunctioning node).
+  ///
+  /// Use [`DEFAULT_MAX_FEE_PER_BYTE`] for a reasonable default limit.
+  pub async fn get_fee_checked(&self, max_fee_per_byte: u64) -> Result<Fee, RpcError> {
+    let fee = self.get_fee().await?;
+
+    if fee.per_weight == 0 {
+      return Err(RpcError::ZeroFee);
+    }
+
+    if fee.per_weight > max_fee_per_byte {
+      return Err(RpcError::FeeExceedsLimit {
+        per_weight: fee.per_weight,
+        limit: max_fee_per_byte,
+      });
+    }
+
+    Ok(fee)
   }
 
   pub async fn publish_transaction(&self, tx: &Transaction) -> Result<(), RpcError> {
