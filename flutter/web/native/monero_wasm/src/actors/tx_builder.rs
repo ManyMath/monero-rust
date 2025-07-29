@@ -918,6 +918,14 @@ impl Notifiable<CreateUnsignedTx> for TxBuilderActor {
                     }.send_signal_to_dart();
                 }
             }
+        } else {
+            UnsignedTransactionCreatedResponse {
+                success: false,
+                error: Some("Wallet not initialized".to_string()),
+                unsigned_tx_hex: None,
+                fee: 0,
+                recipients: vec![],
+            }.send_signal_to_dart();
         }
     }
 }
@@ -1023,6 +1031,13 @@ impl Notifiable<ExportKeyImages> for TxBuilderActor {
                     }.send_signal_to_dart();
                 }
             }
+        } else {
+            KeyImagesExportedResponse {
+                success: false,
+                error: Some("Wallet not initialized".to_string()),
+                key_images_hex: None,
+                count: 0,
+            }.send_signal_to_dart();
         }
     }
 }
@@ -1059,33 +1074,29 @@ impl Notifiable<ImportKeyImages> for TxBuilderActor {
 
             let count = key_images.len() as u64;
 
+            // Key image import assigns key images to outputs so the view-only
+            // wallet can later detect spends during blockchain scanning. It does
+            // NOT mark outputs as spent — that happens when the key image is
+            // actually seen in a block.
             let wallet_data_result = wallet_addr.send(GetWalletData).await;
             match wallet_data_result {
                 Ok(wallet_data) => {
-                    let mut spent_count = 0u64;
-                    let mut spent_key_images = Vec::new();
+                    let mut matched_count = 0u64;
                     for ki in &key_images {
                         for output in &wallet_data.outputs {
-                            if output.key_image == *ki && !output.spent {
-                                spent_count += 1;
-                                spent_key_images.push(ki.clone());
+                            if output.tx_hash == ki.tx_hash
+                                && output.output_index == ki.output_index
+                            {
+                                matched_count += 1;
                             }
                         }
-                    }
-
-                    if !spent_key_images.is_empty() {
-                        let _ = wallet_addr.notify(UpdateSpentStatus {
-                            key_images: spent_key_images,
-                            tx_hashes: vec![],
-                            height: 0,
-                        }).await;
                     }
 
                     KeyImagesImportedResponse {
                         success: true,
                         error: None,
                         imported_count: count,
-                        spent_count,
+                        spent_count: matched_count,
                     }.send_signal_to_dart();
                 }
                 Err(_) => {
@@ -1097,6 +1108,13 @@ impl Notifiable<ImportKeyImages> for TxBuilderActor {
                     }.send_signal_to_dart();
                 }
             }
+        } else {
+            KeyImagesImportedResponse {
+                success: false,
+                error: Some("Wallet not initialized".to_string()),
+                imported_count: 0,
+                spent_count: 0,
+            }.send_signal_to_dart();
         }
     }
 }

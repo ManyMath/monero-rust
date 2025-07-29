@@ -130,13 +130,23 @@ impl UnsignedTransaction {
 
     let payments = read_vec(read_payment, r)?;
 
-    let data_len: usize = read_varint(r)?.try_into().unwrap();
+    let data_len: usize = read_varint(r)?
+      .try_into()
+      .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "data length overflow"))?;
+    if data_len > 1_000_000 {
+      return Err(io::Error::new(io::ErrorKind::InvalidData, "data length exceeds limit"));
+    }
     let mut data = Vec::with_capacity(data_len);
     for _ in 0 .. data_len {
       data.push(read_vec(read_byte, r)?);
     }
 
-    let inputs_len: usize = read_varint(r)?.try_into().unwrap();
+    let inputs_len: usize = read_varint(r)?
+      .try_into()
+      .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "inputs length overflow"))?;
+    if inputs_len > 1000 {
+      return Err(io::Error::new(io::ErrorKind::InvalidData, "inputs count exceeds limit"));
+    }
     let mut inputs = Vec::with_capacity(inputs_len);
     for _ in 0 .. inputs_len {
       inputs.push(UnsignedInput {

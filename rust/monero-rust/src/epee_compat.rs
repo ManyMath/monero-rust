@@ -1,8 +1,9 @@
-//! Feather/Monero-compatible epee serialization for offline transaction signing.
+//! Simplified key image export/import format for offline transaction signing.
 //!
-//! Provides conversion between our internal `UnsignedTransaction` format and Monero's
-//! standard `unsigned_tx_set` / `signed_tx_set` / `key_images` epee formats,
-//! enabling interoperability with Feather Wallet, monero-wallet-cli, and XmrSigner.
+//! NOTE: This is a project-internal format. It uses the same magic bytes as
+//! Monero's signed_key_images v3 format but does NOT include the signature
+//! field required for full interoperability with Feather Wallet, monero-wallet-cli,
+//! or XmrSigner. For cross-wallet interop, signatures must be added.
 
 use serde::{Deserialize, Serialize};
 
