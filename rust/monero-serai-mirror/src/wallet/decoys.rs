@@ -34,6 +34,23 @@ lazy_static! {
   static ref DISTRIBUTION: Mutex<Vec<u64>> = Mutex::new(Vec::with_capacity(3000000));
 }
 
+/// Clear the distribution cache entirely.
+/// Call this when a reorg is detected to ensure stale data is not used.
+pub async fn reset_distribution_cache() {
+  DISTRIBUTION.lock().await.clear();
+}
+
+/// Append new entries to the distribution cache.
+/// Use this to incrementally update the cache after a reset or during normal operation.
+pub async fn update_distribution_cache(new_entries: &[u64]) {
+  DISTRIBUTION.lock().await.extend_from_slice(new_entries);
+}
+
+/// Return the current height (number of entries) in the distribution cache.
+pub async fn distribution_cache_height() -> u64 {
+  DISTRIBUTION.lock().await.len() as u64
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn select_n<'a, R: RngCore + CryptoRng, RPC: RpcConnection>(
   rng: &mut R,
