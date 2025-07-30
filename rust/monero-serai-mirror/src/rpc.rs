@@ -62,6 +62,8 @@ pub enum RpcError {
   FeeExceedsLimit { per_weight: u64, limit: u64 },
   #[error("zero fee returned by node")]
   ZeroFee,
+  #[error("zero fee mask returned by node")]
+  ZeroMask,
 }
 
 /// A generous upper bound for fee per byte in atomic units.
@@ -543,8 +545,7 @@ impl<R: RpcConnection> Rpc<R> {
   }
 
   /// Get the currently estimated fee from the node. This may be manipulated to unsafe levels and
-  /// MUST be sanity checked.
-  // TODO: Take a sanity check argument
+  /// MUST be sanity checked. Prefer [`get_fee_checked`] for production use.
   pub async fn get_fee(&self) -> Result<Fee, RpcError> {
     #[allow(dead_code)]
     #[derive(Deserialize, Debug)]
@@ -568,6 +569,10 @@ impl<R: RpcConnection> Rpc<R> {
 
     if fee.per_weight == 0 {
       return Err(RpcError::ZeroFee);
+    }
+
+    if fee.mask == 0 {
+      return Err(RpcError::ZeroMask);
     }
 
     if fee.per_weight > max_fee_per_byte {

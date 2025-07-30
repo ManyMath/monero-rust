@@ -197,7 +197,7 @@ macro_rules! test {
 
           let builder = SignableTransactionBuilder::new(
             rpc.get_protocol().await.unwrap(),
-            rpc.get_fee().await.unwrap(),
+            rpc.get_fee_checked(monero_serai::rpc::DEFAULT_MAX_FEE_PER_BYTE).await.unwrap(),
             Some(Change::new(
               &ViewPair::new(
                 &random_scalar(&mut OsRng) * &ED25519_BASEPOINT_TABLE,
