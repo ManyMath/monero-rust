@@ -36,26 +36,25 @@ pub fn random_address() -> (Scalar, ViewPair, MoneroAddress) {
 }
 
 // TODO: Support transactions already on-chain
-// TODO: Don't have a side effect of mining blocks more blocks than needed under race conditions
-// TODO: mine as much as needed instead of default 10 blocks
 pub async fn mine_until_unlocked(rpc: &Rpc<HttpRpc>, addr: &str, tx_hash: [u8; 32]) {
-  // mine until tx is in a block
-  let mut height = rpc.get_height().await.unwrap();
-  let mut found = false;
-  while !found {
-    let block = rpc.get_block_by_number(height - 1).await.unwrap();
-    found = match block.txs.iter().find(|&&x| x == tx_hash) {
-      Some(_) => true,
-      None => {
-        rpc.generate_blocks(addr, 1).await.unwrap();
-        height += 1;
-        false
+  // Mine until the tx is confirmed in a block, polling one block at a time
+  let tx_height = loop {
+    let height = rpc.get_height().await.unwrap();
+    if height > 1 {
+      let block = rpc.get_block_by_number(height - 1).await.unwrap();
+      if block.txs.iter().any(|h| *h == tx_hash) {
+        break height - 1;
       }
     }
+    rpc.generate_blocks(addr, 1).await.unwrap();
+  };
+  // Mine blocks until the transaction has 10 confirmations (LOCK_WINDOW)
+  let unlock_height = tx_height + 10;
+  let current = rpc.get_height().await.unwrap();
+  if current < unlock_height + 1 {
+    let needed = unlock_height + 1 - current;
+    rpc.generate_blocks(addr, needed).await.unwrap();
   }
-
-  // mine 9 more blocks to unlock the tx
-  rpc.generate_blocks(addr, 9).await.unwrap();
 }
 
 // Mines 60 blocks and returns an unlocked miner TX output.
@@ -192,7 +191,7 @@ macro_rules! test {
           let rpc = rpc().await;
 
           let view = ViewPair::new(spend_pub, Zeroizing::new(random_scalar(&mut OsRng)));
-          let addr = view.address(Network::Mainnet, AddressSpec::Standard);
+          let _addr = view.address(Network::Mainnet, AddressSpec::Standard);
 
           let miner_tx = get_miner_tx_output(&rpc, &view).await;
 
@@ -244,8 +243,8 @@ macro_rules! test {
             }
           };
 
-          // TODO: Generate a distinct wallet for each transaction to prevent overlap
-          let next_addr = addr;
+          // Generate a distinct address for each transaction to prevent overlap
+          let next_addr = random_address().2;
 
           let temp = Box::new({
             let mut builder = builder.clone();
