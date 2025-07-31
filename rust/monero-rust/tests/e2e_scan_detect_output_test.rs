@@ -1,3 +1,41 @@
+// ---------------------------------------------------------------------------
+// What blocks the 2 ignored tests (test_step2 and test_step3)?
+// ---------------------------------------------------------------------------
+//
+// The test fixture `tests/vectors/honked_bagpipe_rpc.json` was captured from
+// a stagenet node with `prune: true` in the get_transactions request.  As a
+// result, each transaction entry contains only `pruned_as_hex` (the prefix +
+// RctBase) and an empty `prunable_as_hex` field.  The prunable portion of a
+// RingCT transaction contains:
+//
+//   - CLSAG / MLSAG / Bulletproof(+) range proofs
+//   - Pseudo-output commitments
+//
+// `scan_block_for_outputs` (and the monero-serai Scanner) need to decode
+// **full** transactions (prefix + RctBase + RctPrunable) in order to:
+//
+//   1. Verify Pedersen commitment balance and extract the real output amount
+//      via ECDH decoding (needs the commitment from RctPrunable for non-
+//      coinbase outputs).
+//   2. Compute the key image for each owned output (needs the full key
+//      derivation path that includes data validated against the prunable
+//      section).
+//
+// To unblock these tests, the fixture must be re-captured from a live
+// stagenet node **without** the `prune` flag (or with `prune: false`) so
+// that `prunable_as_hex` is populated for both transactions in block
+// 1384526.  Specifically, the `get_transactions` entry needs:
+//
+//   - `as_hex` OR `prunable_as_hex` populated with the full hex-encoded
+//     transaction bytes (not just the pruned prefix).
+//   - Alternatively, a separate binary fixture from `get_blocks.bin` that
+//     returns full block data including prunable sections.
+//
+// Once the full transaction data is available, the mock RPC will be able to
+// return parseable transactions and both `test_step2_scan_and_detect_output`
+// and `test_step3_key_image_determinism` will pass.
+// ---------------------------------------------------------------------------
+
 use monero_rust::scanner::{derive_address, scan_block_for_outputs, BlockScanResult};
 use monero_serai::rpc::{Rpc, RpcConnection, RpcError};
 use monero_serai::wallet::seed::Seed;
