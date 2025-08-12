@@ -1,0 +1,13 @@
+{
+  "address": "58aWiYGUeqZc5idYcx31rYR58K1EVsCYkN6thrZppU1MGqMowPh1BYy4frVWH5RjGLPWthZy9sRGm5ZC4fgX44HUCmqtGUf",
+  "check": {
+    "confirmations": 525927,
+    "good": true,
+    "in_pool": false,
+    "received": 10000000000000
+  },
+  "description": "TX proof round-trip from stagenet wallet",
+  "message": "capture-vectors-test",
+  "signature": "InProofV2UZxx7dQeS5J7rs5YtC5rgUWfKLVfP4M1jPm2R96oxkUBDFAZHcjFnMW3tgCWG6Et8sdpssNXtpa8dVzpWQJnxf2rStz2s5nVR1UPBWNix4mioDA3WiHDhMSeTMFMwrHTbMv1",
+  "txid": "07a561e60118c0a485b20bbfac787fd8efead96a9f422d9dff4a86f2985db7c5"
+}
