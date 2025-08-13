@@ -278,6 +278,12 @@ void main() {
   // -----------------------------------------------------------------------
   // DartSignal types: construct -> toJson (via sendSignalToRust internals)
   // We test the JSON map that would be sent, not the send itself.
+  //
+  // LIMITATION: These tests manually reconstruct the JSON map rather than
+  // calling sendSignalToRust(), so drift between the test and the real
+  // serialization code could go undetected. A future improvement would be
+  // to extract toJson() methods on each DartSignal class and test those
+  // directly (see also: RustSignal classes which already have fromJson()).
   // -----------------------------------------------------------------------
 
   group('DartSignal: CreateTransactionRequest', () {
