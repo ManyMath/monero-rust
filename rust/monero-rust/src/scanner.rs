@@ -40,6 +40,82 @@ async fn yield_to_event_loop() {
     }
 }
 
+/// Encode a u64 as a Monero varint into a byte buffer.
+fn write_varint_to_buf(val: u64, buf: &mut Vec<u8>) {
+    let mut v = val;
+    loop {
+        let byte = (v & 0x7f) as u8;
+        v >>= 7;
+        if v == 0 {
+            buf.push(byte);
+            break;
+        }
+        buf.push(byte | 0x80);
+    }
+}
+
+/// Monero Merkle tree hash (CryptoNote tree_hash algorithm).
+fn tree_hash(hashes: &[[u8; 32]]) -> [u8; 32] {
+    use sha3::{Digest, Keccak256};
+
+    match hashes.len() {
+        0 => [0u8; 32],
+        1 => hashes[0],
+        2 => {
+            let mut buf = [0u8; 64];
+            buf[..32].copy_from_slice(&hashes[0]);
+            buf[32..].copy_from_slice(&hashes[1]);
+            Keccak256::digest(buf).into()
+        }
+        n => {
+            let cnt = n.next_power_of_two();
+            let mut buf = vec![[0u8; 32]; cnt];
+            let overflow = n - (cnt / 2);
+            let mut j = 0;
+            for i in 0..overflow {
+                let mut hasher = Keccak256::new();
+                hasher.update(hashes[2 * i]);
+                hasher.update(hashes[2 * i + 1]);
+                buf[cnt / 2 + i] = hasher.finalize().into();
+                j = 2 * i + 2;
+            }
+            for i in overflow..(cnt / 2) {
+                buf[cnt / 2 + i] = hashes[j];
+                j += 1;
+            }
+            let mut level_size = cnt / 2;
+            while level_size > 1 {
+                for i in 0..(level_size / 2) {
+                    let mut hasher = Keccak256::new();
+                    hasher.update(buf[level_size + 2 * i]);
+                    hasher.update(buf[level_size + 2 * i + 1]);
+                    buf[level_size / 2 + i] = hasher.finalize().into();
+                }
+                level_size /= 2;
+            }
+            buf[1]
+        }
+    }
+}
+
+/// Compute a Monero block ID from a parsed Block.
+///
+/// block_id = keccak256(header || tree_hash(tx_hashes) || varint(tx_count))
+fn compute_block_id(block: &Block) -> [u8; 32] {
+    let miner_tx_hash: [u8; 32] = Keccak256::digest(block.miner_tx.serialize()).into();
+    let mut tx_hashes = Vec::with_capacity(1 + block.txs.len());
+    tx_hashes.push(miner_tx_hash);
+    tx_hashes.extend_from_slice(&block.txs);
+
+    let root = tree_hash(&tx_hashes);
+
+    let mut blob = block.header.serialize();
+    blob.extend_from_slice(&root);
+    write_varint_to_buf(tx_hashes.len() as u64, &mut blob);
+
+    Keccak256::digest(&blob).into()
+}
+
 /// Fallback key image extraction from raw tx bytes when `Transaction::read()` fails.
 pub fn extract_key_images_from_raw_tx(tx_blob: &[u8]) -> Vec<String> {
     use std::io::{Cursor, Read};
@@ -747,6 +823,7 @@ pub async fn scan_blocks_batch<R: RpcConnection>(
     mnemonic: &str,
     network_str: &str,
     lookahead: Lookahead,
+    prune: bool,
 ) -> Result<Vec<BlockScanResult>, String> {
     // Get a known block hash so the daemon can find the fork point.
     let known_hash = rpc
@@ -756,7 +833,7 @@ pub async fn scan_blocks_batch<R: RpcConnection>(
 
     // Fetch batch of blocks via binary RPC (up to ~1000 blocks per call)
     let response = rpc
-        .get_blocks_fast(&[known_hash], start_height, false)
+        .get_blocks_fast(&[known_hash], start_height, prune)
         .await
         .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
 
@@ -829,6 +906,10 @@ pub async fn process_batch_response(
         // Pre-RingCT blocks can't be parsed by monero-serai
         let major_version = block_entry.block.first().copied().unwrap_or(0);
         if major_version < 4 {
+            // Pre-RingCT block: monero-serai can't parse it, so we can't
+            // compute the proper block ID. Use raw blob hash as a
+            // placeholder — these blocks are deep in history and won't
+            // appear in reorg detection.
             let block_hash = hex::encode(Keccak256::digest(&block_entry.block));
             results.push(BlockScanResult {
                 block_height,
@@ -855,7 +936,7 @@ pub async fn process_batch_response(
         }
 
         let block_timestamp = block.header.timestamp;
-        let block_hash = hex::encode(Keccak256::digest(&block_entry.block));
+        let block_hash = hex::encode(compute_block_id(&block));
 
         let miner_tx = block.miner_tx;
         let mut parsed_txs = Vec::with_capacity(block_entry.txs.len());
@@ -972,20 +1053,21 @@ pub async fn scan_blocks_batch_with_url(
     mnemonic: &str,
     network_str: &str,
     lookahead: Lookahead,
+    prune: bool,
 ) -> Result<Vec<BlockScanResult>, String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         use monero_serai::rpc::HttpRpc;
         let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
-        scan_blocks_batch(&rpc, start_height, mnemonic, network_str, lookahead).await
+        scan_blocks_batch(&rpc, start_height, mnemonic, network_str, lookahead, prune).await
     }
 
     #[cfg(target_arch = "wasm32")]
     {
         use crate::rpc_serai::WasmRpcConnection;
         let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
-        scan_blocks_batch(&rpc, start_height, mnemonic, network_str, lookahead).await
+        scan_blocks_batch(&rpc, start_height, mnemonic, network_str, lookahead, prune).await
     }
 }
 
@@ -998,6 +1080,7 @@ pub async fn scan_blocks_batch_multi_wallet<R: RpcConnection>(
     rpc: &Rpc<R>,
     start_height: u64,
     wallet_configs: Vec<WalletScanConfig>,
+    prune: bool,
 ) -> Result<Vec<MultiWalletScanResult>, String> {
     if wallet_configs.is_empty() {
         return Err("No wallet configurations provided".to_string());
@@ -1011,7 +1094,7 @@ pub async fn scan_blocks_batch_multi_wallet<R: RpcConnection>(
 
     // Fetch batch of blocks via binary RPC
     let response = rpc
-        .get_blocks_fast(&[known_hash], start_height, false)
+        .get_blocks_fast(&[known_hash], start_height, prune)
         .await
         .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
 
@@ -1091,6 +1174,10 @@ pub async fn process_batch_multi_wallet_response(
         // Pre-RingCT blocks can't be parsed by monero-serai
         let major_version = block_entry.block.first().copied().unwrap_or(0);
         if major_version < 4 {
+            // Pre-RingCT block: monero-serai can't parse it, so we can't
+            // compute the proper block ID. Use raw blob hash as a
+            // placeholder — these blocks are deep in history and won't
+            // appear in reorg detection.
             let block_hash = hex::encode(Keccak256::digest(&block_entry.block));
             let mut wallet_results = HashMap::new();
             for entry in &cached_scanners.entries {
@@ -1127,7 +1214,7 @@ pub async fn process_batch_multi_wallet_response(
         }
 
         let block_timestamp = block.header.timestamp;
-        let block_hash = hex::encode(Keccak256::digest(&block_entry.block));
+        let block_hash = hex::encode(compute_block_id(&block));
 
         let miner_tx = block.miner_tx;
         let mut parsed_txs = Vec::with_capacity(block_entry.txs.len());
@@ -1253,20 +1340,21 @@ pub async fn scan_blocks_batch_multi_wallet_with_url(
     node_url: &str,
     start_height: u64,
     wallet_configs: Vec<WalletScanConfig>,
+    prune: bool,
 ) -> Result<Vec<MultiWalletScanResult>, String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         use monero_serai::rpc::HttpRpc;
         let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
-        scan_blocks_batch_multi_wallet(&rpc, start_height, wallet_configs).await
+        scan_blocks_batch_multi_wallet(&rpc, start_height, wallet_configs, prune).await
     }
 
     #[cfg(target_arch = "wasm32")]
     {
         use crate::rpc_serai::WasmRpcConnection;
         let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
-        scan_blocks_batch_multi_wallet(&rpc, start_height, wallet_configs).await
+        scan_blocks_batch_multi_wallet(&rpc, start_height, wallet_configs, prune).await
     }
 }
 
@@ -1295,6 +1383,7 @@ impl FetchedBlocks {
 pub async fn fetch_blocks_batch_with_url(
     node_url: &str,
     start_height: u64,
+    prune: bool,
 ) -> Result<FetchedBlocks, String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -1306,7 +1395,7 @@ pub async fn fetch_blocks_batch_with_url(
             .await
             .map_err(|e| format!("Failed to get block hash at {}: {:?}", start_height, e))?;
         let response = rpc
-            .get_blocks_fast(&[known_hash], start_height, false)
+            .get_blocks_fast(&[known_hash], start_height, prune)
             .await
             .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
         Ok(FetchedBlocks { response })
@@ -1321,7 +1410,7 @@ pub async fn fetch_blocks_batch_with_url(
             .await
             .map_err(|e| format!("Failed to get block hash at {}: {:?}", start_height, e))?;
         let response = rpc
-            .get_blocks_fast(&[known_hash], start_height, false)
+            .get_blocks_fast(&[known_hash], start_height, prune)
             .await
             .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
         Ok(FetchedBlocks { response })
@@ -1376,6 +1465,7 @@ pub async fn scan_blocks_batch_with_history<R: RpcConnection>(
     mnemonic: &str,
     network_str: &str,
     lookahead: Lookahead,
+    prune: bool,
 ) -> Result<(Vec<BlockScanResult>, u64), String> {
     let block_ids: Vec<[u8; 32]> = if known_hashes.is_empty() {
         // Fallback: single hash like the old behavior
@@ -1392,7 +1482,7 @@ pub async fn scan_blocks_batch_with_history<R: RpcConnection>(
     };
 
     let response = rpc
-        .get_blocks_fast(&block_ids, start_height, false)
+        .get_blocks_fast(&block_ids, start_height, prune)
         .await
         .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
 
@@ -1409,20 +1499,21 @@ pub async fn scan_blocks_batch_with_history_url(
     mnemonic: &str,
     network_str: &str,
     lookahead: Lookahead,
+    prune: bool,
 ) -> Result<(Vec<BlockScanResult>, u64), String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         use monero_serai::rpc::HttpRpc;
         let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
-        scan_blocks_batch_with_history(&rpc, start_height, known_hashes, mnemonic, network_str, lookahead).await
+        scan_blocks_batch_with_history(&rpc, start_height, known_hashes, mnemonic, network_str, lookahead, prune).await
     }
 
     #[cfg(target_arch = "wasm32")]
     {
         use crate::rpc_serai::WasmRpcConnection;
         let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
-        scan_blocks_batch_with_history(&rpc, start_height, known_hashes, mnemonic, network_str, lookahead).await
+        scan_blocks_batch_with_history(&rpc, start_height, known_hashes, mnemonic, network_str, lookahead, prune).await
     }
 }
 
@@ -1433,6 +1524,7 @@ pub async fn fetch_blocks_batch_with_history_url(
     node_url: &str,
     start_height: u64,
     known_hashes: &[(u64, String)],
+    prune: bool,
 ) -> Result<(FetchedBlocks, u64), String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -1452,7 +1544,7 @@ pub async fn fetch_blocks_batch_with_history_url(
                 .collect::<Result<Vec<_>, _>>()?
         };
         let response = rpc
-            .get_blocks_fast(&block_ids, start_height, false)
+            .get_blocks_fast(&block_ids, start_height, prune)
             .await
             .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
         let actual_start = response.start_height;
@@ -1476,7 +1568,7 @@ pub async fn fetch_blocks_batch_with_history_url(
                 .collect::<Result<Vec<_>, _>>()?
         };
         let response = rpc
-            .get_blocks_fast(&block_ids, start_height, false)
+            .get_blocks_fast(&block_ids, start_height, prune)
             .await
             .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
         let actual_start = response.start_height;

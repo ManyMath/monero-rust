@@ -176,6 +176,7 @@ async fn test_batch_scan_early_blocks() {
     let results = scan_blocks_batch(
         &rpc, 100_000, STAGENET_SEED, "stagenet",
         Lookahead { account: 0, subaddress: 20 },
+        false,
     ).await.expect("batch scan from 100k should succeed");
 
     assert!(!results.is_empty());
@@ -199,6 +200,7 @@ async fn test_batch_scan_later_blocks() {
     let results = scan_blocks_batch(
         &rpc, 800_000, STAGENET_SEED, "stagenet",
         Lookahead { account: 0, subaddress: 20 },
+        false,
     ).await.expect("batch scan from 800k should succeed");
 
     assert!(!results.is_empty());

@@ -1448,6 +1448,7 @@ impl Notifiable<ContinueScan> for WalletActor {
                     &node_url,
                     batch_start_height,
                     &block_hash_history,
+                    false,
                 ).await {
                     Ok((data, _actual_start)) => data,
                     Err(e) => {
@@ -1501,6 +1502,7 @@ impl Notifiable<ContinueScan> for WalletActor {
                     if let Ok(data) = monero_rust::fetch_blocks_batch_with_url(
                         &prefetch_url,
                         next_height,
+                        false,
                     ).await {
                         store_prefetch(scan_gen, next_height, data);
                     }
@@ -1733,6 +1735,7 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                     &node_url,
                     batch_start_height,
                     &block_hash_history,
+                    false,
                 ).await {
                     Ok((data, _actual_start)) => data,
                     Err(e) => {
@@ -1769,6 +1772,7 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                     if let Ok(data) = monero_rust::fetch_blocks_batch_with_url(
                         &prefetch_url,
                         next_height,
+                        false,
                     ).await {
                         store_prefetch(scan_gen, next_height, data);
                     }
@@ -1877,25 +1881,12 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                         return;
                     }
 
-                    let wallet_accounts: Vec<Option<HashSet<u32>>> = wallets
-                        .iter()
-                        .map(|w| w.accounts_to_scan.as_ref().map(|a| a.iter().copied().collect()))
-                        .collect();
-
                     for result in &batch_results {
                         let wallet_results: Vec<WalletScanResult> = result
                             .wallet_results
                             .iter()
-                            .enumerate()
-                            .map(|(idx, (address, wallet_data))| {
-                                let accounts_filter =
-                                    wallet_accounts.get(idx).and_then(|a| a.as_ref());
-
-                                let filtered = monero_rust::filter_outputs_by_accounts(
-                                    wallet_data.outputs.iter(),
-                                    accounts_filter,
-                                );
-                                let outputs: Vec<OwnedOutput> = filtered.iter().map(|o| o.into()).collect();
+                            .map(|(address, wallet_data)| {
+                                let outputs: Vec<OwnedOutput> = wallet_data.outputs.iter().map(|o| o.into()).collect();
 
                                 WalletScanResult {
                                     address: address.clone(),
