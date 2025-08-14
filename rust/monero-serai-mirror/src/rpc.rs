@@ -696,6 +696,7 @@ impl<R: RpcConnection> Rpc<R> {
     &self,
     block_ids: &[[u8; 32]],
     start_height: u64,
+    prune: bool,
   ) -> Result<GetBlocksFastResponse, RpcError> {
     // block_ids must be serialized as a contiguous blob (KV_SERIALIZE_CONTAINER_POD_AS_BLOB)
     let block_ids_blob: Vec<u8> = block_ids.iter().flat_map(|h| h.iter().copied()).collect();
@@ -711,7 +712,7 @@ impl<R: RpcConnection> Rpc<R> {
     let req = Request {
       block_ids: block_ids_blob,
       start_height,
-      prune: false,
+      prune,
       no_miner_tx: false,
     };
 

@@ -756,7 +756,7 @@ pub async fn scan_blocks_batch<R: RpcConnection>(
 
     // Fetch batch of blocks via binary RPC (up to ~1000 blocks per call)
     let response = rpc
-        .get_blocks_fast(&[known_hash], start_height)
+        .get_blocks_fast(&[known_hash], start_height, false)
         .await
         .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
 
@@ -1011,7 +1011,7 @@ pub async fn scan_blocks_batch_multi_wallet<R: RpcConnection>(
 
     // Fetch batch of blocks via binary RPC
     let response = rpc
-        .get_blocks_fast(&[known_hash], start_height)
+        .get_blocks_fast(&[known_hash], start_height, false)
         .await
         .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
 
@@ -1306,7 +1306,7 @@ pub async fn fetch_blocks_batch_with_url(
             .await
             .map_err(|e| format!("Failed to get block hash at {}: {:?}", start_height, e))?;
         let response = rpc
-            .get_blocks_fast(&[known_hash], start_height)
+            .get_blocks_fast(&[known_hash], start_height, false)
             .await
             .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
         Ok(FetchedBlocks { response })
@@ -1321,7 +1321,7 @@ pub async fn fetch_blocks_batch_with_url(
             .await
             .map_err(|e| format!("Failed to get block hash at {}: {:?}", start_height, e))?;
         let response = rpc
-            .get_blocks_fast(&[known_hash], start_height)
+            .get_blocks_fast(&[known_hash], start_height, false)
             .await
             .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
         Ok(FetchedBlocks { response })
@@ -1392,7 +1392,7 @@ pub async fn scan_blocks_batch_with_history<R: RpcConnection>(
     };
 
     let response = rpc
-        .get_blocks_fast(&block_ids, start_height)
+        .get_blocks_fast(&block_ids, start_height, false)
         .await
         .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
 
@@ -1452,7 +1452,7 @@ pub async fn fetch_blocks_batch_with_history_url(
                 .collect::<Result<Vec<_>, _>>()?
         };
         let response = rpc
-            .get_blocks_fast(&block_ids, start_height)
+            .get_blocks_fast(&block_ids, start_height, false)
             .await
             .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
         let actual_start = response.start_height;
@@ -1476,7 +1476,7 @@ pub async fn fetch_blocks_batch_with_history_url(
                 .collect::<Result<Vec<_>, _>>()?
         };
         let response = rpc
-            .get_blocks_fast(&block_ids, start_height)
+            .get_blocks_fast(&block_ids, start_height, false)
             .await
             .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
         let actual_start = response.start_height;
