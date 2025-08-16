@@ -939,104 +939,144 @@ pub async fn process_batch_response(
         let block_hash = hex::encode(compute_block_id(&block));
 
         let miner_tx = block.miner_tx;
-        let mut parsed_txs = Vec::with_capacity(block_entry.txs.len());
-        let mut skipped_key_images = Vec::new();
-        for tx_blob in &block_entry.txs {
-            match Transaction::read::<&[u8]>(&mut tx_blob.as_ref()) {
-                Ok(tx) => parsed_txs.push(tx),
-                Err(_) => {
-                    skipped_key_images.extend(extract_key_images_from_raw_tx(tx_blob));
-                }
-            }
-        }
-
-        let all_transactions: Vec<&Transaction> = std::iter::once(&miner_tx)
-            .chain(parsed_txs.iter())
-            .collect();
-
         let tx_count = 1 + block_entry.txs.len();
-        let mut outputs = Vec::new();
-        let skipped_count = skipped_key_images.len();
-        let mut spent_key_images = skipped_key_images;
-        let mut spent_key_image_tx_hashes: Vec<String> = vec![String::new(); skipped_count];
 
-        for tx in &all_transactions {
-            let tx_hash = hex::encode(tx.hash());
-            let is_coinbase = matches!(tx.prefix.inputs.get(0), Some(Input::Gen(_)));
+        // When a block is pruned, the RingCT signature data is stripped from
+        // transaction blobs. This means Transaction::read() will fail for
+        // non-coinbase transactions. However, the transaction prefix (version,
+        // timelock, inputs, outputs, extra) is preserved, so we CAN still
+        // extract key images (spent output detection). We CANNOT detect
+        // received outputs because the ECDH info and commitment data needed
+        // for output scanning are in the pruned RingCT portion.
+        if block_entry.pruned {
+            let mut spent_key_images = Vec::new();
+            let mut spent_key_image_tx_hashes = Vec::new();
 
-            for input in &tx.prefix.inputs {
+            for input in &miner_tx.prefix.inputs {
                 if let Input::ToKey { key_image, .. } = input {
-                    let ki_hex = hex::encode(key_image.compress().to_bytes());
-                    spent_key_images.push(ki_hex);
-                    spent_key_image_tx_hashes.push(tx_hash.clone());
+                    spent_key_images.push(hex::encode(key_image.compress().to_bytes()));
+                    spent_key_image_tx_hashes.push(hex::encode(miner_tx.hash()));
                 }
             }
 
-            let scan_result = scanner.scanner.scan_transaction(tx);
-            let owned_outputs = scan_result.ignore_timelock();
+            for tx_blob in &block_entry.txs {
+                let key_images = extract_key_images_from_raw_tx(tx_blob);
+                let ki_count = key_images.len();
+                spent_key_images.extend(key_images);
+                // We don't have the tx hash for pruned blobs (can't compute
+                // hash without full data), so use empty strings as placeholders
+                spent_key_image_tx_hashes.extend(std::iter::repeat_with(String::new).take(ki_count));
+            }
 
-            for output in owned_outputs {
-                if let Some(subaddr) = output.metadata.subaddress {
-                    scanner.expand_if_needed(subaddr);
+            results.push(BlockScanResult {
+                block_height,
+                block_hash,
+                block_timestamp,
+                tx_count,
+                outputs: vec![],
+                daemon_height,
+                spent_key_images,
+                spent_key_image_tx_hashes,
+            });
+        } else {
+            let mut parsed_txs = Vec::with_capacity(block_entry.txs.len());
+            let mut skipped_key_images = Vec::new();
+            for tx_blob in &block_entry.txs {
+                match Transaction::read::<&[u8]>(&mut tx_blob.as_ref()) {
+                    Ok(tx) => parsed_txs.push(tx),
+                    Err(_) => {
+                        skipped_key_images.extend(extract_key_images_from_raw_tx(tx_blob));
+                    }
+                }
+            }
+
+            let all_transactions: Vec<&Transaction> = std::iter::once(&miner_tx)
+                .chain(parsed_txs.iter())
+                .collect();
+
+            let mut outputs = Vec::new();
+            let skipped_count = skipped_key_images.len();
+            let mut spent_key_images = skipped_key_images;
+            let mut spent_key_image_tx_hashes: Vec<String> = vec![String::new(); skipped_count];
+
+            for tx in &all_transactions {
+                let tx_hash = hex::encode(tx.hash());
+                let is_coinbase = matches!(tx.prefix.inputs.get(0), Some(Input::Gen(_)));
+
+                for input in &tx.prefix.inputs {
+                    if let Input::ToKey { key_image, .. } = input {
+                        let ki_hex = hex::encode(key_image.compress().to_bytes());
+                        spent_key_images.push(ki_hex);
+                        spent_key_image_tx_hashes.push(tx_hash.clone());
+                    }
                 }
 
-                let amount = output.data.commitment.amount;
-                let amount_xmr = format!("{:.12}", amount as f64 / 1_000_000_000_000.0);
-                let output_index = output.absolute.o;
-                let key = hex::encode(output.data.key.compress().to_bytes());
-                let key_offset = hex::encode(output.data.key_offset.to_bytes());
-                let commitment_mask = hex::encode(output.data.commitment.mask.to_bytes());
-                let subaddress_index = output
-                    .metadata
-                    .subaddress
-                    .map(|idx| (idx.account(), idx.address()));
-                let payment_id = if output.metadata.payment_id != [0u8; 8] {
-                    Some(hex::encode(output.metadata.payment_id))
-                } else {
-                    None
-                };
-                let received_output_bytes = hex::encode(output.serialize());
+                let scan_result = scanner.scanner.scan_transaction(tx);
+                let owned_outputs = scan_result.ignore_timelock();
 
-                #[cfg(target_arch = "wasm32")]
-                let key_image = {
-                    let key_image_point =
-                        calculate_key_image(&scanner.spend_scalar, &output.data.key_offset);
-                    hex::encode(key_image_point.compress().to_bytes())
-                };
-                #[cfg(not(target_arch = "wasm32"))]
-                let key_image = String::new();
+                for output in owned_outputs {
+                    if let Some(subaddr) = output.metadata.subaddress {
+                        scanner.expand_if_needed(subaddr);
+                    }
 
-                outputs.push(WalletOutput {
-                    tx_hash: tx_hash.clone(),
-                    output_index,
-                    amount,
-                    amount_xmr,
-                    key,
-                    key_offset,
-                    commitment_mask,
-                    subaddress_index,
-                    payment_id,
-                    received_output_bytes,
-                    block_height,
-                    spent: false,
-                    spent_height: None,
-                    key_image,
-                    is_coinbase,
-                    frozen: false,
-                });
+                    let amount = output.data.commitment.amount;
+                    let amount_xmr = format!("{:.12}", amount as f64 / 1_000_000_000_000.0);
+                    let output_index = output.absolute.o;
+                    let key = hex::encode(output.data.key.compress().to_bytes());
+                    let key_offset = hex::encode(output.data.key_offset.to_bytes());
+                    let commitment_mask = hex::encode(output.data.commitment.mask.to_bytes());
+                    let subaddress_index = output
+                        .metadata
+                        .subaddress
+                        .map(|idx| (idx.account(), idx.address()));
+                    let payment_id = if output.metadata.payment_id != [0u8; 8] {
+                        Some(hex::encode(output.metadata.payment_id))
+                    } else {
+                        None
+                    };
+                    let received_output_bytes = hex::encode(output.serialize());
+
+                    #[cfg(target_arch = "wasm32")]
+                    let key_image = {
+                        let key_image_point =
+                            calculate_key_image(&scanner.spend_scalar, &output.data.key_offset);
+                        hex::encode(key_image_point.compress().to_bytes())
+                    };
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let key_image = String::new();
+
+                    outputs.push(WalletOutput {
+                        tx_hash: tx_hash.clone(),
+                        output_index,
+                        amount,
+                        amount_xmr,
+                        key,
+                        key_offset,
+                        commitment_mask,
+                        subaddress_index,
+                        payment_id,
+                        received_output_bytes,
+                        block_height,
+                        spent: false,
+                        spent_height: None,
+                        key_image,
+                        is_coinbase,
+                        frozen: false,
+                    });
+                }
             }
+
+            results.push(BlockScanResult {
+                block_height,
+                block_hash,
+                block_timestamp,
+                tx_count,
+                outputs,
+                daemon_height,
+                spent_key_images,
+                spent_key_image_tx_hashes,
+            });
         }
-
-        results.push(BlockScanResult {
-            block_height,
-            block_hash,
-            block_timestamp,
-            tx_count,
-            outputs,
-            daemon_height,
-            spent_key_images,
-            spent_key_image_tx_hashes,
-        });
 
         if block_idx % YIELD_EVERY_N_BLOCKS == YIELD_EVERY_N_BLOCKS - 1 {
             yield_to_event_loop().await;
@@ -1217,115 +1257,157 @@ pub async fn process_batch_multi_wallet_response(
         let block_hash = hex::encode(compute_block_id(&block));
 
         let miner_tx = block.miner_tx;
-        let mut parsed_txs = Vec::with_capacity(block_entry.txs.len());
-        let mut skipped_key_images = Vec::new();
-        for tx_blob in &block_entry.txs {
-            match Transaction::read::<&[u8]>(&mut tx_blob.as_ref()) {
-                Ok(tx) => parsed_txs.push(tx),
-                Err(_) => {
-                    skipped_key_images.extend(extract_key_images_from_raw_tx(tx_blob));
-                }
-            }
-        }
-
-        let all_transactions: Vec<&Transaction> = std::iter::once(&miner_tx)
-            .chain(parsed_txs.iter())
-            .collect();
         let tx_count = 1 + block_entry.txs.len();
 
-        let skipped_count = skipped_key_images.len();
-        let mut spent_key_images = skipped_key_images;
-        let mut spent_key_image_tx_hashes: Vec<String> = vec![String::new(); skipped_count];
-        for tx in &all_transactions {
-            let tx_hash_for_ki = hex::encode(tx.hash());
-            for input in &tx.prefix.inputs {
+        if block_entry.pruned {
+            let mut spent_key_images = Vec::new();
+            let mut spent_key_image_tx_hashes = Vec::new();
+
+            for input in &miner_tx.prefix.inputs {
                 if let Input::ToKey { key_image, .. } = input {
                     spent_key_images.push(hex::encode(key_image.compress().to_bytes()));
-                    spent_key_image_tx_hashes.push(tx_hash_for_ki.clone());
+                    spent_key_image_tx_hashes.push(hex::encode(miner_tx.hash()));
                 }
             }
-        }
 
-        let mut wallet_results = HashMap::new();
-        for entry in &mut cached_scanners.entries {
-            let mut outputs = Vec::new();
-            for tx in &all_transactions {
-                let tx_hash = hex::encode(tx.hash());
-                let is_coinbase = matches!(tx.prefix.inputs.get(0), Some(Input::Gen(_)));
+            for tx_blob in &block_entry.txs {
+                let key_images = extract_key_images_from_raw_tx(tx_blob);
+                let ki_count = key_images.len();
+                spent_key_images.extend(key_images);
+                spent_key_image_tx_hashes.extend(std::iter::repeat_with(String::new).take(ki_count));
+            }
 
-                let scan_result = entry.scanner.scan_transaction(tx);
-                let owned_outputs = scan_result.ignore_timelock();
+            let mut wallet_results = HashMap::new();
+            for entry in &cached_scanners.entries {
+                wallet_results.insert(
+                    entry.address.clone(),
+                    WalletScanData {
+                        address: entry.address.clone(),
+                        outputs: vec![],
+                    },
+                );
+            }
 
-                for output in owned_outputs {
-                    if let Some(subaddr) = output.metadata.subaddress {
-                        entry.expand_if_needed(subaddr);
+            results.push(MultiWalletScanResult {
+                block_height,
+                block_hash,
+                block_timestamp,
+                tx_count,
+                daemon_height,
+                spent_key_images,
+                spent_key_image_tx_hashes,
+                wallet_results,
+            });
+        } else {
+            let mut parsed_txs = Vec::with_capacity(block_entry.txs.len());
+            let mut skipped_key_images = Vec::new();
+            for tx_blob in &block_entry.txs {
+                match Transaction::read::<&[u8]>(&mut tx_blob.as_ref()) {
+                    Ok(tx) => parsed_txs.push(tx),
+                    Err(_) => {
+                        skipped_key_images.extend(extract_key_images_from_raw_tx(tx_blob));
                     }
-
-                    let amount = output.data.commitment.amount;
-                    let amount_xmr = format!("{:.12}", amount as f64 / 1_000_000_000_000.0);
-                    let output_index = output.absolute.o;
-                    let key = hex::encode(output.data.key.compress().to_bytes());
-                    let key_offset = hex::encode(output.data.key_offset.to_bytes());
-                    let commitment_mask = hex::encode(output.data.commitment.mask.to_bytes());
-                    let subaddress_index = output
-                        .metadata
-                        .subaddress
-                        .map(|idx| (idx.account(), idx.address()));
-                    let payment_id = if output.metadata.payment_id != [0u8; 8] {
-                        Some(hex::encode(output.metadata.payment_id))
-                    } else {
-                        None
-                    };
-                    let received_output_bytes = hex::encode(output.serialize());
-
-                    #[cfg(target_arch = "wasm32")]
-                    let key_image = {
-                        let key_image_point =
-                            calculate_key_image(&entry.spend_scalar, &output.data.key_offset);
-                        hex::encode(key_image_point.compress().to_bytes())
-                    };
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let key_image = String::new();
-
-                    outputs.push(WalletOutput {
-                        tx_hash: tx_hash.clone(),
-                        output_index,
-                        amount,
-                        amount_xmr,
-                        key,
-                        key_offset,
-                        commitment_mask,
-                        subaddress_index,
-                        payment_id,
-                        received_output_bytes,
-                        block_height,
-                        spent: false,
-                        spent_height: None,
-                        key_image,
-                        is_coinbase,
-                        frozen: false,
-                    });
                 }
             }
-            wallet_results.insert(
-                entry.address.clone(),
-                WalletScanData {
-                    address: entry.address.clone(),
-                    outputs,
-                },
-            );
-        }
 
-        results.push(MultiWalletScanResult {
-            block_height,
-            block_hash,
-            block_timestamp,
-            tx_count,
-            daemon_height,
-            spent_key_images,
-            spent_key_image_tx_hashes,
-            wallet_results,
-        });
+            let all_transactions: Vec<&Transaction> = std::iter::once(&miner_tx)
+                .chain(parsed_txs.iter())
+                .collect();
+
+            let skipped_count = skipped_key_images.len();
+            let mut spent_key_images = skipped_key_images;
+            let mut spent_key_image_tx_hashes: Vec<String> = vec![String::new(); skipped_count];
+            for tx in &all_transactions {
+                let tx_hash_for_ki = hex::encode(tx.hash());
+                for input in &tx.prefix.inputs {
+                    if let Input::ToKey { key_image, .. } = input {
+                        spent_key_images.push(hex::encode(key_image.compress().to_bytes()));
+                        spent_key_image_tx_hashes.push(tx_hash_for_ki.clone());
+                    }
+                }
+            }
+
+            let mut wallet_results = HashMap::new();
+            for entry in &mut cached_scanners.entries {
+                let mut outputs = Vec::new();
+                for tx in &all_transactions {
+                    let tx_hash = hex::encode(tx.hash());
+                    let is_coinbase = matches!(tx.prefix.inputs.get(0), Some(Input::Gen(_)));
+
+                    let scan_result = entry.scanner.scan_transaction(tx);
+                    let owned_outputs = scan_result.ignore_timelock();
+
+                    for output in owned_outputs {
+                        if let Some(subaddr) = output.metadata.subaddress {
+                            entry.expand_if_needed(subaddr);
+                        }
+
+                        let amount = output.data.commitment.amount;
+                        let amount_xmr = format!("{:.12}", amount as f64 / 1_000_000_000_000.0);
+                        let output_index = output.absolute.o;
+                        let key = hex::encode(output.data.key.compress().to_bytes());
+                        let key_offset = hex::encode(output.data.key_offset.to_bytes());
+                        let commitment_mask = hex::encode(output.data.commitment.mask.to_bytes());
+                        let subaddress_index = output
+                            .metadata
+                            .subaddress
+                            .map(|idx| (idx.account(), idx.address()));
+                        let payment_id = if output.metadata.payment_id != [0u8; 8] {
+                            Some(hex::encode(output.metadata.payment_id))
+                        } else {
+                            None
+                        };
+                        let received_output_bytes = hex::encode(output.serialize());
+
+                        #[cfg(target_arch = "wasm32")]
+                        let key_image = {
+                            let key_image_point =
+                                calculate_key_image(&entry.spend_scalar, &output.data.key_offset);
+                            hex::encode(key_image_point.compress().to_bytes())
+                        };
+                        #[cfg(not(target_arch = "wasm32"))]
+                        let key_image = String::new();
+
+                        outputs.push(WalletOutput {
+                            tx_hash: tx_hash.clone(),
+                            output_index,
+                            amount,
+                            amount_xmr,
+                            key,
+                            key_offset,
+                            commitment_mask,
+                            subaddress_index,
+                            payment_id,
+                            received_output_bytes,
+                            block_height,
+                            spent: false,
+                            spent_height: None,
+                            key_image,
+                            is_coinbase,
+                            frozen: false,
+                        });
+                    }
+                }
+                wallet_results.insert(
+                    entry.address.clone(),
+                    WalletScanData {
+                        address: entry.address.clone(),
+                        outputs,
+                    },
+                );
+            }
+
+            results.push(MultiWalletScanResult {
+                block_height,
+                block_hash,
+                block_timestamp,
+                tx_count,
+                daemon_height,
+                spent_key_images,
+                spent_key_image_tx_hashes,
+                wallet_results,
+            });
+        }
 
         if block_idx % YIELD_EVERY_N_BLOCKS == YIELD_EVERY_N_BLOCKS - 1 {
             yield_to_event_loop().await;
