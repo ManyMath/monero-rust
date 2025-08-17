@@ -596,6 +596,7 @@ pub fn derive_keys(mnemonic: &str, network_str: &str) -> Result<DerivedKeys, Str
 }
 
 pub async fn get_daemon_height(node_url: &str) -> Result<u64, String> {
+    crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
     #[cfg(not(target_arch = "wasm32"))]
     {
         use monero_serai::rpc::HttpRpc;
@@ -628,6 +629,7 @@ pub async fn scan_block_for_outputs_with_url(
     mnemonic: &str,
     network_str: &str,
 ) -> Result<BlockScanResult, String> {
+    crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
     crate::error_codes::validate_network(network_str).map_err(|e| e.message.clone())?;
     scan_block_for_outputs_with_url_and_lookahead(node_url, block_height, mnemonic, network_str, DEFAULT_LOOKAHEAD).await
 }

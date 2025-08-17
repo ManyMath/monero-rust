@@ -242,6 +242,7 @@ pub mod native {
     ) -> Result<DecoyResult, String> {
         use std::io::Cursor;
 
+        crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
         if stored_outputs.is_empty() {
             return Err("No outputs provided".to_string());
         }
@@ -293,6 +294,7 @@ pub mod native {
         num_inputs: usize,
         num_outputs: usize,
     ) -> Result<FeeEstimate, String> {
+        crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
         if num_inputs == 0 {
             return Err("Must have at least one input".to_string());
         }
@@ -339,6 +341,7 @@ pub mod native {
         stored_outputs: Vec<StoredOutputData>,
         recipients: &[(String, u64)],
     ) -> Result<PreparedTransaction, String> {
+        crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
         crate::error_codes::validate_network(network_str).map_err(|e| e.message.clone())?;
         if stored_outputs.is_empty() {
             return Err("No outputs provided".to_string());
@@ -443,6 +446,7 @@ pub mod native {
         stored_outputs: Vec<StoredOutputData>,
         recipients: &[(String, u64)],
     ) -> Result<TransactionResult, String> {
+        crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
         crate::error_codes::validate_network(network_str).map_err(|e| e.message.clone())?;
         if stored_outputs.is_empty() {
             return Err("No outputs provided".to_string());
@@ -612,6 +616,7 @@ pub mod native {
         stored_outputs: Vec<StoredOutputData>,
         destination_address: &str,
     ) -> Result<TransactionResult, String> {
+        crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
         crate::error_codes::validate_network(network_str).map_err(|e| e.message.clone())?;
         if stored_outputs.is_empty() {
             return Err("No outputs provided".to_string());

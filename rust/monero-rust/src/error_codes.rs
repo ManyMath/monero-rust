@@ -58,6 +58,24 @@ pub fn validate_network(network_str: &str) -> Result<(), ErrorResponse> {
     Ok(())
 }
 
+pub fn validate_node_url(url: &str) -> Result<(), ErrorResponse> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Err(ErrorResponse::new(
+            ERR_INVALID_URL,
+            "Node URL is empty",
+        ).with_hint("Provide a URL like http://127.0.0.1:18081"));
+    }
+    if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+        return Err(ErrorResponse::new(
+            ERR_INVALID_URL,
+            format!("Node URL has invalid scheme: '{}'", trimmed),
+        ).with_hint("URL must start with http:// or https://"));
+    }
+    Ok(())
+}
+
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorResponse {
     pub code: u32,
