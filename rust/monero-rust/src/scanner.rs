@@ -521,6 +521,7 @@ fn address_from_seed(seed: &Seed, network: Network) -> String {
 }
 
 pub fn derive_address(mnemonic: &str, network_str: &str) -> Result<String, String> {
+    crate::error_codes::validate_network(network_str).map_err(|e| e.message.clone())?;
     let network = parse_network(network_str)?;
     let seed = resolve_seed(mnemonic)?;
     Ok(address_from_seed(&seed, network))
@@ -534,6 +535,7 @@ pub fn derive_subaddress(
 ) -> Result<String, String> {
     use monero_serai::wallet::address::AddressSpec;
 
+    crate::error_codes::validate_network(network_str).map_err(|e| e.message.clone())?;
     let network = parse_network(network_str)?;
 
     let seed = resolve_seed(mnemonic)?;
@@ -565,6 +567,7 @@ pub fn derive_subaddress(
 }
 
 pub fn derive_keys(mnemonic: &str, network_str: &str) -> Result<DerivedKeys, String> {
+    crate::error_codes::validate_network(network_str).map_err(|e| e.message.clone())?;
     let network = parse_network(network_str)?;
 
     let seed = resolve_seed(mnemonic)?;
@@ -625,6 +628,7 @@ pub async fn scan_block_for_outputs_with_url(
     mnemonic: &str,
     network_str: &str,
 ) -> Result<BlockScanResult, String> {
+    crate::error_codes::validate_network(network_str).map_err(|e| e.message.clone())?;
     scan_block_for_outputs_with_url_and_lookahead(node_url, block_height, mnemonic, network_str, DEFAULT_LOOKAHEAD).await
 }
 

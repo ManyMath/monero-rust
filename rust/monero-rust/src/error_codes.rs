@@ -2,9 +2,61 @@
 
 use monero_serai::{
     rpc::RpcError,
-    wallet::{address::AddressError, seed::SeedError},
+    wallet::{
+        address::{AddressError, Network as SeraiNetwork},
+        seed::SeedError,
+    },
 };
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Network {
+    Mainnet,
+    Testnet,
+    Stagenet,
+}
+
+impl Network {
+    pub fn from_str(s: &str) -> Result<Self, ErrorResponse> {
+        match s.to_lowercase().as_str() {
+            "mainnet" => Ok(Network::Mainnet),
+            "testnet" => Ok(Network::Testnet),
+            "stagenet" => Ok(Network::Stagenet),
+            _ => Err(ErrorResponse::new(
+                ERR_INVALID_NETWORK,
+                format!("Invalid network: '{}'. Expected mainnet, testnet, or stagenet", s),
+            )),
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Network::Mainnet => "mainnet",
+            Network::Testnet => "testnet",
+            Network::Stagenet => "stagenet",
+        }
+    }
+
+    pub fn to_serai(self) -> SeraiNetwork {
+        match self {
+            Network::Mainnet => SeraiNetwork::Mainnet,
+            Network::Testnet => SeraiNetwork::Testnet,
+            Network::Stagenet => SeraiNetwork::Stagenet,
+        }
+    }
+}
+
+impl std::fmt::Display for Network {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+pub fn validate_network(network_str: &str) -> Result<(), ErrorResponse> {
+    Network::from_str(network_str)?;
+    Ok(())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorResponse {
