@@ -8,6 +8,7 @@ pub mod abstractions;
 pub mod bip39_conv;
 pub mod coin_selection;
 pub mod encryption;
+pub mod error_codes;
 pub mod scan_coordinator;
 pub mod scanner;
 pub mod wallet_output;
