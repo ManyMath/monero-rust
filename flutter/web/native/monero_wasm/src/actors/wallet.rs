@@ -271,6 +271,9 @@ impl WalletActor {
                         seed,
                         success: true,
                         error: None,
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                         restore_height,
                     }
                     .send_signal_to_dart();
@@ -280,6 +283,9 @@ impl WalletActor {
                         seed: String::new(),
                         success: false,
                         error: Some(e),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                         restore_height: None,
                     }
                     .send_signal_to_dart();
@@ -295,7 +301,7 @@ impl WalletActor {
             let resolved = match pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
                 Ok(s) => s,
                 Err(e) => {
-                    SeedBirthdayResponse { birthday: None, success: false, error: Some(e) }.send_signal_to_dart();
+                    SeedBirthdayResponse { birthday: None, success: false, error: Some(e), error_code: None, error_hint: None, error_transient: None }.send_signal_to_dart();
                     continue;
                 }
             };
@@ -304,6 +310,9 @@ impl WalletActor {
                 birthday,
                 success: true,
                 error: None,
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
             }
             .send_signal_to_dart();
         }
@@ -319,6 +328,9 @@ impl WalletActor {
                         block_height,
                         success: true,
                         error: None,
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                     }
                     .send_signal_to_dart();
                 }
@@ -327,6 +339,9 @@ impl WalletActor {
                         block_height: 0,
                         success: false,
                         error: Some(e),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                     }
                     .send_signal_to_dart();
                 }
@@ -440,7 +455,7 @@ impl WalletActor {
             let resolved = match pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
                 Ok(s) => s,
                 Err(e) => {
-                    AddressDerivedResponse { address: String::new(), success: false, error: Some(e) }.send_signal_to_dart();
+                    AddressDerivedResponse { address: String::new(), success: false, error: Some(e), error_code: None, error_hint: None, error_transient: None }.send_signal_to_dart();
                     continue;
                 }
             };
@@ -450,6 +465,9 @@ impl WalletActor {
                         address,
                         success: true,
                         error: None,
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                     }
                     .send_signal_to_dart();
                 }
@@ -458,6 +476,9 @@ impl WalletActor {
                         address: String::new(),
                         success: false,
                         error: Some(e),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                     }
                     .send_signal_to_dart();
                 }
@@ -472,7 +493,7 @@ impl WalletActor {
             let resolved = match pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
                 Ok(s) => s,
                 Err(e) => {
-                    SubaddressDerivedResponse { address: String::new(), success: false, error: Some(e) }.send_signal_to_dart();
+                    SubaddressDerivedResponse { address: String::new(), success: false, error: Some(e), error_code: None, error_hint: None, error_transient: None }.send_signal_to_dart();
                     continue;
                 }
             };
@@ -487,6 +508,9 @@ impl WalletActor {
                         address,
                         success: true,
                         error: None,
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                     }
                     .send_signal_to_dart();
                 }
@@ -495,6 +519,9 @@ impl WalletActor {
                         address: String::new(),
                         success: false,
                         error: Some(e),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                     }
                     .send_signal_to_dart();
                 }
@@ -513,6 +540,7 @@ impl WalletActor {
                         address: String::new(), secret_spend_key: String::new(),
                         secret_view_key: String::new(), public_spend_key: String::new(),
                         public_view_key: String::new(), success: false, error: Some(e),
+                        error_code: None, error_hint: None, error_transient: None,
                     }.send_signal_to_dart();
                     continue;
                 }
@@ -527,6 +555,9 @@ impl WalletActor {
                         public_view_key: keys.public_view_key,
                         success: true,
                         error: None,
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                     }
                     .send_signal_to_dart();
                 }
@@ -539,6 +570,9 @@ impl WalletActor {
                         public_view_key: String::new(),
                         success: false,
                         error: Some(e),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                     }
                     .send_signal_to_dart();
                 }
@@ -555,7 +589,9 @@ impl WalletActor {
                 Ok(s) => s,
                 Err(e) => {
                     BlockScanResponse {
-                        success: false, error: Some(e), block_height: request.block_height,
+                        success: false, error: Some(e),
+                        error_code: None, error_hint: None, error_transient: None,
+                        block_height: request.block_height,
                         block_hash: String::new(), block_timestamp: 0, tx_count: 0,
                         outputs: Vec::new(), daemon_height: 0, spent_key_images: Vec::new(),
                         spent_key_image_tx_hashes: Vec::new(),
@@ -601,6 +637,9 @@ impl WalletActor {
                     BlockScanResponse {
                         success: true,
                         error: None,
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                         block_height: result.block_height,
                         block_hash: result.block_hash,
                         block_timestamp: result.block_timestamp,
@@ -616,6 +655,9 @@ impl WalletActor {
                     BlockScanResponse {
                         success: false,
                         error: Some(e),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                         block_height: request.block_height,
                         block_hash: String::new(),
                         block_timestamp: 0,
@@ -643,6 +685,9 @@ impl WalletActor {
                     DaemonHeightResponse {
                         success: true,
                         error: None,
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                         daemon_height: height,
                     }
                     .send_signal_to_dart();
@@ -651,6 +696,9 @@ impl WalletActor {
                     DaemonHeightResponse {
                         success: false,
                         error: Some(e),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                         daemon_height: 0,
                     }
                     .send_signal_to_dart();
@@ -667,7 +715,9 @@ impl WalletActor {
                 Ok(s) => s,
                 Err(e) => {
                     BlockScanResponse {
-                        success: false, error: Some(e), block_height: request.start_height,
+                        success: false, error: Some(e),
+                        error_code: None, error_hint: None, error_transient: None,
+                        block_height: request.start_height,
                         block_hash: String::new(), block_timestamp: 0, tx_count: 0,
                         outputs: Vec::new(), daemon_height: 0, spent_key_images: Vec::new(),
                         spent_key_image_tx_hashes: Vec::new(),
@@ -704,7 +754,9 @@ impl WalletActor {
                 Ok(s) => s,
                 Err(e) => {
                     MempoolScanResponse {
-                        success: false, error: Some(e), tx_count: 0,
+                        success: false, error: Some(e),
+                        error_code: None, error_hint: None, error_transient: None,
+                        tx_count: 0,
                         outputs: Vec::new(), spent_key_images: Vec::new(),
                         spent_key_image_tx_hashes: Vec::new(),
                     }.send_signal_to_dart();
@@ -739,6 +791,9 @@ impl WalletActor {
                         MempoolScanResponse {
                             success: true,
                             error: None,
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                             tx_count: result.tx_count as u32,
                             outputs,
                             spent_key_images: result.spent_key_images,
@@ -760,6 +815,9 @@ impl WalletActor {
                         MempoolScanResponse {
                             success: false,
                             error: Some(e),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                             tx_count: 0,
                             outputs: Vec::new(),
                             spent_key_images: Vec::new(),
@@ -788,7 +846,9 @@ impl WalletActor {
             }
             if let Some(e) = resolve_err {
                 MultiWalletScanResponse {
-                    success: false, error: Some(e), block_height: request.block_height,
+                    success: false, error: Some(e),
+                    error_code: None, error_hint: None, error_transient: None,
+                    block_height: request.block_height,
                     block_hash: String::new(), block_timestamp: 0, tx_count: 0,
                     daemon_height: 0, spent_key_images: Vec::new(),
                     spent_key_image_tx_hashes: Vec::new(), wallet_results: Vec::new(),
@@ -839,6 +899,9 @@ impl WalletActor {
                         MultiWalletScanResponse {
                             success: true,
                             error: None,
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                             block_height: result.block_height,
                             block_hash: result.block_hash,
                             block_timestamp: result.block_timestamp,
@@ -854,6 +917,9 @@ impl WalletActor {
                         MultiWalletScanResponse {
                             success: false,
                             error: Some(e),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                             block_height: request.block_height,
                             block_hash: String::new(),
                             block_timestamp: 0,
@@ -895,6 +961,7 @@ impl WalletActor {
             if let Some(e) = resolve_err {
                 MultiWalletScanResponse {
                     success: false, error: Some(format!("Failed to resolve BIP39 seed: {}", e)),
+                    error_code: None, error_hint: None, error_transient: None,
                     block_height: 0, block_hash: String::new(), block_timestamp: 0,
                     tx_count: 0, daemon_height: 0, spent_key_images: Vec::new(),
                     spent_key_image_tx_hashes: Vec::new(), wallet_results: Vec::new(),
@@ -940,6 +1007,9 @@ impl WalletActor {
                         MultiWalletScanResponse {
                             success: false,
                             error: Some(format!("Failed to get daemon height: {}", e)),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                             block_height: 0,
                             block_hash: String::new(),
                             block_timestamp: 0,
@@ -1005,6 +1075,9 @@ impl WalletActor {
                         legacy_seed: legacy,
                         success: true,
                         error: None,
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                     }
                     .send_signal_to_dart();
                 }
@@ -1013,6 +1086,9 @@ impl WalletActor {
                         legacy_seed: String::new(),
                         success: false,
                         error: Some(e),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                     }
                     .send_signal_to_dart();
                 }
@@ -1116,6 +1192,9 @@ impl Notifiable<GetPendingStateMsg> for WalletActor {
                 PendingStateResponse {
                     success: true,
                     error: None,
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                     pending_state_json: Some(json),
                 }
                 .send_signal_to_dart();
@@ -1124,6 +1203,9 @@ impl Notifiable<GetPendingStateMsg> for WalletActor {
                 PendingStateResponse {
                     success: false,
                     error: Some(format!("Failed to serialize pending state: {}", e)),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                     pending_state_json: None,
                 }
                 .send_signal_to_dart();
@@ -1141,6 +1223,9 @@ impl Notifiable<GetBlockHashesMsg> for WalletActor {
                 BlockHashesResponse {
                     success: true,
                     error: None,
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                     block_hashes_json: Some(json),
                 }
                 .send_signal_to_dart();
@@ -1149,6 +1234,9 @@ impl Notifiable<GetBlockHashesMsg> for WalletActor {
                 BlockHashesResponse {
                     success: false,
                     error: Some(format!("Failed to serialize block hashes: {}", e)),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                     block_hashes_json: None,
                 }
                 .send_signal_to_dart();
@@ -1353,6 +1441,9 @@ impl Notifiable<StartContinuousScan> for WalletActor {
                     BlockScanResponse {
                         success: false,
                         error: Some(format!("Failed to get daemon height: {}", e)),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                         block_height: 0,
                         block_hash: String::new(),
                         block_timestamp: 0,
@@ -1464,6 +1555,9 @@ impl Notifiable<ContinueScan> for WalletActor {
                         BlockScanResponse {
                             success: false,
                             error: Some(e),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                             block_height: batch_start_height,
                             block_hash: String::new(),
                             block_timestamp: 0,
@@ -1576,6 +1670,9 @@ impl Notifiable<ContinueScan> for WalletActor {
                         BlockScanResponse {
                             success: true,
                             error: None,
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                             block_height: block.block_height,
                             block_hash: block.block_hash.clone(),
                             block_timestamp: block.block_timestamp,
@@ -1659,6 +1756,9 @@ impl Notifiable<ContinueScan> for WalletActor {
                     BlockScanResponse {
                         success: false,
                         error: Some(e),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                         block_height: batch_start_height,
                         block_hash: String::new(),
                         block_timestamp: 0,
@@ -1742,6 +1842,9 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                         MultiWalletScanResponse {
                             success: false,
                             error: Some(e),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                             block_height: batch_start_height,
                             block_hash: String::new(),
                             block_timestamp: 0,
@@ -1901,6 +2004,9 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                             MultiWalletScanResponse {
                                 success: true,
                                 error: None,
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                                 block_height: result.block_height,
                                 block_hash: result.block_hash.clone(),
                                 block_timestamp: result.block_timestamp,
@@ -1944,6 +2050,9 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                     MultiWalletScanResponse {
                         success: false,
                         error: Some(e),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                         block_height: batch_start_height,
                         block_hash: String::new(),
                         block_timestamp: 0,

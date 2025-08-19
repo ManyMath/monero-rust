@@ -941,6 +941,9 @@ class BalanceResponse {
 class TransactionCreatedResponse {
   final bool success;
   final String? error;
+  final int? errorCode;
+  final String? errorHint;
+  final bool? errorTransient;
   final String txId;
   final int fee;
   final String? txBlob;
@@ -952,6 +955,9 @@ class TransactionCreatedResponse {
   const TransactionCreatedResponse({
     required this.success,
     this.error,
+    this.errorCode,
+    this.errorHint,
+    this.errorTransient,
     required this.txId,
     required this.fee,
     this.txBlob,
@@ -965,6 +971,9 @@ class TransactionCreatedResponse {
       TransactionCreatedResponse(
         success: json['success'] as bool,
         error: json['error'] as String?,
+        errorCode: json['error_code'] as int?,
+        errorHint: json['error_hint'] as String?,
+        errorTransient: json['error_transient'] as bool?,
         txId: json['tx_id'] as String,
         fee: json['fee'] as int,
         txBlob: json['tx_blob'] as String?,
@@ -985,12 +994,18 @@ class SeedGeneratedResponse {
   final String seed;
   final bool success;
   final String? error;
+  final int? errorCode;
+  final String? errorHint;
+  final bool? errorTransient;
   final int? restoreHeight;
 
   const SeedGeneratedResponse({
     required this.seed,
     required this.success,
     this.error,
+    this.errorCode,
+    this.errorHint,
+    this.errorTransient,
     this.restoreHeight,
   });
 
@@ -999,6 +1014,9 @@ class SeedGeneratedResponse {
         seed: json['seed'] as String,
         success: json['success'] as bool,
         error: json['error'] as String?,
+        errorCode: json['error_code'] as int?,
+        errorHint: json['error_hint'] as String?,
+        errorTransient: json['error_transient'] as bool?,
         restoreHeight: json['restore_height'] as int?,
       );
 
@@ -1011,11 +1029,17 @@ class SeedBirthdayResponse {
   final int? birthday;
   final bool success;
   final String? error;
+  final int? errorCode;
+  final String? errorHint;
+  final bool? errorTransient;
 
   const SeedBirthdayResponse({
     this.birthday,
     required this.success,
     this.error,
+    this.errorCode,
+    this.errorHint,
+    this.errorTransient,
   });
 
   factory SeedBirthdayResponse.fromJson(Map<String, dynamic> json) =>
@@ -1023,6 +1047,9 @@ class SeedBirthdayResponse {
         birthday: json['birthday'] as int?,
         success: json['success'] as bool,
         error: json['error'] as String?,
+        errorCode: json['error_code'] as int?,
+        errorHint: json['error_hint'] as String?,
+        errorTransient: json['error_transient'] as bool?,
       );
 
   static Stream<SeedBirthdayResponse> get stream => signalSender
@@ -1034,11 +1061,17 @@ class BlockHeightFromTimestampResponse {
   final int blockHeight;
   final bool success;
   final String? error;
+  final int? errorCode;
+  final String? errorHint;
+  final bool? errorTransient;
 
   const BlockHeightFromTimestampResponse({
     required this.blockHeight,
     required this.success,
     this.error,
+    this.errorCode,
+    this.errorHint,
+    this.errorTransient,
   });
 
   factory BlockHeightFromTimestampResponse.fromJson(
@@ -1047,6 +1080,9 @@ class BlockHeightFromTimestampResponse {
     blockHeight: json['block_height'] as int,
     success: json['success'] as bool,
     error: json['error'] as String?,
+    errorCode: json['error_code'] as int?,
+    errorHint: json['error_hint'] as String?,
+    errorTransient: json['error_transient'] as bool?,
   );
 
   static Stream<BlockHeightFromTimestampResponse> get stream => signalSender
@@ -1058,11 +1094,17 @@ class AddressDerivedResponse {
   final String address;
   final bool success;
   final String? error;
+  final int? errorCode;
+  final String? errorHint;
+  final bool? errorTransient;
 
   const AddressDerivedResponse({
     required this.address,
     required this.success,
     this.error,
+    this.errorCode,
+    this.errorHint,
+    this.errorTransient,
   });
 
   factory AddressDerivedResponse.fromJson(Map<String, dynamic> json) =>
@@ -1070,6 +1112,9 @@ class AddressDerivedResponse {
         address: json['address'] as String,
         success: json['success'] as bool,
         error: json['error'] as String?,
+        errorCode: json['error_code'] as int?,
+        errorHint: json['error_hint'] as String?,
+        errorTransient: json['error_transient'] as bool?,
       );
 
   static Stream<AddressDerivedResponse> get stream => signalSender
@@ -1081,11 +1126,17 @@ class SubaddressDerivedResponse {
   final String address;
   final bool success;
   final String? error;
+  final int? errorCode;
+  final String? errorHint;
+  final bool? errorTransient;
 
   const SubaddressDerivedResponse({
     required this.address,
     required this.success,
     this.error,
+    this.errorCode,
+    this.errorHint,
+    this.errorTransient,
   });
 
   factory SubaddressDerivedResponse.fromJson(Map<String, dynamic> json) =>
@@ -1093,6 +1144,9 @@ class SubaddressDerivedResponse {
         address: json['address'] as String,
         success: json['success'] as bool,
         error: json['error'] as String?,
+        errorCode: json['error_code'] as int?,
+        errorHint: json['error_hint'] as String?,
+        errorTransient: json['error_transient'] as bool?,
       );
 
   static Stream<SubaddressDerivedResponse> get stream => signalSender
@@ -1108,6 +1162,9 @@ class KeysDerivedResponse {
   final String publicViewKey;
   final bool success;
   final String? error;
+  final int? errorCode;
+  final String? errorHint;
+  final bool? errorTransient;
 
   const KeysDerivedResponse({
     required this.address,
@@ -1117,6 +1174,9 @@ class KeysDerivedResponse {
     required this.publicViewKey,
     required this.success,
     this.error,
+    this.errorCode,
+    this.errorHint,
+    this.errorTransient,
   });
 
   factory KeysDerivedResponse.fromJson(Map<String, dynamic> json) =>
@@ -1128,6 +1188,9 @@ class KeysDerivedResponse {
         publicViewKey: json['public_view_key'] as String,
         success: json['success'] as bool,
         error: json['error'] as String?,
+        errorCode: json['error_code'] as int?,
+        errorHint: json['error_hint'] as String?,
+        errorTransient: json['error_transient'] as bool?,
       );
 
   static Stream<KeysDerivedResponse> get stream => signalSender
@@ -1138,6 +1201,9 @@ class KeysDerivedResponse {
 class BlockScanResponse {
   final bool success;
   final String? error;
+  final int? errorCode;
+  final String? errorHint;
+  final bool? errorTransient;
   final int blockHeight;
   final String blockHash;
   final int blockTimestamp;
@@ -1150,6 +1216,9 @@ class BlockScanResponse {
   const BlockScanResponse({
     required this.success,
     this.error,
+    this.errorCode,
+    this.errorHint,
+    this.errorTransient,
     required this.blockHeight,
     required this.blockHash,
     required this.blockTimestamp,
@@ -1164,6 +1233,9 @@ class BlockScanResponse {
       BlockScanResponse(
         success: json['success'] as bool,
         error: json['error'] as String?,
+        errorCode: json['error_code'] as int?,
+        errorHint: json['error_hint'] as String?,
+        errorTransient: json['error_transient'] as bool?,
         blockHeight: json['block_height'] as int,
         blockHash: json['block_hash'] as String,
         blockTimestamp: json['block_timestamp'] as int,
@@ -1185,6 +1257,9 @@ class BlockScanResponse {
 class TransactionBroadcastResponse {
   final bool success;
   final String? error;
+  final int? errorCode;
+  final String? errorHint;
+  final bool? errorTransient;
   final String? txId;
   final bool isRetryable;
   final bool isDoubleSpend;
@@ -1192,6 +1267,9 @@ class TransactionBroadcastResponse {
   const TransactionBroadcastResponse({
     required this.success,
     this.error,
+    this.errorCode,
+    this.errorHint,
+    this.errorTransient,
     this.txId,
     this.isRetryable = false,
     this.isDoubleSpend = false,
@@ -1201,6 +1279,9 @@ class TransactionBroadcastResponse {
       TransactionBroadcastResponse(
         success: json['success'] as bool,
         error: json['error'] as String?,
+        errorCode: json['error_code'] as int?,
+        errorHint: json['error_hint'] as String?,
+        errorTransient: json['error_transient'] as bool?,
         txId: json['tx_id'] as String?,
         isRetryable: json['is_retryable'] as bool? ?? false,
         isDoubleSpend: json['is_double_spend'] as bool? ?? false,
@@ -1214,11 +1295,17 @@ class TransactionBroadcastResponse {
 class DaemonHeightResponse {
   final bool success;
   final String? error;
+  final int? errorCode;
+  final String? errorHint;
+  final bool? errorTransient;
   final int daemonHeight;
 
   const DaemonHeightResponse({
     required this.success,
     this.error,
+    this.errorCode,
+    this.errorHint,
+    this.errorTransient,
     required this.daemonHeight,
   });
 
@@ -1226,6 +1313,9 @@ class DaemonHeightResponse {
       DaemonHeightResponse(
         success: json['success'] as bool,
         error: json['error'] as String?,
+        errorCode: json['error_code'] as int?,
+        errorHint: json['error_hint'] as String?,
+        errorTransient: json['error_transient'] as bool?,
         daemonHeight: json['daemon_height'] as int,
       );
 
@@ -1252,6 +1342,9 @@ class SpentStatusUpdatedResponse {
 class MempoolScanResponse {
   final bool success;
   final String? error;
+  final int? errorCode;
+  final String? errorHint;
+  final bool? errorTransient;
   final int txCount;
   final List<OwnedOutput> outputs;
   final List<String> spentKeyImages;
@@ -1260,6 +1353,9 @@ class MempoolScanResponse {
   const MempoolScanResponse({
     required this.success,
     this.error,
+    this.errorCode,
+    this.errorHint,
+    this.errorTransient,
     required this.txCount,
     required this.outputs,
     required this.spentKeyImages,
@@ -1270,6 +1366,9 @@ class MempoolScanResponse {
       MempoolScanResponse(
         success: json['success'] as bool,
         error: json['error'] as String?,
+        errorCode: json['error_code'] as int?,
+        errorHint: json['error_hint'] as String?,
+        errorTransient: json['error_transient'] as bool?,
         txCount: json['tx_count'] as int,
         outputs: (json['outputs'] as List)
             .map((e) => OwnedOutput.fromJson(e as Map<String, dynamic>))
@@ -1287,12 +1386,18 @@ class MempoolScanResponse {
 class OutProofGeneratedResponse {
   final bool success;
   final String? error;
+  final int? errorCode;
+  final String? errorHint;
+  final bool? errorTransient;
   final String? signature;
   final String? formatted;
 
   const OutProofGeneratedResponse({
     required this.success,
     this.error,
+    this.errorCode,
+    this.errorHint,
+    this.errorTransient,
     this.signature,
     this.formatted,
   });
@@ -1301,6 +1406,9 @@ class OutProofGeneratedResponse {
       OutProofGeneratedResponse(
         success: json['success'] as bool,
         error: json['error'] as String?,
+        errorCode: json['error_code'] as int?,
+        errorHint: json['error_hint'] as String?,
+        errorTransient: json['error_transient'] as bool?,
         signature: json['signature'] as String?,
         formatted: json['formatted'] as String?,
       );
@@ -1313,11 +1421,17 @@ class OutProofGeneratedResponse {
 class WalletDataSavedResponse {
   final bool success;
   final String? error;
+  final int? errorCode;
+  final String? errorHint;
+  final bool? errorTransient;
   final String? encryptedData;
 
   const WalletDataSavedResponse({
     required this.success,
     this.error,
+    this.errorCode,
+    this.errorHint,
+    this.errorTransient,
     this.encryptedData,
   });
 
@@ -1325,6 +1439,9 @@ class WalletDataSavedResponse {
       WalletDataSavedResponse(
         success: json['success'] as bool,
         error: json['error'] as String?,
+        errorCode: json['error_code'] as int?,
+        errorHint: json['error_hint'] as String?,
+        errorTransient: json['error_transient'] as bool?,
         encryptedData: json['encrypted_data'] as String?,
       );
 
@@ -1336,11 +1453,17 @@ class WalletDataSavedResponse {
 class WalletDataLoadedResponse {
   final bool success;
   final String? error;
+  final int? errorCode;
+  final String? errorHint;
+  final bool? errorTransient;
   final String? walletDataJson;
 
   const WalletDataLoadedResponse({
     required this.success,
     this.error,
+    this.errorCode,
+    this.errorHint,
+    this.errorTransient,
     this.walletDataJson,
   });
 
@@ -1348,6 +1471,9 @@ class WalletDataLoadedResponse {
       WalletDataLoadedResponse(
         success: json['success'] as bool,
         error: json['error'] as String?,
+        errorCode: json['error_code'] as int?,
+        errorHint: json['error_hint'] as String?,
+        errorTransient: json['error_transient'] as bool?,
         walletDataJson: json['wallet_data_json'] as String?,
       );
 
@@ -1359,12 +1485,18 @@ class WalletDataLoadedResponse {
 class EncryptionKeyDerivedResponse {
   final bool success;
   final String? error;
+  final int? errorCode;
+  final String? errorHint;
+  final bool? errorTransient;
   final String? keyHex;
   final String? saltHex;
 
   const EncryptionKeyDerivedResponse({
     required this.success,
     this.error,
+    this.errorCode,
+    this.errorHint,
+    this.errorTransient,
     this.keyHex,
     this.saltHex,
   });
@@ -1373,6 +1505,9 @@ class EncryptionKeyDerivedResponse {
       EncryptionKeyDerivedResponse(
         success: json['success'] as bool,
         error: json['error'] as String?,
+        errorCode: json['error_code'] as int?,
+        errorHint: json['error_hint'] as String?,
+        errorTransient: json['error_transient'] as bool?,
         keyHex: json['key_hex'] as String?,
         saltHex: json['salt_hex'] as String?,
       );
@@ -1385,6 +1520,9 @@ class EncryptionKeyDerivedResponse {
 class MultiWalletScanResponse {
   final bool success;
   final String? error;
+  final int? errorCode;
+  final String? errorHint;
+  final bool? errorTransient;
   final int blockHeight;
   final String blockHash;
   final int blockTimestamp;
@@ -1397,6 +1535,9 @@ class MultiWalletScanResponse {
   const MultiWalletScanResponse({
     required this.success,
     this.error,
+    this.errorCode,
+    this.errorHint,
+    this.errorTransient,
     required this.blockHeight,
     required this.blockHash,
     required this.blockTimestamp,
@@ -1411,6 +1552,9 @@ class MultiWalletScanResponse {
       MultiWalletScanResponse(
         success: json['success'] as bool,
         error: json['error'] as String?,
+        errorCode: json['error_code'] as int?,
+        errorHint: json['error_hint'] as String?,
+        errorTransient: json['error_transient'] as bool?,
         blockHeight: json['block_height'] as int,
         blockHash: json['block_hash'] as String,
         blockTimestamp: json['block_timestamp'] as int,
@@ -1432,11 +1576,17 @@ class MultiWalletScanResponse {
 class BlockHashesResponse {
   final bool success;
   final String? error;
+  final int? errorCode;
+  final String? errorHint;
+  final bool? errorTransient;
   final String? blockHashesJson;
 
   const BlockHashesResponse({
     required this.success,
     this.error,
+    this.errorCode,
+    this.errorHint,
+    this.errorTransient,
     this.blockHashesJson,
   });
 
@@ -1444,6 +1594,9 @@ class BlockHashesResponse {
       BlockHashesResponse(
         success: json['success'] as bool,
         error: json['error'] as String?,
+        errorCode: json['error_code'] as int?,
+        errorHint: json['error_hint'] as String?,
+        errorTransient: json['error_transient'] as bool?,
         blockHashesJson: json['block_hashes_json'] as String?,
       );
 
@@ -1455,11 +1608,17 @@ class BlockHashesResponse {
 class PendingStateResponse {
   final bool success;
   final String? error;
+  final int? errorCode;
+  final String? errorHint;
+  final bool? errorTransient;
   final String? pendingStateJson;
 
   const PendingStateResponse({
     required this.success,
     this.error,
+    this.errorCode,
+    this.errorHint,
+    this.errorTransient,
     this.pendingStateJson,
   });
 
@@ -1467,6 +1626,9 @@ class PendingStateResponse {
       PendingStateResponse(
         success: json['success'] as bool,
         error: json['error'] as String?,
+        errorCode: json['error_code'] as int?,
+        errorHint: json['error_hint'] as String?,
+        errorTransient: json['error_transient'] as bool?,
         pendingStateJson: json['pending_state_json'] as String?,
       );
 
@@ -1528,11 +1690,17 @@ class Bip39LegacySeedResponse {
   final String legacySeed;
   final bool success;
   final String? error;
+  final int? errorCode;
+  final String? errorHint;
+  final bool? errorTransient;
 
   const Bip39LegacySeedResponse({
     required this.legacySeed,
     required this.success,
     this.error,
+    this.errorCode,
+    this.errorHint,
+    this.errorTransient,
   });
 
   factory Bip39LegacySeedResponse.fromJson(Map<String, dynamic> json) =>
@@ -1540,6 +1708,9 @@ class Bip39LegacySeedResponse {
         legacySeed: json['legacy_seed'] as String,
         success: json['success'] as bool,
         error: json['error'] as String?,
+        errorCode: json['error_code'] as int?,
+        errorHint: json['error_hint'] as String?,
+        errorTransient: json['error_transient'] as bool?,
       );
 
   static Stream<Bip39LegacySeedResponse> get stream => signalSender
@@ -1596,6 +1767,9 @@ class TransactionStatusUpdate {
 class UnsignedTransactionCreatedResponse {
   final bool success;
   final String? error;
+  final int? errorCode;
+  final String? errorHint;
+  final bool? errorTransient;
   final String? unsignedTxHex;
   final int fee;
   final List<Recipient> recipients;
@@ -1603,6 +1777,9 @@ class UnsignedTransactionCreatedResponse {
   const UnsignedTransactionCreatedResponse({
     required this.success,
     this.error,
+    this.errorCode,
+    this.errorHint,
+    this.errorTransient,
     this.unsignedTxHex,
     required this.fee,
     required this.recipients,
@@ -1613,6 +1790,9 @@ class UnsignedTransactionCreatedResponse {
   ) => UnsignedTransactionCreatedResponse(
     success: json['success'] as bool,
     error: json['error'] as String?,
+    errorCode: json['error_code'] as int?,
+    errorHint: json['error_hint'] as String?,
+    errorTransient: json['error_transient'] as bool?,
     unsignedTxHex: json['unsigned_tx_hex'] as String?,
     fee: json['fee'] as int,
     recipients: (json['recipients'] as List)
@@ -1628,6 +1808,9 @@ class UnsignedTransactionCreatedResponse {
 class TransactionSignedOfflineResponse {
   final bool success;
   final String? error;
+  final int? errorCode;
+  final String? errorHint;
+  final bool? errorTransient;
   final String? txId;
   final int fee;
   final String? txBlob;
@@ -1638,6 +1821,9 @@ class TransactionSignedOfflineResponse {
   const TransactionSignedOfflineResponse({
     required this.success,
     this.error,
+    this.errorCode,
+    this.errorHint,
+    this.errorTransient,
     this.txId,
     required this.fee,
     this.txBlob,
@@ -1651,6 +1837,9 @@ class TransactionSignedOfflineResponse {
   ) => TransactionSignedOfflineResponse(
     success: json['success'] as bool,
     error: json['error'] as String?,
+    errorCode: json['error_code'] as int?,
+    errorHint: json['error_hint'] as String?,
+    errorTransient: json['error_transient'] as bool?,
     txId: json['tx_id'] as String?,
     fee: json['fee'] as int,
     txBlob: json['tx_blob'] as String?,
@@ -1669,12 +1858,18 @@ class TransactionSignedOfflineResponse {
 class KeyImagesExportedResponse {
   final bool success;
   final String? error;
+  final int? errorCode;
+  final String? errorHint;
+  final bool? errorTransient;
   final String? keyImagesHex;
   final int count;
 
   const KeyImagesExportedResponse({
     required this.success,
     this.error,
+    this.errorCode,
+    this.errorHint,
+    this.errorTransient,
     this.keyImagesHex,
     required this.count,
   });
@@ -1683,6 +1878,9 @@ class KeyImagesExportedResponse {
       KeyImagesExportedResponse(
         success: json['success'] as bool,
         error: json['error'] as String?,
+        errorCode: json['error_code'] as int?,
+        errorHint: json['error_hint'] as String?,
+        errorTransient: json['error_transient'] as bool?,
         keyImagesHex: json['key_images_hex'] as String?,
         count: json['count'] as int,
       );
@@ -1695,12 +1893,18 @@ class KeyImagesExportedResponse {
 class KeyImagesImportedResponse {
   final bool success;
   final String? error;
+  final int? errorCode;
+  final String? errorHint;
+  final bool? errorTransient;
   final int importedCount;
   final int spentCount;
 
   const KeyImagesImportedResponse({
     required this.success,
     this.error,
+    this.errorCode,
+    this.errorHint,
+    this.errorTransient,
     required this.importedCount,
     required this.spentCount,
   });
@@ -1709,6 +1913,9 @@ class KeyImagesImportedResponse {
       KeyImagesImportedResponse(
         success: json['success'] as bool,
         error: json['error'] as String?,
+        errorCode: json['error_code'] as int?,
+        errorHint: json['error_hint'] as String?,
+        errorTransient: json['error_transient'] as bool?,
         importedCount: json['imported_count'] as int,
         spentCount: json['spent_count'] as int,
       );

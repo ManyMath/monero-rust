@@ -43,7 +43,9 @@ impl TxBuilderActor {
                 Ok(s) => s,
                 Err(e) => {
                     TransactionCreatedResponse {
-                        success: false, error: Some(e), tx_id: String::new(), fee: 0,
+                        success: false, error: Some(e),
+                        error_code: None, error_hint: None, error_transient: None,
+                        tx_id: String::new(), fee: 0,
                         tx_blob: None, tx_key: None, tx_key_additional: Vec::new(),
                         spent_output_hashes: Vec::new(), change_outputs: Vec::new(),
                     }.send_signal_to_dart();
@@ -77,7 +79,9 @@ impl TxBuilderActor {
                 Ok(s) => s,
                 Err(e) => {
                     TransactionCreatedResponse {
-                        success: false, error: Some(e), tx_id: String::new(), fee: 0,
+                        success: false, error: Some(e),
+                        error_code: None, error_hint: None, error_transient: None,
+                        tx_id: String::new(), fee: 0,
                         tx_blob: None, tx_key: None, tx_key_additional: Vec::new(),
                         spent_output_hashes: Vec::new(), change_outputs: Vec::new(),
                     }.send_signal_to_dart();
@@ -127,6 +131,9 @@ impl TxBuilderActor {
                     OutProofGeneratedResponse {
                         success: true,
                         error: None,
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                         signature: Some(result.signature),
                         formatted: Some(result.formatted),
                     }
@@ -136,6 +143,9 @@ impl TxBuilderActor {
                     OutProofGeneratedResponse {
                         success: false,
                         error: Some(e),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                         signature: None,
                         formatted: None,
                     }
@@ -174,6 +184,7 @@ impl TxBuilderActor {
                 Err(e) => {
                     TransactionSignedOfflineResponse {
                         success: false, error: Some(e), tx_id: None, fee: 0,
+                        error_code: None, error_hint: None, error_transient: None,
                         tx_blob: None, tx_key: None, tx_key_additional: vec![],
                         change_outputs: vec![],
                     }.send_signal_to_dart();
@@ -199,6 +210,7 @@ impl TxBuilderActor {
                 Err(e) => {
                     KeyImagesExportedResponse {
                         success: false, error: Some(e), key_images_hex: None, count: 0,
+                        error_code: None, error_hint: None, error_transient: None,
                     }.send_signal_to_dart();
                     continue;
                 }
@@ -297,6 +309,9 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                                     TransactionCreatedResponse {
                                         success: false,
                                         error: Some(error_msg),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                                         tx_id: String::new(),
                                         fee: 0,
                                         tx_blob: None,
@@ -341,6 +356,9 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                                     TransactionCreatedResponse {
                                         success: true,
                                         error: None,
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                                         tx_id: result.tx_id,
                                         fee: result.fee,
                                         tx_blob: Some(result.tx_blob),
@@ -355,6 +373,9 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                                     TransactionCreatedResponse {
                                         success: false,
                                         error: Some(format!("Transaction building failed: {}", e)),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                                         tx_id: String::new(),
                                         fee: 0,
                                         tx_blob: None,
@@ -393,6 +414,9 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                                             TransactionCreatedResponse {
                                                 success: false,
                                                 error: Some(error_msg),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                                                 tx_id: String::new(),
                                                 fee: 0,
                                                 tx_blob: None,
@@ -421,6 +445,9 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                                     TransactionCreatedResponse {
                                         success: false,
                                         error: Some(error_msg),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                                         tx_id: String::new(),
                                         fee: 0,
                                         tx_blob: None,
@@ -444,6 +471,9 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                                 TransactionCreatedResponse {
                                     success: false,
                                     error: Some("Recipient amount(s) too small to cover the fee after subtraction".to_string()),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                                     tx_id: String::new(),
                                     fee: 0,
                                     tx_blob: None,
@@ -489,6 +519,9 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                                 TransactionCreatedResponse {
                                     success: true,
                                     error: None,
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                                     tx_id: result.tx_id,
                                     fee: result.fee,
                                     tx_blob: Some(result.tx_blob),
@@ -525,6 +558,9 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                                         TransactionCreatedResponse {
                                             success: true,
                                             error: None,
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                                             tx_id: result.tx_id,
                                             fee: result.fee,
                                             tx_blob: Some(result.tx_blob),
@@ -539,6 +575,9 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                                         TransactionCreatedResponse {
                                             success: false,
                                             error: Some(format!("Transaction building failed: {}", e2)),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                                             tx_id: String::new(),
                                             fee: 0,
                                             tx_blob: None,
@@ -555,6 +594,9 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                                 TransactionCreatedResponse {
                                     success: false,
                                     error: Some(format!("Transaction building failed: {}", e)),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                                     tx_id: String::new(),
                                     fee: 0,
                                     tx_blob: None,
@@ -572,6 +614,9 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                     TransactionCreatedResponse {
                         success: false,
                         error: Some(format!("Failed to get wallet data or height: {:?}", e)),
+                        error_code: None,
+                        error_hint: None,
+                        error_transient: None,
                         tx_id: String::new(),
                         fee: 0,
                         tx_blob: None,
@@ -587,6 +632,9 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
             TransactionCreatedResponse {
                 success: false,
                 error: Some("Wallet actor not initialized".to_string()),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                 tx_id: String::new(),
                 fee: 0,
                 tx_blob: None,
@@ -640,6 +688,9 @@ impl Notifiable<SweepAll> for TxBuilderActor {
                                 TransactionCreatedResponse {
                                     success: false,
                                     error: Some(error_msg),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                                     tx_id: String::new(),
                                     fee: 0,
                                     tx_blob: None,
@@ -685,6 +736,9 @@ impl Notifiable<SweepAll> for TxBuilderActor {
                                 TransactionCreatedResponse {
                                     success: true,
                                     error: None,
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                                     tx_id: result.tx_id,
                                     fee: result.fee,
                                     tx_blob: Some(result.tx_blob),
@@ -699,6 +753,9 @@ impl Notifiable<SweepAll> for TxBuilderActor {
                                 TransactionCreatedResponse {
                                     success: false,
                                     error: Some(e),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                                     tx_id: String::new(),
                                     fee: 0,
                                     tx_blob: None,
@@ -716,6 +773,9 @@ impl Notifiable<SweepAll> for TxBuilderActor {
                     TransactionCreatedResponse {
                         success: false,
                         error: Some(format!("Failed to get wallet data: {:?}", e)),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                         tx_id: String::new(),
                         fee: 0,
                         tx_blob: None,
@@ -731,6 +791,9 @@ impl Notifiable<SweepAll> for TxBuilderActor {
             TransactionCreatedResponse {
                 success: false,
                 error: Some("Wallet actor not initialized".to_string()),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                 tx_id: String::new(),
                 fee: 0,
                 tx_blob: None,
@@ -784,6 +847,9 @@ impl Notifiable<BroadcastTransaction> for TxBuilderActor {
                     TransactionBroadcastResponse {
                         success: true,
                         error: None,
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                         tx_id: Some(tx_id),
                         is_retryable: false,
                         is_double_spend: false,
@@ -799,6 +865,9 @@ impl Notifiable<BroadcastTransaction> for TxBuilderActor {
                     TransactionBroadcastResponse {
                         success: false,
                         error: Some(error_str),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                         tx_id: None,
                         is_retryable,
                         is_double_spend,
@@ -868,6 +937,7 @@ impl Notifiable<CreateUnsignedTx> for TxBuilderActor {
                             UnsignedTransactionCreatedResponse {
                                 success: false,
                                 error: Some("No spendable outputs available".to_string()),
+                                error_code: None, error_hint: None, error_transient: None,
                                 unsigned_tx_hex: None,
                                 fee: 0,
                                 recipients: vec![],
@@ -887,6 +957,7 @@ impl Notifiable<CreateUnsignedTx> for TxBuilderActor {
                                 UnsignedTransactionCreatedResponse {
                                     success: true,
                                     error: None,
+                                    error_code: None, error_hint: None, error_transient: None,
                                     unsigned_tx_hex: Some(result.unsigned_tx_hex),
                                     fee: result.fee,
                                     recipients: result.recipients.iter()
@@ -900,6 +971,7 @@ impl Notifiable<CreateUnsignedTx> for TxBuilderActor {
                                 UnsignedTransactionCreatedResponse {
                                     success: false,
                                     error: Some(e),
+                                    error_code: None, error_hint: None, error_transient: None,
                                     unsigned_tx_hex: None,
                                     fee: 0,
                                     recipients: vec![],
@@ -912,6 +984,7 @@ impl Notifiable<CreateUnsignedTx> for TxBuilderActor {
                     UnsignedTransactionCreatedResponse {
                         success: false,
                         error: Some("Failed to get wallet data".to_string()),
+                        error_code: None, error_hint: None, error_transient: None,
                         unsigned_tx_hex: None,
                         fee: 0,
                         recipients: vec![],
@@ -922,6 +995,7 @@ impl Notifiable<CreateUnsignedTx> for TxBuilderActor {
             UnsignedTransactionCreatedResponse {
                 success: false,
                 error: Some("Wallet not initialized".to_string()),
+                error_code: None, error_hint: None, error_transient: None,
                 unsigned_tx_hex: None,
                 fee: 0,
                 recipients: vec![],
@@ -947,6 +1021,7 @@ impl Notifiable<SignUnsignedTx> for TxBuilderActor {
                     TransactionSignedOfflineResponse {
                         success: true,
                         error: None,
+                        error_code: None, error_hint: None, error_transient: None,
                         tx_id: Some(result.tx_id),
                         fee: result.fee,
                         tx_blob: Some(result.tx_blob),
@@ -972,6 +1047,7 @@ impl Notifiable<SignUnsignedTx> for TxBuilderActor {
                     TransactionSignedOfflineResponse {
                         success: false,
                         error: Some(e),
+                        error_code: None, error_hint: None, error_transient: None,
                         tx_id: None,
                         fee: 0,
                         tx_blob: None,
@@ -1008,6 +1084,7 @@ impl Notifiable<ExportKeyImages> for TxBuilderActor {
                             KeyImagesExportedResponse {
                                 success: true,
                                 error: None,
+                                error_code: None, error_hint: None, error_transient: None,
                                 key_images_hex: Some(hex::encode(data)),
                                 count,
                             }.send_signal_to_dart();
@@ -1016,6 +1093,7 @@ impl Notifiable<ExportKeyImages> for TxBuilderActor {
                             KeyImagesExportedResponse {
                                 success: false,
                                 error: Some(e),
+                                error_code: None, error_hint: None, error_transient: None,
                                 key_images_hex: None,
                                 count: 0,
                             }.send_signal_to_dart();
@@ -1026,6 +1104,7 @@ impl Notifiable<ExportKeyImages> for TxBuilderActor {
                     KeyImagesExportedResponse {
                         success: false,
                         error: Some("Failed to get wallet data".to_string()),
+                        error_code: None, error_hint: None, error_transient: None,
                         key_images_hex: None,
                         count: 0,
                     }.send_signal_to_dart();
@@ -1035,6 +1114,7 @@ impl Notifiable<ExportKeyImages> for TxBuilderActor {
             KeyImagesExportedResponse {
                 success: false,
                 error: Some("Wallet not initialized".to_string()),
+                error_code: None, error_hint: None, error_transient: None,
                 key_images_hex: None,
                 count: 0,
             }.send_signal_to_dart();
@@ -1052,6 +1132,7 @@ impl Notifiable<ImportKeyImages> for TxBuilderActor {
                     KeyImagesImportedResponse {
                         success: false,
                         error: Some(format!("Invalid hex data: {:?}", e)),
+                        error_code: None, error_hint: None, error_transient: None,
                         imported_count: 0,
                         spent_count: 0,
                     }.send_signal_to_dart();
@@ -1065,6 +1146,7 @@ impl Notifiable<ImportKeyImages> for TxBuilderActor {
                     KeyImagesImportedResponse {
                         success: false,
                         error: Some(format!("Failed to parse key images: {}", e)),
+                        error_code: None, error_hint: None, error_transient: None,
                         imported_count: 0,
                         spent_count: 0,
                     }.send_signal_to_dart();
@@ -1095,6 +1177,7 @@ impl Notifiable<ImportKeyImages> for TxBuilderActor {
                     KeyImagesImportedResponse {
                         success: true,
                         error: None,
+                        error_code: None, error_hint: None, error_transient: None,
                         imported_count: count,
                         spent_count: matched_count,
                     }.send_signal_to_dart();
@@ -1103,6 +1186,7 @@ impl Notifiable<ImportKeyImages> for TxBuilderActor {
                     KeyImagesImportedResponse {
                         success: false,
                         error: Some("Failed to get wallet data".to_string()),
+                        error_code: None, error_hint: None, error_transient: None,
                         imported_count: 0,
                         spent_count: 0,
                     }.send_signal_to_dart();
@@ -1112,6 +1196,7 @@ impl Notifiable<ImportKeyImages> for TxBuilderActor {
             KeyImagesImportedResponse {
                 success: false,
                 error: Some("Wallet not initialized".to_string()),
+                error_code: None, error_hint: None, error_transient: None,
                 imported_count: 0,
                 spent_count: 0,
             }.send_signal_to_dart();

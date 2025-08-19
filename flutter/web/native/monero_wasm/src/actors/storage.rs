@@ -106,6 +106,9 @@ impl Notifiable<SaveWalletData> for StorageActor {
                 WalletDataSavedResponse {
                     success: true,
                     error: None,
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                     encrypted_data: Some(encrypted_base64),
                 }
                 .send_signal_to_dart();
@@ -117,6 +120,9 @@ impl Notifiable<SaveWalletData> for StorageActor {
                 WalletDataSavedResponse {
                     success: false,
                     error: Some(format!("Encryption failed: {}", e)),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                     encrypted_data: None,
                 }
                 .send_signal_to_dart();
@@ -144,6 +150,9 @@ impl Notifiable<LoadWalletData> for StorageActor {
                 WalletDataLoadedResponse {
                     success: false,
                     error: Some(format!("Invalid encrypted data: {}", e)),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                     wallet_data_json: None,
                 }
                 .send_signal_to_dart();
@@ -162,6 +171,9 @@ impl Notifiable<LoadWalletData> for StorageActor {
                         WalletDataLoadedResponse {
                             success: true,
                             error: None,
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                             wallet_data_json: Some(wallet_data_json),
                         }
                         .send_signal_to_dart();
@@ -173,6 +185,9 @@ impl Notifiable<LoadWalletData> for StorageActor {
                         WalletDataLoadedResponse {
                             success: false,
                             error: Some(format!("Invalid decrypted data: {}", e)),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                             wallet_data_json: None,
                         }
                         .send_signal_to_dart();
@@ -186,6 +201,9 @@ impl Notifiable<LoadWalletData> for StorageActor {
                 WalletDataLoadedResponse {
                     success: false,
                     error: Some(format!("Decryption failed: {} (wrong password?)", e)),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                     wallet_data_json: None,
                 }
                 .send_signal_to_dart();
@@ -207,6 +225,9 @@ impl Notifiable<DeriveKey> for StorageActor {
                 EncryptionKeyDerivedResponse {
                     success: true,
                     error: None,
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                     key_hex: Some(hex::encode(key)),
                     salt_hex: Some(hex::encode(salt)),
                 }
@@ -216,6 +237,9 @@ impl Notifiable<DeriveKey> for StorageActor {
                 EncryptionKeyDerivedResponse {
                     success: false,
                     error: Some(format!("Key derivation failed: {}", e)),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                     key_hex: None,
                     salt_hex: None,
                 }
@@ -245,6 +269,9 @@ impl Notifiable<SaveWithKey> for StorageActor {
                 WalletDataSavedResponse {
                     success: false,
                     error: Some("Invalid derived key".to_string()),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                     encrypted_data: None,
                 }
                 .send_signal_to_dart();
@@ -262,6 +289,9 @@ impl Notifiable<SaveWithKey> for StorageActor {
                 WalletDataSavedResponse {
                     success: false,
                     error: Some("Invalid salt".to_string()),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                     encrypted_data: None,
                 }
                 .send_signal_to_dart();
@@ -280,6 +310,9 @@ impl Notifiable<SaveWithKey> for StorageActor {
                 WalletDataSavedResponse {
                     success: true,
                     error: None,
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                     encrypted_data: Some(encrypted_base64),
                 }
                 .send_signal_to_dart();
@@ -288,6 +321,9 @@ impl Notifiable<SaveWithKey> for StorageActor {
                 WalletDataSavedResponse {
                     success: false,
                     error: Some(format!("Encryption failed: {}", e)),
+                    error_code: None,
+                    error_hint: None,
+                    error_transient: None,
                     encrypted_data: None,
                 }
                 .send_signal_to_dart();

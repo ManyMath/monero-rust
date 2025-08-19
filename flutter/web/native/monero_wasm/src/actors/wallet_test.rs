@@ -66,6 +66,7 @@ async fn test_update_scan_state_message() {
         seed: "test seed".to_string(),
         network: "stagenet".to_string(),
         account_lookahead: 50,
+        subaddress_lookahead: 0,
         accounts_to_scan: None,
     };
 
@@ -87,6 +88,7 @@ async fn test_stop_scan_message() {
         seed: "test seed".to_string(),
         network: "stagenet".to_string(),
         account_lookahead: 50,
+        subaddress_lookahead: 0,
         accounts_to_scan: None,
     };
 
@@ -135,6 +137,7 @@ async fn test_scan_state_transitions() {
             seed: "test seed".to_string(),
             network: "stagenet".to_string(),
             account_lookahead: 50,
+            subaddress_lookahead: 0,
             accounts_to_scan: None,
         }, &test_ctx).await;
     }
@@ -177,6 +180,7 @@ async fn test_update_scan_state_with_bip39_seed() {
         seed: BIP39_SEED.to_string(),
         network: "mainnet".to_string(),
         account_lookahead: 50,
+        subaddress_lookahead: 0,
         accounts_to_scan: None,
     }, &test_ctx).await;
 
@@ -199,6 +203,7 @@ async fn test_full_scan_lifecycle_with_bip39_seed() {
         seed: BIP39_SEED.to_string(),
         network: "mainnet".to_string(),
         account_lookahead: 50,
+        subaddress_lookahead: 0,
         accounts_to_scan: None,
     }, &test_ctx).await;
 
@@ -226,6 +231,7 @@ async fn test_full_scan_lifecycle_with_bip39_seed() {
         seed: BIP39_SEED.to_string(),
         network: "mainnet".to_string(),
         account_lookahead: 50,
+        subaddress_lookahead: 0,
         accounts_to_scan: None,
     }, &test_ctx).await;
 

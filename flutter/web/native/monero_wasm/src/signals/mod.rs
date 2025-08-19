@@ -93,6 +93,9 @@ pub struct ChangeOutput {
 pub struct TransactionCreatedResponse {
     pub success: bool,
     pub error: Option<String>,
+    pub error_code: Option<u32>,
+    pub error_hint: Option<String>,
+    pub error_transient: Option<bool>,
     pub tx_id: String,
     pub fee: u64,
     pub tx_blob: Option<String>,
@@ -115,6 +118,9 @@ pub struct SeedGeneratedResponse {
     pub seed: String,
     pub success: bool,
     pub error: Option<String>,
+    pub error_code: Option<u32>,
+    pub error_hint: Option<String>,
+    pub error_transient: Option<bool>,
     pub restore_height: Option<u64>,
 }
 
@@ -132,6 +138,9 @@ pub struct SeedBirthdayResponse {
     pub birthday: Option<u64>,
     pub success: bool,
     pub error: Option<String>,
+    pub error_code: Option<u32>,
+    pub error_hint: Option<String>,
+    pub error_transient: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -145,6 +154,9 @@ pub struct BlockHeightFromTimestampResponse {
     pub block_height: u64,
     pub success: bool,
     pub error: Option<String>,
+    pub error_code: Option<u32>,
+    pub error_hint: Option<String>,
+    pub error_transient: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -162,6 +174,9 @@ pub struct AddressDerivedResponse {
     pub address: String,
     pub success: bool,
     pub error: Option<String>,
+    pub error_code: Option<u32>,
+    pub error_hint: Option<String>,
+    pub error_transient: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -181,6 +196,9 @@ pub struct SubaddressDerivedResponse {
     pub address: String,
     pub success: bool,
     pub error: Option<String>,
+    pub error_code: Option<u32>,
+    pub error_hint: Option<String>,
+    pub error_transient: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -202,6 +220,9 @@ pub struct KeysDerivedResponse {
     pub public_view_key: String,
     pub success: bool,
     pub error: Option<String>,
+    pub error_code: Option<u32>,
+    pub error_hint: Option<String>,
+    pub error_transient: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -306,6 +327,9 @@ impl From<OwnedOutput> for monero_rust::WalletOutput {
 pub struct BlockScanResponse {
     pub success: bool,
     pub error: Option<String>,
+    pub error_code: Option<u32>,
+    pub error_hint: Option<String>,
+    pub error_transient: Option<bool>,
     pub block_height: u64,
     pub block_hash: String,
     pub block_timestamp: u64,
@@ -331,6 +355,9 @@ pub struct BroadcastTransactionRequest {
 pub struct TransactionBroadcastResponse {
     pub success: bool,
     pub error: Option<String>,
+    pub error_code: Option<u32>,
+    pub error_hint: Option<String>,
+    pub error_transient: Option<bool>,
     pub tx_id: Option<String>,
     #[serde(default)]
     pub is_retryable: bool,
@@ -347,6 +374,9 @@ pub struct QueryDaemonHeightRequest {
 pub struct DaemonHeightResponse {
     pub success: bool,
     pub error: Option<String>,
+    pub error_code: Option<u32>,
+    pub error_hint: Option<String>,
+    pub error_transient: Option<bool>,
     pub daemon_height: u64,
 }
 
@@ -396,6 +426,9 @@ pub struct MempoolScanRequest {
 pub struct MempoolScanResponse {
     pub success: bool,
     pub error: Option<String>,
+    pub error_code: Option<u32>,
+    pub error_hint: Option<String>,
+    pub error_transient: Option<bool>,
     pub tx_count: u32,
     pub outputs: Vec<OwnedOutput>,
     pub spent_key_images: Vec<String>,
@@ -415,6 +448,9 @@ pub struct GenerateOutProofRequest {
 pub struct OutProofGeneratedResponse {
     pub success: bool,
     pub error: Option<String>,
+    pub error_code: Option<u32>,
+    pub error_hint: Option<String>,
+    pub error_transient: Option<bool>,
     /// The OutProofV2 signature string (e.g., "OutProofV2...")
     pub signature: Option<String>,
     /// Feather-style formatted proof with headers
@@ -431,6 +467,9 @@ pub struct SaveWalletDataRequest {
 pub struct WalletDataSavedResponse {
     pub success: bool,
     pub error: Option<String>,
+    pub error_code: Option<u32>,
+    pub error_hint: Option<String>,
+    pub error_transient: Option<bool>,
     pub encrypted_data: Option<String>,
 }
 
@@ -444,6 +483,9 @@ pub struct LoadWalletDataRequest {
 pub struct WalletDataLoadedResponse {
     pub success: bool,
     pub error: Option<String>,
+    pub error_code: Option<u32>,
+    pub error_hint: Option<String>,
+    pub error_transient: Option<bool>,
     pub wallet_data_json: Option<String>,
 }
 
@@ -458,6 +500,9 @@ pub struct DeriveEncryptionKeyRequest {
 pub struct EncryptionKeyDerivedResponse {
     pub success: bool,
     pub error: Option<String>,
+    pub error_code: Option<u32>,
+    pub error_hint: Option<String>,
+    pub error_transient: Option<bool>,
     pub key_hex: Option<String>,
     pub salt_hex: Option<String>,
 }
@@ -503,6 +548,9 @@ pub struct WalletScanResult {
 pub struct MultiWalletScanResponse {
     pub success: bool,
     pub error: Option<String>,
+    pub error_code: Option<u32>,
+    pub error_hint: Option<String>,
+    pub error_transient: Option<bool>,
     pub block_height: u64,
     pub block_hash: String,
     pub block_timestamp: u64,
@@ -544,6 +592,9 @@ pub struct GetBlockHashesRequest {}
 pub struct BlockHashesResponse {
     pub success: bool,
     pub error: Option<String>,
+    pub error_code: Option<u32>,
+    pub error_hint: Option<String>,
+    pub error_transient: Option<bool>,
     pub block_hashes_json: Option<String>,
 }
 
@@ -554,6 +605,9 @@ pub struct GetPendingStateRequest {}
 pub struct PendingStateResponse {
     pub success: bool,
     pub error: Option<String>,
+    pub error_code: Option<u32>,
+    pub error_hint: Option<String>,
+    pub error_transient: Option<bool>,
     pub pending_state_json: Option<String>,
 }
 
@@ -592,6 +646,9 @@ pub struct Bip39LegacySeedResponse {
     pub legacy_seed: String,
     pub success: bool,
     pub error: Option<String>,
+    pub error_code: Option<u32>,
+    pub error_hint: Option<String>,
+    pub error_transient: Option<bool>,
 }
 
 // --- Freeze/Thaw signals ---
@@ -663,6 +720,9 @@ pub struct ImportKeyImagesRequest {
 pub struct UnsignedTransactionCreatedResponse {
     pub success: bool,
     pub error: Option<String>,
+    pub error_code: Option<u32>,
+    pub error_hint: Option<String>,
+    pub error_transient: Option<bool>,
     pub unsigned_tx_hex: Option<String>,
     pub fee: u64,
     pub recipients: Vec<Recipient>,
@@ -672,6 +732,9 @@ pub struct UnsignedTransactionCreatedResponse {
 pub struct TransactionSignedOfflineResponse {
     pub success: bool,
     pub error: Option<String>,
+    pub error_code: Option<u32>,
+    pub error_hint: Option<String>,
+    pub error_transient: Option<bool>,
     pub tx_id: Option<String>,
     pub fee: u64,
     pub tx_blob: Option<String>,
@@ -684,6 +747,9 @@ pub struct TransactionSignedOfflineResponse {
 pub struct KeyImagesExportedResponse {
     pub success: bool,
     pub error: Option<String>,
+    pub error_code: Option<u32>,
+    pub error_hint: Option<String>,
+    pub error_transient: Option<bool>,
     pub key_images_hex: Option<String>,
     pub count: u64,
 }
@@ -692,6 +758,9 @@ pub struct KeyImagesExportedResponse {
 pub struct KeyImagesImportedResponse {
     pub success: bool,
     pub error: Option<String>,
+    pub error_code: Option<u32>,
+    pub error_hint: Option<String>,
+    pub error_transient: Option<bool>,
     pub imported_count: u64,
     pub spent_count: u64,
 }
@@ -842,6 +911,9 @@ mod tests {
         let response = BlockScanResponse {
             success: true,
             error: None,
+            error_code: None,
+            error_hint: None,
+            error_transient: None,
             block_height: 1_384_526,
             block_hash: "a5918cf3".into(),
             block_timestamp: 1_688_074_142,
@@ -872,6 +944,9 @@ mod tests {
         let response = BlockScanResponse {
             success: true,
             error: None,
+            error_code: None,
+            error_hint: None,
+            error_transient: None,
             block_height: 100,
             block_hash: "hash".into(),
             block_timestamp: 0,
@@ -895,6 +970,9 @@ mod tests {
         let response = BlockScanResponse {
             success: false,
             error: Some("Connection refused".into()),
+            error_code: None,
+            error_hint: None,
+            error_transient: None,
             block_height: 0,
             block_hash: String::new(),
             block_timestamp: 0,
@@ -929,6 +1007,9 @@ mod tests {
         let response = TransactionCreatedResponse {
             success: true,
             error: None,
+            error_code: None,
+            error_hint: None,
+            error_transient: None,
             tx_id: "txid_hex".into(),
             fee: 44_000_000,
             tx_blob: Some("blob_hex".into()),
@@ -975,6 +1056,9 @@ mod tests {
         let response = MultiWalletScanResponse {
             success: true,
             error: None,
+            error_code: None,
+            error_hint: None,
+            error_transient: None,
             block_height: 5_000,
             block_hash: "blockhash".into(),
             block_timestamp: 1_700_000_000,
@@ -1077,6 +1161,9 @@ mod tests {
             public_view_key: "pvk".into(),
             success: true,
             error: None,
+            error_code: None,
+            error_hint: None,
+            error_transient: None,
         };
 
         let v = round_trip(&response);
@@ -1090,6 +1177,9 @@ mod tests {
         let response = TransactionBroadcastResponse {
             success: false,
             error: Some("Double spend".into()),
+            error_code: None,
+            error_hint: None,
+            error_transient: None,
             tx_id: None,
             is_retryable: false,
             is_double_spend: true,
@@ -1150,6 +1240,9 @@ mod tests {
         let response = UnsignedTransactionCreatedResponse {
             success: true,
             error: None,
+            error_code: None,
+            error_hint: None,
+            error_transient: None,
             unsigned_tx_hex: Some("aabbccdd".into()),
             fee: 50_000_000,
             recipients: vec![Recipient {
@@ -1182,6 +1275,9 @@ mod tests {
         let response = TransactionSignedOfflineResponse {
             success: true,
             error: None,
+            error_code: None,
+            error_hint: None,
+            error_transient: None,
             tx_id: Some("signed_txid".into()),
             fee: 44_000_000,
             tx_blob: Some("signed_blob".into()),
