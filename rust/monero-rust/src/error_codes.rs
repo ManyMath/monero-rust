@@ -103,6 +103,83 @@ impl ErrorResponse {
         self.transient = true;
         self
     }
+
+    /// Classify a bare `String` error from the core library into a structured
+    /// `ErrorResponse` by pattern-matching on the message text.
+    ///
+    /// This is the preferred way to convert legacy `Result<_, String>` errors
+    /// that originate from `monero-rust` into structured codes when the
+    /// original typed error (e.g. `SeedError`, `RpcError`) is no longer
+    /// available.
+    pub fn from_string(msg: &str) -> Self {
+        let lower = msg.to_lowercase();
+
+        // Seed / mnemonic errors
+        if lower.contains("invalid seed") || lower.contains("failed to parse seed")
+            || lower.contains("invalid bip39") || lower.contains("failed to parse derived legacy seed")
+        {
+            return ErrorResponse::new(ERR_SEED_INVALID, msg)
+                .with_hint("Double-check the seed phrase for typos");
+        }
+        if lower.contains("seed phrase is empty") {
+            return ErrorResponse::new(ERR_EMPTY_FIELD, msg)
+                .with_hint("Provide a non-empty seed phrase");
+        }
+        if lower.contains("unknown language") {
+            return ErrorResponse::new(ERR_SEED_UNKNOWN_LANGUAGE, msg);
+        }
+        if lower.contains("invalid checksum") {
+            return ErrorResponse::new(ERR_SEED_INVALID_CHECKSUM, msg)
+                .with_hint("Double-check the seed phrase for typos");
+        }
+        if lower.contains("invalid seed length") || lower.contains("invalid word count") {
+            return ErrorResponse::new(ERR_SEED_INVALID_LENGTH, msg)
+                .with_hint("A classic seed is 25 words; a polyseed is 16 words");
+        }
+
+        // Network errors
+        if lower.contains("invalid network") {
+            return ErrorResponse::new(ERR_INVALID_NETWORK, msg)
+                .with_hint("Expected mainnet, testnet, or stagenet");
+        }
+
+        // Address errors
+        if lower.contains("invalid address") || lower.contains("address") && lower.contains("invalid") {
+            return ErrorResponse::new(ERR_INVALID_ADDRESS, msg);
+        }
+        if lower.contains("different network") {
+            return ErrorResponse::new(ERR_ADDRESS_WRONG_NETWORK, msg);
+        }
+
+        // RPC / connection errors
+        if lower.contains("connection") || lower.contains("fetch failed")
+            || lower.contains("failed to get height") || lower.contains("failed to create rpc")
+        {
+            return ErrorResponse::new(ERR_RPC_CONNECTION, msg)
+                .with_hint("Check your network connection and node URL")
+                .transient();
+        }
+
+        // No outputs
+        if lower.contains("no spendable outputs") || lower.contains("no selected outputs")
+            || lower.contains("no confirmed outputs")
+        {
+            return ErrorResponse::new(ERR_NO_OUTPUTS, msg);
+        }
+
+        // Insufficient funds
+        if lower.contains("insufficient") {
+            return ErrorResponse::new(ERR_INSUFFICIENT_FUNDS, msg);
+        }
+
+        // Transaction build failures
+        if lower.contains("transaction") && (lower.contains("failed") || lower.contains("error")) {
+            return ErrorResponse::new(ERR_TX_BUILD_FAILED, msg);
+        }
+
+        // Fallback: internal error
+        ErrorResponse::new(ERR_INTERNAL, msg)
+    }
 }
 
 impl std::fmt::Display for ErrorResponse {

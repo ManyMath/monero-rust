@@ -257,6 +257,8 @@ impl WalletActor {
     }
 
     async fn listen_to_generate_seed(_self_addr: Address<Self>) {
+        use monero_rust::error_codes::ErrorResponse;
+
         let mut receiver = crate::ffi_web::get_generate_seed_request_receiver();
         while let Some(dart_msg) = receiver.recv().await {
             let request = dart_msg;
@@ -271,21 +273,22 @@ impl WalletActor {
                         seed,
                         success: true,
                         error: None,
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
+                        error_code: None,
+                        error_hint: None,
+                        error_transient: None,
                         restore_height,
                     }
                     .send_signal_to_dart();
                 }
                 Err(e) => {
+                    let err = ErrorResponse::from_string(&e);
                     SeedGeneratedResponse {
                         seed: String::new(),
                         success: false,
                         error: Some(e),
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
+                        error_code: Some(err.code),
+                        error_hint: err.hint,
+                        error_transient: Some(err.transient),
                         restore_height: None,
                     }
                     .send_signal_to_dart();
@@ -295,13 +298,19 @@ impl WalletActor {
     }
 
     async fn listen_to_get_seed_birthday(_self_addr: Address<Self>) {
+        use monero_rust::error_codes::ErrorResponse;
+
         let mut receiver = crate::ffi_web::get_get_seed_birthday_request_receiver();
         while let Some(dart_msg) = receiver.recv().await {
             let request = dart_msg;
             let resolved = match pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
                 Ok(s) => s,
                 Err(e) => {
-                    SeedBirthdayResponse { birthday: None, success: false, error: Some(e), error_code: None, error_hint: None, error_transient: None }.send_signal_to_dart();
+                    let err = ErrorResponse::from_string(&e);
+                    SeedBirthdayResponse {
+                        birthday: None, success: false, error: Some(e),
+                        error_code: Some(err.code), error_hint: err.hint, error_transient: Some(err.transient),
+                    }.send_signal_to_dart();
                     continue;
                 }
             };
@@ -310,9 +319,9 @@ impl WalletActor {
                 birthday,
                 success: true,
                 error: None,
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
+                error_code: None,
+                error_hint: None,
+                error_transient: None,
             }
             .send_signal_to_dart();
         }
@@ -449,13 +458,19 @@ impl WalletActor {
     }
 
     async fn listen_to_derive_address(_self_addr: Address<Self>) {
+        use monero_rust::error_codes::ErrorResponse;
+
         let mut receiver = crate::ffi_web::get_derive_address_request_receiver();
         while let Some(dart_msg) = receiver.recv().await {
             let request = dart_msg;
             let resolved = match pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
                 Ok(s) => s,
                 Err(e) => {
-                    AddressDerivedResponse { address: String::new(), success: false, error: Some(e), error_code: None, error_hint: None, error_transient: None }.send_signal_to_dart();
+                    let err = ErrorResponse::from_string(&e);
+                    AddressDerivedResponse {
+                        address: String::new(), success: false, error: Some(e),
+                        error_code: Some(err.code), error_hint: err.hint, error_transient: Some(err.transient),
+                    }.send_signal_to_dart();
                     continue;
                 }
             };
@@ -465,20 +480,21 @@ impl WalletActor {
                         address,
                         success: true,
                         error: None,
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
+                        error_code: None,
+                        error_hint: None,
+                        error_transient: None,
                     }
                     .send_signal_to_dart();
                 }
                 Err(e) => {
+                    let err = ErrorResponse::from_string(&e);
                     AddressDerivedResponse {
                         address: String::new(),
                         success: false,
                         error: Some(e),
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
+                        error_code: Some(err.code),
+                        error_hint: err.hint,
+                        error_transient: Some(err.transient),
                     }
                     .send_signal_to_dart();
                 }
@@ -487,13 +503,19 @@ impl WalletActor {
     }
 
     async fn listen_to_derive_subaddress(_self_addr: Address<Self>) {
+        use monero_rust::error_codes::ErrorResponse;
+
         let mut receiver = crate::ffi_web::get_derive_subaddress_request_receiver();
         while let Some(dart_msg) = receiver.recv().await {
             let request = dart_msg;
             let resolved = match pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
                 Ok(s) => s,
                 Err(e) => {
-                    SubaddressDerivedResponse { address: String::new(), success: false, error: Some(e), error_code: None, error_hint: None, error_transient: None }.send_signal_to_dart();
+                    let err = ErrorResponse::from_string(&e);
+                    SubaddressDerivedResponse {
+                        address: String::new(), success: false, error: Some(e),
+                        error_code: Some(err.code), error_hint: err.hint, error_transient: Some(err.transient),
+                    }.send_signal_to_dart();
                     continue;
                 }
             };
@@ -508,20 +530,21 @@ impl WalletActor {
                         address,
                         success: true,
                         error: None,
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
+                        error_code: None,
+                        error_hint: None,
+                        error_transient: None,
                     }
                     .send_signal_to_dart();
                 }
                 Err(e) => {
+                    let err = ErrorResponse::from_string(&e);
                     SubaddressDerivedResponse {
                         address: String::new(),
                         success: false,
                         error: Some(e),
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
+                        error_code: Some(err.code),
+                        error_hint: err.hint,
+                        error_transient: Some(err.transient),
                     }
                     .send_signal_to_dart();
                 }
@@ -530,17 +553,20 @@ impl WalletActor {
     }
 
     async fn listen_to_derive_keys(_self_addr: Address<Self>) {
+        use monero_rust::error_codes::ErrorResponse;
+
         let mut receiver = crate::ffi_web::get_derive_keys_request_receiver();
         while let Some(dart_msg) = receiver.recv().await {
             let request = dart_msg;
             let resolved = match pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
                 Ok(s) => s,
                 Err(e) => {
+                    let err = ErrorResponse::from_string(&e);
                     KeysDerivedResponse {
                         address: String::new(), secret_spend_key: String::new(),
                         secret_view_key: String::new(), public_spend_key: String::new(),
                         public_view_key: String::new(), success: false, error: Some(e),
-                        error_code: None, error_hint: None, error_transient: None,
+                        error_code: Some(err.code), error_hint: err.hint, error_transient: Some(err.transient),
                     }.send_signal_to_dart();
                     continue;
                 }
@@ -555,13 +581,14 @@ impl WalletActor {
                         public_view_key: keys.public_view_key,
                         success: true,
                         error: None,
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
+                        error_code: None,
+                        error_hint: None,
+                        error_transient: None,
                     }
                     .send_signal_to_dart();
                 }
                 Err(e) => {
+                    let err = ErrorResponse::from_string(&e);
                     KeysDerivedResponse {
                         address: String::new(),
                         secret_spend_key: String::new(),
@@ -570,9 +597,9 @@ impl WalletActor {
                         public_view_key: String::new(),
                         success: false,
                         error: Some(e),
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
+                        error_code: Some(err.code),
+                        error_hint: err.hint,
+                        error_transient: Some(err.transient),
                     }
                     .send_signal_to_dart();
                 }
@@ -1062,6 +1089,8 @@ impl WalletActor {
     }
 
     async fn listen_to_convert_bip39_to_legacy(_self_addr: Address<Self>) {
+        use monero_rust::error_codes::ErrorResponse;
+
         let mut receiver = crate::ffi_web::get_convert_bip39_to_legacy_request_receiver();
         while let Some(dart_msg) = receiver.recv().await {
             let request = dart_msg;
@@ -1075,20 +1104,21 @@ impl WalletActor {
                         legacy_seed: legacy,
                         success: true,
                         error: None,
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
+                        error_code: None,
+                        error_hint: None,
+                        error_transient: None,
                     }
                     .send_signal_to_dart();
                 }
                 Err(e) => {
+                    let err = ErrorResponse::from_string(&e);
                     Bip39LegacySeedResponse {
                         legacy_seed: String::new(),
                         success: false,
                         error: Some(e),
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
+                        error_code: Some(err.code),
+                        error_hint: err.hint,
+                        error_transient: Some(err.transient),
                     }
                     .send_signal_to_dart();
                 }
