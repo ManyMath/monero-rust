@@ -3,8 +3,27 @@ use crate::signals::*;
 use async_trait::async_trait;
 use messages::prelude::{Actor, Address, Context, Notifiable};
 use crate::ffi_web::SendToDart;
+use monero_rust::error_codes::ErrorResponse;
 use tokio::task::JoinSet;
 use tokio_with_wasm::alias as tokio;
+
+fn tx_error_response(msg: String) -> TransactionCreatedResponse {
+    let err = ErrorResponse::from_string(&msg);
+    TransactionCreatedResponse {
+        success: false,
+        error: Some(msg),
+        error_code: Some(err.code),
+        error_hint: err.hint,
+        error_transient: Some(err.transient),
+        tx_id: String::new(),
+        fee: 0,
+        tx_blob: None,
+        tx_key: None,
+        tx_key_additional: Vec::new(),
+        spent_output_hashes: Vec::new(),
+        change_outputs: Vec::new(),
+    }
+}
 
 pub struct TxBuilderActor {
     wallet_actor: Option<Address<super::wallet::WalletActor>>,
@@ -42,9 +61,10 @@ impl TxBuilderActor {
             let resolved_seed = match super::wallet::pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
                 Ok(s) => s,
                 Err(e) => {
+                    let err = ErrorResponse::from_string(&e);
                     TransactionCreatedResponse {
                         success: false, error: Some(e),
-                        error_code: None, error_hint: None, error_transient: None,
+                        error_code: Some(err.code), error_hint: err.hint, error_transient: Some(err.transient),
                         tx_id: String::new(), fee: 0,
                         tx_blob: None, tx_key: None, tx_key_additional: Vec::new(),
                         spent_output_hashes: Vec::new(), change_outputs: Vec::new(),
@@ -78,9 +98,10 @@ impl TxBuilderActor {
             let resolved_seed = match super::wallet::pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
                 Ok(s) => s,
                 Err(e) => {
+                    let err = ErrorResponse::from_string(&e);
                     TransactionCreatedResponse {
                         success: false, error: Some(e),
-                        error_code: None, error_hint: None, error_transient: None,
+                        error_code: Some(err.code), error_hint: err.hint, error_transient: Some(err.transient),
                         tx_id: String::new(), fee: 0,
                         tx_blob: None, tx_key: None, tx_key_additional: Vec::new(),
                         spent_output_hashes: Vec::new(), change_outputs: Vec::new(),
@@ -306,21 +327,7 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                             ) {
                                 Ok(p) => p,
                                 Err(error_msg) => {
-                                    TransactionCreatedResponse {
-                                        success: false,
-                                        error: Some(error_msg),
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
-                                        tx_id: String::new(),
-                                        fee: 0,
-                                        tx_blob: None,
-                                        tx_key: None,
-                                        tx_key_additional: Vec::new(),
-                                        spent_output_hashes: Vec::new(),
-                                        change_outputs: Vec::new(),
-                                    }
-                                    .send_signal_to_dart();
+                                    tx_error_response(error_msg).send_signal_to_dart();
                                     return;
                                 }
                             };
@@ -356,9 +363,9 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                                     TransactionCreatedResponse {
                                         success: true,
                                         error: None,
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
+                                        error_code: None,
+                                        error_hint: None,
+                                        error_transient: None,
                                         tx_id: result.tx_id,
                                         fee: result.fee,
                                         tx_blob: Some(result.tx_blob),
@@ -370,21 +377,8 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                                     .send_signal_to_dart();
                                 }
                                 Err(e) => {
-                                    TransactionCreatedResponse {
-                                        success: false,
-                                        error: Some(format!("Transaction building failed: {}", e)),
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
-                                        tx_id: String::new(),
-                                        fee: 0,
-                                        tx_blob: None,
-                                        tx_key: None,
-                                        tx_key_additional: Vec::new(),
-                                        spent_output_hashes: Vec::new(),
-                                        change_outputs: Vec::new(),
-                                    }
-                                    .send_signal_to_dart();
+                                    tx_error_response(format!("Transaction building failed: {}", e))
+                                        .send_signal_to_dart();
                                 }
                             }
                             return;
@@ -411,21 +405,7 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                                     ) {
                                         Ok(p) => p,
                                         Err(error_msg) => {
-                                            TransactionCreatedResponse {
-                                                success: false,
-                                                error: Some(error_msg),
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
-                                                tx_id: String::new(),
-                                                fee: 0,
-                                                tx_blob: None,
-                                                tx_key: None,
-                                                tx_key_additional: Vec::new(),
-                                                spent_output_hashes: Vec::new(),
-                                                change_outputs: Vec::new(),
-                                            }
-                                            .send_signal_to_dart();
+                                            tx_error_response(error_msg).send_signal_to_dart();
                                             return;
                                         }
                                     }
@@ -442,21 +422,7 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                             ) {
                                 Ok(p) => p,
                                 Err(error_msg) => {
-                                    TransactionCreatedResponse {
-                                        success: false,
-                                        error: Some(error_msg),
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
-                                        tx_id: String::new(),
-                                        fee: 0,
-                                        tx_blob: None,
-                                        tx_key: None,
-                                        tx_key_additional: Vec::new(),
-                                        spent_output_hashes: Vec::new(),
-                                        change_outputs: Vec::new(),
-                                    }
-                                    .send_signal_to_dart();
+                                    tx_error_response(error_msg).send_signal_to_dart();
                                     return;
                                 }
                             }
@@ -468,21 +434,9 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                         let final_recipients = if subtract_fee {
                             let adjusted = monero_rust::adjust_recipients_for_fee(&recipients, prepared.estimated_fee);
                             if adjusted.iter().any(|(_, amt)| *amt == 0) {
-                                TransactionCreatedResponse {
-                                    success: false,
-                                    error: Some("Recipient amount(s) too small to cover the fee after subtraction".to_string()),
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
-                                    tx_id: String::new(),
-                                    fee: 0,
-                                    tx_blob: None,
-                                    tx_key: None,
-                                    tx_key_additional: Vec::new(),
-                                    spent_output_hashes: Vec::new(),
-                                    change_outputs: Vec::new(),
-                                }
-                                .send_signal_to_dart();
+                                tx_error_response(
+                                    "Recipient amount(s) too small to cover the fee after subtraction".to_string()
+                                ).send_signal_to_dart();
                                 return;
                             }
                             adjusted
@@ -519,9 +473,9 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                                 TransactionCreatedResponse {
                                     success: true,
                                     error: None,
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
+                                    error_code: None,
+                                    error_hint: None,
+                                    error_transient: None,
                                     tx_id: result.tx_id,
                                     fee: result.fee,
                                     tx_blob: Some(result.tx_blob),
@@ -558,9 +512,9 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                                         TransactionCreatedResponse {
                                             success: true,
                                             error: None,
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
+                                            error_code: None,
+                                            error_hint: None,
+                                            error_transient: None,
                                             tx_id: result.tx_id,
                                             fee: result.fee,
                                             tx_blob: Some(result.tx_blob),
@@ -572,78 +526,26 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                                         .send_signal_to_dart();
                                     }
                                     Err(e2) => {
-                                        TransactionCreatedResponse {
-                                            success: false,
-                                            error: Some(format!("Transaction building failed: {}", e2)),
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
-                                            tx_id: String::new(),
-                                            fee: 0,
-                                            tx_blob: None,
-                                            tx_key: None,
-                                            tx_key_additional: Vec::new(),
-                                            spent_output_hashes: Vec::new(),
-                                            change_outputs: Vec::new(),
-                                        }
-                                        .send_signal_to_dart();
+                                        tx_error_response(format!("Transaction building failed: {}", e2))
+                                            .send_signal_to_dart();
                                     }
                                 }
                             }
                             Err(e) => {
-                                TransactionCreatedResponse {
-                                    success: false,
-                                    error: Some(format!("Transaction building failed: {}", e)),
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
-                                    tx_id: String::new(),
-                                    fee: 0,
-                                    tx_blob: None,
-                                    tx_key: None,
-                                    tx_key_additional: Vec::new(),
-                                    spent_output_hashes: Vec::new(),
-                                    change_outputs: Vec::new(),
-                                }
-                                .send_signal_to_dart();
+                                tx_error_response(format!("Transaction building failed: {}", e))
+                                    .send_signal_to_dart();
                             }
                         }
                     });
                 }
                 (Err(e), _) | (_, Err(e)) => {
-                    TransactionCreatedResponse {
-                        success: false,
-                        error: Some(format!("Failed to get wallet data or height: {:?}", e)),
-                        error_code: None,
-                        error_hint: None,
-                        error_transient: None,
-                        tx_id: String::new(),
-                        fee: 0,
-                        tx_blob: None,
-                        tx_key: None,
-                        tx_key_additional: Vec::new(),
-                        spent_output_hashes: Vec::new(),
-                        change_outputs: Vec::new(),
-                    }
-                    .send_signal_to_dart();
+                    tx_error_response(format!("Failed to get wallet data or height: {:?}", e))
+                        .send_signal_to_dart();
                 }
             }
         } else {
-            TransactionCreatedResponse {
-                success: false,
-                error: Some("Wallet actor not initialized".to_string()),
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
-                tx_id: String::new(),
-                fee: 0,
-                tx_blob: None,
-                tx_key: None,
-                tx_key_additional: Vec::new(),
-                spent_output_hashes: Vec::new(),
-                change_outputs: Vec::new(),
-            }
-            .send_signal_to_dart();
+            tx_error_response("Wallet actor not initialized".to_string())
+                .send_signal_to_dart();
         }
     }
 }
@@ -685,21 +587,7 @@ impl Notifiable<SweepAll> for TxBuilderActor {
                         ) {
                             Ok(p) => p,
                             Err(error_msg) => {
-                                TransactionCreatedResponse {
-                                    success: false,
-                                    error: Some(error_msg),
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
-                                    tx_id: String::new(),
-                                    fee: 0,
-                                    tx_blob: None,
-                                    tx_key: None,
-                                    tx_key_additional: Vec::new(),
-                                    spent_output_hashes: Vec::new(),
-                                    change_outputs: Vec::new(),
-                                }
-                                .send_signal_to_dart();
+                                tx_error_response(error_msg).send_signal_to_dart();
                                 return;
                             }
                         };
@@ -736,9 +624,9 @@ impl Notifiable<SweepAll> for TxBuilderActor {
                                 TransactionCreatedResponse {
                                     success: true,
                                     error: None,
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
+                                    error_code: None,
+                                    error_hint: None,
+                                    error_transient: None,
                                     tx_id: result.tx_id,
                                     fee: result.fee,
                                     tx_blob: Some(result.tx_blob),
@@ -750,59 +638,19 @@ impl Notifiable<SweepAll> for TxBuilderActor {
                                 .send_signal_to_dart();
                             }
                             Err(e) => {
-                                TransactionCreatedResponse {
-                                    success: false,
-                                    error: Some(e),
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
-                                    tx_id: String::new(),
-                                    fee: 0,
-                                    tx_blob: None,
-                                    tx_key: None,
-                                    tx_key_additional: Vec::new(),
-                                    spent_output_hashes: Vec::new(),
-                                    change_outputs: Vec::new(),
-                                }
-                                .send_signal_to_dart();
+                                tx_error_response(e).send_signal_to_dart();
                             }
                         }
                     });
                 }
                 (Err(e), _) | (_, Err(e)) => {
-                    TransactionCreatedResponse {
-                        success: false,
-                        error: Some(format!("Failed to get wallet data: {:?}", e)),
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
-                        tx_id: String::new(),
-                        fee: 0,
-                        tx_blob: None,
-                        tx_key: None,
-                        tx_key_additional: Vec::new(),
-                        spent_output_hashes: Vec::new(),
-                        change_outputs: Vec::new(),
-                    }
-                    .send_signal_to_dart();
+                    tx_error_response(format!("Failed to get wallet data: {:?}", e))
+                        .send_signal_to_dart();
                 }
             }
         } else {
-            TransactionCreatedResponse {
-                success: false,
-                error: Some("Wallet actor not initialized".to_string()),
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
-                tx_id: String::new(),
-                fee: 0,
-                tx_blob: None,
-                tx_key: None,
-                tx_key_additional: Vec::new(),
-                spent_output_hashes: Vec::new(),
-                change_outputs: Vec::new(),
-            }
-            .send_signal_to_dart();
+            tx_error_response("Wallet actor not initialized".to_string())
+                .send_signal_to_dart();
         }
     }
 }
@@ -862,12 +710,22 @@ impl Notifiable<BroadcastTransaction> for TxBuilderActor {
                     web_sys::console::error_1(&error_str.as_str().into());
                     let (is_double_spend, is_retryable) = monero_rust::classify_broadcast_error(&error_str);
 
+                    let err = ErrorResponse::from_string(&error_str);
+                    let error_transient = Some(is_retryable || err.transient);
+                    let error_code = if is_double_spend {
+                        Some(monero_rust::error_codes::ERR_TX_DOUBLE_SPEND)
+                    } else if is_retryable {
+                        Some(monero_rust::error_codes::ERR_RPC_CONNECTION)
+                    } else {
+                        Some(err.code)
+                    };
+
                     TransactionBroadcastResponse {
                         success: false,
                         error: Some(error_str),
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
+                        error_code,
+                        error_hint: err.hint,
+                        error_transient,
                         tx_id: None,
                         is_retryable,
                         is_double_spend,
