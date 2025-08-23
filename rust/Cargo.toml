@@ -3,5 +3,6 @@ members = [
     "monero-rust",
     "monero-serai-mirror",
     "monero-epee-bin-serde",
+    "monero-cli",
 ]
 resolver = "2"
