@@ -615,7 +615,7 @@ impl WalletActor {
         while let Some(dart_msg) = receiver.recv().await {
             let request = dart_msg;
 
-            if let Err(err) = monero_rust::error_codes::Network::from_str(&request.network) {
+            if let Err(err) = monero_rust::error_codes::Network::parse(&request.network) {
                 BlockScanResponse {
                     success: false, error: Some(err.message.clone()),
                     error_code: Some(err.code), error_hint: err.hint, error_transient: Some(err.transient),
@@ -759,7 +759,7 @@ impl WalletActor {
         while let Some(dart_msg) = receiver.recv().await {
             let request = dart_msg;
 
-            if let Err(err) = monero_rust::error_codes::Network::from_str(&request.network) {
+            if let Err(err) = monero_rust::error_codes::Network::parse(&request.network) {
                 BlockScanResponse {
                     success: false, error: Some(err.message.clone()),
                     error_code: Some(err.code), error_hint: err.hint, error_transient: Some(err.transient),
@@ -814,7 +814,7 @@ impl WalletActor {
         while let Some(dart_msg) = receiver.recv().await {
             let request = dart_msg;
 
-            if let Err(err) = monero_rust::error_codes::Network::from_str(&request.network) {
+            if let Err(err) = monero_rust::error_codes::Network::parse(&request.network) {
                 MempoolScanResponse {
                     success: false, error: Some(err.message.clone()),
                     error_code: Some(err.code), error_hint: err.hint, error_transient: Some(err.transient),

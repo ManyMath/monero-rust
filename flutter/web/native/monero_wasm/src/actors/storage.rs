@@ -1,4 +1,5 @@
 use monero_rust::encryption;
+use monero_rust::error_codes::{ErrorResponse, ERR_ENCRYPTION, ERR_DECRYPTION, ERR_INVALID_KEY};
 use crate::signals::{
     DeriveEncryptionKeyRequest, EncryptionKeyDerivedResponse, LoadWalletDataRequest,
     SaveWalletDataRequest, SaveWithDerivedKeyRequest, WalletDataLoadedResponse,
@@ -117,12 +118,13 @@ impl Notifiable<SaveWalletData> for StorageActor {
                 #[cfg(target_arch = "wasm32")]
                 web_sys::console::error_1(&format!("Encryption failed: {}", e).into());
 
+                let err = ErrorResponse::new(ERR_ENCRYPTION, format!("Encryption failed: {}", e));
                 WalletDataSavedResponse {
                     success: false,
-                    error: Some(format!("Encryption failed: {}", e)),
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
+                    error: Some(err.message.clone()),
+                    error_code: Some(err.code),
+                    error_hint: err.hint,
+                    error_transient: Some(err.transient),
                     encrypted_data: None,
                 }
                 .send_signal_to_dart();
@@ -147,12 +149,14 @@ impl Notifiable<LoadWalletData> for StorageActor {
                 #[cfg(target_arch = "wasm32")]
                 web_sys::console::error_1(&format!("Base64 decode failed: {}", e).into());
 
+                let err = ErrorResponse::new(ERR_DECRYPTION, format!("Invalid encrypted data: {}", e))
+                    .with_hint("The stored data may be corrupted");
                 WalletDataLoadedResponse {
                     success: false,
-                    error: Some(format!("Invalid encrypted data: {}", e)),
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
+                    error: Some(err.message.clone()),
+                    error_code: Some(err.code),
+                    error_hint: err.hint,
+                    error_transient: Some(err.transient),
                     wallet_data_json: None,
                 }
                 .send_signal_to_dart();
@@ -182,12 +186,14 @@ impl Notifiable<LoadWalletData> for StorageActor {
                         #[cfg(target_arch = "wasm32")]
                         web_sys::console::error_1(&format!("UTF-8 decode failed: {}", e).into());
 
+                        let err = ErrorResponse::new(ERR_DECRYPTION, format!("Invalid decrypted data: {}", e))
+                            .with_hint("Wrong password or corrupted data");
                         WalletDataLoadedResponse {
                             success: false,
-                            error: Some(format!("Invalid decrypted data: {}", e)),
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
+                            error: Some(err.message.clone()),
+                            error_code: Some(err.code),
+                            error_hint: err.hint,
+                            error_transient: Some(err.transient),
                             wallet_data_json: None,
                         }
                         .send_signal_to_dart();
@@ -198,12 +204,14 @@ impl Notifiable<LoadWalletData> for StorageActor {
                 #[cfg(target_arch = "wasm32")]
                 web_sys::console::error_1(&format!("Decryption failed: {}", e).into());
 
+                let err = ErrorResponse::new(ERR_DECRYPTION, format!("Decryption failed: {}", e))
+                    .with_hint("Check that the password is correct");
                 WalletDataLoadedResponse {
                     success: false,
-                    error: Some(format!("Decryption failed: {} (wrong password?)", e)),
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
+                    error: Some(err.message.clone()),
+                    error_code: Some(err.code),
+                    error_hint: err.hint,
+                    error_transient: Some(err.transient),
                     wallet_data_json: None,
                 }
                 .send_signal_to_dart();
@@ -234,12 +242,13 @@ impl Notifiable<DeriveKey> for StorageActor {
                 .send_signal_to_dart();
             }
             Err(e) => {
+                let err = ErrorResponse::new(ERR_ENCRYPTION, format!("Key derivation failed: {}", e));
                 EncryptionKeyDerivedResponse {
                     success: false,
-                    error: Some(format!("Key derivation failed: {}", e)),
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
+                    error: Some(err.message.clone()),
+                    error_code: Some(err.code),
+                    error_hint: err.hint,
+                    error_transient: Some(err.transient),
                     key_hex: None,
                     salt_hex: None,
                 }
@@ -269,9 +278,9 @@ impl Notifiable<SaveWithKey> for StorageActor {
                 WalletDataSavedResponse {
                     success: false,
                     error: Some("Invalid derived key".to_string()),
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
+                    error_code: Some(ERR_INVALID_KEY),
+                    error_hint: Some("Derived key must be 32 bytes hex-encoded".to_string()),
+                    error_transient: Some(false),
                     encrypted_data: None,
                 }
                 .send_signal_to_dart();
@@ -289,9 +298,9 @@ impl Notifiable<SaveWithKey> for StorageActor {
                 WalletDataSavedResponse {
                     success: false,
                     error: Some("Invalid salt".to_string()),
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
+                    error_code: Some(ERR_INVALID_KEY),
+                    error_hint: Some("Salt must be 16 bytes hex-encoded".to_string()),
+                    error_transient: Some(false),
                     encrypted_data: None,
                 }
                 .send_signal_to_dart();
@@ -318,12 +327,13 @@ impl Notifiable<SaveWithKey> for StorageActor {
                 .send_signal_to_dart();
             }
             Err(e) => {
+                let err = ErrorResponse::new(ERR_ENCRYPTION, format!("Encryption failed: {}", e));
                 WalletDataSavedResponse {
                     success: false,
-                    error: Some(format!("Encryption failed: {}", e)),
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
+                    error: Some(err.message.clone()),
+                    error_code: Some(err.code),
+                    error_hint: err.hint,
+                    error_transient: Some(err.transient),
                     encrypted_data: None,
                 }
                 .send_signal_to_dart();

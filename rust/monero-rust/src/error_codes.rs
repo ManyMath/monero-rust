@@ -18,7 +18,7 @@ pub enum Network {
 }
 
 impl Network {
-    pub fn from_str(s: &str) -> Result<Self, ErrorResponse> {
+    pub fn parse(s: &str) -> Result<Self, ErrorResponse> {
         match s.to_lowercase().as_str() {
             "mainnet" => Ok(Network::Mainnet),
             "testnet" => Ok(Network::Testnet),
@@ -54,7 +54,7 @@ impl std::fmt::Display for Network {
 }
 
 pub fn validate_network(network_str: &str) -> Result<(), ErrorResponse> {
-    Network::from_str(network_str)?;
+    Network::parse(network_str)?;
     Ok(())
 }
 
@@ -104,13 +104,7 @@ impl ErrorResponse {
         self
     }
 
-    /// Classify a bare `String` error from the core library into a structured
-    /// `ErrorResponse` by pattern-matching on the message text.
-    ///
-    /// This is the preferred way to convert legacy `Result<_, String>` errors
-    /// that originate from `monero-rust` into structured codes when the
-    /// original typed error (e.g. `SeedError`, `RpcError`) is no longer
-    /// available.
+    /// Pattern-match a legacy string error into a structured code.
     pub fn from_string(msg: &str) -> Self {
         let lower = msg.to_lowercase();
 
@@ -144,7 +138,7 @@ impl ErrorResponse {
         }
 
         // Address errors
-        if lower.contains("invalid address") || lower.contains("address") && lower.contains("invalid") {
+        if lower.contains("address") && lower.contains("invalid") {
             return ErrorResponse::new(ERR_INVALID_ADDRESS, msg);
         }
         if lower.contains("different network") {
@@ -195,11 +189,15 @@ pub const ERR_EMPTY_FIELD: u32 = 1000;
 pub const ERR_INVALID_NETWORK: u32 = 1001;
 pub const ERR_INVALID_ADDRESS: u32 = 1002;
 pub const ERR_ADDRESS_WRONG_NETWORK: u32 = 1003;
+pub const ERR_INVALID_URL: u32 = 1004;
+pub const ERR_TOO_MANY_RECIPIENTS: u32 = 1005;
 
 // Wallet state (1100–1199)
 pub const ERR_WALLET_NOT_READY: u32 = 1100;
 pub const ERR_NO_OUTPUTS: u32 = 1101;
 pub const ERR_INSUFFICIENT_FUNDS: u32 = 1102;
+pub const ERR_ENCRYPTION: u32 = 1103;
+pub const ERR_DECRYPTION: u32 = 1104;
 
 // Transaction (1200–1299)
 pub const ERR_TX_BUILD_FAILED: u32 = 1200;
