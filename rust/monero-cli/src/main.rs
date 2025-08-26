@@ -96,13 +96,50 @@ async fn main() {
     }
 }
 
-fn cmd_generate(_seed_type: &str, _network: &str) -> Result<(), String> {
-    println!("generate: not yet implemented");
+fn cmd_generate(seed_type: &str, network: &str) -> Result<(), String> {
+    let mnemonic = monero_rust::generate_seed(seed_type)?;
+    let address = monero_rust::derive_address(&mnemonic, network)?;
+
+    println!("=== New Monero Wallet ===");
+    println!();
+    println!("Seed phrase:");
+    println!("  {}", mnemonic);
+    println!();
+    println!("Primary address:");
+    println!("  {}", address);
+    println!();
+    println!("IMPORTANT: Write down your seed phrase and store it safely.");
+    println!("Anyone with your seed phrase can access your funds.");
+
     Ok(())
 }
 
-fn cmd_address(_network: &str) -> Result<(), String> {
-    println!("address: not yet implemented");
+fn cmd_address(network: &str) -> Result<(), String> {
+    let mnemonic = rpassword::prompt_password("Enter seed phrase: ")
+        .map_err(|e| format!("Failed to read seed: {}", e))?;
+
+    let mnemonic = mnemonic.trim();
+    monero_rust::validate_seed(mnemonic)?;
+
+    let keys = monero_rust::derive_keys(mnemonic, network)?;
+
+    println!("=== Wallet Keys ===");
+    println!();
+    println!("Primary address:");
+    println!("  {}", keys.address);
+    println!();
+    println!("Secret spend key:");
+    println!("  {}", keys.secret_spend_key);
+    println!();
+    println!("Secret view key:");
+    println!("  {}", keys.secret_view_key);
+    println!();
+    println!("Public spend key:");
+    println!("  {}", keys.public_spend_key);
+    println!();
+    println!("Public view key:");
+    println!("  {}", keys.public_view_key);
+
     Ok(())
 }
 
