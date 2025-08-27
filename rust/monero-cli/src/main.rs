@@ -1,6 +1,7 @@
 mod wallet_file;
 
 use clap::{Parser, Subcommand};
+use indicatif::{ProgressBar, ProgressStyle};
 use wallet_file::{resolve_wallet_path, WalletData};
 
 #[derive(Parser)]
@@ -212,8 +213,131 @@ fn cmd_balance(wallet_path: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-async fn cmd_sync(_daemon: &str, _wallet: Option<&str>) -> Result<(), String> {
-    println!("sync: not yet implemented");
+async fn cmd_sync(daemon: &str, wallet_path: Option<&str>) -> Result<(), String> {
+    let path = resolve_wallet_path(wallet_path)?;
+    let password = rpassword::prompt_password("Wallet password: ")
+        .map_err(|e| format!("Failed to read password: {}", e))?;
+
+    let mut data = wallet_file::load_wallet(&path, &password)?;
+    let mnemonic = &data.encrypted_seed;
+    let network = &data.network;
+
+    let daemon_height = monero_rust::get_daemon_height(daemon).await?;
+    let start_height = data.last_sync_height;
+
+    if start_height >= daemon_height {
+        println!("Wallet is already synced to height {}", daemon_height);
+        return Ok(());
+    }
+
+    let address = monero_rust::derive_address(mnemonic, network)?;
+    println!("Syncing wallet: {}", address);
+    println!(
+        "Scanning from height {} to {} ({} blocks)",
+        start_height,
+        daemon_height,
+        daemon_height - start_height
+    );
+
+    let total_blocks = daemon_height - start_height;
+    let pb = ProgressBar::new(total_blocks);
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} blocks ({eta})",
+        )
+        .unwrap()
+        .progress_chars("=>-"),
+    );
+
+    let lookahead = monero_rust::DEFAULT_LOOKAHEAD;
+    let mut current_height = start_height;
+    let mut total_outputs_found: usize = 0;
+    let mut cached_scanner: Option<monero_rust::CachedScanner> = None;
+
+    loop {
+        if current_height >= daemon_height {
+            break;
+        }
+
+        let fetched =
+            monero_rust::fetch_blocks_batch_with_url(daemon, current_height, false).await?;
+
+        if fetched.is_empty() {
+            break;
+        }
+
+        let (batch_results, returned_scanner) = monero_rust::process_fetched_batch_cached(
+            fetched, mnemonic, network, lookahead, cached_scanner,
+        )
+        .await?;
+        cached_scanner = Some(returned_scanner);
+
+        let processed = monero_rust::process_single_wallet_batch(
+            &batch_results,
+            None, // scan all accounts
+            daemon_height,
+            current_height,
+        );
+
+        // Merge new outputs into wallet data, deduplicating by key_image
+        // to handle interrupted syncs that may re-fetch overlapping blocks.
+        let mut new_output_count = 0;
+        for output in processed.outputs_to_store {
+            if !data.outputs.iter().any(|existing| existing.key_image == output.key_image) {
+                data.outputs.push(output);
+                new_output_count += 1;
+            }
+        }
+        total_outputs_found += new_output_count;
+
+        if !processed.spent_key_images.is_empty() {
+            for ki in &processed.spent_key_images {
+                for output in &mut data.outputs {
+                    if output.key_image == *ki && !output.spent {
+                        output.spent = true;
+                        output.spent_height = Some(processed.batch_end_height);
+                    }
+                }
+            }
+        }
+
+        current_height = processed.batch_end_height;
+        data.last_sync_height = current_height;
+
+        let scanned = current_height.saturating_sub(start_height);
+        pb.set_position(scanned.min(total_blocks));
+
+        // Save wallet after each batch so progress is not lost
+        wallet_file::save_wallet(&path, &data, &password)?;
+
+        if !processed.should_continue {
+            break;
+        }
+    }
+
+    pb.finish_with_message("done");
+
+    let balance: u64 = data
+        .outputs
+        .iter()
+        .filter(|o| !o.spent)
+        .map(|o| o.amount)
+        .sum();
+
+    println!();
+    println!("=== Sync Complete ===");
+    println!("Synced to height: {}", current_height);
+    println!("New outputs found: {}", total_outputs_found);
+    println!("Total outputs: {}", data.outputs.len());
+    println!(
+        "Unspent outputs: {}",
+        data.outputs.iter().filter(|o| !o.spent).count()
+    );
+    println!(
+        "Balance: {:.12} XMR",
+        balance as f64 / 1_000_000_000_000.0
+    );
+
     Ok(())
 }
 
