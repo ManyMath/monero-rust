@@ -193,22 +193,47 @@ fn cmd_balance(wallet_path: Option<&str>) -> Result<(), String> {
 
     let data = wallet_file::load_wallet(&path, &password)?;
 
-    let total: u64 = data
-        .outputs
-        .iter()
-        .filter(|o| !o.spent)
-        .map(|o| o.amount)
-        .sum();
-    let spendable_count = data.outputs.iter().filter(|o| !o.spent).count();
+    let unspent: Vec<&monero_rust::WalletOutput> =
+        data.outputs.iter().filter(|o| !o.spent).collect();
+
+    let sync_height = data.last_sync_height;
+
+    let mut unlocked_total: u64 = 0;
+    let mut locked_total: u64 = 0;
+    let mut unlocked_count: usize = 0;
+    let mut locked_count: usize = 0;
+
+    for o in &unspent {
+        if monero_rust::is_spendable(o, sync_height) {
+            unlocked_total += o.amount;
+            unlocked_count += 1;
+        } else {
+            locked_total += o.amount;
+            locked_count += 1;
+        }
+    }
+
+    let total = unlocked_total + locked_total;
 
     println!("=== Wallet Balance ===");
     println!();
     println!(
-        "Balance: {:.12} XMR",
+        "Total:    {:.12} XMR",
         total as f64 / 1_000_000_000_000.0
     );
-    println!("Unspent outputs: {}", spendable_count);
-    println!("Last synced height: {}", data.last_sync_height);
+    println!(
+        "Unlocked: {:.12} XMR  ({} outputs)",
+        unlocked_total as f64 / 1_000_000_000_000.0,
+        unlocked_count
+    );
+    println!(
+        "Locked:   {:.12} XMR  ({} outputs)",
+        locked_total as f64 / 1_000_000_000_000.0,
+        locked_count
+    );
+    println!();
+    println!("Total unspent outputs: {}", unspent.len());
+    println!("Last synced height: {}", sync_height);
 
     Ok(())
 }
