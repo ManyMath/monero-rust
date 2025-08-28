@@ -518,26 +518,17 @@ fn cmd_info(wallet_path: Option<&str>) -> Result<(), String> {
     let address = monero_rust::derive_address(&data.encrypted_seed, &data.network)?;
     let keys = monero_rust::derive_keys(&data.encrypted_seed, &data.network)?;
 
-    let total: u64 = data
-        .outputs
-        .iter()
-        .filter(|o| !o.spent)
-        .map(|o| o.amount)
-        .sum();
+    let unspent_count = data.outputs.iter().filter(|o| !o.spent).count();
 
     println!("=== Wallet Info ===");
     println!();
-    println!("Wallet file: {}", path.display());
-    println!("Network: {}", data.network);
-    println!("Primary address: {}", address);
-    println!("Secret view key: {}", keys.secret_view_key);
-    println!("Last synced height: {}", data.last_sync_height);
-    println!("Total outputs: {}", data.outputs.len());
-    println!("Unspent outputs: {}", data.outputs.iter().filter(|o| !o.spent).count());
-    println!(
-        "Balance: {:.12} XMR",
-        total as f64 / 1_000_000_000_000.0
-    );
+    println!("Wallet file:      {}", path.display());
+    println!("Network:          {}", data.network);
+    println!("Primary address:  {}", address);
+    println!("Public view key:  {}", keys.public_view_key);
+    println!("Last sync height: {}", data.last_sync_height);
+    println!("Total outputs:    {}", data.outputs.len());
+    println!("Unspent outputs:  {}", unspent_count);
 
     Ok(())
 }
