@@ -103,7 +103,7 @@ async fn main() {
             amount,
             daemon,
             wallet,
-        } => cmd_transfer(&address, &amount, &daemon, wallet.as_deref()),
+        } => cmd_transfer(&address, &amount, &daemon, wallet.as_deref()).await,
         Command::Info { wallet } => cmd_info(wallet.as_deref()),
     };
 
@@ -341,13 +341,145 @@ async fn cmd_sync(daemon: &str, wallet_path: Option<&str>) -> Result<(), String>
     Ok(())
 }
 
-fn cmd_transfer(
-    _address: &str,
-    _amount: &str,
-    _daemon: &str,
-    _wallet: Option<&str>,
+async fn cmd_transfer(
+    address: &str,
+    amount: &str,
+    daemon: &str,
+    wallet_path: Option<&str>,
 ) -> Result<(), String> {
-    println!("transfer: not yet implemented");
+    let path = resolve_wallet_path(wallet_path)?;
+    let password = rpassword::prompt_password("Wallet password: ")
+        .map_err(|e| format!("Failed to read password: {}", e))?;
+
+    let mut data = wallet_file::load_wallet(&path, &password)?;
+    let seed = &data.encrypted_seed;
+    let network = &data.network;
+
+    // Parse amount from XMR string to piconero
+    let amount_xmr: f64 = amount
+        .parse()
+        .map_err(|_| format!("Invalid amount: {}", amount))?;
+    if amount_xmr <= 0.0 {
+        return Err("Amount must be positive".to_string());
+    }
+    let amount_pico = (amount_xmr * 1_000_000_000_000.0) as u64;
+
+    let daemon_height = monero_rust::get_daemon_height(daemon).await?;
+    let spendable: Vec<monero_rust::WalletOutput> = data
+        .outputs
+        .iter()
+        .filter(|o| !o.spent && !o.frozen && monero_rust::is_spendable(o, daemon_height))
+        .cloned()
+        .collect();
+
+    let selection = monero_rust::select_inputs(&spendable, amount_pico, 1, None)?;
+
+    let stored_outputs: Vec<monero_rust::native::StoredOutputData> = selection
+        .selected
+        .iter()
+        .map(|o| o.into())
+        .collect();
+
+    let prepared = monero_rust::native::prepare_transaction(
+        daemon,
+        network,
+        stored_outputs.clone(),
+        &[(address.to_string(), amount_pico)],
+    )
+    .await?;
+
+    println!("=== Transaction Summary ===");
+    println!();
+    println!(
+        "Destination: {}",
+        address
+    );
+    println!(
+        "Amount:      {:.12} XMR",
+        amount_pico as f64 / 1_000_000_000_000.0
+    );
+    println!(
+        "Fee:         {:.12} XMR",
+        prepared.fee as f64 / 1_000_000_000_000.0
+    );
+    println!(
+        "Total:       {:.12} XMR",
+        (amount_pico + prepared.fee) as f64 / 1_000_000_000_000.0
+    );
+    println!("Inputs:      {}", selection.selected.len());
+    println!();
+    print!("Confirm transaction? (yes/no): ");
+    use std::io::Write;
+    std::io::stdout()
+        .flush()
+        .map_err(|e| format!("Failed to flush stdout: {}", e))?;
+
+    let mut confirm = String::new();
+    std::io::stdin()
+        .read_line(&mut confirm)
+        .map_err(|e| format!("Failed to read confirmation: {}", e))?;
+
+    if confirm.trim().to_lowercase() != "yes" {
+        println!("Transaction cancelled.");
+        return Ok(());
+    }
+
+    println!("Signing transaction...");
+    let result = monero_rust::native::create_transaction(
+        daemon,
+        seed,
+        network,
+        stored_outputs,
+        &[(address.to_string(), amount_pico)],
+    )
+    .await?;
+
+    println!("Broadcasting transaction...");
+    monero_rust::native::broadcast_transaction(daemon, &result.tx_blob).await?;
+
+    let spent_key_set: std::collections::HashSet<String> = selection
+        .selected
+        .iter()
+        .map(|o| o.key_image.clone())
+        .collect();
+    for output in &mut data.outputs {
+        if spent_key_set.contains(&output.key_image) && !output.spent {
+            output.spent = true;
+            output.spent_height = Some(daemon_height);
+        }
+    }
+
+    for change in &result.change_outputs {
+        data.outputs.push(monero_rust::WalletOutput {
+            tx_hash: change.tx_hash.clone(),
+            output_index: change.output_index,
+            amount: change.amount,
+            amount_xmr: change.amount_xmr.clone(),
+            key: change.key.clone(),
+            key_offset: change.key_offset.clone(),
+            commitment_mask: change.commitment_mask.clone(),
+            subaddress_index: change.subaddress_index,
+            payment_id: None,
+            received_output_bytes: change.received_output_bytes.clone(),
+            block_height: daemon_height,
+            spent: false,
+            spent_height: None,
+            key_image: change.key_image.clone(),
+            is_coinbase: false,
+            frozen: false,
+        });
+    }
+
+    wallet_file::save_wallet(&path, &data, &password)?;
+
+    println!();
+    println!("=== Transaction Sent ===");
+    println!("Transaction ID: {}", result.tx_id);
+    println!(
+        "Fee:            {:.12} XMR",
+        result.fee as f64 / 1_000_000_000_000.0
+    );
+
     Ok(())
 }
 
