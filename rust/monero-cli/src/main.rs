@@ -82,6 +82,20 @@ enum Command {
         #[arg(long)]
         wallet: Option<String>,
     },
+
+    /// Sweep all funds to an address (sends entire balance minus fee)
+    SweepAll {
+        /// Destination address
+        address: String,
+
+        /// Monero daemon RPC URL
+        #[arg(long, default_value = "http://127.0.0.1:18081")]
+        daemon: String,
+
+        /// Path to wallet file
+        #[arg(long)]
+        wallet: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -105,6 +119,11 @@ async fn main() {
             wallet,
         } => cmd_transfer(&address, &amount, &daemon, wallet.as_deref()).await,
         Command::Info { wallet } => cmd_info(wallet.as_deref()),
+        Command::SweepAll {
+            address,
+            daemon,
+            wallet,
+        } => cmd_sweep_all(&address, &daemon, wallet.as_deref()).await,
     };
 
     if let Err(e) = result {
@@ -529,6 +548,110 @@ fn cmd_info(wallet_path: Option<&str>) -> Result<(), String> {
     println!("Last sync height: {}", data.last_sync_height);
     println!("Total outputs:    {}", data.outputs.len());
     println!("Unspent outputs:  {}", unspent_count);
+
+    Ok(())
+}
+
+async fn cmd_sweep_all(
+    address: &str,
+    daemon: &str,
+    wallet_path: Option<&str>,
+) -> Result<(), String> {
+    let path = resolve_wallet_path(wallet_path)?;
+    let password = rpassword::prompt_password("Wallet password: ")
+        .map_err(|e| format!("Failed to read password: {}", e))?;
+
+    let mut data = wallet_file::load_wallet(&path, &password)?;
+    let seed = &data.encrypted_seed;
+    let network = &data.network;
+
+    let daemon_height = monero_rust::get_daemon_height(daemon).await?;
+    let spendable: Vec<monero_rust::WalletOutput> = data
+        .outputs
+        .iter()
+        .filter(|o| !o.spent && !o.frozen && monero_rust::is_spendable(o, daemon_height))
+        .cloned()
+        .collect();
+
+    if spendable.is_empty() {
+        return Err("No spendable outputs available".to_string());
+    }
+
+    let total_amount: u64 = spendable.iter().map(|o| o.amount).sum();
+
+    let stored_outputs: Vec<monero_rust::native::StoredOutputData> =
+        spendable.iter().map(|o| o.into()).collect();
+
+    let fee_est = monero_rust::estimate_fee(spendable.len(), 2);
+
+    let send_amount = total_amount.saturating_sub(fee_est);
+
+    println!("=== Sweep All ===");
+    println!();
+    println!("Destination: {}", address);
+    println!(
+        "Balance:     {:.12} XMR",
+        total_amount as f64 / 1_000_000_000_000.0
+    );
+    println!(
+        "Est. fee:    {:.12} XMR",
+        fee_est as f64 / 1_000_000_000_000.0
+    );
+    println!(
+        "Send amount: {:.12} XMR (approx)",
+        send_amount as f64 / 1_000_000_000_000.0
+    );
+    println!("Inputs:      {}", spendable.len());
+    println!();
+    print!("Confirm sweep? (yes/no): ");
+    use std::io::Write;
+    std::io::stdout()
+        .flush()
+        .map_err(|e| format!("Failed to flush stdout: {}", e))?;
+
+    let mut confirm = String::new();
+    std::io::stdin()
+        .read_line(&mut confirm)
+        .map_err(|e| format!("Failed to read confirmation: {}", e))?;
+
+    if confirm.trim().to_lowercase() != "yes" {
+        println!("Sweep cancelled.");
+        return Ok(());
+    }
+
+    println!("Building sweep transaction...");
+    let result = monero_rust::native::sweep_all(
+        daemon,
+        seed,
+        network,
+        stored_outputs,
+        address,
+    )
+    .await?;
+
+    println!("Broadcasting transaction...");
+    monero_rust::native::broadcast_transaction(daemon, &result.tx_blob).await?;
+
+    let spent_key_set: std::collections::HashSet<String> = spendable
+        .iter()
+        .map(|o| o.key_image.clone())
+        .collect();
+    for output in &mut data.outputs {
+        if spent_key_set.contains(&output.key_image) && !output.spent {
+            output.spent = true;
+            output.spent_height = Some(daemon_height);
+        }
+    }
+
+    wallet_file::save_wallet(&path, &data, &password)?;
+
+    println!();
+    println!("=== Sweep Complete ===");
+    println!("Transaction ID: {}", result.tx_id);
+    println!(
+        "Fee:            {:.12} XMR",
+        result.fee as f64 / 1_000_000_000_000.0
+    );
 
     Ok(())
 }
