@@ -4,10 +4,11 @@ use std::path::{Path, PathBuf};
 use zeroize::Zeroize;
 
 /// Persistent wallet data, encrypted at rest.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct WalletData {
-    /// The seed phrase, stored encrypted within the wallet file
-    pub encrypted_seed: String,
+    /// The seed phrase (plaintext within the encrypted wallet file)
+    #[serde(alias = "encrypted_seed")]
+    pub mnemonic: String,
     /// Network: "mainnet", "stagenet", or "testnet"
     pub network: String,
     /// Last synced block height

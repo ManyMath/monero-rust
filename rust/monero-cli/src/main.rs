@@ -4,6 +4,33 @@ use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
 use wallet_file::{resolve_wallet_path, WalletData};
 
+fn parse_xmr_to_piconero(s: &str) -> Result<u64, String> {
+    let s = s.trim();
+    let parts: Vec<&str> = s.split('.').collect();
+    match parts.len() {
+        1 => {
+            let whole: u64 = parts[0].parse().map_err(|_| format!("Invalid amount: {}", s))?;
+            whole.checked_mul(1_000_000_000_000)
+                .ok_or_else(|| "Amount overflow".to_string())
+        }
+        2 => {
+            let whole: u64 = parts[0].parse().map_err(|_| format!("Invalid amount: {}", s))?;
+            let frac_str = parts[1];
+            if frac_str.len() > 12 {
+                return Err("Too many decimal places (max 12)".to_string());
+            }
+            let padded = format!("{:0<12}", frac_str);
+            let frac: u64 = padded.parse().map_err(|_| format!("Invalid amount: {}", s))?;
+            whole.checked_mul(1_000_000_000_000)
+                .and_then(|w| w.checked_add(frac))
+                .ok_or_else(|| "Amount overflow".to_string())
+        }
+        _ => Err(format!("Invalid amount format: {}", s)),
+    }
+}
+
+
+
 #[derive(Parser)]
 #[command(name = "monero-cli")]
 #[command(about = "A pure-Rust Monero wallet CLI")]
@@ -155,15 +182,25 @@ fn cmd_generate(
     if save {
         let password = rpassword::prompt_password("Set wallet password: ")
             .map_err(|e| format!("Failed to read password: {}", e))?;
-        let confirm = rpassword::prompt_password("Confirm password: ")
-            .map_err(|e| format!("Failed to read password: {}", e))?;
-        if password != confirm {
-            return Err("Passwords do not match".to_string());
+        if password.is_empty() {
+            eprint!("Warning: empty password provides no protection. Continue? [y/N]: ");
+            let mut confirm_empty = String::new();
+            std::io::stdin().read_line(&mut confirm_empty)
+                .map_err(|e| format!("Failed to read input: {}", e))?;
+            if !confirm_empty.trim().eq_ignore_ascii_case("y") {
+                return Err("Aborted".to_string());
+            }
+        } else {
+            let confirm = rpassword::prompt_password("Confirm password: ")
+                .map_err(|e| format!("Failed to read password: {}", e))?;
+            if password != confirm {
+                return Err("Passwords do not match".to_string());
+            }
         }
 
         let path = resolve_wallet_path(wallet_path)?;
         let data = WalletData {
-            encrypted_seed: mnemonic,
+            mnemonic: mnemonic,
             network: network.to_string(),
             last_sync_height: 0,
             outputs: Vec::new(),
@@ -263,7 +300,7 @@ async fn cmd_sync(daemon: &str, wallet_path: Option<&str>) -> Result<(), String>
         .map_err(|e| format!("Failed to read password: {}", e))?;
 
     let mut data = wallet_file::load_wallet(&path, &password)?;
-    let mnemonic = &data.encrypted_seed;
+    let mnemonic = &data.mnemonic;
     let network = &data.network;
 
     let daemon_height = monero_rust::get_daemon_height(daemon).await?;
@@ -396,17 +433,13 @@ async fn cmd_transfer(
         .map_err(|e| format!("Failed to read password: {}", e))?;
 
     let mut data = wallet_file::load_wallet(&path, &password)?;
-    let seed = &data.encrypted_seed;
+    let seed = &data.mnemonic;
     let network = &data.network;
 
-    // Parse amount from XMR string to piconero
-    let amount_xmr: f64 = amount
-        .parse()
-        .map_err(|_| format!("Invalid amount: {}", amount))?;
-    if amount_xmr <= 0.0 {
+    let amount_pico = parse_xmr_to_piconero(&amount)?;
+    if amount_pico == 0 {
         return Err("Amount must be positive".to_string());
     }
-    let amount_pico = (amount_xmr * 1_000_000_000_000.0) as u64;
 
     let daemon_height = monero_rust::get_daemon_height(daemon).await?;
     let spendable: Vec<monero_rust::WalletOutput> = data
@@ -534,8 +567,8 @@ fn cmd_info(wallet_path: Option<&str>) -> Result<(), String> {
 
     let data = wallet_file::load_wallet(&path, &password)?;
 
-    let address = monero_rust::derive_address(&data.encrypted_seed, &data.network)?;
-    let keys = monero_rust::derive_keys(&data.encrypted_seed, &data.network)?;
+    let address = monero_rust::derive_address(&data.mnemonic, &data.network)?;
+    let keys = monero_rust::derive_keys(&data.mnemonic, &data.network)?;
 
     let unspent_count = data.outputs.iter().filter(|o| !o.spent).count();
 
@@ -562,7 +595,7 @@ async fn cmd_sweep_all(
         .map_err(|e| format!("Failed to read password: {}", e))?;
 
     let mut data = wallet_file::load_wallet(&path, &password)?;
-    let seed = &data.encrypted_seed;
+    let seed = &data.mnemonic;
     let network = &data.network;
 
     let daemon_height = monero_rust::get_daemon_height(daemon).await?;
@@ -585,6 +618,9 @@ async fn cmd_sweep_all(
     let fee_est = monero_rust::estimate_fee(spendable.len(), 2);
 
     let send_amount = total_amount.saturating_sub(fee_est);
+    if send_amount == 0 {
+        return Err("Balance too low to cover the transaction fee. Cannot sweep.".to_string());
+    }
 
     println!("=== Sweep All ===");
     println!();
