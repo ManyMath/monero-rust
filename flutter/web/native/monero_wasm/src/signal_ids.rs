@@ -74,18 +74,58 @@ pub const TRANSACTION_SIGNED_OFFLINE_RESPONSE: u32 = 130;
 pub const KEY_IMAGES_EXPORTED_RESPONSE: u32 = 131;
 pub const KEY_IMAGES_IMPORTED_RESPONSE: u32 = 132;
 
-/// Route an incoming DartSignal to the appropriate handler.
+/// Map a RustSignal type name to its numeric ID for native FFI dispatch.
+///
+/// Used by `SendToDart::send_signal_to_dart()` on native to convert the
+/// compile-time type name into the numeric signal_id expected by the
+/// C FFI callback.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn rust_signal_id_for_name(name: &str) -> u32 {
+    match name {
+        "MoneroTestResponse" => MONERO_TEST_RESPONSE,
+        "WalletCreatedResponse" => WALLET_CREATED_RESPONSE,
+        "SyncProgressResponse" => SYNC_PROGRESS_RESPONSE,
+        "BalanceResponse" => BALANCE_RESPONSE,
+        "TransactionCreatedResponse" => TRANSACTION_CREATED_RESPONSE,
+        "SeedGeneratedResponse" => SEED_GENERATED_RESPONSE,
+        "SeedBirthdayResponse" => SEED_BIRTHDAY_RESPONSE,
+        "BlockHeightFromTimestampResponse" => BLOCK_HEIGHT_FROM_TIMESTAMP_RESPONSE,
+        "AddressDerivedResponse" => ADDRESS_DERIVED_RESPONSE,
+        "SubaddressDerivedResponse" => SUBADDRESS_DERIVED_RESPONSE,
+        "KeysDerivedResponse" => KEYS_DERIVED_RESPONSE,
+        "BlockScanResponse" => BLOCK_SCAN_RESPONSE,
+        "TransactionBroadcastResponse" => TRANSACTION_BROADCAST_RESPONSE,
+        "DaemonHeightResponse" => DAEMON_HEIGHT_RESPONSE,
+        "SpentStatusUpdatedResponse" => SPENT_STATUS_UPDATED_RESPONSE,
+        "MempoolScanResponse" => MEMPOOL_SCAN_RESPONSE,
+        "OutProofGeneratedResponse" => OUT_PROOF_GENERATED_RESPONSE,
+        "WalletDataSavedResponse" => WALLET_DATA_SAVED_RESPONSE,
+        "WalletDataLoadedResponse" => WALLET_DATA_LOADED_RESPONSE,
+        "EncryptionKeyDerivedResponse" => ENCRYPTION_KEY_DERIVED_RESPONSE,
+        "MultiWalletScanResponse" => MULTI_WALLET_SCAN_RESPONSE,
+        "BlockHashesResponse" => BLOCK_HASHES_RESPONSE,
+        "PendingStateResponse" => PENDING_STATE_RESPONSE,
+        "ReorgDetectedResponse" => REORG_DETECTED_RESPONSE,
+        "DoubleSpendDetectedResponse" => DOUBLE_SPEND_DETECTED_RESPONSE,
+        "Bip39LegacySeedResponse" => BIP39_LEGACY_SEED_RESPONSE,
+        "FreezeThawResponse" => FREEZE_THAW_RESPONSE,
+        "TransactionStatusUpdate" => TRANSACTION_STATUS_UPDATE,
+        "UnsignedTransactionCreatedResponse" => UNSIGNED_TRANSACTION_CREATED_RESPONSE,
+        "TransactionSignedOfflineResponse" => TRANSACTION_SIGNED_OFFLINE_RESPONSE,
+        "KeyImagesExportedResponse" => KEY_IMAGES_EXPORTED_RESPONSE,
+        "KeyImagesImportedResponse" => KEY_IMAGES_IMPORTED_RESPONSE,
+        _ => {
+            eprintln!("unknown RustSignal type name: {name}");
+            0
+        }
+    }
+}
+
+/// Route an incoming DartSignal to the appropriate channel.
 ///
 /// This is the native-FFI equivalent of the wasm-bindgen signal routing.
-/// For now this is a stub — full routing would deserialize each signal
-/// via JSON and dispatch to the actor mailboxes.
+/// For now this is a stub — full routing is implemented in commit 2.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn route_dart_signal(_signal_id: u32, _data: Vec<u8>) {
     // TODO: match on signal_id, JSON-deserialize, and send to actors.
-    // Example:
-    // match signal_id {
-    //     MONERO_TEST_REQUEST => { ... }
-    //     CREATE_WALLET_REQUEST => { ... }
-    //     _ => { eprintln!("unknown signal_id: {signal_id}"); }
-    // }
 }

@@ -1,4 +1,6 @@
 use std::cell::RefCell;
+
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
 use crate::signals::*;
@@ -9,8 +11,12 @@ use crate::signals::*;
 //
 // For each DartSignal type, generates:
 //   - A thread_local UnboundedSender
-//   - A #[wasm_bindgen] export `send_<snake_name>(json)` that deserializes and sends
+//   - On wasm32: a #[wasm_bindgen] export `send_<snake_name>(json)` (JsValue error)
+//   - On native: a pub(crate) `send_<snake_name>(json)` (String error)
 //   - A `get_<snake_name>_receiver()` function for actors to call during init
+//
+// The channel infrastructure is identical on both targets. Only the
+// send function's calling convention differs.
 
 macro_rules! dart_signal {
     ($type:ty, $snake:ident) => {
@@ -20,6 +26,7 @@ macro_rules! dart_signal {
                     = RefCell::new(None);
             }
 
+            #[cfg(target_arch = "wasm32")]
             #[wasm_bindgen]
             pub fn [<send_ $snake>](json: &str) -> Result<(), JsValue> {
                 let msg: $type = serde_json::from_str(json)
@@ -29,6 +36,19 @@ macro_rules! dart_signal {
                         tx.send(msg).map_err(|_| JsValue::from_str("channel closed"))
                     } else {
                         Err(JsValue::from_str("not initialized"))
+                    }
+                })
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            pub(crate) fn [<send_ $snake>](json: &str) -> Result<(), String> {
+                let msg: $type = serde_json::from_str(json)
+                    .map_err(|e| e.to_string())?;
+                [<$snake:upper _SENDER>].with(|s| {
+                    if let Some(tx) = s.borrow().as_ref() {
+                        tx.send(msg).map_err(|_| "channel closed".to_string())
+                    } else {
+                        Err("not initialized".to_string())
                     }
                 })
             }
@@ -80,18 +100,21 @@ dart_signal!(ExportKeyImagesRequest, export_key_images_request);
 dart_signal!(ImportKeyImagesRequest, import_key_images_request);
 
 // ---------------------------------------------------------------------------
-// Rust -> Dart callback
+// Rust -> Dart callback (wasm32: JS callback, native: C FFI callback)
 // ---------------------------------------------------------------------------
 
+#[cfg(target_arch = "wasm32")]
 thread_local! {
     static DART_CALLBACK: RefCell<Option<js_sys::Function>> = RefCell::new(None);
 }
 
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub fn register_rust_signal_callback(callback: js_sys::Function) {
     DART_CALLBACK.with(|c| { *c.borrow_mut() = Some(callback); });
 }
 
+#[cfg(target_arch = "wasm32")]
 fn send_to_dart_raw<T: serde::Serialize + ?Sized>(type_name: &str, msg: &T) {
     DART_CALLBACK.with(|c| {
         if let Some(cb) = c.borrow().as_ref() {
@@ -111,6 +134,19 @@ fn send_to_dart_raw<T: serde::Serialize + ?Sized>(type_name: &str, msg: &T) {
             }
         }
     });
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn send_to_dart_raw<T: serde::Serialize + ?Sized>(type_name: &str, msg: &T) {
+    match serde_json::to_string(msg) {
+        Ok(json) => {
+            let signal_id = crate::signal_ids::rust_signal_id_for_name(type_name);
+            crate::ffi_native::send_rust_signal(signal_id, json.as_bytes());
+        }
+        Err(e) => {
+            eprintln!("serialize error for {}: {}", type_name, e);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -174,6 +210,7 @@ impl_send_to_dart! {
 // WASM entry point
 // ---------------------------------------------------------------------------
 
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub async fn start_rust_runtime() {
     tokio_with_wasm::alias::spawn(crate::actors::create_actors());
