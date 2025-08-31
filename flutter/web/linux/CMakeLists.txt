@@ -57,8 +57,40 @@ pkg_check_modules(GTK REQUIRED IMPORTED_TARGET gtk+-3.0)
 # Application build; see runner/CMakeLists.txt.
 add_subdirectory("runner")
 
+# === Rust native library (monero_wasm) ===
+set(RUST_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/../native/monero_wasm/Cargo.toml")
+set(RUST_TARGET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../target")
+set(RUST_LIB_NAME "libmonero_wasm.so")
+
+# Choose cargo profile based on CMake build type.
+if(CMAKE_BUILD_TYPE MATCHES "Debug")
+  set(CARGO_BUILD_FLAGS "")
+  set(RUST_BUILD_PROFILE "debug")
+else()
+  set(CARGO_BUILD_FLAGS "--release")
+  set(RUST_BUILD_PROFILE "release")
+endif()
+
+set(RUST_LIB_PATH "${RUST_TARGET_DIR}/${RUST_BUILD_PROFILE}/${RUST_LIB_NAME}")
+
+add_custom_command(
+  OUTPUT "${RUST_LIB_PATH}"
+  COMMENT "Building Rust native library (monero_wasm) for Linux"
+  COMMAND cargo build --manifest-path "${RUST_MANIFEST}" ${CARGO_BUILD_FLAGS}
+  USES_TERMINAL
+)
+
+add_custom_target(monero_wasm_native ALL
+  DEPENDS "${RUST_LIB_PATH}"
+)
+
+# Install the Rust shared library into the bundle lib directory.
+install(FILES "${RUST_LIB_PATH}"
+  DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+  COMPONENT Runtime)
+
 # Run the Flutter tool portions of the build. This must not be removed.
-add_dependencies(${BINARY_NAME} flutter_assemble)
+add_dependencies(${BINARY_NAME} flutter_assemble monero_wasm_native)
 
 # Only the install-generated bundle's copy of the executable will launch
 # correctly, since the resources must in the right relative locations. To avoid
