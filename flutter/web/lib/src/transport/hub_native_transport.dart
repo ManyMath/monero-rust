@@ -41,6 +41,7 @@ class HubNativeTransport implements HubTransport {
         ffi.NativeCallable<RustSignalCallbackFunction>.listener(_onRustSignal);
 
     _globalController = _controller;
+    _globalBindings = _bindings;
 
     _handle = _bindings.hub_init(
       _nativeCallable.nativeFunction,
@@ -54,7 +55,12 @@ class HubNativeTransport implements HubTransport {
     }
   }
 
+  // Keep a reference to bindings so the static callback can free Rust memory.
+  static HubNativeBindings? _globalBindings;
+
   /// Callback invoked by Rust when a RustSignal is emitted.
+  /// The data pointer was allocated by Rust via alloc_rust_bytes and must be
+  /// freed with hub_free_bytes after copying.
   static void _onRustSignal(
     int signalId,
     ffi.Pointer<ffi.Uint8> dataPtr,
@@ -62,6 +68,8 @@ class HubNativeTransport implements HubTransport {
     ffi.Pointer<ffi.Void> userData,
   ) {
     final copy = Uint8List.fromList(dataPtr.asTypedList(dataLen));
+    // Free the Rust-allocated buffer now that we've copied the data.
+    _globalBindings?.hub_free_bytes(dataPtr.cast(), dataLen);
     _globalController?.add((signalId: signalId, data: copy));
   }
 
@@ -92,6 +100,7 @@ class HubNativeTransport implements HubTransport {
     _bindings.hub_shutdown(_handle);
     _nativeCallable.close();
     _globalController = null;
+    _globalBindings = null;
     _controller.close();
   }
 

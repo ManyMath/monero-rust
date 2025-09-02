@@ -51,8 +51,9 @@ static GLOBAL_CALLBACK: Mutex<Option<CallbackState>> = Mutex::new(None);
 
 /// Send a RustSignal to Dart from anywhere in the Rust runtime.
 ///
-/// Copies the callback out of the lock before invoking it to avoid
-/// holding the Mutex during the (potentially slow) FFI callback.
+/// Allocates a persistent copy of the data via [`alloc_rust_bytes`] so that
+/// the Dart-side async callback can safely read the bytes after Rust returns.
+/// The Dart side MUST call [`hub_free_bytes`] after copying the data.
 #[allow(dead_code)]
 pub(crate) fn send_rust_signal(signal_id: u32, data: &[u8]) {
     let cb = {
@@ -60,7 +61,8 @@ pub(crate) fn send_rust_signal(signal_id: u32, data: &[u8]) {
         guard.as_ref().map(|s| (s.callback, s.user_data))
     };
     if let Some((callback, user_data)) = cb {
-        callback(signal_id, data.as_ptr(), data.len(), user_data);
+        let (ptr, len) = alloc_rust_bytes(data.to_vec());
+        callback(signal_id, ptr, len, user_data);
     }
 }
 

@@ -7,7 +7,19 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use tokio::task::JoinSet;
 use tokio_with_wasm::alias as tokio;
-use wasm_bindgen_futures;
+
+/// Cross-platform spawn_local: uses wasm_bindgen_futures on WASM,
+/// tokio::task::spawn_local on native (requires a LocalSet or
+/// current_thread runtime).
+#[cfg(target_arch = "wasm32")]
+fn spawn_local<F: std::future::Future<Output = ()> + 'static>(f: F) {
+    wasm_bindgen_futures::spawn_local(f);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn spawn_local<F: std::future::Future<Output = ()> + 'static>(f: F) {
+    tokio::task::spawn_local(f);
+}
 
 /// Get current time in seconds (WASM-safe).
 pub(crate) fn current_time_secs() -> u64 {
@@ -411,7 +423,8 @@ impl WalletActor {
         Ok(best_height)
     }
 
-    /// Make a JSON-RPC call to a Monero daemon.
+    /// Make a JSON-RPC call to a Monero daemon (WASM only; native uses reqwest).
+    #[cfg(target_arch = "wasm32")]
     async fn json_rpc_call(url: &str, method: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {
         use wasm_bindgen::JsCast;
         use wasm_bindgen_futures::JsFuture;
@@ -841,7 +854,7 @@ impl WalletActor {
             };
             let mut addr = self_addr.clone();
 
-            wasm_bindgen_futures::spawn_local(async move {
+            spawn_local(async move {
                 match monero_rust::scan_mempool_for_outputs_with_account_lookahead(
                     &request.node_url,
                     &resolved_seed,
@@ -934,7 +947,7 @@ impl WalletActor {
                 continue;
             }
 
-            wasm_bindgen_futures::spawn_local(async move {
+            spawn_local(async move {
                 // Convert wallet configs to the format expected by the scanner
                 let wallet_configs: Vec<monero_rust::WalletScanConfig> = request
                     .wallets
@@ -1056,7 +1069,7 @@ impl WalletActor {
             let mut self_addr_clone = self_addr.clone();
 
             // Spawn task to get daemon height and start scanning
-            wasm_bindgen_futures::spawn_local(async move {
+            spawn_local(async move {
                 bump_generation();
 
                 match monero_rust::get_daemon_height(&node_url).await {
@@ -1488,7 +1501,7 @@ impl Notifiable<StartContinuousScan> for WalletActor {
         let subaddress_lookahead = msg.subaddress_lookahead;
         let mut self_addr = ctx.address();
 
-        wasm_bindgen_futures::spawn_local(async move {
+        spawn_local(async move {
             bump_generation();
 
             match monero_rust::get_daemon_height(&node_url).await {
@@ -1613,7 +1626,7 @@ impl Notifiable<ContinueScan> for WalletActor {
 
         let scan_gen = PREFETCH_GENERATION.with(|g| g.get());
 
-        wasm_bindgen_futures::spawn_local(async move {
+        spawn_local(async move {
             let lookahead = monero_rust::compute_lookahead(
                 account_lookahead,
                 subaddress_lookahead,
@@ -1681,7 +1694,7 @@ impl Notifiable<ContinueScan> for WalletActor {
             let next_height = batch_start_height + fetched.block_count() as u64;
             if next_height < target_height {
                 let prefetch_url = node_url.clone();
-                wasm_bindgen_futures::spawn_local(async move {
+                spawn_local(async move {
                     if let Ok(data) = monero_rust::fetch_blocks_batch_with_url(
                         &prefetch_url,
                         next_height,
@@ -1904,7 +1917,7 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
 
         let scan_gen = PREFETCH_GENERATION.with(|g| g.get());
 
-        wasm_bindgen_futures::spawn_local(async move {
+        spawn_local(async move {
             let wallet_configs: Vec<monero_rust::WalletScanConfig> = wallets
                 .iter()
                 .map(|w| monero_rust::WalletScanConfig {
@@ -1962,7 +1975,7 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
             let next_height = batch_start_height + fetched.block_count() as u64;
             if next_height < target_height {
                 let prefetch_url = node_url.clone();
-                wasm_bindgen_futures::spawn_local(async move {
+                spawn_local(async move {
                     if let Ok(data) = monero_rust::fetch_blocks_batch_with_url(
                         &prefetch_url,
                         next_height,

@@ -10,21 +10,27 @@ use crate::signals::*;
 // ---------------------------------------------------------------------------
 //
 // For each DartSignal type, generates:
-//   - A thread_local UnboundedSender
+//   - On wasm32: a thread_local UnboundedSender (single-threaded, safe)
+//   - On native: a static Mutex<Option<UnboundedSender>> (supports hub restart)
 //   - On wasm32: a #[wasm_bindgen] export `send_<snake_name>(json)` (JsValue error)
 //   - On native: a pub(crate) `send_<snake_name>(json)` (String error)
 //   - A `get_<snake_name>_receiver()` function for actors to call during init
-//
-// The channel infrastructure is identical on both targets. Only the
-// send function's calling convention differs.
 
 macro_rules! dart_signal {
     ($type:ty, $snake:ident) => {
         paste::paste! {
+            // WASM: thread_local is fine since everything runs on one thread.
+            #[cfg(target_arch = "wasm32")]
             thread_local! {
                 static [<$snake:upper _SENDER>]: RefCell<Option<tokio::sync::mpsc::UnboundedSender<$type>>>
                     = RefCell::new(None);
             }
+
+            // Native: Mutex<Option<>> allows re-initialization on hub restart.
+            // UnboundedSender is Send+Sync so this is safe.
+            #[cfg(not(target_arch = "wasm32"))]
+            static [<$snake:upper _SENDER>]: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<$type>>>
+                = std::sync::Mutex::new(None);
 
             #[cfg(target_arch = "wasm32")]
             #[wasm_bindgen]
@@ -44,18 +50,27 @@ macro_rules! dart_signal {
             pub(crate) fn [<send_ $snake>](json: &str) -> Result<(), String> {
                 let msg: $type = serde_json::from_str(json)
                     .map_err(|e| e.to_string())?;
-                [<$snake:upper _SENDER>].with(|s| {
-                    if let Some(tx) = s.borrow().as_ref() {
-                        tx.send(msg).map_err(|_| "channel closed".to_string())
-                    } else {
-                        Err("not initialized".to_string())
-                    }
-                })
+                let guard = [<$snake:upper _SENDER>].lock()
+                    .map_err(|_| "channel lock poisoned".to_string())?;
+                match guard.as_ref() {
+                    Some(tx) => tx.send(msg).map_err(|_| "channel closed".to_string()),
+                    None => Err("not initialized".to_string()),
+                }
             }
 
+            #[cfg(target_arch = "wasm32")]
             pub fn [<get_ $snake _receiver>]() -> tokio::sync::mpsc::UnboundedReceiver<$type> {
                 let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
                 [<$snake:upper _SENDER>].with(|s| { *s.borrow_mut() = Some(tx); });
+                rx
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            pub fn [<get_ $snake _receiver>]() -> tokio::sync::mpsc::UnboundedReceiver<$type> {
+                let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                if let Ok(mut guard) = [<$snake:upper _SENDER>].lock() {
+                    *guard = Some(tx);
+                }
                 rx
             }
         }

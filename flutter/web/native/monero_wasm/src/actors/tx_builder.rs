@@ -7,6 +7,16 @@ use monero_rust::error_codes::ErrorResponse;
 use tokio::task::JoinSet;
 use tokio_with_wasm::alias as tokio;
 
+#[cfg(target_arch = "wasm32")]
+fn spawn_local<F: std::future::Future<Output = ()> + 'static>(f: F) {
+    wasm_bindgen_futures::spawn_local(f);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn spawn_local<F: std::future::Future<Output = ()> + 'static>(f: F) {
+    tokio::task::spawn_local(f);
+}
+
 fn tx_error_response(msg: String) -> TransactionCreatedResponse {
     let err = ErrorResponse::from_string(&msg);
     TransactionCreatedResponse {
@@ -273,7 +283,7 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                     let selected_outputs = msg.selected_outputs;
                     let subtract_fee = msg.subtract_fee;
 
-                    wasm_bindgen_futures::spawn_local(async move {
+                    spawn_local(async move {
                         // Query fresh daemon height to avoid stale core_state
                         let daemon_height = match monero_rust::get_daemon_height(&node_url).await {
                             Ok(h) => {
@@ -567,7 +577,7 @@ impl Notifiable<SweepAll> for TxBuilderActor {
                     let destination = msg.destination_address;
                     let selected_outputs = msg.selected_outputs;
 
-                    wasm_bindgen_futures::spawn_local(async move {
+                    spawn_local(async move {
                         // Query fresh daemon height to avoid stale core_state
                         let daemon_height = match monero_rust::get_daemon_height(&node_url).await {
                             Ok(h) => h.max(stored_daemon_height),
@@ -667,7 +677,7 @@ impl Notifiable<BroadcastTransaction> for TxBuilderActor {
         web_sys::console::log_1(&"Broadcasting transaction...".into());
 
         // Spawn in local task to avoid Send requirements
-        wasm_bindgen_futures::spawn_local(async move {
+        spawn_local(async move {
             match monero_rust::native::broadcast_transaction(&msg.node_url, &msg.tx_blob).await {
                 Ok(()) => {
                     #[cfg(target_arch = "wasm32")]
@@ -754,7 +764,7 @@ impl Notifiable<CreateUnsignedTx> for TxBuilderActor {
                     let selected_outputs = msg.selected_outputs;
                     let daemon_height = wallet_height.daemon_height;
 
-                    wasm_bindgen_futures::spawn_local(async move {
+                    spawn_local(async move {
                         let fresh_daemon_height =
                             match monero_rust::get_daemon_height(&node_url).await {
                                 Ok(h) => h.max(daemon_height),
@@ -869,7 +879,7 @@ impl Notifiable<SignUnsignedTx> for TxBuilderActor {
         let unsigned_tx_hex = msg.unsigned_tx_hex;
         let network = msg.network;
 
-        wasm_bindgen_futures::spawn_local(async move {
+        spawn_local(async move {
             match monero_rust::tx_builder::sign_unsigned_transaction(
                 &seed,
                 &unsigned_tx_hex,
