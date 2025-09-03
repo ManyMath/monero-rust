@@ -321,7 +321,7 @@ class FileManagementState extends ChangeNotifier {
       currentHeight: loadedHeight,
       blockHashesJson: loadResult.blockHashesJson,
       pendingStateJson: loadResult.pendingStateJson,
-      passphrase: '',
+      passphrase: _walletState.passphrase,
       bip39AccountIndex: 0,
     ).sendSignalToRust();
 

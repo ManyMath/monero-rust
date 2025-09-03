@@ -46,14 +46,16 @@ class WalletScanService {
     required int blockHeight,
     required String nodeUrl,
     required String network,
+    String passphrase = '',
+    int bip39AccountIndex = 0,
   }) {
     ScanBlockRequest(
       nodeUrl: nodeUrl,
       blockHeight: blockHeight,
       seed: seed,
       network: network,
-      passphrase: '',
-      bip39AccountIndex: 0,
+      passphrase: passphrase,
+      bip39AccountIndex: bip39AccountIndex,
     ).sendSignalToRust();
   }
 
@@ -108,6 +110,8 @@ class WalletScanService {
     String? network,
     int accountLookahead = 0,
     int subaddressLookahead = 0,
+    String passphrase = '',
+    int bip39AccountIndex = 0,
   }) {
     if (walletsToScan.length > 1) {
       final walletConfigs = walletsToScan.map((w) => w.toWalletConfig(subaddressLookahead: subaddressLookahead)).toList();
@@ -126,8 +130,8 @@ class WalletScanService {
         network: wallet.network,
         accountLookahead: accountLookahead,
         subaddressLookahead: subaddressLookahead,
-        passphrase: '',
-        bip39AccountIndex: 0,
+        passphrase: passphrase,
+        bip39AccountIndex: bip39AccountIndex,
       ).sendSignalToRust();
     } else if (seed != null && network != null) {
       StartContinuousScanRequest(
@@ -137,8 +141,8 @@ class WalletScanService {
         network: network,
         accountLookahead: accountLookahead,
         subaddressLookahead: subaddressLookahead,
-        passphrase: '',
-        bip39AccountIndex: 0,
+        passphrase: passphrase,
+        bip39AccountIndex: bip39AccountIndex,
       ).sendSignalToRust();
     }
   }
@@ -186,6 +190,8 @@ class WalletScanService {
     required String network,
     int accountLookahead = 0,
     int subaddressLookahead = 0,
+    String passphrase = '',
+    int bip39AccountIndex = 0,
   }) {
     MempoolScanRequest(
       nodeUrl: nodeUrl,
@@ -193,8 +199,8 @@ class WalletScanService {
       network: network,
       accountLookahead: accountLookahead,
       subaddressLookahead: subaddressLookahead,
-      passphrase: '',
-      bip39AccountIndex: 0,
+      passphrase: passphrase,
+      bip39AccountIndex: bip39AccountIndex,
     ).sendSignalToRust();
   }
 }

@@ -110,6 +110,8 @@ class TransactionService {
     required String nodeUrl,
     List<String>? selectedOutputs,
     bool subtractFee = false,
+    String passphrase = '',
+    int bip39AccountIndex = 0,
   }) {
     CreateTransactionRequest(
       nodeUrl: nodeUrl,
@@ -117,8 +119,8 @@ class TransactionService {
       network: network,
       recipients: recipients,
       selectedOutputs: selectedOutputs,
-      passphrase: '',
-      bip39AccountIndex: 0,
+      passphrase: passphrase,
+      bip39AccountIndex: bip39AccountIndex,
       subtractFee: subtractFee,
     ).sendSignalToRust();
   }
@@ -185,6 +187,8 @@ class TransactionService {
     required String destinationAddress,
     required String nodeUrl,
     List<String>? selectedOutputs,
+    String passphrase = '',
+    int bip39AccountIndex = 0,
   }) {
     SweepAllRequest(
       nodeUrl: nodeUrl,
@@ -192,8 +196,8 @@ class TransactionService {
       network: network,
       destinationAddress: destinationAddress,
       selectedOutputs: selectedOutputs,
-      passphrase: '',
-      bip39AccountIndex: 0,
+      passphrase: passphrase,
+      bip39AccountIndex: bip39AccountIndex,
     ).sendSignalToRust();
   }
 

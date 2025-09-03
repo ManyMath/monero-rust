@@ -22,6 +22,7 @@ class WalletState extends ChangeNotifier {
 
   String network = 'stagenet';
   String seedType = '25 word (classic)';
+  String passphrase = '';
   String? validationError;
   String? derivedAddress;
   String? responseError;
@@ -111,7 +112,7 @@ class WalletState extends ChangeNotifier {
       }
 
       if (seed.isNotEmpty) {
-        GetSeedBirthdayRequest(seed: seed, passphrase: '', bip39AccountIndex: 0).sendSignalToRust();
+        GetSeedBirthdayRequest(seed: seed, passphrase: passphrase, bip39AccountIndex: 0).sendSignalToRust();
       }
     } else {
       derivedAddress = null;
@@ -213,7 +214,7 @@ class WalletState extends ChangeNotifier {
   void _handleBip39LegacySeed(Bip39LegacySeedResponse msg) {
     if (msg.success) {
       derivedLegacySeed = msg.legacySeed;
-      DeriveKeysRequest(seed: msg.legacySeed, network: network, passphrase: '', bip39AccountIndex: 0).sendSignalToRust();
+      DeriveKeysRequest(seed: msg.legacySeed, network: network, passphrase: passphrase, bip39AccountIndex: 0).sendSignalToRust();
     } else {
       responseError = msg.error ?? 'BIP39 conversion failed';
       derivedLegacySeed = null;
@@ -278,7 +279,7 @@ class WalletState extends ChangeNotifier {
       ConvertBip39ToLegacyRequest(
         bip39Mnemonic: result.normalizedInput!,
         accountIndex: 0,
-        passphrase: '',
+        passphrase: passphrase,
       ).sendSignalToRust();
       return;
     }
@@ -286,7 +287,7 @@ class WalletState extends ChangeNotifier {
     DeriveKeysRequest(
       seed: result.normalizedInput!,
       network: network,
-      passphrase: '',
+      passphrase: passphrase,
       bip39AccountIndex: 0,
     ).sendSignalToRust();
 
@@ -314,7 +315,7 @@ class WalletState extends ChangeNotifier {
                 network: network,
                 account: account,
                 addressIndex: index,
-                passphrase: '',
+                passphrase: passphrase,
                 bip39AccountIndex: 0,
               ).sendSignalToRust();
             }
@@ -337,7 +338,7 @@ class WalletState extends ChangeNotifier {
               network: network,
               account: activeAccount,
               addressIndex: index,
-              passphrase: '',
+              passphrase: passphrase,
               bip39AccountIndex: 0,
             ).sendSignalToRust();
           }

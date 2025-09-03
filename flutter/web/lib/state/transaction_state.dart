@@ -155,7 +155,7 @@ class TransactionState extends ChangeNotifier {
       outputs: _walletState.allOutputs,
       daemonHeight: _scanState.daemonHeight ?? 0,
       currentHeight: _walletState.continuousScanCurrentHeight,
-      passphrase: '',
+      passphrase: _walletState.passphrase,
       bip39AccountIndex: 0,
     ).sendSignalToRust();
   }
