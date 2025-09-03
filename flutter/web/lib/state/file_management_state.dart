@@ -322,7 +322,7 @@ class FileManagementState extends ChangeNotifier {
       blockHashesJson: loadResult.blockHashesJson,
       pendingStateJson: loadResult.pendingStateJson,
       passphrase: _walletState.passphrase,
-      bip39AccountIndex: 0,
+      bip39AccountIndex: _walletState.bip39AccountIndex,
     ).sendSignalToRust();
 
     // Rebuild Dart-side pending key images from restored pending state

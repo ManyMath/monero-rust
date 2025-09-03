@@ -23,6 +23,7 @@ class WalletState extends ChangeNotifier {
   String network = 'stagenet';
   String seedType = '25 word (classic)';
   String passphrase = '';
+  int bip39AccountIndex = 0;
   String? validationError;
   String? derivedAddress;
   String? responseError;
@@ -112,7 +113,7 @@ class WalletState extends ChangeNotifier {
       }
 
       if (seed.isNotEmpty) {
-        GetSeedBirthdayRequest(seed: seed, passphrase: passphrase, bip39AccountIndex: 0).sendSignalToRust();
+        GetSeedBirthdayRequest(seed: seed, passphrase: passphrase, bip39AccountIndex: bip39AccountIndex).sendSignalToRust();
       }
     } else {
       derivedAddress = null;
@@ -214,7 +215,7 @@ class WalletState extends ChangeNotifier {
   void _handleBip39LegacySeed(Bip39LegacySeedResponse msg) {
     if (msg.success) {
       derivedLegacySeed = msg.legacySeed;
-      DeriveKeysRequest(seed: msg.legacySeed, network: network, passphrase: passphrase, bip39AccountIndex: 0).sendSignalToRust();
+      DeriveKeysRequest(seed: msg.legacySeed, network: network, passphrase: passphrase, bip39AccountIndex: bip39AccountIndex).sendSignalToRust();
     } else {
       responseError = msg.error ?? 'BIP39 conversion failed';
       derivedLegacySeed = null;
@@ -288,7 +289,7 @@ class WalletState extends ChangeNotifier {
       seed: result.normalizedInput!,
       network: network,
       passphrase: passphrase,
-      bip39AccountIndex: 0,
+      bip39AccountIndex: bip39AccountIndex,
     ).sendSignalToRust();
 
     deriveSubaddresses();
@@ -316,7 +317,7 @@ class WalletState extends ChangeNotifier {
                 account: account,
                 addressIndex: index,
                 passphrase: passphrase,
-                bip39AccountIndex: 0,
+                bip39AccountIndex: bip39AccountIndex,
               ).sendSignalToRust();
             }
             derived++;
@@ -339,7 +340,7 @@ class WalletState extends ChangeNotifier {
               account: activeAccount,
               addressIndex: index,
               passphrase: passphrase,
-              bip39AccountIndex: 0,
+              bip39AccountIndex: bip39AccountIndex,
             ).sendSignalToRust();
           }
           derived++;
