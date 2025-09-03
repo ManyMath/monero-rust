@@ -68,22 +68,22 @@ class KeysDisplayPanel extends StatelessWidget {
         const Divider(height: 1),
         CommonWidgets.buildKeyRow(
           label: 'Secret Spend Key',
-          value: secretSpendKey ?? 'TODO',
+          value: secretSpendKey ?? 'Deriving...',
           onCopyPressed: () => onCopyToClipboard(secretSpendKey ?? '', 'Secret Spend Key'),
         ),
         CommonWidgets.buildKeyRow(
           label: 'Secret View Key',
-          value: secretViewKey ?? 'TODO',
+          value: secretViewKey ?? 'Deriving...',
           onCopyPressed: () => onCopyToClipboard(secretViewKey ?? '', 'Secret View Key'),
         ),
         CommonWidgets.buildKeyRow(
           label: 'Public Spend Key',
-          value: publicSpendKey ?? 'TODO',
+          value: publicSpendKey ?? 'Deriving...',
           onCopyPressed: () => onCopyToClipboard(publicSpendKey ?? '', 'Public Spend Key'),
         ),
         CommonWidgets.buildKeyRow(
           label: 'Public View Key',
-          value: publicViewKey ?? 'TODO',
+          value: publicViewKey ?? 'Deriving...',
           onCopyPressed: () => onCopyToClipboard(publicViewKey ?? '', 'Public View Key'),
         ),
       ],

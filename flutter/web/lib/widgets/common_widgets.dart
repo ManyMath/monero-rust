@@ -8,17 +8,17 @@ class CommonWidgets {
   /// Builds a key-value row with a copy button.
   ///
   /// Displays a label and value in a row with a copy button. The copy button
-  /// is disabled if the value is 'TODO'.
+  /// is disabled if the value is a placeholder (e.g. 'Deriving...').
   ///
   /// - [label]: The label text to display
-  /// - [value]: The value to display (can be 'TODO')
+  /// - [value]: The value to display
   /// - [onCopyPressed]: Callback when the copy button is pressed
   static Widget buildKeyRow({
     required String label,
     required String value,
     required VoidCallback onCopyPressed,
   }) {
-    final bool isTodo = value == 'TODO';
+    final bool isPlaceholder = value == 'TODO' || value == 'Deriving...';
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
@@ -42,8 +42,8 @@ class CommonWidgets {
           ),
           IconButton(
             icon: const Icon(Icons.copy_outlined, size: 16),
-            onPressed: !isTodo ? onCopyPressed : null,
-            tooltip: isTodo ? null : 'Copy $label',
+            onPressed: !isPlaceholder ? onCopyPressed : null,
+            tooltip: isPlaceholder ? null : 'Copy $label',
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(),
           ),
