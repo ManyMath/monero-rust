@@ -55,23 +55,23 @@ fn hub_generate_polyseed_then_birthday() {
 
 #[test]
 fn hub_derive_address_with_bip39() {
-    let address = derive_address(BIP39_SEED, "mainnet").unwrap();
+    let address = derive_address(BIP39_SEED, "mainnet", "").unwrap();
     assert_eq!(address, BIP39_EXPECTED_ADDRESS);
 }
 
 #[test]
 fn hub_derive_subaddress_with_bip39() {
-    let primary = derive_subaddress(BIP39_SEED, "mainnet", 0, 0).unwrap();
+    let primary = derive_subaddress(BIP39_SEED, "mainnet", 0, 0, "").unwrap();
     assert_eq!(primary, BIP39_EXPECTED_ADDRESS);
 
-    let sub = derive_subaddress(BIP39_SEED, "mainnet", 0, 1).unwrap();
+    let sub = derive_subaddress(BIP39_SEED, "mainnet", 0, 1, "").unwrap();
     assert_ne!(sub, primary);
     assert!(sub.starts_with('8'));
 }
 
 #[test]
 fn hub_derive_keys_with_bip39() {
-    let keys = derive_keys(BIP39_SEED, "mainnet").unwrap();
+    let keys = derive_keys(BIP39_SEED, "mainnet", "").unwrap();
     assert_eq!(keys.address, BIP39_EXPECTED_ADDRESS);
     assert!(!keys.secret_spend_key.is_empty());
     assert!(!keys.secret_view_key.is_empty());
@@ -96,7 +96,7 @@ fn hub_validate_seed_invalid_bip39_rejected() {
 fn hub_bip39_to_legacy_conversion() {
     let legacy = bip39_to_legacy_mnemonic(BIP39_SEED, "", 0).unwrap();
     assert_eq!(legacy.split_whitespace().count(), 25);
-    let addr = derive_address(&legacy, "mainnet").unwrap();
+    let addr = derive_address(&legacy, "mainnet", "").unwrap();
     assert_eq!(addr, BIP39_EXPECTED_ADDRESS);
 }
 
@@ -122,15 +122,15 @@ fn hub_full_bip39_restore_pipeline() {
     assert_eq!(birthday, None);
 
     // 3. Derive keys (wallet initialization)
-    let keys = derive_keys(BIP39_SEED, "mainnet").unwrap();
+    let keys = derive_keys(BIP39_SEED, "mainnet", "").unwrap();
     assert_eq!(keys.address, BIP39_EXPECTED_ADDRESS);
 
     // 4. Derive primary address
-    let address = derive_address(BIP39_SEED, "mainnet").unwrap();
+    let address = derive_address(BIP39_SEED, "mainnet", "").unwrap();
     assert_eq!(address, BIP39_EXPECTED_ADDRESS);
 
     // 5. Derive subaddress for receiving
-    let sub = derive_subaddress(BIP39_SEED, "mainnet", 0, 1).unwrap();
+    let sub = derive_subaddress(BIP39_SEED, "mainnet", 0, 1, "").unwrap();
     assert!(sub.starts_with('8'));
 
     // 6. resolve_seed succeeds (used by all scan/tx paths internally)
@@ -148,9 +148,9 @@ fn hub_all_seed_types_through_restore_pipeline() {
     for (seed_type, seed) in &seeds {
         validate_seed(seed).unwrap_or_else(|e| panic!("{} validate failed: {}", seed_type, e));
         let _ = seed_birthday(seed); // should not panic for any type
-        derive_keys(seed, "mainnet").unwrap_or_else(|e| panic!("{} derive_keys failed: {}", seed_type, e));
-        derive_address(seed, "mainnet").unwrap_or_else(|e| panic!("{} derive_address failed: {}", seed_type, e));
-        derive_subaddress(seed, "mainnet", 0, 0).unwrap_or_else(|e| panic!("{} derive_subaddress failed: {}", seed_type, e));
+        derive_keys(seed, "mainnet", "").unwrap_or_else(|e| panic!("{} derive_keys failed: {}", seed_type, e));
+        derive_address(seed, "mainnet", "").unwrap_or_else(|e| panic!("{} derive_address failed: {}", seed_type, e));
+        derive_subaddress(seed, "mainnet", 0, 0, "").unwrap_or_else(|e| panic!("{} derive_subaddress failed: {}", seed_type, e));
         resolve_seed(seed).unwrap_or_else(|e| panic!("{} resolve_seed failed: {}", seed_type, e));
     }
 }
@@ -160,7 +160,7 @@ fn hub_pre_resolve_bip39_cake_wallet_passphrase_vector() {
     // Cross-validated against Cake Wallet: pre-resolve pattern with passphrase
     let bip39 = "meadow tip best belt boss eyebrow control affair eternal piece very shiver";
     let legacy = bip39_to_legacy_mnemonic(bip39, "passphrase", 0).unwrap();
-    let addr = derive_address(&legacy, "mainnet").unwrap();
+    let addr = derive_address(&legacy, "mainnet", "").unwrap();
     assert_eq!(
         addr,
         "44KghHsEKVxbf9kpZ5Jry33rbX2J3DkWV3HVKEMsaAykY1Gmi2s55F6fsTB41U98dnSjgswjhc7HkY9nq9nwP4cDERWwpsM"
@@ -173,8 +173,8 @@ fn hub_pre_resolve_bip39_with_passphrase_derives_different_address() {
     let bip39 = BIP39_SEED;
     let legacy_no_pass = bip39_to_legacy_mnemonic(bip39, "", 0).unwrap();
     let legacy_with_pass = bip39_to_legacy_mnemonic(bip39, "testpass", 0).unwrap();
-    let addr_no_pass = derive_address(&legacy_no_pass, "mainnet").unwrap();
-    let addr_with_pass = derive_address(&legacy_with_pass, "mainnet").unwrap();
+    let addr_no_pass = derive_address(&legacy_no_pass, "mainnet", "").unwrap();
+    let addr_with_pass = derive_address(&legacy_with_pass, "mainnet", "").unwrap();
     assert_ne!(addr_no_pass, addr_with_pass);
     assert_eq!(addr_no_pass, BIP39_EXPECTED_ADDRESS);
 }
@@ -184,8 +184,8 @@ fn hub_pre_resolve_bip39_with_account_index_derives_different_address() {
     let bip39 = BIP39_SEED;
     let legacy_acct0 = bip39_to_legacy_mnemonic(bip39, "", 0).unwrap();
     let legacy_acct1 = bip39_to_legacy_mnemonic(bip39, "", 1).unwrap();
-    let addr_0 = derive_address(&legacy_acct0, "mainnet").unwrap();
-    let addr_1 = derive_address(&legacy_acct1, "mainnet").unwrap();
+    let addr_0 = derive_address(&legacy_acct0, "mainnet", "").unwrap();
+    let addr_1 = derive_address(&legacy_acct1, "mainnet", "").unwrap();
     assert_ne!(addr_0, addr_1);
 }
 
@@ -197,7 +197,7 @@ fn hub_pre_resolve_classic_passthrough() {
         dating dwindling king";
     // Simulating pre_resolve_bip39: word count != 12, so returns seed unchanged
     assert_ne!(classic.split_whitespace().count(), 12);
-    let keys = derive_keys(classic, "mainnet").unwrap();
+    let keys = derive_keys(classic, "mainnet", "").unwrap();
     assert!(!keys.address.is_empty());
 }
 
@@ -208,8 +208,8 @@ fn hub_resolve_seed_bip39_matches_pre_resolve_pattern() {
     let bip39 = BIP39_SEED;
     let _seed = resolve_seed_bip39(bip39, "pass123", 0).unwrap();
     let legacy = bip39_to_legacy_mnemonic(bip39, "pass123", 0).unwrap();
-    let keys_from_legacy = derive_keys(&legacy, "mainnet").unwrap();
+    let keys_from_legacy = derive_keys(&legacy, "mainnet", "").unwrap();
     // Both paths should give the same address
-    let keys_no_pass = derive_keys(bip39, "mainnet").unwrap();
+    let keys_no_pass = derive_keys(bip39, "mainnet", "").unwrap();
     assert_ne!(keys_from_legacy.address, keys_no_pass.address);
 }

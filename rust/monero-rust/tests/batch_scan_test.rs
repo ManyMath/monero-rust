@@ -84,14 +84,14 @@ fn lookahead() -> Lookahead {
 #[tokio::test]
 async fn test_invalid_seed_rejected() {
     let resp = make_response(100, 1, 101);
-    let err = process_batch_response(resp, "bad seed", "stagenet", lookahead(), None).await.unwrap_err();
+    let err = process_batch_response(resp, "bad seed", "stagenet", lookahead(), None, "").await.unwrap_err();
     assert!(err.contains("mnemonic") || err.contains("seed"), "{err}");
 }
 
 #[tokio::test]
 async fn test_invalid_network_rejected() {
     let resp = make_response(100, 1, 101);
-    let err = process_batch_response(resp, STAGENET_SEED, "badnet", lookahead(), None).await.unwrap_err();
+    let err = process_batch_response(resp, STAGENET_SEED, "badnet", lookahead(), None, "").await.unwrap_err();
     assert!(err.contains("network") || err.contains("Network"), "{err}");
 }
 
@@ -106,8 +106,8 @@ async fn test_empty_configs_rejected() {
 async fn test_one_bad_seed_fails_multi_wallet_batch() {
     let resp = make_response(100, 1, 101);
     let configs = vec![
-        WalletScanConfig { mnemonic: STAGENET_SEED.to_string(), network: "stagenet".to_string(), lookahead: lookahead() },
-        WalletScanConfig { mnemonic: "bad".to_string(), network: "stagenet".to_string(), lookahead: lookahead() },
+        WalletScanConfig { mnemonic: STAGENET_SEED.to_string(), network: "stagenet".to_string(), lookahead: lookahead(), passphrase: String::new() },
+        WalletScanConfig { mnemonic: "bad".to_string(), network: "stagenet".to_string(), lookahead: lookahead(), passphrase: String::new() },
     ];
     assert!(process_batch_multi_wallet_response(resp, configs, None).await.is_err());
 }
@@ -117,7 +117,7 @@ async fn test_one_bad_seed_fails_multi_wallet_batch() {
 #[tokio::test]
 async fn test_empty_batch_returns_empty() {
     let resp = make_response(100, 0, 100);
-    assert!(process_batch_response(resp, STAGENET_SEED, "stagenet", lookahead(), None).await.unwrap().0.is_empty());
+    assert!(process_batch_response(resp, STAGENET_SEED, "stagenet", lookahead(), None, "").await.unwrap().0.is_empty());
 }
 
 #[tokio::test]
@@ -136,7 +136,7 @@ async fn test_height_mismatch_detected() {
         top_hash: String::new(),
         daemon_time: 0,
     };
-    let err = process_batch_response(resp, STAGENET_SEED, "stagenet", lookahead(), None).await.unwrap_err();
+    let err = process_batch_response(resp, STAGENET_SEED, "stagenet", lookahead(), None, "").await.unwrap_err();
     assert!(err.contains("mismatch"), "{err}");
 }
 
@@ -147,11 +147,12 @@ async fn test_multi_wallet_produces_entry_per_wallet() {
     let resp = make_response(100, 3, 103);
     let other_seed = "honked bagpipe alpine juicy faked afoot jostle claim cowl tunnel orphans negative pheasants feast jetting quote frown teeming cycling tribal womanly hills cottage daytime daytime";
     let configs = vec![
-        WalletScanConfig { mnemonic: STAGENET_SEED.to_string(), network: "stagenet".to_string(), lookahead: lookahead() },
+        WalletScanConfig { mnemonic: STAGENET_SEED.to_string(), network: "stagenet".to_string(), lookahead: lookahead(), passphrase: String::new() },
         WalletScanConfig {
             mnemonic: other_seed.to_string(),
             network: "stagenet".to_string(),
             lookahead: lookahead(),
+            passphrase: String::new(),
         },
     ];
     let (results, _) = process_batch_multi_wallet_response(resp, configs, None).await.unwrap();
@@ -177,6 +178,7 @@ async fn test_batch_scan_early_blocks() {
         &rpc, 100_000, STAGENET_SEED, "stagenet",
         Lookahead { account: 0, subaddress: 20 },
         false,
+        "",
     ).await.expect("batch scan from 100k should succeed");
 
     assert!(!results.is_empty());
@@ -201,6 +203,7 @@ async fn test_batch_scan_later_blocks() {
         &rpc, 800_000, STAGENET_SEED, "stagenet",
         Lookahead { account: 0, subaddress: 20 },
         false,
+        "",
     ).await.expect("batch scan from 800k should succeed");
 
     assert!(!results.is_empty());
@@ -218,7 +221,7 @@ async fn test_multi_wallet_batch_metadata_matches_single_wallet() {
     let resp_single = make_response(100, 5, 105);
     let resp_multi = make_response(100, 5, 105);
 
-    let (single_results, _) = process_batch_response(resp_single, STAGENET_SEED, "stagenet", lookahead(), None)
+    let (single_results, _) = process_batch_response(resp_single, STAGENET_SEED, "stagenet", lookahead(), None, "")
         .await
         .unwrap();
 
@@ -226,6 +229,7 @@ async fn test_multi_wallet_batch_metadata_matches_single_wallet() {
         mnemonic: STAGENET_SEED.to_string(),
         network: "stagenet".to_string(),
         lookahead: lookahead(),
+        passphrase: String::new(),
     }];
     let (multi_results, _) = process_batch_multi_wallet_response(resp_multi, configs, None)
         .await
@@ -247,11 +251,13 @@ async fn test_multi_wallet_batch_deterministic() {
                 mnemonic: STAGENET_SEED.to_string(),
                 network: "stagenet".to_string(),
                 lookahead: lookahead(),
+                passphrase: String::new(),
             },
             WalletScanConfig {
                 mnemonic: HONKED_BAGPIPE_SEED.to_string(),
                 network: "stagenet".to_string(),
                 lookahead: lookahead(),
+                passphrase: String::new(),
             },
         ]
     };
@@ -292,11 +298,13 @@ async fn test_multi_wallet_batch_wallets_independent() {
             mnemonic: STAGENET_SEED.to_string(),
             network: "stagenet".to_string(),
             lookahead: lookahead(),
+            passphrase: String::new(),
         },
         WalletScanConfig {
             mnemonic: HONKED_BAGPIPE_SEED.to_string(),
             network: "stagenet".to_string(),
             lookahead: lookahead(),
+            passphrase: String::new(),
         },
     ];
 
@@ -304,8 +312,8 @@ async fn test_multi_wallet_batch_wallets_independent() {
     assert_eq!(results.len(), 3);
 
     // Derive expected addresses
-    let addr1 = monero_rust::scanner::derive_address(STAGENET_SEED, "stagenet").unwrap();
-    let addr2 = monero_rust::scanner::derive_address(HONKED_BAGPIPE_SEED, "stagenet").unwrap();
+    let addr1 = monero_rust::scanner::derive_address(STAGENET_SEED, "stagenet", "").unwrap();
+    let addr2 = monero_rust::scanner::derive_address(HONKED_BAGPIPE_SEED, "stagenet", "").unwrap();
     assert_ne!(addr1, addr2, "the two wallets must have different addresses");
 
     for r in &results {
@@ -331,11 +339,13 @@ async fn test_multi_wallet_batch_spent_key_images_shared() {
             mnemonic: STAGENET_SEED.to_string(),
             network: "stagenet".to_string(),
             lookahead: lookahead(),
+            passphrase: String::new(),
         },
         WalletScanConfig {
             mnemonic: HONKED_BAGPIPE_SEED.to_string(),
             network: "stagenet".to_string(),
             lookahead: lookahead(),
+            passphrase: String::new(),
         },
     ];
 
@@ -358,7 +368,7 @@ async fn test_multi_wallet_single_wallet_matches_single_batch() {
     let resp_single = make_response(100, 5, 105);
     let resp_multi = make_response(100, 5, 105);
 
-    let (single_results, _) = process_batch_response(resp_single, STAGENET_SEED, "stagenet", lookahead(), None)
+    let (single_results, _) = process_batch_response(resp_single, STAGENET_SEED, "stagenet", lookahead(), None, "")
         .await
         .unwrap();
 
@@ -366,6 +376,7 @@ async fn test_multi_wallet_single_wallet_matches_single_batch() {
         mnemonic: STAGENET_SEED.to_string(),
         network: "stagenet".to_string(),
         lookahead: lookahead(),
+        passphrase: String::new(),
     }];
     let (multi_results, _) = process_batch_multi_wallet_response(resp_multi, configs, None)
         .await
@@ -380,7 +391,7 @@ async fn test_multi_wallet_single_wallet_matches_single_batch() {
     assert_eq!(single_heights, multi_heights);
 
     // Same number of outputs (should be 0 for synthetic blocks, but counts must match)
-    let addr = monero_rust::scanner::derive_address(STAGENET_SEED, "stagenet").unwrap();
+    let addr = monero_rust::scanner::derive_address(STAGENET_SEED, "stagenet", "").unwrap();
     for (s, m) in single_results.iter().zip(multi_results.iter()) {
         let single_output_count = s.outputs.len();
         let multi_output_count = m.wallet_results[&addr].outputs.len();
@@ -400,16 +411,19 @@ async fn test_multi_wallet_batch_three_wallets() {
             mnemonic: STAGENET_SEED.to_string(),
             network: "stagenet".to_string(),
             lookahead: lookahead(),
+            passphrase: String::new(),
         },
         WalletScanConfig {
             mnemonic: HONKED_BAGPIPE_SEED.to_string(),
             network: "stagenet".to_string(),
             lookahead: lookahead(),
+            passphrase: String::new(),
         },
         WalletScanConfig {
             mnemonic: HEMLOCK_SEED.to_string(),
             network: "stagenet".to_string(),
             lookahead: lookahead(),
+            passphrase: String::new(),
         },
     ];
 
@@ -435,11 +449,13 @@ async fn test_multi_wallet_batch_large_batch() {
             mnemonic: STAGENET_SEED.to_string(),
             network: "stagenet".to_string(),
             lookahead: lookahead(),
+            passphrase: String::new(),
         },
         WalletScanConfig {
             mnemonic: HONKED_BAGPIPE_SEED.to_string(),
             network: "stagenet".to_string(),
             lookahead: lookahead(),
+            passphrase: String::new(),
         },
     ];
 

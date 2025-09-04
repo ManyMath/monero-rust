@@ -54,6 +54,7 @@ digest_auth = { version = "0.3", optional = true }
 reqwest = { version = "0.11", features = ["json"], optional = true }
 
 polyseed = { git = "https://github.com/kayabaNerve/monero-wallet-util", rev = "3aa28da1eb636550f2cc54798521f43e8920b15b", default-features = false }
+pbkdf2 = { version = "0.12", features = ["simple"] }
 
 [build-dependencies]
 dalek-ff-group = { package = "dalek-ff-group-mirror", version = "0.3" }

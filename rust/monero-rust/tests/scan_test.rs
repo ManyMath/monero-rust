@@ -12,7 +12,7 @@ async fn test_scan_mainnet_block() {
     let rpc = HttpRpc::new(LOCAL_NODE.to_string())
         .expect("Failed to create RPC");
 
-    let result = scan_block_for_outputs(&rpc, TEST_BLOCK, HONKED_BAGPIPE_SEED, "stagenet")
+    let result = scan_block_for_outputs(&rpc, TEST_BLOCK, HONKED_BAGPIPE_SEED, "stagenet", "")
         .await
         .expect("scan failed");
 
@@ -25,7 +25,7 @@ async fn test_scan_block_no_outputs() {
     let rpc = HttpRpc::new(LOCAL_NODE.to_string())
         .expect("Failed to create RPC");
 
-    let result = scan_block_for_outputs(&rpc, 2000000, HONKED_BAGPIPE_SEED, "stagenet")
+    let result = scan_block_for_outputs(&rpc, 2000000, HONKED_BAGPIPE_SEED, "stagenet", "")
         .await
         .expect("scan failed");
 
@@ -52,9 +52,9 @@ async fn test_scan_invalid_inputs() {
     let rpc = HttpRpc::new(LOCAL_NODE.to_string())
         .expect("Failed to create RPC");
 
-    let result = scan_block_for_outputs(&rpc, 1, "invalid seed words", "stagenet").await;
+    let result = scan_block_for_outputs(&rpc, 1, "invalid seed words", "stagenet", "").await;
     assert!(result.is_err());
 
-    let result = scan_block_for_outputs(&rpc, 1, HONKED_BAGPIPE_SEED, "invalidnet").await;
+    let result = scan_block_for_outputs(&rpc, 1, HONKED_BAGPIPE_SEED, "invalidnet", "").await;
     assert!(result.is_err());
 }

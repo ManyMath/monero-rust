@@ -216,6 +216,7 @@ pub struct WalletScanConfig {
     pub mnemonic: String,
     pub network: String,
     pub lookahead: Lookahead,
+    pub passphrase: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -257,8 +258,8 @@ fn parse_network(network_str: &str) -> Result<Network, String> {
     }
 }
 
-fn spend_key_from_seed(seed: &Seed) -> EdwardsPoint {
-    let key_bytes = seed.key_bytes();
+fn spend_key_from_seed(seed: &Seed, passphrase: &str) -> EdwardsPoint {
+    let key_bytes = seed.key_bytes_with_passphrase(passphrase);
     let mut spend_bytes = [0u8; 32];
     spend_bytes.copy_from_slice(&key_bytes[..]);
 
@@ -266,8 +267,8 @@ fn spend_key_from_seed(seed: &Seed) -> EdwardsPoint {
     &spend_scalar * &ED25519_BASEPOINT_TABLE
 }
 
-fn view_key_from_seed(seed: &Seed) -> Scalar {
-    let key_bytes = seed.key_bytes();
+fn view_key_from_seed(seed: &Seed, passphrase: &str) -> Scalar {
+    let key_bytes = seed.key_bytes_with_passphrase(passphrase);
     let mut spend_bytes = [0u8; 32];
     spend_bytes.copy_from_slice(&key_bytes[..]);
 
@@ -277,8 +278,8 @@ fn view_key_from_seed(seed: &Seed) -> Scalar {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn spend_key_scalar_from_seed(seed: &Seed) -> Scalar {
-    let key_bytes = seed.key_bytes();
+fn spend_key_scalar_from_seed(seed: &Seed, passphrase: &str) -> Scalar {
+    let key_bytes = seed.key_bytes_with_passphrase(passphrase);
     let mut spend_bytes = [0u8; 32];
     spend_bytes.copy_from_slice(&key_bytes[..]);
     Scalar::from_bytes_mod_order(spend_bytes)
@@ -507,9 +508,9 @@ pub fn validate_seed(mnemonic: &str) -> Result<(), String> {
         .map_err(|e| format!("Invalid seed phrase: {:?}", e))
 }
 
-fn address_from_seed(seed: &Seed, network: Network) -> String {
-    let spend_point = spend_key_from_seed(seed);
-    let view_scalar = view_key_from_seed(seed);
+fn address_from_seed(seed: &Seed, network: Network, passphrase: &str) -> String {
+    let spend_point = spend_key_from_seed(seed, passphrase);
+    let view_scalar = view_key_from_seed(seed, passphrase);
     let view_point: EdwardsPoint = &view_scalar * &ED25519_BASEPOINT_TABLE;
 
     MoneroAddress::new(
@@ -520,11 +521,11 @@ fn address_from_seed(seed: &Seed, network: Network) -> String {
     .to_string()
 }
 
-pub fn derive_address(mnemonic: &str, network_str: &str) -> Result<String, String> {
+pub fn derive_address(mnemonic: &str, network_str: &str, passphrase: &str) -> Result<String, String> {
     crate::error_codes::validate_network(network_str).map_err(|e| e.message.clone())?;
     let network = parse_network(network_str)?;
     let seed = resolve_seed(mnemonic)?;
-    Ok(address_from_seed(&seed, network))
+    Ok(address_from_seed(&seed, network, passphrase))
 }
 
 pub fn derive_subaddress(
@@ -532,6 +533,7 @@ pub fn derive_subaddress(
     network_str: &str,
     account: u32,
     address_index: u32,
+    passphrase: &str,
 ) -> Result<String, String> {
     use monero_serai::wallet::address::AddressSpec;
 
@@ -540,7 +542,7 @@ pub fn derive_subaddress(
 
     let seed = resolve_seed(mnemonic)?;
 
-    let spend: [u8; 32] = *seed.key_bytes();
+    let spend: [u8; 32] = *seed.key_bytes_with_passphrase(passphrase);
     let spend_scalar = Scalar::from_bytes_mod_order(spend);
     let spend_point: EdwardsPoint = &spend_scalar * &ED25519_BASEPOINT_TABLE;
 
@@ -566,13 +568,13 @@ pub fn derive_subaddress(
     Ok(address.to_string())
 }
 
-pub fn derive_keys(mnemonic: &str, network_str: &str) -> Result<DerivedKeys, String> {
+pub fn derive_keys(mnemonic: &str, network_str: &str, passphrase: &str) -> Result<DerivedKeys, String> {
     crate::error_codes::validate_network(network_str).map_err(|e| e.message.clone())?;
     let network = parse_network(network_str)?;
 
     let seed = resolve_seed(mnemonic)?;
 
-    let spend: [u8; 32] = *seed.key_bytes();
+    let spend: [u8; 32] = *seed.key_bytes_with_passphrase(passphrase);
     let spend_scalar = Scalar::from_bytes_mod_order(spend);
     let spend_point: EdwardsPoint = &spend_scalar * &ED25519_BASEPOINT_TABLE;
 
@@ -628,10 +630,11 @@ pub async fn scan_block_for_outputs_with_url(
     block_height: u64,
     mnemonic: &str,
     network_str: &str,
+    passphrase: &str,
 ) -> Result<BlockScanResult, String> {
     crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
     crate::error_codes::validate_network(network_str).map_err(|e| e.message.clone())?;
-    scan_block_for_outputs_with_url_and_lookahead(node_url, block_height, mnemonic, network_str, DEFAULT_LOOKAHEAD).await
+    scan_block_for_outputs_with_url_and_lookahead(node_url, block_height, mnemonic, network_str, DEFAULT_LOOKAHEAD, passphrase).await
 }
 
 pub async fn scan_block_for_outputs_with_url_and_lookahead(
@@ -640,6 +643,7 @@ pub async fn scan_block_for_outputs_with_url_and_lookahead(
     mnemonic: &str,
     network_str: &str,
     lookahead: Lookahead,
+    passphrase: &str,
 ) -> Result<BlockScanResult, String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -652,6 +656,7 @@ pub async fn scan_block_for_outputs_with_url_and_lookahead(
             mnemonic,
             network_str,
             lookahead,
+            passphrase,
         )
         .await
     }
@@ -667,6 +672,7 @@ pub async fn scan_block_for_outputs_with_url_and_lookahead(
             mnemonic,
             network_str,
             lookahead,
+            passphrase,
         )
         .await
     }
@@ -677,6 +683,7 @@ pub async fn scan_block_for_outputs<R: RpcConnection>(
     block_height: u64,
     mnemonic: &str,
     network_str: &str,
+    passphrase: &str,
 ) -> Result<BlockScanResult, String> {
     scan_block_for_outputs_with_lookahead(
         rpc,
@@ -684,6 +691,7 @@ pub async fn scan_block_for_outputs<R: RpcConnection>(
         mnemonic,
         network_str,
         DEFAULT_LOOKAHEAD,
+        passphrase,
     )
     .await
 }
@@ -694,15 +702,16 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
     mnemonic: &str,
     network_str: &str,
     lookahead: Lookahead,
+    passphrase: &str,
 ) -> Result<BlockScanResult, String> {
     let _network = parse_network(network_str)?;
 
     let seed = resolve_seed(mnemonic)?;
 
-    let spend_point = spend_key_from_seed(&seed);
-    let view_scalar = view_key_from_seed(&seed);
+    let spend_point = spend_key_from_seed(&seed, passphrase);
+    let view_scalar = view_key_from_seed(&seed, passphrase);
     #[cfg(target_arch = "wasm32")]
-    let spend_scalar = spend_key_scalar_from_seed(&seed);
+    let spend_scalar = spend_key_scalar_from_seed(&seed, passphrase);
 
     let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
     let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
@@ -830,6 +839,7 @@ pub async fn scan_blocks_batch<R: RpcConnection>(
     network_str: &str,
     lookahead: Lookahead,
     prune: bool,
+    passphrase: &str,
 ) -> Result<Vec<BlockScanResult>, String> {
     // Get a known block hash so the daemon can find the fork point.
     let known_hash = rpc
@@ -843,7 +853,7 @@ pub async fn scan_blocks_batch<R: RpcConnection>(
         .await
         .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
 
-    let (results, _cached) = process_batch_response(response, mnemonic, network_str, lookahead, None).await?;
+    let (results, _cached) = process_batch_response(response, mnemonic, network_str, lookahead, None, passphrase).await?;
     Ok(results)
 }
 
@@ -858,14 +868,15 @@ pub async fn process_batch_response(
     network_str: &str,
     lookahead: Lookahead,
     cached: Option<CachedScanner>,
+    passphrase: &str,
 ) -> Result<(Vec<BlockScanResult>, CachedScanner), String> {
     let _network = parse_network(network_str)?;
 
     let seed = resolve_seed(mnemonic)?;
-    let spend_point = spend_key_from_seed(&seed);
+    let spend_point = spend_key_from_seed(&seed, passphrase);
     let fingerprint = spend_point.compress().to_bytes();
     #[cfg(target_arch = "wasm32")]
-    let spend_scalar = spend_key_scalar_from_seed(&seed);
+    let spend_scalar = spend_key_scalar_from_seed(&seed, passphrase);
 
     let mut scanner = if let Some(c) = cached {
         if c.fingerprint == fingerprint && c.lookahead == lookahead {
@@ -875,7 +886,7 @@ pub async fn process_batch_response(
         } else {
             // Mismatch — rebuild
             drop(c);
-            let view_scalar = view_key_from_seed(&seed);
+            let view_scalar = view_key_from_seed(&seed, passphrase);
             let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
             let mut s = Scanner::from_view(view_pair, Some(HashSet::new()));
             register_subaddresses_async(&mut s, lookahead).await;
@@ -885,11 +896,11 @@ pub async fn process_batch_response(
                 fingerprint,
                 watermark: SubaddressWatermark::new(lookahead),
                 #[cfg(target_arch = "wasm32")]
-                spend_scalar: spend_key_scalar_from_seed(&seed),
+                spend_scalar: spend_key_scalar_from_seed(&seed, passphrase),
             }
         }
     } else {
-        let view_scalar = view_key_from_seed(&seed);
+        let view_scalar = view_key_from_seed(&seed, passphrase);
         let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
         let mut s = Scanner::from_view(view_pair, Some(HashSet::new()));
         register_subaddresses_async(&mut s, lookahead).await;
@@ -899,7 +910,7 @@ pub async fn process_batch_response(
             fingerprint,
             watermark: SubaddressWatermark::new(lookahead),
             #[cfg(target_arch = "wasm32")]
-            spend_scalar: spend_key_scalar_from_seed(&seed),
+            spend_scalar: spend_key_scalar_from_seed(&seed, passphrase),
         }
     };
 
@@ -1100,20 +1111,21 @@ pub async fn scan_blocks_batch_with_url(
     network_str: &str,
     lookahead: Lookahead,
     prune: bool,
+    passphrase: &str,
 ) -> Result<Vec<BlockScanResult>, String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         use monero_serai::rpc::HttpRpc;
         let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
-        scan_blocks_batch(&rpc, start_height, mnemonic, network_str, lookahead, prune).await
+        scan_blocks_batch(&rpc, start_height, mnemonic, network_str, lookahead, prune, passphrase).await
     }
 
     #[cfg(target_arch = "wasm32")]
     {
         use crate::rpc_serai::WasmRpcConnection;
         let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
-        scan_blocks_batch(&rpc, start_height, mnemonic, network_str, lookahead, prune).await
+        scan_blocks_batch(&rpc, start_height, mnemonic, network_str, lookahead, prune, passphrase).await
     }
 }
 
@@ -1168,7 +1180,7 @@ pub async fn process_batch_multi_wallet_response(
     let mut config_fingerprints = Vec::with_capacity(wallet_configs.len());
     for config in &wallet_configs {
         let seed = resolve_seed(&config.mnemonic)?;
-        let spend_point = spend_key_from_seed(&seed);
+        let spend_point = spend_key_from_seed(&seed, &config.passphrase);
         config_fingerprints.push(spend_point.compress().to_bytes());
     }
 
@@ -1192,9 +1204,9 @@ pub async fn process_batch_multi_wallet_response(
         for (config, fp) in wallet_configs.iter().zip(config_fingerprints.iter()) {
             let network = parse_network(&config.network)?;
             let seed = resolve_seed(&config.mnemonic)?;
-            let address = address_from_seed(&seed, network);
-            let spend_point = spend_key_from_seed(&seed);
-            let view_scalar = view_key_from_seed(&seed);
+            let address = address_from_seed(&seed, network, &config.passphrase);
+            let spend_point = spend_key_from_seed(&seed, &config.passphrase);
+            let view_scalar = view_key_from_seed(&seed, &config.passphrase);
             let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
             let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
             register_subaddresses_async(&mut scanner, config.lookahead).await;
@@ -1206,7 +1218,7 @@ pub async fn process_batch_multi_wallet_response(
                 fingerprint: *fp,
                 watermark: SubaddressWatermark::new(config.lookahead),
                 #[cfg(target_arch = "wasm32")]
-                spend_scalar: spend_key_scalar_from_seed(&seed),
+                spend_scalar: spend_key_scalar_from_seed(&seed, &config.passphrase),
             });
         }
         CachedScanners { entries }
@@ -1511,8 +1523,9 @@ pub async fn process_fetched_batch(
     mnemonic: &str,
     network_str: &str,
     lookahead: Lookahead,
+    passphrase: &str,
 ) -> Result<Vec<BlockScanResult>, String> {
-    let (results, _cached) = process_batch_response(fetched.response, mnemonic, network_str, lookahead, None).await?;
+    let (results, _cached) = process_batch_response(fetched.response, mnemonic, network_str, lookahead, None, passphrase).await?;
     Ok(results)
 }
 
@@ -1523,8 +1536,9 @@ pub async fn process_fetched_batch_cached(
     network_str: &str,
     lookahead: Lookahead,
     cached: Option<CachedScanner>,
+    passphrase: &str,
 ) -> Result<(Vec<BlockScanResult>, CachedScanner), String> {
-    process_batch_response(fetched.response, mnemonic, network_str, lookahead, cached).await
+    process_batch_response(fetched.response, mnemonic, network_str, lookahead, cached, passphrase).await
 }
 
 fn hex_to_hash(hex_str: &str) -> Result<[u8; 32], String> {
@@ -1554,6 +1568,7 @@ pub async fn scan_blocks_batch_with_history<R: RpcConnection>(
     network_str: &str,
     lookahead: Lookahead,
     prune: bool,
+    passphrase: &str,
 ) -> Result<(Vec<BlockScanResult>, u64), String> {
     let block_ids: Vec<[u8; 32]> = if known_hashes.is_empty() {
         // Fallback: single hash like the old behavior
@@ -1575,7 +1590,7 @@ pub async fn scan_blocks_batch_with_history<R: RpcConnection>(
         .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
 
     let actual_start = response.start_height;
-    let (results, _cached) = process_batch_response(response, mnemonic, network_str, lookahead, None).await?;
+    let (results, _cached) = process_batch_response(response, mnemonic, network_str, lookahead, None, passphrase).await?;
     Ok((results, actual_start))
 }
 
@@ -1588,20 +1603,21 @@ pub async fn scan_blocks_batch_with_history_url(
     network_str: &str,
     lookahead: Lookahead,
     prune: bool,
+    passphrase: &str,
 ) -> Result<(Vec<BlockScanResult>, u64), String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         use monero_serai::rpc::HttpRpc;
         let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
-        scan_blocks_batch_with_history(&rpc, start_height, known_hashes, mnemonic, network_str, lookahead, prune).await
+        scan_blocks_batch_with_history(&rpc, start_height, known_hashes, mnemonic, network_str, lookahead, prune, passphrase).await
     }
 
     #[cfg(target_arch = "wasm32")]
     {
         use crate::rpc_serai::WasmRpcConnection;
         let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
-        scan_blocks_batch_with_history(&rpc, start_height, known_hashes, mnemonic, network_str, lookahead, prune).await
+        scan_blocks_batch_with_history(&rpc, start_height, known_hashes, mnemonic, network_str, lookahead, prune, passphrase).await
     }
 }
 
@@ -1759,12 +1775,13 @@ pub async fn scan_block_multi_wallet<R: RpcConnection + Send + Sync + Clone + 's
             // Parse seed once — used for both address derivation and scanner setup
             let network = parse_network(&wallet_config.network)?;
             let seed = resolve_seed(&wallet_config.mnemonic)?;
-            let address = address_from_seed(&seed, network);
+            let passphrase = wallet_config.passphrase.as_str();
+            let address = address_from_seed(&seed, network, passphrase);
 
-            let spend_point = spend_key_from_seed(&seed);
-            let view_scalar = view_key_from_seed(&seed);
+            let spend_point = spend_key_from_seed(&seed, passphrase);
+            let view_scalar = view_key_from_seed(&seed, passphrase);
             #[cfg(target_arch = "wasm32")]
-            let spend_scalar = spend_key_scalar_from_seed(&seed);
+            let spend_scalar = spend_key_scalar_from_seed(&seed, passphrase);
 
             let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
             let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
@@ -1932,12 +1949,13 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
         // Parse seed once — used for both address derivation and scanner setup
         let network = parse_network(&wallet_config.network)?;
         let seed = resolve_seed(&wallet_config.mnemonic)?;
-        let address = address_from_seed(&seed, network);
+        let passphrase = wallet_config.passphrase.as_str();
+        let address = address_from_seed(&seed, network, passphrase);
 
-        let spend_point = spend_key_from_seed(&seed);
-        let view_scalar = view_key_from_seed(&seed);
+        let spend_point = spend_key_from_seed(&seed, passphrase);
+        let view_scalar = view_key_from_seed(&seed, passphrase);
         #[cfg(target_arch = "wasm32")]
-        let spend_scalar = spend_key_scalar_from_seed(&seed);
+        let spend_scalar = spend_key_scalar_from_seed(&seed, passphrase);
 
         let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
         let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
@@ -2035,8 +2053,9 @@ pub async fn scan_mempool_for_outputs(
     node_url: &str,
     mnemonic: &str,
     network_str: &str,
+    passphrase: &str,
 ) -> Result<MempoolScanResult, String> {
-    scan_mempool_for_outputs_with_lookahead(node_url, mnemonic, network_str, DEFAULT_LOOKAHEAD).await
+    scan_mempool_for_outputs_with_lookahead(node_url, mnemonic, network_str, DEFAULT_LOOKAHEAD, passphrase).await
 }
 
 pub async fn scan_mempool_for_outputs_with_account_lookahead(
@@ -2045,12 +2064,13 @@ pub async fn scan_mempool_for_outputs_with_account_lookahead(
     network_str: &str,
     account_lookahead: u32,
     subaddress_lookahead: u32,
+    passphrase: &str,
 ) -> Result<MempoolScanResult, String> {
     let lookahead = Lookahead {
         account: account_lookahead,
         subaddress: if subaddress_lookahead > 0 { subaddress_lookahead } else { DEFAULT_LOOKAHEAD.subaddress },
     };
-    scan_mempool_for_outputs_with_lookahead(node_url, mnemonic, network_str, lookahead).await
+    scan_mempool_for_outputs_with_lookahead(node_url, mnemonic, network_str, lookahead, passphrase).await
 }
 
 pub async fn scan_mempool_for_outputs_with_lookahead(
@@ -2058,13 +2078,14 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
     mnemonic: &str,
     _network_str: &str,
     lookahead: Lookahead,
+    passphrase: &str,
 ) -> Result<MempoolScanResult, String> {
     let seed = resolve_seed(mnemonic)?;
 
-    let spend_point = spend_key_from_seed(&seed);
-    let view_scalar = view_key_from_seed(&seed);
+    let spend_point = spend_key_from_seed(&seed, passphrase);
+    let view_scalar = view_key_from_seed(&seed, passphrase);
     #[cfg(target_arch = "wasm32")]
-    let spend_scalar = spend_key_scalar_from_seed(&seed);
+    let spend_scalar = spend_key_scalar_from_seed(&seed, passphrase);
 
     let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
     let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
@@ -2223,7 +2244,7 @@ mod tests {
 
     #[test]
     fn test_derive_address_test_vector_1_mainnet() {
-        let address = derive_address(TEST_VECTOR_1_SEED, "mainnet")
+        let address = derive_address(TEST_VECTOR_1_SEED, "mainnet", "")
             .expect("Failed to derive address from test vector 1");
 
         assert_eq!(address, TEST_VECTOR_1_ADDRESS);
@@ -2239,7 +2260,7 @@ mod tests {
 
     #[test]
     fn test_derive_address_test_vector_2_stagenet() {
-        let address = derive_address(TEST_VECTOR_2_SEED, "stagenet")
+        let address = derive_address(TEST_VECTOR_2_SEED, "stagenet", "")
             .expect("Failed to derive address from test vector 2");
 
         assert_eq!(address, TEST_VECTOR_2_ADDRESS);
@@ -2255,7 +2276,7 @@ mod tests {
 
     #[test]
     fn test_derive_address_test_vector_3_stagenet() {
-        let address = derive_address(TEST_VECTOR_3_SEED, "stagenet")
+        let address = derive_address(TEST_VECTOR_3_SEED, "stagenet", "")
             .expect("Failed to derive address from test vector 3");
 
         assert_eq!(address, TEST_VECTOR_3_ADDRESS);
@@ -2263,7 +2284,7 @@ mod tests {
 
     #[test]
     fn test_derive_address_test_vector_4_english() {
-        let _address = derive_address(TEST_VECTOR_4_SEED, "mainnet")
+        let _address = derive_address(TEST_VECTOR_4_SEED, "mainnet", "")
             .expect("Failed to derive address from test vector 4");
 
         let seed = Seed::from_string(Zeroizing::new(TEST_VECTOR_4_SEED.to_string())).unwrap();
@@ -2277,7 +2298,7 @@ mod tests {
 
     #[test]
     fn test_derive_address_test_vector_5_spanish() {
-        let _address = derive_address(TEST_VECTOR_5_SEED, "mainnet")
+        let _address = derive_address(TEST_VECTOR_5_SEED, "mainnet", "")
             .expect("Failed to derive address from test vector 5");
 
         let seed = Seed::from_string(Zeroizing::new(TEST_VECTOR_5_SEED.to_string())).unwrap();
@@ -2291,7 +2312,7 @@ mod tests {
 
     #[test]
     fn test_derive_address_test_vector_6_french() {
-        let _address = derive_address(TEST_VECTOR_6_SEED, "mainnet")
+        let _address = derive_address(TEST_VECTOR_6_SEED, "mainnet", "")
             .expect("Failed to derive address from test vector 6");
 
         let seed = Seed::from_string(Zeroizing::new(TEST_VECTOR_6_SEED.to_string())).unwrap();
@@ -2305,7 +2326,7 @@ mod tests {
 
     #[test]
     fn test_derive_address_test_vector_7_german() {
-        let _address = derive_address(TEST_VECTOR_7_SEED, "mainnet")
+        let _address = derive_address(TEST_VECTOR_7_SEED, "mainnet", "")
             .expect("Failed to derive address from test vector 7");
 
         let seed = Seed::from_string(Zeroizing::new(TEST_VECTOR_7_SEED.to_string())).unwrap();
@@ -2320,15 +2341,15 @@ mod tests {
     #[test]
     fn test_derive_address_networks() {
         let mainnet_addr =
-            derive_address(TEST_VECTOR_1_SEED, "mainnet").expect("Failed for mainnet");
+            derive_address(TEST_VECTOR_1_SEED, "mainnet", "").expect("Failed for mainnet");
         assert!(mainnet_addr.starts_with("4"));
 
         let testnet_addr =
-            derive_address(TEST_VECTOR_1_SEED, "testnet").expect("Failed for testnet");
+            derive_address(TEST_VECTOR_1_SEED, "testnet", "").expect("Failed for testnet");
         assert!(testnet_addr.starts_with("9") || testnet_addr.starts_with("A"));
 
         let stagenet_addr =
-            derive_address(TEST_VECTOR_2_SEED, "stagenet").expect("Failed for stagenet");
+            derive_address(TEST_VECTOR_2_SEED, "stagenet", "").expect("Failed for stagenet");
         assert!(stagenet_addr.starts_with("5"));
 
         assert_ne!(mainnet_addr, testnet_addr);
@@ -2339,9 +2360,9 @@ mod tests {
     #[test]
     fn test_derive_address_deterministic() {
         let address1 =
-            derive_address(TEST_VECTOR_1_SEED, "mainnet").expect("Failed first derivation");
+            derive_address(TEST_VECTOR_1_SEED, "mainnet", "").expect("Failed first derivation");
         let address2 =
-            derive_address(TEST_VECTOR_1_SEED, "mainnet").expect("Failed second derivation");
+            derive_address(TEST_VECTOR_1_SEED, "mainnet", "").expect("Failed second derivation");
 
         assert_eq!(address1, address2);
         assert_eq!(address1.len(), 95);
@@ -2349,13 +2370,13 @@ mod tests {
 
     #[test]
     fn test_derive_address_invalid_seed() {
-        let result = derive_address("invalid seed words", "mainnet");
+        let result = derive_address("invalid seed words", "mainnet", "");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_derive_address_invalid_network() {
-        let result = derive_address(TEST_VECTOR_1_SEED, "invalidnet");
+        let result = derive_address(TEST_VECTOR_1_SEED, "invalidnet", "");
         assert!(result.is_err());
     }
 
@@ -2363,23 +2384,23 @@ mod tests {
     fn test_seed_generation_and_address_derivation() {
         let seed = generate_seed("classic").expect("Failed to generate seed");
 
-        let mainnet_address = derive_address(&seed, "mainnet")
+        let mainnet_address = derive_address(&seed, "mainnet", "")
             .expect("Failed to derive mainnet address from generated seed");
         assert!(mainnet_address.starts_with("4"));
         assert_eq!(mainnet_address.len(), 95);
 
-        let testnet_address = derive_address(&seed, "testnet")
+        let testnet_address = derive_address(&seed, "testnet", "")
             .expect("Failed to derive testnet address from generated seed");
         assert!(testnet_address.starts_with("9") || testnet_address.starts_with("A"));
 
-        let stagenet_address = derive_address(&seed, "stagenet")
+        let stagenet_address = derive_address(&seed, "stagenet", "")
             .expect("Failed to derive stagenet address from generated seed");
         assert!(stagenet_address.starts_with("5"));
     }
 
     #[test]
     fn test_derive_keys_test_vector_1() {
-        let keys = derive_keys(TEST_VECTOR_1_SEED, "mainnet")
+        let keys = derive_keys(TEST_VECTOR_1_SEED, "mainnet", "")
             .expect("Failed to derive keys from test vector 1");
 
         assert_eq!(keys.secret_spend_key, TEST_VECTOR_1_SPEND_KEY);
@@ -2393,7 +2414,7 @@ mod tests {
 
     #[test]
     fn test_derive_keys_test_vector_2_stagenet() {
-        let keys = derive_keys(TEST_VECTOR_2_SEED, "stagenet")
+        let keys = derive_keys(TEST_VECTOR_2_SEED, "stagenet", "")
             .expect("Failed to derive keys from test vector 2");
 
         assert_eq!(keys.secret_spend_key, TEST_VECTOR_2_SPEND_KEY);
@@ -2469,8 +2490,8 @@ mod tests {
         let seed1 = Seed::from_string(Zeroizing::new(TEST_VECTOR_1_SEED.to_string())).unwrap();
         let seed2 = Seed::from_string(Zeroizing::new(TEST_VECTOR_2_SEED.to_string())).unwrap();
 
-        let spend1 = spend_key_from_seed(&seed1);
-        let spend2 = spend_key_from_seed(&seed2);
+        let spend1 = spend_key_from_seed(&seed1, "");
+        let spend2 = spend_key_from_seed(&seed2, "");
 
         // Different seeds should produce different spend keys
         assert_ne!(spend1.compress().to_bytes(), spend2.compress().to_bytes());
@@ -2481,8 +2502,8 @@ mod tests {
         let seed1 = Seed::from_string(Zeroizing::new(TEST_VECTOR_1_SEED.to_string())).unwrap();
         let seed2 = Seed::from_string(Zeroizing::new(TEST_VECTOR_2_SEED.to_string())).unwrap();
 
-        let view1 = view_key_from_seed(&seed1);
-        let view2 = view_key_from_seed(&seed2);
+        let view1 = view_key_from_seed(&seed1, "");
+        let view2 = view_key_from_seed(&seed2, "");
 
         // Different seeds should produce different view keys
         assert_ne!(view1.to_bytes(), view2.to_bytes());
@@ -2490,19 +2511,19 @@ mod tests {
 
     #[test]
     fn test_derive_keys_invalid_seed() {
-        let result = derive_keys("invalid seed phrase", "mainnet");
+        let result = derive_keys("invalid seed phrase", "mainnet", "");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_derive_keys_invalid_network() {
-        let result = derive_keys(TEST_VECTOR_1_SEED, "invalidnet");
+        let result = derive_keys(TEST_VECTOR_1_SEED, "invalidnet", "");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_derive_keys_hex_format() {
-        let keys = derive_keys(TEST_VECTOR_1_SEED, "mainnet").unwrap();
+        let keys = derive_keys(TEST_VECTOR_1_SEED, "mainnet", "").unwrap();
 
         // All hex strings should be 64 characters (32 bytes)
         assert_eq!(keys.secret_spend_key.len(), 64);
@@ -2585,6 +2606,7 @@ mod tests {
             mnemonic: TEST_VECTOR_1_SEED.to_string(),
             network: "mainnet".to_string(),
             lookahead: DEFAULT_LOOKAHEAD,
+            passphrase: String::new(),
         };
 
         let cloned = config.clone();

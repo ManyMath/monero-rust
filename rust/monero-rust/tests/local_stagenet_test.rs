@@ -32,7 +32,7 @@ mod local_stagenet_tests {
     async fn test_scan_block_native() {
         let rpc = HttpRpc::new(LOCAL_NODE.to_string()).unwrap();
 
-        let result = scan_block_for_outputs(&rpc, TEST_BLOCK, HONKED_BAGPIPE, "stagenet")
+        let result = scan_block_for_outputs(&rpc, TEST_BLOCK, HONKED_BAGPIPE, "stagenet", "")
             .await
             .expect("scan failed");
 
@@ -44,7 +44,7 @@ mod local_stagenet_tests {
 
     #[tokio::test]
     async fn test_wallet_address() {
-        let address = derive_address(HONKED_BAGPIPE, "stagenet").unwrap();
+        let address = derive_address(HONKED_BAGPIPE, "stagenet", "").unwrap();
         assert_eq!(address, EXPECTED_ADDRESS);
     }
 }

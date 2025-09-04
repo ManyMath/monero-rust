@@ -28,13 +28,13 @@ impl TestApi {
     // Derive address from seed
     #[wasm_bindgen]
     pub fn derive_address(seed: &str, network: &str) -> Result<String, JsValue> {
-        derive_address(seed, network)
+        derive_address(seed, network, "")
             .map_err(|e| JsValue::from_str(&format!("addr failed: {}", e)))
     }
 
     #[wasm_bindgen]
     pub fn derive_keys(seed: &str, network: &str) -> Result<JsValue, JsValue> {
-        let keys = derive_keys(seed, network)
+        let keys = derive_keys(seed, network, "")
             .map_err(|e| JsValue::from_str(&format!("keys failed: {}", e)))?;
 
         // TODO: optimize serialization

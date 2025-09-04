@@ -71,7 +71,7 @@ impl RpcConnection for MockRpcConnection {
 
 #[test]
 fn test_step1_address_derivation() {
-    let result = derive_address(TEST_SEED, "stagenet");
+    let result = derive_address(TEST_SEED, "stagenet", "");
     assert!(result.is_ok(), "Address derivation should succeed");
 
     let address = result.unwrap();
@@ -80,7 +80,7 @@ fn test_step1_address_derivation() {
 
 #[tokio::test]
 async fn test_step2_scan_and_detect_output() {
-    let address = derive_address(TEST_SEED, "stagenet")
+    let address = derive_address(TEST_SEED, "stagenet", "")
         .expect("Address derivation should succeed");
     assert_eq!(address, EXPECTED_ADDRESS);
 
@@ -91,7 +91,8 @@ async fn test_step2_scan_and_detect_output() {
         &rpc,
         TEST_BLOCK_HEIGHT,
         TEST_SEED,
-        "stagenet"
+        "stagenet",
+        "",
     ).await.expect("Block scan should succeed");
 
     assert!(!scan_result.outputs.is_empty(), "Should detect at least one output");
@@ -118,14 +119,14 @@ async fn test_step3_key_image_determinism() {
     let mock_rpc = MockRpcConnection::new();
     let rpc = Rpc::new_with_connection(mock_rpc);
 
-    let scan1 = scan_block_for_outputs(&rpc, TEST_BLOCK_HEIGHT, TEST_SEED, "stagenet")
+    let scan1 = scan_block_for_outputs(&rpc, TEST_BLOCK_HEIGHT, TEST_SEED, "stagenet", "")
         .await
         .expect("First scan should succeed");
 
     let mock_rpc2 = MockRpcConnection::new();
     let rpc2 = Rpc::new_with_connection(mock_rpc2);
 
-    let scan2 = scan_block_for_outputs(&rpc2, TEST_BLOCK_HEIGHT, TEST_SEED, "stagenet")
+    let scan2 = scan_block_for_outputs(&rpc2, TEST_BLOCK_HEIGHT, TEST_SEED, "stagenet", "")
         .await
         .expect("Second scan should succeed");
 
@@ -144,7 +145,7 @@ async fn test_step4_scan_block_no_outputs() {
     let mock_rpc = MockRpcConnection::new();
     let rpc = Rpc::new_with_connection(mock_rpc);
 
-    let result = scan_block_for_outputs(&rpc, 999999, TEST_SEED, "stagenet").await;
+    let result = scan_block_for_outputs(&rpc, 999999, TEST_SEED, "stagenet", "").await;
 
     // Mock doesn't have vectors for this block
     assert!(result.is_err());
@@ -159,7 +160,8 @@ async fn test_step5_invalid_seed_handling() {
         &rpc,
         TEST_BLOCK_HEIGHT,
         "invalid short seed",
-        "stagenet"
+        "stagenet",
+        "",
     ).await;
 
     assert!(result.is_err());
@@ -180,7 +182,8 @@ async fn test_step6_network_validation() {
         &rpc,
         TEST_BLOCK_HEIGHT,
         TEST_SEED,
-        "invalid_network"
+        "invalid_network",
+        "",
     ).await;
 
     assert!(result.is_err());

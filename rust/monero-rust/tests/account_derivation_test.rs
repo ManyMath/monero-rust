@@ -152,17 +152,17 @@ fn test_derive_subaddress_api() {
     let seed = HONKED_BAGPIPE_MNEMONIC;
 
     // Test account 1, subaddress 0
-    let addr_1_0 = derive_subaddress(seed, "stagenet", 1, 0)
+    let addr_1_0 = derive_subaddress(seed, "stagenet", 1, 0, "")
         .expect("derive_subaddress should succeed");
     assert_eq!(addr_1_0, EXPECTED_ACCOUNT_1_SUBADDRESS_0);
 
     // Test account 1, subaddress 1
-    let addr_1_1 = derive_subaddress(seed, "stagenet", 1, 1)
+    let addr_1_1 = derive_subaddress(seed, "stagenet", 1, 1, "")
         .expect("derive_subaddress should succeed");
     assert_eq!(addr_1_1, EXPECTED_ACCOUNT_1_SUBADDRESS_1);
 
     // Test account 0, subaddress 0 (should return standard address)
-    let addr_0_0 = derive_subaddress(seed, "stagenet", 0, 0)
+    let addr_0_0 = derive_subaddress(seed, "stagenet", 0, 0, "")
         .expect("derive_subaddress should succeed for (0, 0)");
     assert_eq!(addr_0_0, EXPECTED_ACCOUNT_0_SUBADDRESS_0);
 }

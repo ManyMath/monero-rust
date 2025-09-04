@@ -183,6 +183,7 @@ pub struct WalletActor {
     scan_target_height: u64,
     scan_node_url: String,
     scan_seed: String,
+    scan_passphrase: String,
     scan_network: String,
     scan_account_lookahead: u32,
     scan_subaddress_lookahead: u32,
@@ -234,6 +235,7 @@ impl WalletActor {
             scan_target_height: 0,
             scan_node_url: String::new(),
             scan_seed: String::new(),
+            scan_passphrase: String::new(),
             scan_network: String::new(),
             scan_account_lookahead: 0,
             scan_subaddress_lookahead: 0,
@@ -488,7 +490,7 @@ impl WalletActor {
                     continue;
                 }
             };
-            match monero_rust::derive_address(&resolved, &request.network) {
+            match monero_rust::derive_address(&resolved, &request.network, &request.passphrase) {
                 Ok(address) => {
                     AddressDerivedResponse {
                         address,
@@ -538,6 +540,7 @@ impl WalletActor {
                 &request.network,
                 request.account,
                 request.address_index,
+                &request.passphrase,
             ) {
                 Ok(address) => {
                     SubaddressDerivedResponse {
@@ -585,7 +588,7 @@ impl WalletActor {
                     continue;
                 }
             };
-            match monero_rust::derive_keys(&resolved, &request.network) {
+            match monero_rust::derive_keys(&resolved, &request.network, &request.passphrase) {
                 Ok(keys) => {
                     KeysDerivedResponse {
                         address: keys.address,
@@ -662,6 +665,7 @@ impl WalletActor {
                 request.block_height,
                 &seed,
                 &request.network,
+                &request.passphrase,
             )
             .await
             {
@@ -804,6 +808,7 @@ impl WalletActor {
                     node_url: request.node_url,
                     start_height: request.start_height,
                     seed: resolved_seed,
+                    passphrase: request.passphrase,
                     network: request.network,
                     account_lookahead: request.account_lookahead,
                     subaddress_lookahead: request.subaddress_lookahead,
@@ -861,6 +866,7 @@ impl WalletActor {
                     &request.network,
                     request.account_lookahead,
                     request.subaddress_lookahead,
+                    &request.passphrase,
                 )
                 .await
                 {
@@ -961,6 +967,7 @@ impl WalletActor {
                             w.subaddress_lookahead,
                             w.accounts_to_scan.as_deref(),
                         ),
+                        passphrase: w.passphrase.clone(),
                     })
                     .collect();
 
@@ -1044,7 +1051,7 @@ impl WalletActor {
                         account_lookahead: w.account_lookahead,
                         subaddress_lookahead: w.subaddress_lookahead,
                         accounts_to_scan: w.accounts_to_scan.clone(),
-                        passphrase: String::new(),
+                        passphrase: w.passphrase.clone(),
                         bip39_account_index: 0,
                     }),
                     Err(e) => { resolve_err = Some(e); break; }
@@ -1459,6 +1466,7 @@ impl Notifiable<UpdateScanState> for WalletActor {
         self.scan_target_height = msg.target_height;
         self.scan_node_url = msg.node_url;
         self.scan_seed = msg.seed;
+        self.scan_passphrase = msg.passphrase;
         self.scan_network = msg.network;
         self.scan_account_lookahead = msg.account_lookahead;
         self.scan_subaddress_lookahead = msg.subaddress_lookahead;
@@ -1496,6 +1504,7 @@ impl Notifiable<StartContinuousScan> for WalletActor {
         let node_url = msg.node_url.clone();
         let start_height = msg.start_height;
         let seed = msg.seed.clone();
+        let passphrase = msg.passphrase.clone();
         let network = msg.network.clone();
         let account_lookahead = msg.account_lookahead;
         let subaddress_lookahead = msg.subaddress_lookahead;
@@ -1514,6 +1523,7 @@ impl Notifiable<StartContinuousScan> for WalletActor {
                             target_height: daemon_height,
                             node_url: node_url.clone(),
                             seed: seed.clone(),
+                            passphrase: passphrase.clone(),
                             network: network.clone(),
                             account_lookahead,
                             subaddress_lookahead,
@@ -1610,6 +1620,7 @@ impl Notifiable<ContinueScan> for WalletActor {
         let node_url = self.scan_node_url.clone();
         let batch_start_height = self.scan_current_height;
         let seed = self.scan_seed.clone();
+        let passphrase = self.scan_passphrase.clone();
         let network = self.scan_network.clone();
         let account_lookahead = self.scan_account_lookahead;
         let subaddress_lookahead = self.scan_subaddress_lookahead;
@@ -1713,6 +1724,7 @@ impl Notifiable<ContinueScan> for WalletActor {
                 &network,
                 lookahead,
                 cached_scanner,
+                &passphrase,
             ).await {
                 Ok((batch_results, returned_scanner)) => {
                     if batch_results.is_empty() {
@@ -1749,6 +1761,7 @@ impl Notifiable<ContinueScan> for WalletActor {
                             batch_start_height,
                             node_url,
                             seed,
+                            passphrase,
                             network,
                             account_lookahead,
                             subaddress_lookahead,
@@ -1832,6 +1845,7 @@ impl Notifiable<ContinueScan> for WalletActor {
                             target_height,
                             node_url,
                             seed,
+                            passphrase,
                             network,
                             account_lookahead,
                             subaddress_lookahead,
@@ -1928,6 +1942,7 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                         w.subaddress_lookahead,
                         w.accounts_to_scan.as_deref(),
                     ),
+                    passphrase: w.passphrase.clone(),
                 })
                 .collect();
 
@@ -2039,6 +2054,7 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                             batch_start_height,
                             node_url,
                             seed: first_wallet.seed.clone(),
+                            passphrase: first_wallet.passphrase.clone(),
                             network: first_wallet.network.clone(),
                             account_lookahead: first_wallet.account_lookahead,
                             subaddress_lookahead: first_wallet.subaddress_lookahead,
@@ -2342,6 +2358,7 @@ impl Notifiable<HandleReorg> for WalletActor {
                     target_height: msg.target_height,
                     node_url: msg.node_url,
                     seed: msg.seed,
+                    passphrase: msg.passphrase,
                     network: msg.network,
                     account_lookahead: msg.account_lookahead,
                     subaddress_lookahead: msg.subaddress_lookahead,

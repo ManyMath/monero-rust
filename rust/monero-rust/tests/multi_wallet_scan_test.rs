@@ -22,6 +22,7 @@ mod tests {
             mnemonic: TEST_WALLET_1_SEED.to_string(),
             network: "mainnet".to_string(),
             lookahead: DEFAULT_LOOKAHEAD,
+            passphrase: String::new(),
         };
 
         assert_eq!(config.mnemonic, TEST_WALLET_1_SEED);
@@ -37,11 +38,13 @@ mod tests {
                 mnemonic: TEST_WALLET_1_SEED.to_string(),
                 network: "mainnet".to_string(),
                 lookahead: DEFAULT_LOOKAHEAD,
+                passphrase: String::new(),
             },
             WalletScanConfig {
                 mnemonic: TEST_WALLET_2_SEED.to_string(),
                 network: "stagenet".to_string(),
                 lookahead: DEFAULT_LOOKAHEAD,
+                passphrase: String::new(),
             },
             WalletScanConfig {
                 mnemonic: TEST_WALLET_3_SEED.to_string(),
@@ -50,6 +53,7 @@ mod tests {
                     account: 0,
                     subaddress: 10,
                 },
+                passphrase: String::new(),
             },
         ];
 
@@ -105,26 +109,26 @@ mod tests {
     #[test]
     fn test_derive_address_consistent_with_keys() {
         // Wallet 1 is mainnet
-        let addr1 = derive_address(TEST_WALLET_1_SEED, "mainnet")
+        let addr1 = derive_address(TEST_WALLET_1_SEED, "mainnet", "")
             .expect("derive_address failed for wallet 1");
         assert_eq!(addr1, TEST_WALLET_1_ADDRESS, "Wallet 1 address mismatch");
 
         // Wallet 2 is stagenet
-        let addr2 = derive_address(TEST_WALLET_2_SEED, "stagenet")
+        let addr2 = derive_address(TEST_WALLET_2_SEED, "stagenet", "")
             .expect("derive_address failed for wallet 2");
         assert_eq!(addr2, TEST_WALLET_2_ADDRESS, "Wallet 2 address mismatch");
 
         // Wallet 3 is stagenet
-        let addr3 = derive_address(TEST_WALLET_3_SEED, "stagenet")
+        let addr3 = derive_address(TEST_WALLET_3_SEED, "stagenet", "")
             .expect("derive_address failed for wallet 3");
         assert_eq!(addr3, TEST_WALLET_3_ADDRESS, "Wallet 3 address mismatch");
     }
 
     #[test]
     fn test_derive_address_called_twice_same_result() {
-        let first = derive_address(TEST_WALLET_1_SEED, "mainnet")
+        let first = derive_address(TEST_WALLET_1_SEED, "mainnet", "")
             .expect("first derive_address call failed");
-        let second = derive_address(TEST_WALLET_1_SEED, "mainnet")
+        let second = derive_address(TEST_WALLET_1_SEED, "mainnet", "")
             .expect("second derive_address call failed");
         assert_eq!(first, second, "Two calls to derive_address must return the same result");
     }
@@ -138,6 +142,7 @@ mod tests {
                 account: 2,
                 subaddress: 50,
             },
+            passphrase: String::new(),
         };
 
         let cloned = original.clone();
@@ -150,11 +155,11 @@ mod tests {
 
     #[test]
     fn test_different_seeds_different_addresses() {
-        let addr1 = derive_address(TEST_WALLET_1_SEED, "mainnet")
+        let addr1 = derive_address(TEST_WALLET_1_SEED, "mainnet", "")
             .expect("derive_address failed for wallet 1");
-        let addr2 = derive_address(TEST_WALLET_2_SEED, "stagenet")
+        let addr2 = derive_address(TEST_WALLET_2_SEED, "stagenet", "")
             .expect("derive_address failed for wallet 2");
-        let addr3 = derive_address(TEST_WALLET_3_SEED, "stagenet")
+        let addr3 = derive_address(TEST_WALLET_3_SEED, "stagenet", "")
             .expect("derive_address failed for wallet 3");
 
         assert_ne!(addr1, addr2, "Wallet 1 and 2 should have different addresses");
@@ -169,11 +174,13 @@ mod tests {
                 mnemonic: TEST_WALLET_1_SEED.to_string(),
                 network: "mainnet".to_string(),
                 lookahead: DEFAULT_LOOKAHEAD,
+                passphrase: String::new(),
             },
             WalletScanConfig {
                 mnemonic: TEST_WALLET_2_SEED.to_string(),
                 network: "stagenet".to_string(),
                 lookahead: DEFAULT_LOOKAHEAD,
+                passphrase: String::new(),
             },
             WalletScanConfig {
                 mnemonic: TEST_WALLET_3_SEED.to_string(),
@@ -182,6 +189,7 @@ mod tests {
                     account: 0,
                     subaddress: 10,
                 },
+                passphrase: String::new(),
             },
         ];
 

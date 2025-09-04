@@ -166,7 +166,7 @@ fn cmd_generate(
     wallet_path: Option<&str>,
 ) -> Result<(), String> {
     let mnemonic = monero_rust::generate_seed(seed_type)?;
-    let address = monero_rust::derive_address(&mnemonic, network)?;
+    let address = monero_rust::derive_address(&mnemonic, network, "")?;
 
     println!("=== New Monero Wallet ===");
     println!();
@@ -220,7 +220,7 @@ fn cmd_address(network: &str) -> Result<(), String> {
     let mnemonic = mnemonic.trim();
     monero_rust::validate_seed(mnemonic)?;
 
-    let keys = monero_rust::derive_keys(mnemonic, network)?;
+    let keys = monero_rust::derive_keys(mnemonic, network, "")?;
 
     println!("=== Wallet Keys ===");
     println!();
@@ -311,7 +311,7 @@ async fn cmd_sync(daemon: &str, wallet_path: Option<&str>) -> Result<(), String>
         return Ok(());
     }
 
-    let address = monero_rust::derive_address(mnemonic, network)?;
+    let address = monero_rust::derive_address(mnemonic, network, "")?;
     println!("Syncing wallet: {}", address);
     println!(
         "Scanning from height {} to {} ({} blocks)",
@@ -348,7 +348,7 @@ async fn cmd_sync(daemon: &str, wallet_path: Option<&str>) -> Result<(), String>
         }
 
         let (batch_results, returned_scanner) = monero_rust::process_fetched_batch_cached(
-            fetched, mnemonic, network, lookahead, cached_scanner,
+            fetched, mnemonic, network, lookahead, cached_scanner, "",
         )
         .await?;
         cached_scanner = Some(returned_scanner);
@@ -567,8 +567,8 @@ fn cmd_info(wallet_path: Option<&str>) -> Result<(), String> {
 
     let data = wallet_file::load_wallet(&path, &password)?;
 
-    let address = monero_rust::derive_address(&data.mnemonic, &data.network)?;
-    let keys = monero_rust::derive_keys(&data.mnemonic, &data.network)?;
+    let address = monero_rust::derive_address(&data.mnemonic, &data.network, "")?;
+    let keys = monero_rust::derive_keys(&data.mnemonic, &data.network, "")?;
 
     let unspent_count = data.outputs.iter().filter(|o| !o.spent).count();
 

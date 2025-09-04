@@ -114,6 +114,30 @@ impl Seed {
     }
   }
 
+  /// Return the key bytes with an optional polyseed passphrase.
+  ///
+  /// Per the polyseed spec, the passphrase is appended to the PBKDF2 salt
+  /// ("POLYSEED key" + passphrase). Classic seeds ignore the passphrase.
+  pub fn key_bytes_with_passphrase(&self, passphrase: &str) -> Zeroizing<[u8; 32]> {
+    match self {
+      Seed::Classic(seed) => seed.entropy(),
+      Seed::Polyseed(seed) => {
+        if passphrase.is_empty() {
+          seed.key()
+        } else {
+          use pbkdf2::pbkdf2_hmac;
+          use sha3::Sha3_256;
+
+          let mut salt = b"POLYSEED key".to_vec();
+          salt.extend_from_slice(passphrase.as_bytes());
+          let mut key = Zeroizing::new([0u8; 32]);
+          pbkdf2_hmac::<Sha3_256>(seed.entropy().as_slice(), &salt, 10000, key.as_mut());
+          key
+        }
+      }
+    }
+  }
+
   /// Return the birthday (creation timestamp) for this seed.
   pub fn birthday(&self) -> Option<u64> {
     match self {

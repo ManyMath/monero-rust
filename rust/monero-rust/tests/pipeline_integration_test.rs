@@ -48,6 +48,7 @@ fn make_block_result(
         outputs,
         daemon_height: 5000,
         spent_key_images,
+        spent_key_image_tx_hashes: Vec::new(),
     }
 }
 
@@ -368,11 +369,11 @@ fn scan_pipeline_multi_account_filtering() {
 #[test]
 fn scan_pipeline_lookahead_computation() {
     // When scanning specific accounts [0, 3, 1], lookahead should be max(3)
-    let la = compute_lookahead(10, Some(&[0, 3, 1]));
+    let la = compute_lookahead(10, 20, Some(&[0, 3, 1]));
     assert_eq!(la.account, 3);
 
     // When scanning all accounts with lookahead 5
-    let la = compute_lookahead(5, None);
+    let la = compute_lookahead(5, 20, None);
     assert_eq!(la.account, 5);
 }
 

@@ -7,10 +7,10 @@ const HONKED_BAGPIPE_MNEMONIC: &str = "honked bagpipe alpine juicy faked afoot j
 #[test]
 fn test_standard_address_matches_account_0_subaddress_0() {
     // Standard address should equal derive_subaddress(0, 0)
-    let standard = derive_address(HONKED_BAGPIPE_MNEMONIC, "stagenet")
+    let standard = derive_address(HONKED_BAGPIPE_MNEMONIC, "stagenet", "")
         .expect("derive_address should succeed");
 
-    let subaddr_0_0 = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 0, 0)
+    let subaddr_0_0 = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 0, 0, "")
         .expect("derive_subaddress(0, 0) should succeed");
 
     assert_eq!(
@@ -22,13 +22,13 @@ fn test_standard_address_matches_account_0_subaddress_0() {
 #[test]
 fn test_multiple_accounts_different_addresses() {
     // Different accounts should produce different addresses
-    let account_0 = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 0, 0)
+    let account_0 = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 0, 0, "")
         .expect("account 0 should derive");
 
-    let account_1 = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 1, 0)
+    let account_1 = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 1, 0, "")
         .expect("account 1 should derive");
 
-    let account_2 = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 2, 0)
+    let account_2 = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 2, 0, "")
         .expect("account 2 should derive");
 
     assert_ne!(account_0, account_1, "Account 0 and 1 should differ");
@@ -39,13 +39,13 @@ fn test_multiple_accounts_different_addresses() {
 #[test]
 fn test_multiple_subaddresses_same_account() {
     // Different subaddresses in the same account should differ
-    let addr_0 = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 1, 0)
+    let addr_0 = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 1, 0, "")
         .expect("subaddress 0 should derive");
 
-    let addr_1 = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 1, 1)
+    let addr_1 = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 1, 1, "")
         .expect("subaddress 1 should derive");
 
-    let addr_2 = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 1, 2)
+    let addr_2 = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 1, 2, "")
         .expect("subaddress 2 should derive");
 
     assert_ne!(addr_0, addr_1, "Subaddress 0 and 1 should differ");
@@ -59,7 +59,7 @@ fn test_derive_many_accounts() {
     let mut addresses = Vec::new();
 
     for account in 0..=10 {
-        let addr = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", account, 0)
+        let addr = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", account, 0, "")
             .expect(&format!("Account {} should derive", account));
 
         // Verify it's a valid stagenet address (starts with 5, 7, or 8)
@@ -90,7 +90,7 @@ fn test_derive_many_subaddresses() {
     let mut addresses = Vec::new();
 
     for index in 0..=20 {
-        let addr = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 0, index)
+        let addr = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 0, index, "")
             .expect(&format!("Subaddress {} should derive", index));
 
         // Verify it's unique
@@ -110,10 +110,10 @@ fn test_derive_many_subaddresses() {
 fn test_deterministic_derivation() {
     // Deriving the same account/subaddress multiple times should yield the same result
     for _ in 0..5 {
-        let addr = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 3, 7)
+        let addr = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 3, 7, "")
             .expect("Derivation should succeed");
 
-        let addr2 = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 3, 7)
+        let addr2 = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 3, 7, "")
             .expect("Derivation should succeed");
 
         assert_eq!(addr, addr2, "Derivation should be deterministic");
@@ -123,13 +123,13 @@ fn test_deterministic_derivation() {
 #[test]
 fn test_network_specific_addresses() {
     // Same account/subaddress on different networks should produce different addresses
-    let mainnet = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "mainnet", 1, 0)
+    let mainnet = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "mainnet", 1, 0, "")
         .expect("mainnet derivation should succeed");
 
-    let testnet = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "testnet", 1, 0)
+    let testnet = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "testnet", 1, 0, "")
         .expect("testnet derivation should succeed");
 
-    let stagenet = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 1, 0)
+    let stagenet = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 1, 0, "")
         .expect("stagenet derivation should succeed");
 
     assert_ne!(mainnet, testnet, "Mainnet and testnet addresses should differ");
@@ -147,21 +147,21 @@ fn test_network_specific_addresses() {
 #[test]
 fn test_invalid_network() {
     // Invalid network should return an error
-    let result = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "invalidnet", 0, 0);
+    let result = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "invalidnet", 0, 0, "");
     assert!(result.is_err(), "Invalid network should return error");
 }
 
 #[test]
 fn test_invalid_seed() {
     // Invalid seed should return an error
-    let result = derive_subaddress("invalid seed phrase", "stagenet", 0, 0);
+    let result = derive_subaddress("invalid seed phrase", "stagenet", 0, 0, "");
     assert!(result.is_err(), "Invalid seed should return error");
 }
 
 #[test]
 fn test_known_test_vectors() {
     // Test against known addresses
-    let account_0_0 = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 0, 0)
+    let account_0_0 = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 0, 0, "")
         .expect("should derive");
     assert_eq!(
         account_0_0,
@@ -169,7 +169,7 @@ fn test_known_test_vectors() {
         "Account 0, subaddress 0 should match known value"
     );
 
-    let account_1_0 = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 1, 0)
+    let account_1_0 = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 1, 0, "")
         .expect("should derive");
     assert_eq!(
         account_1_0,
@@ -177,7 +177,7 @@ fn test_known_test_vectors() {
         "Account 1, subaddress 0 should match known value"
     );
 
-    let account_1_1 = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 1, 1)
+    let account_1_1 = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 1, 1, "")
         .expect("should derive");
     assert_eq!(
         account_1_1,

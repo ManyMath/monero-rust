@@ -46,8 +46,8 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Skipped: no stagenet node at 127.0.0.1:38081");
         return Ok(());
     }
-    let address = derive_address(TEST_SEED, NETWORK_STR)?;
-    let keys = derive_keys(TEST_SEED, NETWORK_STR)?;
+    let address = derive_address(TEST_SEED, NETWORK_STR, "")?;
+    let keys = derive_keys(TEST_SEED, NETWORK_STR, "")?;
 
     assert!(address.starts_with("5"));
     assert_eq!(address.len(), 95);
@@ -71,7 +71,7 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
     for height in START_BLOCK..=END_BLOCK {
         let lookahead = Lookahead { account: 0, subaddress: 10 };
         let scan_result = scan_block_for_outputs_with_lookahead(
-            &rpc, height, TEST_SEED, NETWORK_STR, lookahead,
+            &rpc, height, TEST_SEED, NETWORK_STR, lookahead, "",
         ).await?;
 
         for output in scan_result.outputs {
@@ -205,8 +205,8 @@ async fn test_address_derivation_consistency() -> Result<(), Box<dyn std::error:
         eprintln!("Skipped: no stagenet node at 127.0.0.1:38081");
         return Ok(());
     }
-    let address1 = derive_address(TEST_SEED, NETWORK_STR)?;
-    let address2 = derive_address(TEST_SEED, NETWORK_STR)?;
+    let address1 = derive_address(TEST_SEED, NETWORK_STR, "")?;
+    let address2 = derive_address(TEST_SEED, NETWORK_STR, "")?;
 
     assert_eq!(address1, address2);
 
@@ -217,7 +217,7 @@ async fn test_address_derivation_consistency() -> Result<(), Box<dyn std::error:
     let spend_scalar = Scalar::from_bytes_mod_order(spend_bytes);
     let spend_point = &spend_scalar * &ED25519_BASEPOINT_TABLE;
 
-    let keys = derive_keys(TEST_SEED, NETWORK_STR)?;
+    let keys = derive_keys(TEST_SEED, NETWORK_STR, "")?;
     let view_bytes = hex::decode(&keys.secret_view_key)?;
     let view_scalar = Scalar::from_bytes_mod_order(view_bytes[..32].try_into()?);
 
@@ -245,8 +245,8 @@ async fn test_key_image_determinism() -> Result<(), Box<dyn std::error::Error>> 
         let rpc = HttpRpc::new(NODE_URL.to_string())?;
         let lookahead = Lookahead { account: 0, subaddress: 10 };
 
-        let scan1 = scan_block_for_outputs_with_lookahead(&rpc, START_BLOCK, TEST_SEED, NETWORK_STR, lookahead).await?;
-        let scan2 = scan_block_for_outputs_with_lookahead(&rpc, START_BLOCK, TEST_SEED, NETWORK_STR, lookahead).await?;
+        let scan1 = scan_block_for_outputs_with_lookahead(&rpc, START_BLOCK, TEST_SEED, NETWORK_STR, lookahead, "").await?;
+        let scan2 = scan_block_for_outputs_with_lookahead(&rpc, START_BLOCK, TEST_SEED, NETWORK_STR, lookahead, "").await?;
 
         if !scan1.outputs.is_empty() && !scan2.outputs.is_empty() {
             assert_eq!(scan1.outputs.len(), scan2.outputs.len());
@@ -284,7 +284,7 @@ async fn test_transaction_with_multiple_inputs() -> Result<(), Box<dyn std::erro
 
     for height in START_BLOCK..=END_BLOCK {
         let scan_result = scan_block_for_outputs_with_lookahead(
-            &rpc, height, TEST_SEED, NETWORK_STR, lookahead,
+            &rpc, height, TEST_SEED, NETWORK_STR, lookahead, "",
         ).await?;
 
         for output in scan_result.outputs {
@@ -300,7 +300,7 @@ async fn test_transaction_with_multiple_inputs() -> Result<(), Box<dyn std::erro
         let spend_scalar = Scalar::from_bytes_mod_order(spend_bytes);
         let spend_point = &spend_scalar * &ED25519_BASEPOINT_TABLE;
 
-        let keys = derive_keys(TEST_SEED, NETWORK_STR)?;
+        let keys = derive_keys(TEST_SEED, NETWORK_STR, "")?;
         let view_bytes = hex::decode(&keys.secret_view_key)?;
         let view_scalar = Scalar::from_bytes_mod_order(view_bytes[..32].try_into()?);
         let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
@@ -322,7 +322,7 @@ async fn test_transaction_with_multiple_inputs() -> Result<(), Box<dyn std::erro
             total_input += output.amount;
         }
 
-        let address = derive_address(TEST_SEED, NETWORK_STR)?;
+        let address = derive_address(TEST_SEED, NETWORK_STR, "")?;
         let dest_addr = MoneroAddress::from_str(NETWORK, &address)?;
         let send_amount = 1_000_000_000u64;
         builder.add_payment(dest_addr, send_amount);
@@ -369,7 +369,7 @@ async fn test_transaction_parsing_and_validation() -> Result<(), Box<dyn std::er
         let mut test_output = None;
         for height in START_BLOCK..=END_BLOCK {
             let scan_result = scan_block_for_outputs_with_lookahead(
-                &rpc, height, TEST_SEED, NETWORK_STR, lookahead,
+                &rpc, height, TEST_SEED, NETWORK_STR, lookahead, "",
             ).await?;
 
             if !scan_result.outputs.is_empty() {

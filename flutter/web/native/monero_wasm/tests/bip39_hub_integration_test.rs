@@ -53,23 +53,23 @@ fn test_wasm_generate_polyseed_then_birthday() {
 
 #[test]
 fn test_wasm_derive_address_with_bip39() {
-    let address = monero_rust::derive_address(BIP39_SEED, "mainnet").unwrap();
+    let address = monero_rust::derive_address(BIP39_SEED, "mainnet", "").unwrap();
     assert_eq!(address, BIP39_EXPECTED_ADDRESS);
 }
 
 #[test]
 fn test_wasm_derive_subaddress_with_bip39() {
-    let primary = monero_rust::derive_subaddress(BIP39_SEED, "mainnet", 0, 0).unwrap();
+    let primary = monero_rust::derive_subaddress(BIP39_SEED, "mainnet", 0, 0, "").unwrap();
     assert_eq!(primary, BIP39_EXPECTED_ADDRESS);
 
-    let sub = monero_rust::derive_subaddress(BIP39_SEED, "mainnet", 0, 1).unwrap();
+    let sub = monero_rust::derive_subaddress(BIP39_SEED, "mainnet", 0, 1, "").unwrap();
     assert_ne!(sub, primary);
     assert!(sub.starts_with('8'));
 }
 
 #[test]
 fn test_wasm_derive_keys_with_bip39() {
-    let keys = monero_rust::derive_keys(BIP39_SEED, "mainnet").unwrap();
+    let keys = monero_rust::derive_keys(BIP39_SEED, "mainnet", "").unwrap();
     assert_eq!(keys.address, BIP39_EXPECTED_ADDRESS);
     assert!(!keys.secret_spend_key.is_empty());
     assert!(!keys.secret_view_key.is_empty());
@@ -95,7 +95,7 @@ fn test_wasm_bip39_to_legacy_conversion() {
     let legacy = monero_rust::bip39_to_legacy_mnemonic(BIP39_SEED, "", 0).unwrap();
     assert_eq!(legacy.split_whitespace().count(), 25);
     // Legacy seed should derive the same address
-    let addr = monero_rust::derive_address(&legacy, "mainnet").unwrap();
+    let addr = monero_rust::derive_address(&legacy, "mainnet", "").unwrap();
     assert_eq!(addr, BIP39_EXPECTED_ADDRESS);
 }
 
@@ -103,7 +103,7 @@ fn test_wasm_bip39_to_legacy_conversion() {
 fn test_wasm_resolve_seed_bip39_consistency() {
     let seed = monero_rust::resolve_seed(BIP39_SEED).unwrap();
     // The resolved seed should produce the same keys as direct derive_keys
-    let keys = monero_rust::derive_keys(BIP39_SEED, "mainnet").unwrap();
+    let keys = monero_rust::derive_keys(BIP39_SEED, "mainnet", "").unwrap();
     assert_eq!(keys.address, BIP39_EXPECTED_ADDRESS);
 }
 
@@ -130,15 +130,15 @@ fn test_wasm_full_bip39_restore_pipeline() {
     assert_eq!(birthday, None);
 
     // 3. Derive keys (wallet initialization)
-    let keys = monero_rust::derive_keys(BIP39_SEED, "mainnet").unwrap();
+    let keys = monero_rust::derive_keys(BIP39_SEED, "mainnet", "").unwrap();
     assert_eq!(keys.address, BIP39_EXPECTED_ADDRESS);
 
     // 4. Derive primary address
-    let address = monero_rust::derive_address(BIP39_SEED, "mainnet").unwrap();
+    let address = monero_rust::derive_address(BIP39_SEED, "mainnet", "").unwrap();
     assert_eq!(address, BIP39_EXPECTED_ADDRESS);
 
     // 5. Derive subaddress for receiving
-    let sub = monero_rust::derive_subaddress(BIP39_SEED, "mainnet", 0, 1).unwrap();
+    let sub = monero_rust::derive_subaddress(BIP39_SEED, "mainnet", 0, 1, "").unwrap();
     assert!(sub.starts_with('8'));
 
     // 6. resolve_seed succeeds (used by all scan/tx paths)
