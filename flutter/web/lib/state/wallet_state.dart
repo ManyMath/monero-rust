@@ -15,6 +15,7 @@ class WalletState extends ChangeNotifier {
   final SignalHub _signalHub;
 
   final seedController = TextEditingController();
+  final passphraseController = TextEditingController();
   final nodeUrlController = TextEditingController(text: 'http://127.0.0.1:38081');
   final blockHeightController = TextEditingController();
   final blockHeightFocusNode = FocusNode();
@@ -54,6 +55,7 @@ class WalletState extends ChangeNotifier {
   })  : lifecycle = lifecycle,
         _signalHub = signalHub {
     seedController.addListener(_onSeedChanged);
+    passphraseController.addListener(_onPassphraseChanged);
     blockHeightController.addListener(_onBlockHeightChanged);
 
     _signalHub.onKeysDerived = _handleKeysDerived;
@@ -380,6 +382,14 @@ class WalletState extends ChangeNotifier {
     });
   }
 
+  void _onPassphraseChanged() {
+    passphrase = passphraseController.text;
+    _debounceTimer?.cancel();
+    _debounceTimer = Timer(const Duration(milliseconds: 800), () {
+      deriveAddress();
+    });
+  }
+
   void _onBlockHeightChanged() {
     if (blockHeightFocusNode.hasFocus) {
       blockHeightUserEdited = true;
@@ -658,8 +668,10 @@ class WalletState extends ChangeNotifier {
   void dispose() {
     _debounceTimer?.cancel();
     seedController.removeListener(_onSeedChanged);
+    passphraseController.removeListener(_onPassphraseChanged);
     blockHeightController.removeListener(_onBlockHeightChanged);
     seedController.dispose();
+    passphraseController.dispose();
     nodeUrlController.dispose();
     blockHeightController.dispose();
     blockHeightFocusNode.dispose();

@@ -4,6 +4,7 @@ import 'error_message_container.dart';
 
 class SeedPhrasePanel extends StatelessWidget {
   final TextEditingController controller;
+  final TextEditingController passphraseController;
   final String seedType;
   final String network;
   final String? validationError;
@@ -16,6 +17,7 @@ class SeedPhrasePanel extends StatelessWidget {
   const SeedPhrasePanel({
     super.key,
     required this.controller,
+    required this.passphraseController,
     required this.seedType,
     required this.network,
     required this.validationError,
@@ -110,6 +112,20 @@ class SeedPhrasePanel extends StatelessWidget {
               ),
             ],
           ),
+          if (seedType.contains('polyseed') || seedType.contains('bip39')) ...[
+            const SizedBox(height: 8),
+            TextField(
+              controller: passphraseController,
+              decoration: InputDecoration(
+                labelText: 'Passphrase (optional)',
+                hintText: seedType.contains('polyseed')
+                    ? 'Polyseed passphrase for key derivation'
+                    : 'BIP39 passphrase',
+                border: const OutlineInputBorder(),
+              ),
+              obscureText: true,
+            ),
+          ],
           if (derivedLegacySeed != null) ...[
             const SizedBox(height: 8),
             Container(

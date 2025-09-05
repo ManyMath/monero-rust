@@ -261,6 +261,7 @@ class _DebugViewState extends State<DebugView> {
                         panel: DebugPanel.seedPhrase,
                         body: SeedPhrasePanel(
                           controller: ws.seedController,
+                          passphraseController: ws.passphraseController,
                           seedType: ws.seedType,
                           network: ws.network,
                           validationError: ws.validationError,
