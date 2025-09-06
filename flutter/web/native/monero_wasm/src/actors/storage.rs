@@ -89,8 +89,7 @@ pub struct LoadWalletData {
 #[async_trait]
 impl Notifiable<SaveWalletData> for StorageActor {
     async fn notify(&mut self, msg: SaveWalletData, _ctx: &Context<Self>) {
-        #[cfg(target_arch = "wasm32")]
-        web_sys::console::log_1(&"Encrypting wallet data...".into());
+        log::info!("Encrypting wallet data...");
 
         // Encrypt the wallet data
         match encryption::encrypt(msg.wallet_data_json.as_bytes(), &msg.password) {
@@ -101,8 +100,7 @@ impl Notifiable<SaveWalletData> for StorageActor {
                     &encrypted_bytes,
                 );
 
-                #[cfg(target_arch = "wasm32")]
-                web_sys::console::log_1(&format!("Wallet data encrypted successfully ({} bytes)", encrypted_bytes.len()).into());
+                log::info!("Wallet data encrypted successfully ({} bytes)", encrypted_bytes.len());
 
                 WalletDataSavedResponse {
                     success: true,
@@ -115,8 +113,7 @@ impl Notifiable<SaveWalletData> for StorageActor {
                 .send_signal_to_dart();
             }
             Err(e) => {
-                #[cfg(target_arch = "wasm32")]
-                web_sys::console::error_1(&format!("Encryption failed: {}", e).into());
+                log::error!("Encryption failed: {}", e);
 
                 let err = ErrorResponse::new(ERR_ENCRYPTION, format!("Encryption failed: {}", e));
                 WalletDataSavedResponse {
@@ -136,8 +133,7 @@ impl Notifiable<SaveWalletData> for StorageActor {
 #[async_trait]
 impl Notifiable<LoadWalletData> for StorageActor {
     async fn notify(&mut self, msg: LoadWalletData, _ctx: &Context<Self>) {
-        #[cfg(target_arch = "wasm32")]
-        web_sys::console::log_1(&"Decrypting wallet data...".into());
+        log::info!("Decrypting wallet data...");
 
         // Decode base64
         let encrypted_bytes = match base64::Engine::decode(
@@ -146,8 +142,7 @@ impl Notifiable<LoadWalletData> for StorageActor {
         ) {
             Ok(bytes) => bytes,
             Err(e) => {
-                #[cfg(target_arch = "wasm32")]
-                web_sys::console::error_1(&format!("Base64 decode failed: {}", e).into());
+                log::error!("Base64 decode failed: {}", e);
 
                 let err = ErrorResponse::new(ERR_DECRYPTION, format!("Invalid encrypted data: {}", e))
                     .with_hint("The stored data may be corrupted");
@@ -169,8 +164,7 @@ impl Notifiable<LoadWalletData> for StorageActor {
             Ok(decrypted_bytes) => {
                 match String::from_utf8(decrypted_bytes) {
                     Ok(wallet_data_json) => {
-                        #[cfg(target_arch = "wasm32")]
-                        web_sys::console::log_1(&"Wallet data decrypted successfully".into());
+                        log::info!("Wallet data decrypted successfully");
 
                         WalletDataLoadedResponse {
                             success: true,
@@ -183,8 +177,7 @@ impl Notifiable<LoadWalletData> for StorageActor {
                         .send_signal_to_dart();
                     }
                     Err(e) => {
-                        #[cfg(target_arch = "wasm32")]
-                        web_sys::console::error_1(&format!("UTF-8 decode failed: {}", e).into());
+                        log::error!("UTF-8 decode failed: {}", e);
 
                         let err = ErrorResponse::new(ERR_DECRYPTION, format!("Invalid decrypted data: {}", e))
                             .with_hint("Wrong password or corrupted data");
@@ -201,8 +194,7 @@ impl Notifiable<LoadWalletData> for StorageActor {
                 }
             }
             Err(e) => {
-                #[cfg(target_arch = "wasm32")]
-                web_sys::console::error_1(&format!("Decryption failed: {}", e).into());
+                log::error!("Decryption failed: {}", e);
 
                 let err = ErrorResponse::new(ERR_DECRYPTION, format!("Decryption failed: {}", e))
                     .with_hint("Check that the password is correct");

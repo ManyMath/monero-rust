@@ -287,19 +287,17 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                         // Query fresh daemon height to avoid stale core_state
                         let daemon_height = match monero_rust::get_daemon_height(&node_url).await {
                             Ok(h) => {
-                                #[cfg(target_arch = "wasm32")]
-                                web_sys::console::log_1(&format!(
+                                log::info!(
                                     "[BuildTx] Fresh daemon height: {}, stored: {}",
                                     h, stored_daemon_height
-                                ).into());
+                                );
                                 h.max(stored_daemon_height)
                             }
                             Err(e) => {
-                                #[cfg(target_arch = "wasm32")]
-                                web_sys::console::warn_1(&format!(
+                                log::warn!(
                                     "[BuildTx] Failed to get daemon height: {}, using stored: {}",
                                     e, stored_daemon_height
-                                ).into());
+                                );
                                 stored_daemon_height
                             }
                         };
@@ -309,11 +307,10 @@ impl Notifiable<BuildTransaction> for TxBuilderActor {
                         let num_spendable = wallet_data.outputs.iter()
                             .filter(|o| monero_rust::is_spendable(o, daemon_height))
                             .count();
-                        #[cfg(target_arch = "wasm32")]
-                        web_sys::console::log_1(&format!(
+                        log::info!(
                             "[BuildTx] outputs={}, spent={}, spendable={}, daemon_height={}",
                             num_outputs, num_spent, num_spendable, daemon_height
-                        ).into());
+                        );
 
                         let total_send_amount: u64 = recipients.iter().map(|(_, amt)| amt).sum();
 
@@ -673,15 +670,13 @@ impl Notifiable<BroadcastTransaction> for TxBuilderActor {
         let spent_key_images = msg.spent_key_images.clone();
         let spent_output_hashes = msg.spent_output_hashes.clone();
 
-        #[cfg(target_arch = "wasm32")]
-        web_sys::console::log_1(&"Broadcasting transaction...".into());
+        log::info!("Broadcasting transaction...");
 
         // Spawn in local task to avoid Send requirements
         spawn_local(async move {
             match monero_rust::native::broadcast_transaction(&msg.node_url, &msg.tx_blob).await {
                 Ok(()) => {
-                    #[cfg(target_arch = "wasm32")]
-                    web_sys::console::log_1(&"Transaction broadcast successful!".into());
+                    log::info!("Transaction broadcast successful!");
 
                     // Add pending spends instead of marking outputs as spent
                     if let Some(mut wallet) = wallet_actor {
@@ -716,8 +711,7 @@ impl Notifiable<BroadcastTransaction> for TxBuilderActor {
                 }
                 Err(e) => {
                     let error_str = format!("Broadcast failed: {}", e);
-                    #[cfg(target_arch = "wasm32")]
-                    web_sys::console::error_1(&error_str.as_str().into());
+                    log::error!("{}", error_str);
                     let (is_double_spend, is_retryable) = monero_rust::classify_broadcast_error(&error_str);
 
                     let err = ErrorResponse::from_string(&error_str);

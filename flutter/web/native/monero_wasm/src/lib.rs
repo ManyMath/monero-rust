@@ -2,6 +2,7 @@
 
 mod actors;
 pub mod ffi_web;
+pub(crate) mod logging;
 mod messages;
 mod signals;
 #[allow(dead_code)]

@@ -1223,11 +1223,10 @@ struct GetPendingStateMsg;
 #[async_trait]
 impl Notifiable<RestoreOutputs> for WalletActor {
     async fn notify(&mut self, msg: RestoreOutputs, _ctx: &Context<Self>) {
-        #[cfg(target_arch = "wasm32")]
-        web_sys::console::log_1(&format!(
+        log::info!(
             "[RestoreOutputs] outputs={}, daemon_height={}, current_height={}, has_block_hashes={}",
             msg.outputs.len(), msg.daemon_height, msg.current_height, msg.block_hashes_json.is_some()
-        ).into());
+        );
         self.seed = Some(msg.seed);
         self.network = Some(msg.network);
         self.core_state.daemon_height = msg.daemon_height;
@@ -1238,16 +1237,10 @@ impl Notifiable<RestoreOutputs> for WalletActor {
             match serde_json::from_str::<monero_rust::BlockHashChain>(&json) {
                 Ok(chain) => {
                     self.core_state.block_hashes = chain;
-                    #[cfg(target_arch = "wasm32")]
-                    web_sys::console::log_1(
-                        &"[RestoreOutputs] Block hash chain restored".into(),
-                    );
+                    log::info!("[RestoreOutputs] Block hash chain restored");
                 }
                 Err(e) => {
-                    #[cfg(target_arch = "wasm32")]
-                    web_sys::console::error_1(
-                        &format!("[RestoreOutputs] Failed to deserialize block hashes: {}", e).into(),
-                    );
+                    log::error!("[RestoreOutputs] Failed to deserialize block hashes: {}", e);
                 }
             }
         }
@@ -1265,16 +1258,10 @@ impl Notifiable<RestoreOutputs> for WalletActor {
                     let now = current_time_secs();
                     self.core_state.restore_pending_spends(blob.pending_spends, now);
                     self.core_state.restore_tracked_transactions(blob.tracked_transactions);
-                    #[cfg(target_arch = "wasm32")]
-                    web_sys::console::log_1(
-                        &"[RestoreOutputs] Pending state restored".into(),
-                    );
+                    log::info!("[RestoreOutputs] Pending state restored");
                 }
                 Err(e) => {
-                    #[cfg(target_arch = "wasm32")]
-                    web_sys::console::error_1(
-                        &format!("[RestoreOutputs] Failed to deserialize pending state: {}", e).into(),
-                    );
+                    log::error!("[RestoreOutputs] Failed to deserialize pending state: {}", e);
                 }
             }
         }
@@ -1384,13 +1371,12 @@ impl Notifiable<GetBalanceRequest> for WalletActor {
 #[async_trait]
 impl Notifiable<StoreOutputs> for WalletActor {
     async fn notify(&mut self, msg: StoreOutputs, _ctx: &Context<Self>) {
-        #[cfg(target_arch = "wasm32")]
-        web_sys::console::log_1(&format!(
+        log::info!(
             "[StoreOutputs] new_outputs={}, daemon_height={}, total_after={}, block_hashes={}",
             msg.outputs.len(), msg.daemon_height,
             self.core_state.outputs().len() + msg.outputs.len(),
             msg.block_hashes.len()
-        ).into());
+        );
         self.seed = Some(msg.seed);
         self.network = Some(msg.network);
         self.core_state.daemon_height = msg.daemon_height;
@@ -1453,8 +1439,7 @@ impl Notifiable<UpdateScanState> for WalletActor {
     async fn notify(&mut self, msg: UpdateScanState, ctx: &Context<Self>) {
         // If multi-wallet scan is active, stop it first to allow transition
         if self.is_scanning && self.active_scan_type == ScanType::MultiWallet {
-            #[cfg(target_arch = "wasm32")]
-            web_sys::console::log_1(&"Stopping multi-wallet scan to transition to single-wallet scan".into());
+            log::info!("Stopping multi-wallet scan to transition to single-wallet scan");
 
             // Stop the multi-wallet scan
             self.notify(StopScan {}, ctx).await;
@@ -1479,8 +1464,7 @@ impl Notifiable<UpdateMultiWalletScanState> for WalletActor {
     async fn notify(&mut self, msg: UpdateMultiWalletScanState, ctx: &Context<Self>) {
         // If single-wallet scan is active, stop it first to allow transition
         if self.is_scanning && self.active_scan_type == ScanType::SingleWallet {
-            #[cfg(target_arch = "wasm32")]
-            web_sys::console::log_1(&"Stopping single-wallet scan to transition to multi-wallet scan".into());
+            log::info!("Stopping single-wallet scan to transition to multi-wallet scan");
 
             // Stop the single-wallet scan
             self.notify(StopScan {}, ctx).await;
@@ -1545,8 +1529,7 @@ impl Notifiable<StartContinuousScan> for WalletActor {
                 }
                 Err(e) => {
                     let msg = format!("Failed to get daemon height: {}", e);
-                    #[cfg(target_arch = "wasm32")]
-                    web_sys::console::error_1(&format!("[StartContinuousScan] {}", msg).into());
+                    log::error!("[StartContinuousScan] {}", msg);
 
                     let err = monero_rust::error_codes::ErrorResponse::from_string(&msg);
                     BlockScanResponse {
@@ -1655,13 +1638,9 @@ impl Notifiable<ContinueScan> for WalletActor {
                 ).await {
                     Ok((data, _actual_start)) => data,
                     Err(e) => {
-                        #[cfg(target_arch = "wasm32")]
-                        web_sys::console::error_1(
-                            &format!(
-                                "[ContinueScan] Batch fetch error at height {}: {}",
-                                batch_start_height, e
-                            )
-                            .into(),
+                        log::error!(
+                            "[ContinueScan] Batch fetch error at height {}: {}",
+                            batch_start_height, e
                         );
 
                         let err = monero_rust::error_codes::ErrorResponse::from_string(&e);
@@ -1747,12 +1726,9 @@ impl Notifiable<ContinueScan> for WalletActor {
                     }
 
                     if reorg_detected {
-                        #[cfg(target_arch = "wasm32")]
-                        web_sys::console::log_1(
-                            &format!(
-                                "[ContinueScan] Reorg detected at batch starting {}",
-                                batch_start_height
-                            ).into(),
+                        log::info!(
+                            "[ContinueScan] Reorg detected at batch starting {}",
+                            batch_start_height
                         );
                         let _ = self_addr.notify(HandleReorg {
                             batch_results,
@@ -1860,13 +1836,9 @@ impl Notifiable<ContinueScan> for WalletActor {
                     }
                 }
                 Err(e) => {
-                    #[cfg(target_arch = "wasm32")]
-                    web_sys::console::error_1(
-                        &format!(
-                            "[ContinueScan] Batch scan error at height {}: {}",
-                            batch_start_height, e
-                        )
-                        .into(),
+                    log::error!(
+                        "[ContinueScan] Batch scan error at height {}: {}",
+                        batch_start_height, e
                     );
 
                     let err = monero_rust::error_codes::ErrorResponse::from_string(&e);
@@ -2027,9 +1999,9 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                     }
 
                     if reorg_detected {
-                        #[cfg(target_arch = "wasm32")]
-                        web_sys::console::warn_1(
-                            &format!("[ContinueMultiWalletScan] Reorg detected at batch starting {}", batch_start_height).into(),
+                        log::warn!(
+                            "[ContinueMultiWalletScan] Reorg detected at batch starting {}",
+                            batch_start_height
                         );
                         // Convert MultiWalletScanResult to BlockScanResult for HandleReorg
                         // Use first wallet's data as representative (all wallets see same blocks)
@@ -2301,13 +2273,10 @@ impl Notifiable<HandleReorg> for WalletActor {
 
         match outcome {
             Ok(monero_rust::ScanBatchOutcome::Reorg(info)) => {
-                #[cfg(target_arch = "wasm32")]
-                web_sys::console::log_1(
-                    &format!(
-                        "[HandleReorg] Reorg at height {}: {} blocks detached, {} outputs removed, {} outputs unspent",
-                        info.split_height, info.blocks_detached,
-                        info.outputs_removed, info.outputs_unspent
-                    ).into(),
+                log::info!(
+                    "[HandleReorg] Reorg at height {}: {} blocks detached, {} outputs removed, {} outputs unspent",
+                    info.split_height, info.blocks_detached,
+                    info.outputs_removed, info.outputs_unspent
                 );
 
                 ReorgDetectedResponse {
@@ -2376,10 +2345,7 @@ impl Notifiable<HandleReorg> for WalletActor {
                 let _ = self_addr.notify(ContinueScan).await;
             }
             Err(e) => {
-                #[cfg(target_arch = "wasm32")]
-                web_sys::console::error_1(
-                    &format!("[HandleReorg] Error: {}", e).into(),
-                );
+                log::error!("[HandleReorg] Error: {}", e);
                 let mut self_addr = ctx.address();
                 let _ = self_addr.notify(StopScan).await;
             }

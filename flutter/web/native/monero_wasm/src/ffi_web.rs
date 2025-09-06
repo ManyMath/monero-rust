@@ -142,9 +142,7 @@ fn send_to_dart_raw<T: serde::Serialize + ?Sized>(type_name: &str, msg: &T) {
                     );
                 }
                 Err(e) => {
-                    web_sys::console::error_1(
-                        &JsValue::from_str(&format!("serialize error for {}: {}", type_name, e))
-                    );
+                    log::error!("serialize error for {}: {}", type_name, e);
                 }
             }
         }
@@ -228,5 +226,6 @@ impl_send_to_dart! {
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub async fn start_rust_runtime() {
+    crate::logging::init();
     tokio_with_wasm::alias::spawn(crate::actors::create_actors());
 }
