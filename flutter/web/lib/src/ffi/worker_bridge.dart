@@ -3,18 +3,23 @@ import 'dart:js_interop';
 import 'dart:async';
 import 'dart:convert';
 import 'signal_sender.dart';
+import '../logging.dart';
 
 class WorkerBridge implements SignalSender {
+  static const _tag = 'WorkerBridge';
+
   late final web.Worker _worker;
   final _readyCompleter = Completer<void>();
   final _signalControllers = <String, StreamController<Map<String, dynamic>>>{};
 
   Future<void> init() async {
+    Log.info(_tag, 'Initializing Web Worker');
     final opts = web.WorkerOptions(type: 'module');
     _worker = web.Worker('pkg/monero_wasm_worker.js'.toJS, opts);
     _worker.onmessage = _onMessage.toJS;
     _worker.onerror = _onError.toJS;
     await _readyCompleter.future;
+    Log.info(_tag, 'Web Worker ready');
   }
 
   void _onMessage(web.MessageEvent event) {
@@ -42,15 +47,13 @@ class WorkerBridge implements SignalSender {
     if (type == 'error') {
       final signalName = data['signalName'] as String;
       final error = data['error'] as String;
-      // ignore: avoid_print
-      print('Worker error for $signalName: $error');
+      Log.error(_tag, 'Worker error for $signalName: $error');
       return;
     }
   }
 
   void _onError(web.Event event) {
-    // ignore: avoid_print
-    print('Worker error: $event');
+    Log.error(_tag, 'Worker error: $event');
     if (!_readyCompleter.isCompleted) {
       _readyCompleter.completeError('Worker failed to initialize');
     }
@@ -58,6 +61,7 @@ class WorkerBridge implements SignalSender {
 
   @override
   void sendSignal(String signalName, Map<String, dynamic> data) {
+    Log.debug(_tag, 'Sending signal: $signalName');
     final msg = {
       'type': 'dart_signal',
       'signalName': signalName,
@@ -74,6 +78,7 @@ class WorkerBridge implements SignalSender {
   }
 
   void dispose() {
+    Log.info(_tag, 'Disposing Web Worker');
     _worker.terminate();
     for (final c in _signalControllers.values) {
       c.close();

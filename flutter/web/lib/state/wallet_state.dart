@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:monero_extension/utils/network_utils.dart';
 import '../src/ffi/signal_types.dart';
+import '../src/logging.dart';
 import '../utils/key_parser.dart';
 import '../models/wallet_instance.dart';
 import '../models/wallet_transaction.dart';
@@ -11,6 +12,7 @@ import '../widgets/close_wallet_dialog.dart';
 import '../src/ffi/signal_hub.dart';
 
 class WalletState extends ChangeNotifier {
+  static const _tag = 'WalletState';
   final WalletLifecycleManager lifecycle;
   final SignalHub _signalHub;
 
@@ -101,6 +103,7 @@ class WalletState extends ChangeNotifier {
 
   // Signal handlers
   void _handleKeysDerived(KeysDerivedResponse msg) {
+    Log.debug(_tag, 'Keys derived: success=${msg.success}');
     if (msg.success) {
       derivedAddress = msg.address;
       secretSpendKey = msg.secretSpendKey;
@@ -231,6 +234,7 @@ class WalletState extends ChangeNotifier {
 
   // Methods
   void generateSeed() {
+    Log.info(_tag, 'Generating seed (type=$seedType)');
     validationError = null;
     responseError = null;
     derivedAddress = null;
@@ -397,6 +401,7 @@ class WalletState extends ChangeNotifier {
   }
 
   void clearWalletState() {
+    Log.info(_tag, 'Clearing wallet state');
     continuousScanCurrentHeight = 0;
     allOutputs = [];
     allTransactions = [];
@@ -409,6 +414,7 @@ class WalletState extends ChangeNotifier {
   }
 
   void resetWalletState() {
+    Log.info(_tag, 'Resetting wallet state');
     seedController.text = '';
     derivedAddress = null;
     secretSpendKey = null;
@@ -505,6 +511,7 @@ class WalletState extends ChangeNotifier {
     Map<int, List<OwnedOutput>>? outputsByAccount,
     int? activeAccount,
   }) {
+    Log.info(_tag, 'Opening wallet: $id (network=$net)');
     final wallet = lifecycle.openWallet(id, seed, net, address);
 
     if (accounts != null && accounts.isNotEmpty) {
@@ -524,6 +531,7 @@ class WalletState extends ChangeNotifier {
   }
 
   void switchToWallet(String id) {
+    Log.info(_tag, 'Switching to wallet: $id');
     final wallet = lifecycle.switchToWallet(id);
     if (wallet == null) return;
 
@@ -574,6 +582,7 @@ class WalletState extends ChangeNotifier {
     final shouldSave = await CloseWalletDialog.show(context, wId);
     if (shouldSave == null || !context.mounted) return;
 
+    Log.info(_tag, 'Closing wallet: $wId (save=$shouldSave)');
     if (shouldSave) {
       final previousWalletId = activeWalletId;
       switchToWallet(wId);
@@ -611,6 +620,7 @@ class WalletState extends ChangeNotifier {
   }
 
   void startNewWallet() {
+    Log.info(_tag, 'Starting new wallet');
     lifecycle.startNewWallet();
     resetWalletState();
     notifyListeners();
