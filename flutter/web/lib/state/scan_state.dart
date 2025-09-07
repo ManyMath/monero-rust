@@ -498,7 +498,7 @@ class ScanState extends ChangeNotifier {
     WalletScanService.queryDaemonHeight(nodeUrl);
 
     if (walletsToScan.length > 1) {
-      final walletConfigs = walletsToScan.map((w) => w.toWalletConfig(subaddressLookahead: lookaheadMode.subaddresses)).toList();
+      final walletConfigs = walletsToScan.map((w) => w.toWalletConfig(subaddressLookahead: lookaheadMode.subaddresses, passphrase: _walletState.passphrase, bip39AccountIndex: _walletState.bip39AccountIndex)).toList();
       StartMultiWalletScanRequest(
         nodeUrl: nodeUrl,
         startHeight: _walletState.continuousScanCurrentHeight,

@@ -114,7 +114,7 @@ class WalletScanService {
     int bip39AccountIndex = 0,
   }) {
     if (walletsToScan.length > 1) {
-      final walletConfigs = walletsToScan.map((w) => w.toWalletConfig(subaddressLookahead: subaddressLookahead)).toList();
+      final walletConfigs = walletsToScan.map((w) => w.toWalletConfig(subaddressLookahead: subaddressLookahead, passphrase: passphrase, bip39AccountIndex: bip39AccountIndex)).toList();
 
       StartMultiWalletScanRequest(
         nodeUrl: nodeUrl,

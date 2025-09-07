@@ -285,7 +285,7 @@ class WalletState extends ChangeNotifier {
     if (seedType.contains('bip39') && words.length == 12) {
       ConvertBip39ToLegacyRequest(
         bip39Mnemonic: result.normalizedInput!,
-        accountIndex: 0,
+        accountIndex: bip39AccountIndex,
         passphrase: passphrase,
       ).sendSignalToRust();
       return;
