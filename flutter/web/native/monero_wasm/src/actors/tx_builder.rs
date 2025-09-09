@@ -930,8 +930,15 @@ impl Notifiable<ExportKeyImages> for TxBuilderActor {
             let wallet_data_result = wallet_addr.send(GetWalletData).await;
             match wallet_data_result {
                 Ok(wallet_data) => {
-                    let key_images: Vec<monero_rust::epee_compat::ExportedKeyImage> = wallet_data.outputs.iter()
+                    // sort to match import ordering
+                    let mut sorted_outputs: Vec<_> = wallet_data.outputs.iter()
                         .filter(|o| !o.key_image.is_empty())
+                        .collect();
+                    sorted_outputs.sort_by(|a, b| {
+                        a.block_height.cmp(&b.block_height)
+                            .then(a.output_index.cmp(&b.output_index))
+                    });
+                    let key_images: Vec<monero_rust::epee_compat::ExportedKeyImage> = sorted_outputs.iter()
                         .map(|o| monero_rust::epee_compat::ExportedKeyImage {
                             key_image: o.key_image.clone(),
                             tx_hash: o.tx_hash.clone(),
@@ -1016,44 +1023,46 @@ impl Notifiable<ImportKeyImages> for TxBuilderActor {
                 }
             };
 
-            let count = key_images.len() as u64;
+            let imported_count = key_images.len() as u64;
 
-            // Key image import assigns key images to outputs so the view-only
-            // wallet can later detect spends during blockchain scanning. It does
-            // NOT mark outputs as spent — that happens when the key image is
-            // actually seen in a block.
-            let wallet_data_result = wallet_addr.send(GetWalletData).await;
-            match wallet_data_result {
-                Ok(wallet_data) => {
-                    let mut matched_count = 0u64;
-                    for ki in &key_images {
-                        for output in &wallet_data.outputs {
-                            if output.tx_hash == ki.tx_hash
-                                && output.output_index == ki.output_index
-                            {
-                                matched_count += 1;
-                            }
-                        }
-                    }
+            // Assign key images positionally to wallet outputs so the view-only
+            // wallet can later detect spends during blockchain scanning. The
+            // wallet actor sorts outputs by (block_height, output_index) to match
+            // Monero's key image export ordering.
+            let _ = wallet_addr.notify(UpdateOutputKeyImages {
+                key_images: key_images.clone(),
+            }).await;
 
-                    KeyImagesImportedResponse {
-                        success: true,
-                        error: None,
-                        error_code: None, error_hint: None, error_transient: None,
-                        imported_count: count,
-                        spent_count: matched_count,
-                    }.send_signal_to_dart();
-                }
-                Err(_) => {
-                    KeyImagesImportedResponse {
-                        success: false,
-                        error: Some("Failed to get wallet data".to_string()),
-                        error_code: None, error_hint: None, error_transient: None,
-                        imported_count: 0,
-                        spent_count: 0,
-                    }.send_signal_to_dart();
-                }
+            let node_url = msg.node_url;
+            let non_empty_kis: Vec<String> = key_images.into_iter()
+                .filter(|ki| !ki.is_empty())
+                .collect();
+
+            if non_empty_kis.is_empty() || node_url.is_empty() {
+                KeyImagesImportedResponse {
+                    success: true,
+                    error: None,
+                    error_code: None, error_hint: None, error_transient: None,
+                    imported_count,
+                    spent_count: 0,
+                }.send_signal_to_dart();
+                return;
             }
+
+            spawn_local(async move {
+                let spent_count = match monero_rust::is_key_image_spent(&node_url, &non_empty_kis).await {
+                    Ok(statuses) => statuses.iter().filter(|&&s| s > 0).count() as u64,
+                    Err(_) => 0,
+                };
+
+                KeyImagesImportedResponse {
+                    success: true,
+                    error: None,
+                    error_code: None, error_hint: None, error_transient: None,
+                    imported_count,
+                    spent_count,
+                }.send_signal_to_dart();
+            });
         } else {
             KeyImagesImportedResponse {
                 success: false,

@@ -223,3 +223,10 @@ pub struct ImportKeyImages {
     pub node_url: String,
 }
 
+/// Assign key images to wallet outputs positionally (for view-only wallet import).
+/// Key images are matched to outputs sorted by (block_height, output_index).
+#[derive(Debug, Clone)]
+pub struct UpdateOutputKeyImages {
+    pub key_images: Vec<String>,
+}
+

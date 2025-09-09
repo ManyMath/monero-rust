@@ -1423,6 +1423,36 @@ impl Notifiable<MarkOutputsSpent> for WalletActor {
 }
 
 #[async_trait]
+impl Notifiable<UpdateOutputKeyImages> for WalletActor {
+    async fn notify(&mut self, msg: UpdateOutputKeyImages, _ctx: &Context<Self>) {
+        let outputs = self.core_state.outputs_mut();
+        // Sort by (block_height, output_index) to match Monero's positional
+        // key image export ordering.
+        outputs.sort_by(|a, b| {
+            a.block_height.cmp(&b.block_height)
+                .then(a.output_index.cmp(&b.output_index))
+        });
+        let ki_count = msg.key_images.len();
+        let out_count = outputs.len();
+        if ki_count != out_count {
+            log::warn!(
+                "[UpdateOutputKeyImages] count mismatch: {} key images vs {} outputs — \
+                 positional assignment may pair key images with wrong outputs",
+                ki_count, out_count
+            );
+        }
+        let count = ki_count.min(out_count);
+        for i in 0..count {
+            outputs[i].key_image = msg.key_images[i].clone();
+        }
+        log::info!(
+            "[UpdateOutputKeyImages] assigned {} key images to {} outputs",
+            count, out_count
+        );
+    }
+}
+
+#[async_trait]
 impl Handler<GetWalletHeight> for WalletActor {
     type Result = WalletHeight;
 

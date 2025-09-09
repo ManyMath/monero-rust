@@ -61,7 +61,7 @@ pub use scanner::{
     // Key derivation
     derive_address, derive_keys, derive_subaddress, generate_seed, resolve_seed, resolve_seed_bip39, seed_birthday, validate_seed,
     // Single-block scanning
-    get_daemon_height,
+    get_daemon_height, is_key_image_spent,
     scan_block_for_outputs_with_url, scan_block_for_outputs_with_url_and_lookahead,
     scan_block_multi_wallet_with_url,
     // Mempool scanning
