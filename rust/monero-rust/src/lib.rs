@@ -110,3 +110,9 @@ pub use wasm_impl::{BrowserStorage, CallbackRpcClient, JsTimeProvider, WasmRpcCl
 pub mod native_impl;
 #[cfg(not(target_arch = "wasm32"))]
 pub use native_impl::SystemTimeProvider;
+
+// -- .keys file import --
+#[cfg(not(target_arch = "wasm32"))]
+pub mod wallet_keys_file;
+#[cfg(not(target_arch = "wasm32"))]
+pub use wallet_keys_file::{decrypt_keys_file, read_keys_file, ImportedKeysFile};
