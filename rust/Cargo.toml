@@ -4,5 +4,6 @@ members = [
     "monero-serai-mirror",
     "monero-epee-bin-serde",
     "monero-cli",
+    "cuprate-cryptonight",
 ]
 resolver = "2"
