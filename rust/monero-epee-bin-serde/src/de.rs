@@ -10,11 +10,15 @@ use std::io;
 
 pub struct Deserializer<'b> {
     buffer: &'b mut dyn io::BufRead,
+    is_root: bool,
 }
 
 impl<'b> Deserializer<'b> {
     pub fn new(buffer: &'b mut dyn io::BufRead) -> Self {
-        Self { buffer }
+        Self {
+            buffer,
+            is_root: true,
+        }
     }
 }
 
@@ -121,9 +125,6 @@ pub struct MapAccess<'a, 'b> {
 }
 
 impl<'a, 'b> MapAccess<'a, 'b> {
-    /// Creates a new instance of [`MapAccess`] that initializes itself by
-    /// reading a varint from the reader within [`Deserializer`] for the
-    /// expected number of fields.
     fn with_varint_encoded_fields(de: &'a mut Deserializer<'b>) -> Result<Self> {
         let number_of_fields = varint::decode(&mut de.buffer)?;
 
@@ -191,11 +192,8 @@ impl<'de, 'a, 'b> serde::de::Deserializer<'de> for SectionFieldNameDeserializer<
 
 pub struct SeqAccess<'a, 'b> {
     de: &'a mut Deserializer<'b>,
-    /// How long we expect the sequence to be.
     length: usize,
-    /// What kind of item we are expecting.
     element_marker: u8,
-    /// How many items we already emitted.
     emitted_items: usize,
 }
 
@@ -499,6 +497,11 @@ impl<'de, 'a, 'b> serde::Deserializer<'de> for &'a mut Deserializer<'b> {
     where
         V: Visitor<'de>,
     {
+        if self.is_root {
+            self.is_root = false;
+        } else {
+            self.read_expected_marker(MARKER_SINGLE_STRUCT)?;
+        }
         visitor.visit_map(MapAccess::with_varint_encoded_fields(self)?)
     }
 
@@ -525,9 +528,6 @@ impl<'de, 'a, 'b> serde::Deserializer<'de> for &'a mut Deserializer<'b> {
     where
         V: Visitor<'de>,
     {
-        // Skip the current field value by reading and discarding it.
-        // Delegating to deserialize_any correctly consumes the marker
-        // and value bytes from the stream.
         self.deserialize_any(visitor)
     }
 }

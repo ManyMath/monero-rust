@@ -1,12 +1,12 @@
 //! Reader for monero-wallet-cli `.keys` files.
 
-use std::collections::HashMap;
 use std::path::Path;
 
 use chacha20::ChaCha20Legacy;
 use cipher::{KeyIvInit, StreamCipher};
 use cuprate_cryptonight::cryptonight_hash_v0;
 use monero_serai::wallet::seed::{Language, Seed};
+use serde::Deserialize;
 use curve25519_dalek::scalar::Scalar;
 use sha3::{Digest, Keccak256};
 use zeroize::Zeroizing;
@@ -25,151 +25,34 @@ pub struct ImportedKeysFile {
     pub mnemonic: Option<String>,
 }
 
-const EPEE_HEADER: &[u8] = b"\x01\x11\x01\x01\x01\x01\x02\x01\x01";
-
-/// Parsed epee value.
-#[derive(Debug, Clone)]
-enum EpeeValue {
-    U64(u64),
-    Blob(Vec<u8>),
-    Section(HashMap<String, EpeeValue>),
-    #[allow(dead_code)]
-    Other,
+#[derive(Deserialize)]
+struct EpeeAccountBase {
+    m_creation_timestamp: u64,
+    m_keys: EpeeAccountKeys,
 }
 
-struct EpeeCursor<'a> {
-    data: &'a [u8],
-    pos: usize,
+#[derive(Deserialize)]
+struct EpeeAccountKeys {
+    m_account_address: EpeeAccountAddress,
+    #[serde(with = "serde_bytes")]
+    m_spend_secret_key: Vec<u8>,
+    #[serde(with = "serde_bytes")]
+    m_view_secret_key: Vec<u8>,
+    #[serde(with = "serde_bytes")]
+    m_encryption_iv: Vec<u8>,
 }
 
-impl<'a> EpeeCursor<'a> {
-    fn new(data: &'a [u8]) -> Self {
-        Self { data, pos: 0 }
-    }
-
-    fn remaining(&self) -> usize {
-        self.data.len() - self.pos
-    }
-
-    fn read_u8(&mut self) -> Result<u8, String> {
-        if self.pos >= self.data.len() {
-            return Err("unexpected EOF reading u8".into());
-        }
-        let b = self.data[self.pos];
-        self.pos += 1;
-        Ok(b)
-    }
-
-    fn read_bytes(&mut self, n: usize) -> Result<&'a [u8], String> {
-        if self.pos + n > self.data.len() {
-            return Err(format!("unexpected EOF reading {} bytes at {}", n, self.pos));
-        }
-        let slice = &self.data[self.pos..self.pos + n];
-        self.pos += n;
-        Ok(slice)
-    }
-
-    fn read_u64_le(&mut self) -> Result<u64, String> {
-        let bytes = self.read_bytes(8)?;
-        Ok(u64::from_le_bytes(bytes.try_into().unwrap()))
-    }
-
-    fn read_epee_varint(&mut self) -> Result<usize, String> {
-        if self.remaining() == 0 {
-            return Err("unexpected EOF reading epee varint".into());
-        }
-        let width = self.data[self.pos] & 0x03;
-        let (raw, size) = match width {
-            0 => (self.read_u8()? as u64, 0),       // already consumed
-            1 => {
-                let b = self.read_bytes(2)?;
-                (u16::from_le_bytes([b[0], b[1]]) as u64, 0)
-            }
-            2 => {
-                let b = self.read_bytes(4)?;
-                (u32::from_le_bytes(b.try_into().unwrap()) as u64, 0)
-            }
-            3 => {
-                let b = self.read_bytes(8)?;
-                (u64::from_le_bytes(b.try_into().unwrap()), 0)
-            }
-            _ => unreachable!(),
-        };
-        let _ = size;
-        Ok((raw >> 2) as usize)
-    }
-
-    /// Parse a section (struct): varint field_count, then N fields.
-    fn read_section(&mut self) -> Result<HashMap<String, EpeeValue>, String> {
-        let field_count = self.read_epee_varint()?;
-        let mut fields = HashMap::new();
-
-        for _ in 0..field_count {
-            let name_len = self.read_u8()? as usize;
-            let name_bytes = self.read_bytes(name_len)?;
-            let name = String::from_utf8_lossy(name_bytes).into_owned();
-            let marker = self.read_u8()?;
-            let value = self.read_value(marker)?;
-            fields.insert(name, value);
-        }
-
-        Ok(fields)
-    }
-
-    fn read_value(&mut self, marker: u8) -> Result<EpeeValue, String> {
-        match marker {
-            // U64
-            5 => Ok(EpeeValue::U64(self.read_u64_le()?)),
-            // STRING / BLOB
-            10 => {
-                let len = self.read_epee_varint()?;
-                let blob = self.read_bytes(len)?;
-                Ok(EpeeValue::Blob(blob.to_vec()))
-            }
-            // STRUCT (nested section)
-            12 => {
-                let section = self.read_section()?;
-                Ok(EpeeValue::Section(section))
-            }
-            // Skip other types we don't need
-            1 => { self.read_bytes(8)?; Ok(EpeeValue::Other) }    // I64
-            2 => { self.read_bytes(4)?; Ok(EpeeValue::Other) }    // I32
-            3 => { self.read_bytes(2)?; Ok(EpeeValue::Other) }    // I16
-            4 => { self.read_bytes(1)?; Ok(EpeeValue::Other) }    // I8
-            6 => { self.read_bytes(4)?; Ok(EpeeValue::Other) }    // U32
-            7 => { self.read_bytes(2)?; Ok(EpeeValue::Other) }    // U16
-            8 => { self.read_bytes(1)?; Ok(EpeeValue::Other) }    // U8
-            9 => { self.read_bytes(8)?; Ok(EpeeValue::Other) }    // F64
-            11 => { self.read_bytes(1)?; Ok(EpeeValue::Other) }   // BOOL
-            // Array types (0x80 | element_type)
-            m if m & 0x80 != 0 => {
-                let elem_type = m & 0x7f;
-                let count = self.read_epee_varint()?;
-                for _ in 0..count {
-                    self.read_value(elem_type)?;
-                }
-                Ok(EpeeValue::Other)
-            }
-            _ => Err(format!("unknown epee marker 0x{marker:02x} at offset {}", self.pos - 1)),
-        }
-    }
+#[derive(Deserialize)]
+struct EpeeAccountAddress {
+    #[serde(with = "serde_bytes")]
+    m_spend_public_key: Vec<u8>,
+    #[serde(with = "serde_bytes")]
+    m_view_public_key: Vec<u8>,
 }
 
-fn parse_epee_account_data(data: &[u8]) -> Result<HashMap<String, EpeeValue>, String> {
-    if !data.starts_with(EPEE_HEADER) {
-        return Err("missing epee header".into());
-    }
-    let mut cursor = EpeeCursor::new(data);
-    cursor.pos = EPEE_HEADER.len();
-    cursor.read_section()
-}
-
-fn get_blob(fields: &HashMap<String, EpeeValue>, key: &str) -> Result<[u8; 32], String> {
-    match fields.get(key) {
-        Some(EpeeValue::Blob(v)) if v.len() == 32 => Ok(v.as_slice().try_into().unwrap()),
-        Some(EpeeValue::Blob(v)) => Err(format!("{key}: expected 32 bytes, got {}", v.len())),
-        _ => Err(format!("{key} not found")),
-    }
+fn to_key(v: &[u8], name: &str) -> Result<[u8; 32], String> {
+    v.try_into()
+        .map_err(|_| format!("{name}: expected 32 bytes, got {}", v.len()))
 }
 
 fn read_leb128(data: &[u8], offset: &mut usize) -> Result<u64, String> {
@@ -348,40 +231,26 @@ fn parse_decrypted_keys(plaintext: &[u8], chacha_key: &[u8; 32]) -> Result<Impor
         unescape_json_bytes(key_data_raw)?
     };
 
-    let root = parse_epee_account_data(&key_data_bytes)?;
+    let acct: EpeeAccountBase = monero_epee_bin_serde::from_bytes(&key_data_bytes)
+        .map_err(|e| format!("epee deserialize: {e}"))?;
 
-    let keys_section = match root.get("m_keys") {
-        Some(EpeeValue::Section(s)) => s,
-        _ => return Err("m_keys section not found".into()),
-    };
-
-    let addr_section = match keys_section.get("m_account_address") {
-        Some(EpeeValue::Section(s)) => s,
-        _ => return Err("m_account_address section not found".into()),
-    };
-
-    let spend_public_key = get_blob(addr_section, "m_spend_public_key")?;
-    let view_public_key = get_blob(addr_section, "m_view_public_key")?;
-    let mut spend_secret_key = get_blob(keys_section, "m_spend_secret_key")?;
-    let mut view_secret_key = get_blob(keys_section, "m_view_secret_key")?;
-
-    let creation_timestamp = match root.get("m_creation_timestamp") {
-        Some(EpeeValue::U64(v)) => *v,
-        _ => 0,
-    };
+    let spend_public_key = to_key(&acct.m_keys.m_account_address.m_spend_public_key, "m_spend_public_key")?;
+    let view_public_key = to_key(&acct.m_keys.m_account_address.m_view_public_key, "m_view_public_key")?;
+    let mut spend_secret_key = to_key(&acct.m_keys.m_spend_secret_key, "m_spend_secret_key")?;
+    let mut view_secret_key = to_key(&acct.m_keys.m_view_secret_key, "m_view_secret_key")?;
+    let creation_timestamp = acct.m_creation_timestamp;
 
     // Decrypt secret keys via xor_with_key_stream if they're encrypted
     let encrypted_secret_keys =
         find_json_int_value(plaintext, "encrypted_secret_keys").unwrap_or(0) != 0;
 
     if encrypted_secret_keys {
-        let encryption_iv = match keys_section.get("m_encryption_iv") {
-            Some(EpeeValue::Blob(v)) if v.len() == 8 => {
-                let iv: [u8; 8] = v.as_slice().try_into().unwrap();
-                iv
-            }
-            _ => return Err("encrypted_secret_keys set but m_encryption_iv not found".into()),
-        };
+        let encryption_iv: [u8; 8] = acct.m_keys.m_encryption_iv.as_slice()
+            .try_into()
+            .map_err(|_| format!(
+                "m_encryption_iv: expected 8 bytes, got {}",
+                acct.m_keys.m_encryption_iv.len()
+            ))?;
 
         let mut derive_input = [0u8; 33];
         derive_input[..32].copy_from_slice(chacha_key);
@@ -437,14 +306,6 @@ mod tests {
         let data = [0xAC, 0x02];
         let mut off = 0;
         assert_eq!(read_leb128(&data, &mut off).unwrap(), 300);
-    }
-
-    #[test]
-    fn epee_varint_values() {
-        assert_eq!(EpeeCursor::new(&[0x00]).read_epee_varint().unwrap(), 0);
-        assert_eq!(EpeeCursor::new(&[0x04]).read_epee_varint().unwrap(), 1);
-        assert_eq!(EpeeCursor::new(&[0x08]).read_epee_varint().unwrap(), 2);
-        assert_eq!(EpeeCursor::new(&[0x80]).read_epee_varint().unwrap(), 32);
     }
 
     #[test]
