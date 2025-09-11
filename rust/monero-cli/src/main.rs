@@ -123,6 +123,20 @@ enum Command {
         #[arg(long)]
         wallet: Option<String>,
     },
+
+    /// Import a monero-wallet-cli .keys file into monero-cli format
+    Import {
+        /// Path to the .keys file (e.g. ~/Monero/wallets/mywallet.keys)
+        keys_file: String,
+
+        /// Network: "mainnet", "stagenet", or "testnet"
+        #[arg(long, default_value = "stagenet")]
+        network: String,
+
+        /// Path to save the imported wallet
+        #[arg(long)]
+        wallet: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -151,6 +165,11 @@ async fn main() {
             daemon,
             wallet,
         } => cmd_sweep_all(&address, &daemon, wallet.as_deref()).await,
+        Command::Import {
+            keys_file,
+            network,
+            wallet,
+        } => cmd_import(&keys_file, &network, wallet.as_deref()),
     };
 
     if let Err(e) = result {
@@ -581,6 +600,83 @@ fn cmd_info(wallet_path: Option<&str>) -> Result<(), String> {
     println!("Last sync height: {}", data.last_sync_height);
     println!("Total outputs:    {}", data.outputs.len());
     println!("Unspent outputs:  {}", unspent_count);
+
+    Ok(())
+}
+
+fn cmd_import(
+    keys_file_path: &str,
+    network: &str,
+    wallet_path: Option<&str>,
+) -> Result<(), String> {
+    let keys_path = std::path::Path::new(keys_file_path);
+    if !keys_path.exists() {
+        return Err(format!("File not found: {}", keys_file_path));
+    }
+
+    let password = rpassword::prompt_password("Password for .keys file: ")
+        .map_err(|e| format!("Failed to read password: {}", e))?;
+
+    println!("Deriving key...");
+    let imported = monero_rust::read_keys_file(keys_path, &password)?;
+
+    println!();
+    println!("=== Imported Keys ===");
+    println!();
+    println!("Watch-only:       {}", if imported.watch_only { "yes" } else { "no" });
+    println!("Seed language:    {}", imported.seed_language.as_deref().unwrap_or("(unknown)"));
+    println!("Spend public key: {}", hex::encode(imported.spend_public_key));
+    println!("View public key:  {}", hex::encode(imported.view_public_key));
+
+    if imported.watch_only {
+        println!("Spend secret key: (not available — watch-only wallet)");
+    } else {
+        println!("Spend secret key: {}", hex::encode(imported.spend_secret_key));
+    }
+    println!("View secret key:  {}", hex::encode(imported.view_secret_key));
+
+    if let Some(ref mnemonic) = imported.mnemonic {
+        println!();
+        println!("Recovered mnemonic:");
+        println!("  {}", mnemonic);
+
+        let address = monero_rust::derive_address(mnemonic, network)?;
+        println!();
+        println!("Primary address ({}):", network);
+        println!("  {}", address);
+
+        print!("\nSave as monero-cli wallet? (yes/no): ");
+        use std::io::Write;
+        std::io::stdout().flush().map_err(|e| format!("{}", e))?;
+
+        let mut confirm = String::new();
+        std::io::stdin().read_line(&mut confirm).map_err(|e| format!("{}", e))?;
+
+        if confirm.trim().to_lowercase() == "yes" {
+            let new_password = rpassword::prompt_password("Set wallet password (for monero-cli format): ")
+                .map_err(|e| format!("Failed to read password: {}", e))?;
+            if !new_password.is_empty() {
+                let confirm_pw = rpassword::prompt_password("Confirm password: ")
+                    .map_err(|e| format!("Failed to read password: {}", e))?;
+                if new_password != confirm_pw {
+                    return Err("Passwords do not match".to_string());
+                }
+            }
+
+            let path = resolve_wallet_path(wallet_path)?;
+            let data = WalletData {
+                mnemonic: mnemonic.clone(),
+                network: network.to_string(),
+                last_sync_height: 0,
+                outputs: Vec::new(),
+            };
+            wallet_file::save_wallet(&path, &data, &new_password)?;
+            println!("Wallet saved to: {}", path.display());
+        }
+    } else {
+        println!();
+        println!("Could not recover mnemonic (watch-only wallet).");
+    }
 
     Ok(())
 }
