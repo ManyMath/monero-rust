@@ -1,7 +1,5 @@
 //! Reader for monero-wallet-cli `.keys` files.
 
-use std::path::Path;
-
 use chacha20::ChaCha20Legacy;
 use cipher::{KeyIvInit, StreamCipher};
 use cuprate_cryptonight::cryptonight_hash_v0;
@@ -168,21 +166,19 @@ fn parse_language(lang: &str) -> Option<Language> {
     }
 }
 
-pub fn read_keys_file(path: &Path, password: &str) -> Result<ImportedKeysFile, String> {
-    let file_data =
-        std::fs::read(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
-    if file_data.len() < 9 {
+pub fn decrypt_keys_data(file_bytes: &[u8], password: &str) -> Result<(Vec<u8>, [u8; 32]), String> {
+    if file_bytes.len() < 9 {
         return Err("file too small to be a valid .keys file".into());
     }
 
-    let iv: [u8; 8] = file_data[..8].try_into().unwrap();
+    let iv: [u8; 8] = file_bytes[..8].try_into().unwrap();
     let mut offset: usize = 8;
-    let ciphertext_len = read_leb128(&file_data, &mut offset)? as usize;
-    if offset + ciphertext_len > file_data.len() {
+    let ciphertext_len = read_leb128(file_bytes, &mut offset)? as usize;
+    if offset + ciphertext_len > file_bytes.len() {
         return Err("ciphertext length exceeds file size".into());
     }
 
-    let mut buf = file_data[offset..offset + ciphertext_len].to_vec();
+    let mut buf = file_bytes[offset..offset + ciphertext_len].to_vec();
     let key: [u8; 32] = cryptonight_hash_v0(password.as_bytes());
     let mut cipher = ChaCha20Legacy::new((&key).into(), (&iv).into());
     cipher.apply_keystream(&mut buf);
@@ -191,35 +187,26 @@ pub fn read_keys_file(path: &Path, password: &str) -> Result<ImportedKeysFile, S
         return Err("decryption produced garbage (wrong password?)".into());
     }
 
-    parse_decrypted_keys(&buf, &key)
+    Ok((buf, key))
 }
 
-pub fn decrypt_keys_file(path: &Path, password: &str) -> Result<Vec<u8>, String> {
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_keys_file(path: &std::path::Path, password: &str) -> Result<ImportedKeysFile, String> {
     let file_data =
         std::fs::read(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
-    if file_data.len() < 9 {
-        return Err("file too small to be a valid .keys file".into());
-    }
-
-    let iv: [u8; 8] = file_data[..8].try_into().unwrap();
-    let mut offset: usize = 8;
-    let ciphertext_len = read_leb128(&file_data, &mut offset)? as usize;
-    if offset + ciphertext_len > file_data.len() {
-        return Err("ciphertext length exceeds file size".into());
-    }
-
-    let mut buf = file_data[offset..offset + ciphertext_len].to_vec();
-    let key: [u8; 32] = cryptonight_hash_v0(password.as_bytes());
-    let mut cipher = ChaCha20Legacy::new((&key).into(), (&iv).into());
-    cipher.apply_keystream(&mut buf);
-
-    if buf.len() < 2 || buf[0] != b'{' || buf[1] != b'"' {
-        return Err("decryption produced garbage (wrong password?)".into());
-    }
-    Ok(buf)
+    let (plaintext, key) = decrypt_keys_data(&file_data, password)?;
+    parse_decrypted_keys(&plaintext, &key)
 }
 
-fn parse_decrypted_keys(plaintext: &[u8], chacha_key: &[u8; 32]) -> Result<ImportedKeysFile, String> {
+#[cfg(not(target_arch = "wasm32"))]
+pub fn decrypt_keys_file(path: &std::path::Path, password: &str) -> Result<Vec<u8>, String> {
+    let file_data =
+        std::fs::read(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    let (plaintext, _key) = decrypt_keys_data(&file_data, password)?;
+    Ok(plaintext)
+}
+
+pub fn parse_decrypted_keys(plaintext: &[u8], chacha_key: &[u8; 32]) -> Result<ImportedKeysFile, String> {
     let (kd_start, kd_end) = find_json_string_value(plaintext, "key_data")
         .ok_or("key_data field not found")?;
 

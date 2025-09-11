@@ -112,7 +112,7 @@ pub mod native_impl;
 pub use native_impl::SystemTimeProvider;
 
 // -- .keys file import --
-#[cfg(not(target_arch = "wasm32"))]
 pub mod wallet_keys_file;
+pub use wallet_keys_file::{decrypt_keys_data, parse_decrypted_keys, ImportedKeysFile};
 #[cfg(not(target_arch = "wasm32"))]
-pub use wallet_keys_file::{decrypt_keys_file, read_keys_file, ImportedKeysFile};
+pub use wallet_keys_file::{decrypt_keys_file, read_keys_file};

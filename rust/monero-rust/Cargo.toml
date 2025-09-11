@@ -22,8 +22,11 @@ base58-monero = { version = "1", default-features = false, features = ["check"] 
 
 # Encryption
 chacha20poly1305 = "0.10"
+chacha20 = "0.9"
+cipher = "0.4"
 argon2 = "0.5"
 serde_bytes = "0.11"
+cuprate-cryptonight = { path = "../cuprate-cryptonight" }
 
 # BIP39/BIP32
 bip39 = { version = "2", features = ["rand"] }
@@ -55,9 +58,6 @@ hex = "0.4"
 rand_core = "0.6"
 rand = "0.8"
 tokio = { version = "1.29", features = ["rt", "macros"] }
-cuprate-cryptonight = { path = "../cuprate-cryptonight" }
-chacha20 = "0.9"
-cipher = "0.4"
 
 [dev-dependencies]
 monero-serai = { path = "../monero-serai-mirror", features = ["http-rpc", "test-helpers"] }
