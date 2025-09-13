@@ -765,6 +765,31 @@ pub struct KeyImagesImportedResponse {
     pub spent_count: u64,
 }
 
+// --- .keys file import signals ---
+
+#[derive(Deserialize)]
+pub struct ImportKeysFileRequest {
+    pub file_bytes_hex: String,
+    pub password: String,
+}
+
+#[derive(Serialize)]
+pub struct ImportKeysFileResponse {
+    pub success: bool,
+    pub error: Option<String>,
+    pub error_code: Option<u32>,
+    pub error_hint: Option<String>,
+    pub error_transient: Option<bool>,
+    pub spend_secret_key: Option<String>,
+    pub view_secret_key: Option<String>,
+    pub spend_public_key: Option<String>,
+    pub view_public_key: Option<String>,
+    pub creation_timestamp: u64,
+    pub watch_only: bool,
+    pub seed_language: Option<String>,
+    pub mnemonic: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

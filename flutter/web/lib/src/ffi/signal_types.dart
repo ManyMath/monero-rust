@@ -859,8 +859,22 @@ class ImportKeyImagesRequest {
   });
 }
 
+class ImportKeysFileRequest {
+  final String fileBytesHex;
+  final String password;
+  const ImportKeysFileRequest({
+    required this.fileBytesHex,
+    required this.password,
+  });
+
+  void sendSignalToRust() => _send('send_import_keys_file_request', {
+    'file_bytes_hex': fileBytesHex,
+    'password': password,
+  });
+}
+
 // ---------------------------------------------------------------------------
-// RustSignal types (Rust -> Dart, 32 total)
+// RustSignal types (Rust -> Dart, 33 total)
 // Each has fromJson() and a static stream getter.
 // ---------------------------------------------------------------------------
 
@@ -1923,4 +1937,57 @@ class KeyImagesImportedResponse {
   static Stream<KeyImagesImportedResponse> get stream => signalSender
       .onRawSignal('KeyImagesImportedResponse')
       .map(KeyImagesImportedResponse.fromJson);
+}
+
+class ImportKeysFileResponse {
+  final bool success;
+  final String? error;
+  final int? errorCode;
+  final String? errorHint;
+  final bool? errorTransient;
+  final String? spendSecretKey;
+  final String? viewSecretKey;
+  final String? spendPublicKey;
+  final String? viewPublicKey;
+  final int creationTimestamp;
+  final bool watchOnly;
+  final String? seedLanguage;
+  final String? mnemonic;
+
+  const ImportKeysFileResponse({
+    required this.success,
+    this.error,
+    this.errorCode,
+    this.errorHint,
+    this.errorTransient,
+    this.spendSecretKey,
+    this.viewSecretKey,
+    this.spendPublicKey,
+    this.viewPublicKey,
+    required this.creationTimestamp,
+    required this.watchOnly,
+    this.seedLanguage,
+    this.mnemonic,
+  });
+
+  factory ImportKeysFileResponse.fromJson(Map<String, dynamic> json) =>
+      ImportKeysFileResponse(
+        success: json['success'] as bool,
+        error: json['error'] as String?,
+        errorCode: json['error_code'] as int?,
+        errorHint: json['error_hint'] as String?,
+        errorTransient: json['error_transient'] as bool?,
+        spendSecretKey: json['spend_secret_key'] as String?,
+        viewSecretKey: json['view_secret_key'] as String?,
+        spendPublicKey: json['spend_public_key'] as String?,
+        viewPublicKey: json['view_public_key'] as String?,
+        creationTimestamp: json['creation_timestamp'] as int,
+        watchOnly: json['watch_only'] as bool,
+        seedLanguage: json['seed_language'] as String?,
+        mnemonic: json['mnemonic'] as String?,
+      );
+
+  static Stream<ImportKeysFileResponse> get stream => signalSender
+      .onRawSignal('ImportKeysFileResponse')
+      .map(ImportKeysFileResponse.fromJson);
 }

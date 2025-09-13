@@ -222,6 +222,7 @@ impl WalletActor {
         _owned_tasks.spawn(Self::listen_to_convert_bip39_to_legacy(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_freeze_output(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_thaw_output(self_addr.clone()));
+        _owned_tasks.spawn(Self::listen_to_import_keys_file());
 
         WalletActor {
             core_state: monero_rust::WalletState::new(),
@@ -2484,6 +2485,62 @@ impl Notifiable<AddMempoolPendingSpends> for WalletActor {
                 pending_spend: balance.pending_spend,
             }
             .send_signal_to_dart();
+        }
+    }
+}
+
+// --- .keys file import ---
+
+impl WalletActor {
+    async fn listen_to_import_keys_file() {
+        let mut receiver = crate::ffi_web::get_import_keys_file_request_receiver();
+        while let Some(request) = receiver.recv().await {
+            let file_bytes = match hex::decode(&request.file_bytes_hex) {
+                Ok(b) => b,
+                Err(e) => {
+                    ImportKeysFileResponse {
+                        success: false,
+                        error: Some(format!("hex decode: {e}")),
+                        error_code: None, error_hint: None, error_transient: None,
+                        spend_secret_key: None, view_secret_key: None,
+                        spend_public_key: None, view_public_key: None,
+                        creation_timestamp: 0, watch_only: false,
+                        seed_language: None, mnemonic: None,
+                    }.send_signal_to_dart();
+                    continue;
+                }
+            };
+
+            let result = monero_rust::decrypt_keys_data(&file_bytes, &request.password)
+                .and_then(|(plaintext, key)| monero_rust::parse_decrypted_keys(&plaintext, &key));
+
+            match result {
+                Ok(imported) => {
+                    ImportKeysFileResponse {
+                        success: true,
+                        error: None, error_code: None, error_hint: None, error_transient: None,
+                        spend_secret_key: Some(hex::encode(imported.spend_secret_key)),
+                        view_secret_key: Some(hex::encode(imported.view_secret_key)),
+                        spend_public_key: Some(hex::encode(imported.spend_public_key)),
+                        view_public_key: Some(hex::encode(imported.view_public_key)),
+                        creation_timestamp: imported.creation_timestamp,
+                        watch_only: imported.watch_only,
+                        seed_language: imported.seed_language,
+                        mnemonic: imported.mnemonic,
+                    }.send_signal_to_dart();
+                }
+                Err(e) => {
+                    ImportKeysFileResponse {
+                        success: false,
+                        error: Some(e),
+                        error_code: None, error_hint: None, error_transient: None,
+                        spend_secret_key: None, view_secret_key: None,
+                        spend_public_key: None, view_public_key: None,
+                        creation_timestamp: 0, watch_only: false,
+                        seed_language: None, mnemonic: None,
+                    }.send_signal_to_dart();
+                }
+            }
         }
     }
 }
