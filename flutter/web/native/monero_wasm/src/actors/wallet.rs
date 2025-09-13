@@ -2512,7 +2512,7 @@ impl WalletActor {
             };
 
             let result = monero_rust::decrypt_keys_data(&file_bytes, &request.password)
-                .and_then(|(plaintext, key)| monero_rust::parse_decrypted_keys(&plaintext, &key));
+                .and_then(|(plaintext, key, iv)| monero_rust::parse_decrypted_keys(&plaintext, &key, iv));
 
             match result {
                 Ok(imported) => {
