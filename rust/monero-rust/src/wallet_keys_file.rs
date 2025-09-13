@@ -4,7 +4,7 @@ use chacha20::ChaCha20Legacy;
 use cipher::{KeyIvInit, StreamCipher};
 use cuprate_cryptonight::cryptonight_hash_v0;
 use monero_serai::wallet::seed::{Language, Seed};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use curve25519_dalek::scalar::Scalar;
 use sha3::{Digest, Keccak256};
 use zeroize::Zeroizing;
@@ -23,24 +23,25 @@ pub struct ImportedKeysFile {
     pub mnemonic: Option<String>,
 }
 
-#[derive(Deserialize)]
+// Field order must be alphabetical to match Monero C++ epee (std::map).
+#[derive(Serialize, Deserialize)]
 struct EpeeAccountBase {
     m_creation_timestamp: u64,
     m_keys: EpeeAccountKeys,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct EpeeAccountKeys {
     m_account_address: EpeeAccountAddress,
+    #[serde(with = "serde_bytes")]
+    m_encryption_iv: Vec<u8>,
     #[serde(with = "serde_bytes")]
     m_spend_secret_key: Vec<u8>,
     #[serde(with = "serde_bytes")]
     m_view_secret_key: Vec<u8>,
-    #[serde(with = "serde_bytes")]
-    m_encryption_iv: Vec<u8>,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct EpeeAccountAddress {
     #[serde(with = "serde_bytes")]
     m_spend_public_key: Vec<u8>,
