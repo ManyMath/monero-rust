@@ -63,6 +63,7 @@ tokio = { version = "1.29", features = ["rt", "macros"] }
 monero-serai = { path = "../monero-serai-mirror", features = ["http-rpc", "test-helpers"] }
 reqwest = "0.11"
 criterion = { version = "0.5", features = ["html_reports"] }
+tempfile = "3"
 
 # Tokio is only needed for native tests
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
