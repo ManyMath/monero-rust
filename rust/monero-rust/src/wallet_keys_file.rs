@@ -256,8 +256,7 @@ pub fn decrypt_keys_file(path: &std::path::Path, password: &str) -> Result<Vec<u
     Ok(plaintext)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-pub fn write_keys_file(path: &std::path::Path, password: &str, wallet: &ImportedKeysFile) -> Result<(), String> {
+pub fn encrypt_keys_data(password: &str, wallet: &ImportedKeysFile) -> Result<Vec<u8>, String> {
     let key: [u8; 32] = cryptonight_hash_v0(password.as_bytes());
 
     let (encrypted_spend, encrypted_view) = inner_encrypt_keys(
@@ -294,6 +293,12 @@ pub fn write_keys_file(path: &std::path::Path, password: &str, wallet: &Imported
     file_data.extend_from_slice(&len_bytes);
     file_data.extend_from_slice(&ciphertext);
 
+    Ok(file_data)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn write_keys_file(path: &std::path::Path, password: &str, wallet: &ImportedKeysFile) -> Result<(), String> {
+    let file_data = encrypt_keys_data(password, wallet)?;
     std::fs::write(path, &file_data)
         .map_err(|e| format!("failed to write {}: {e}", path.display()))
 }
