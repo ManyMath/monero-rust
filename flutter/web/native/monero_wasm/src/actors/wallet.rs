@@ -223,6 +223,7 @@ impl WalletActor {
         _owned_tasks.spawn(Self::listen_to_freeze_output(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_thaw_output(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_import_keys_file());
+        _owned_tasks.spawn(Self::listen_to_export_keys_file());
 
         WalletActor {
             core_state: monero_rust::WalletState::new(),
@@ -2538,6 +2539,84 @@ impl WalletActor {
                         spend_public_key: None, view_public_key: None,
                         creation_timestamp: 0, watch_only: false,
                         seed_language: None, mnemonic: None,
+                    }.send_signal_to_dart();
+                }
+            }
+        }
+    }
+
+    async fn listen_to_export_keys_file() {
+        let mut receiver = crate::ffi_web::get_export_keys_file_request_receiver();
+        while let Some(request) = receiver.recv().await {
+            let result = (|| -> Result<Vec<u8>, String> {
+                let keys = monero_rust::derive_keys(&request.seed, &request.network)
+                    .map_err(|e| format!("derive keys: {e}"))?;
+
+                let spend_secret = hex::decode(&keys.secret_spend_key)
+                    .map_err(|e| format!("spend key hex: {e}"))?;
+                let view_secret = hex::decode(&keys.secret_view_key)
+                    .map_err(|e| format!("view key hex: {e}"))?;
+                let spend_public = hex::decode(&keys.public_spend_key)
+                    .map_err(|e| format!("spend pub hex: {e}"))?;
+                let view_public = hex::decode(&keys.public_view_key)
+                    .map_err(|e| format!("view pub hex: {e}"))?;
+
+                let mut spend_secret_arr = [0u8; 32];
+                let mut view_secret_arr = [0u8; 32];
+                let mut spend_public_arr = [0u8; 32];
+                let mut view_public_arr = [0u8; 32];
+                spend_secret_arr.copy_from_slice(&spend_secret);
+                view_secret_arr.copy_from_slice(&view_secret);
+                spend_public_arr.copy_from_slice(&spend_public);
+                view_public_arr.copy_from_slice(&view_public);
+
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+
+                let mut outer_iv = [0u8; 8];
+                let mut encryption_iv = [0u8; 8];
+                rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut outer_iv);
+                rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut encryption_iv);
+
+                let nettype = match request.network.as_str() {
+                    "mainnet" => 0u8,
+                    "testnet" => 1,
+                    "stagenet" => 2,
+                    _ => return Err(format!("unknown network: {}", request.network)),
+                };
+
+                let wallet = monero_rust::ImportedKeysFile {
+                    spend_secret_key: spend_secret_arr,
+                    view_secret_key: view_secret_arr,
+                    spend_public_key: spend_public_arr,
+                    view_public_key: view_public_arr,
+                    creation_timestamp: now,
+                    watch_only: false,
+                    seed_language: Some("English".to_string()),
+                    mnemonic: Some(request.seed.clone()),
+                    encryption_iv,
+                    outer_iv,
+                    nettype,
+                };
+
+                monero_rust::encrypt_keys_data(&request.password, &wallet)
+            })();
+
+            match result {
+                Ok(file_bytes) => {
+                    ExportKeysFileResponse {
+                        success: true,
+                        error: None,
+                        file_bytes_hex: Some(hex::encode(&file_bytes)),
+                    }.send_signal_to_dart();
+                }
+                Err(e) => {
+                    ExportKeysFileResponse {
+                        success: false,
+                        error: Some(e),
+                        file_bytes_hex: None,
                     }.send_signal_to_dart();
                 }
             }

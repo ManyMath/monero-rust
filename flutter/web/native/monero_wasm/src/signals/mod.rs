@@ -790,6 +790,20 @@ pub struct ImportKeysFileResponse {
     pub mnemonic: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub struct ExportKeysFileRequest {
+    pub seed: String,
+    pub network: String,
+    pub password: String,
+}
+
+#[derive(Serialize)]
+pub struct ExportKeysFileResponse {
+    pub success: bool,
+    pub error: Option<String>,
+    pub file_bytes_hex: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -114,6 +114,7 @@ dart_signal!(SignUnsignedTransactionRequest, sign_unsigned_transaction_request);
 dart_signal!(ExportKeyImagesRequest, export_key_images_request);
 dart_signal!(ImportKeyImagesRequest, import_key_images_request);
 dart_signal!(ImportKeysFileRequest, import_keys_file_request);
+dart_signal!(ExportKeysFileRequest, export_keys_file_request);
 
 // ---------------------------------------------------------------------------
 // Rust -> Dart callback (wasm32: JS callback, native: C FFI callback)
@@ -219,6 +220,7 @@ impl_send_to_dart! {
     KeyImagesExportedResponse => "KeyImagesExportedResponse",
     KeyImagesImportedResponse => "KeyImagesImportedResponse",
     ImportKeysFileResponse => "ImportKeysFileResponse",
+    ExportKeysFileResponse => "ExportKeysFileResponse",
 }
 
 // ---------------------------------------------------------------------------

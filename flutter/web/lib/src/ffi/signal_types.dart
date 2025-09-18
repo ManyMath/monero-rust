@@ -873,6 +873,23 @@ class ImportKeysFileRequest {
   });
 }
 
+class ExportKeysFileRequest {
+  final String seed;
+  final String network;
+  final String password;
+  const ExportKeysFileRequest({
+    required this.seed,
+    required this.network,
+    required this.password,
+  });
+
+  void sendSignalToRust() => _send('send_export_keys_file_request', {
+    'seed': seed,
+    'network': network,
+    'password': password,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // RustSignal types (Rust -> Dart, 33 total)
 // Each has fromJson() and a static stream getter.
@@ -1990,4 +2007,27 @@ class ImportKeysFileResponse {
   static Stream<ImportKeysFileResponse> get stream => signalSender
       .onRawSignal('ImportKeysFileResponse')
       .map(ImportKeysFileResponse.fromJson);
+}
+
+class ExportKeysFileResponse {
+  final bool success;
+  final String? error;
+  final String? fileBytesHex;
+
+  const ExportKeysFileResponse({
+    required this.success,
+    this.error,
+    this.fileBytesHex,
+  });
+
+  factory ExportKeysFileResponse.fromJson(Map<String, dynamic> json) =>
+      ExportKeysFileResponse(
+        success: json['success'] as bool,
+        error: json['error'] as String?,
+        fileBytesHex: json['file_bytes_hex'] as String?,
+      );
+
+  static Stream<ExportKeysFileResponse> get stream => signalSender
+      .onRawSignal('ExportKeysFileResponse')
+      .map(ExportKeysFileResponse.fromJson);
 }
