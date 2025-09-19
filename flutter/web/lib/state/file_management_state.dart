@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:html' as html;
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import '../src/ffi/signal_types.dart';
 import '../models/wallet_instance.dart';
@@ -9,8 +10,6 @@ import '../services/wallet_scan_service.dart';
 import '../widgets/password_dialog.dart';
 import '../widgets/save_wallet_dialog.dart';
 import '../widgets/delete_confirmation_dialog.dart';
-import '../widgets/wallet_id_dialog.dart';
-import '../widgets/overwrite_wallet_dialog.dart';
 import '../widgets/security_warning_dialog.dart';
 import 'wallet_state.dart';
 import 'output_state.dart';
@@ -349,46 +348,94 @@ class FileManagementState extends ChangeNotifier {
   }
 
   Future<void> exportWallet(BuildContext context) async {
-    if (_walletState.walletId.isEmpty) {
-      exportError = 'No wallet selected for export';
+    final seed = _walletState.seedController.text.trim();
+    if (seed.isEmpty) {
+      exportError = 'No seed available for export';
       notifyListeners();
-      _walletState.showSnackBar?.call('Please select or save a wallet first', backgroundColor: Colors.orange);
+      _walletState.showSnackBar?.call('No seed to export', backgroundColor: Colors.orange);
       return;
     }
 
-    if (!WalletPersistenceBrowser.hasWalletData(_walletState.walletId)) {
-      exportError = 'No saved data found for this wallet';
-      notifyListeners();
-      _walletState.showSnackBar?.call('Please save wallet data before exporting', backgroundColor: Colors.orange);
-      return;
-    }
+    if (!context.mounted) return;
+    final password = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => PasswordDialog(
+        isUnlock: false,
+        title: '.keys File Password',
+        submitLabel: 'Export',
+      ),
+    );
+
+    if (password == null) return;
 
     isExporting = true;
     exportError = null;
     notifyListeners();
 
-    final exportResult = await WalletPersistenceBrowser.exportWallet(
-      walletId: _walletState.walletId,
-    );
+    try {
+      final completer = Completer<ExportKeysFileResponse>();
+      final sub = ExportKeysFileResponse.stream.listen((response) {
+        if (!completer.isCompleted) completer.complete(response);
+      });
 
-    isExporting = false;
-    if (!exportResult.success) {
-      exportError = exportResult.error;
-    } else {
+      final network = _walletState.network.isNotEmpty ? _walletState.network : 'mainnet';
+
+      ExportKeysFileRequest(
+        seed: seed,
+        network: network,
+        password: password,
+      ).sendSignalToRust();
+
+      final response = await completer.future.timeout(
+        const Duration(seconds: 30),
+        onTimeout: () => ExportKeysFileResponse(
+          success: false,
+          error: 'Timeout waiting for encryption',
+        ),
+      );
+      await sub.cancel();
+
+      if (!response.success || response.fileBytesHex == null) {
+        isExporting = false;
+        exportError = response.error ?? 'Export failed';
+        notifyListeners();
+        _walletState.showSnackBar?.call(
+          'Export failed: ${response.error}',
+          backgroundColor: Colors.red,
+          seconds: 4,
+        );
+        return;
+      }
+
+      final fileBytes = _hexDecode(response.fileBytesHex!);
+      final blob = html.Blob([fileBytes], 'application/octet-stream');
+      final url = html.Url.createObjectUrlFromBlob(blob);
+      final walletName = _walletState.walletId.isNotEmpty ? _walletState.walletId : 'wallet';
+      final anchor = html.AnchorElement(href: url)
+        ..setAttribute('download', '$walletName.keys')
+        ..click();
+      html.Url.revokeObjectUrl(url);
+
+      isExporting = false;
       exportError = null;
-    }
-    notifyListeners();
+      notifyListeners();
 
-    if (exportResult.cancelled) return;
-
-    if (exportResult.success) {
-      final msg = exportResult.usedSaveAsDialog!
-          ? 'Wallet "${_walletState.walletId}" saved'
-          : 'Wallet "${_walletState.walletId}" exported as ${exportResult.filename}';
-      _walletState.showSnackBar?.call(msg, seconds: 3);
-    } else {
-      _walletState.showSnackBar?.call('Export failed: ${exportResult.error}', backgroundColor: Colors.red, seconds: 4);
+      _walletState.showSnackBar?.call('Exported $walletName.keys', seconds: 3);
+    } catch (e) {
+      isExporting = false;
+      exportError = 'Export failed: $e';
+      notifyListeners();
+      _walletState.showSnackBar?.call('Export failed: $e', backgroundColor: Colors.red, seconds: 4);
     }
+  }
+
+  static List<int> _hexDecode(String hex) {
+    final result = <int>[];
+    for (var i = 0; i < hex.length; i += 2) {
+      result.add(int.parse(hex.substring(i, i + 2), radix: 16));
+    }
+    return result;
   }
 
   Future<void> importWallet(BuildContext context) async {
@@ -397,7 +444,7 @@ class FileManagementState extends ChangeNotifier {
 
     try {
       final uploadInput = html.FileUploadInputElement();
-      uploadInput.accept = '.monero-wallet,*';
+      uploadInput.accept = '.keys,*';
       uploadInput.click();
 
       try {
@@ -413,46 +460,6 @@ class FileManagementState extends ChangeNotifier {
       notifyListeners();
 
       final file = files[0];
-      final suggestedWalletId = WalletPersistenceBrowser.extractWalletIdFromFilename(file.name);
-
-      String? walletId;
-      bool shouldOverwrite = false;
-
-      while (true) {
-        if (!context.mounted) return;
-
-        walletId = await showDialog<String>(
-          context: context,
-          barrierDismissible: false,
-          builder: (context) => WalletIdDialog(
-            suggestedWalletId: suggestedWalletId,
-            existingWalletIds: _walletState.availableWalletIds,
-          ),
-        );
-
-        if (walletId == null || walletId.isEmpty) {
-          isImporting = false;
-          notifyListeners();
-          return;
-        }
-
-        if (_walletState.availableWalletIds.contains(walletId)) {
-          if (!context.mounted) return;
-          final result = await OverwriteWalletDialog.show(context, walletId);
-          if (result == 'cancel') {
-            isImporting = false;
-            notifyListeners();
-            return;
-          } else if (result == 'choose_different') {
-            continue;
-          } else if (result == 'overwrite') {
-            shouldOverwrite = true;
-            break;
-          }
-        } else {
-          break;
-        }
-      }
 
       if (!context.mounted) return;
       final password = await showDialog<String>(
@@ -460,7 +467,7 @@ class FileManagementState extends ChangeNotifier {
         barrierDismissible: false,
         builder: (context) => PasswordDialog(
           isUnlock: true,
-          title: 'Verify Wallet Password',
+          title: '.keys File Password',
           submitLabel: 'Import',
         ),
       );
@@ -471,49 +478,85 @@ class FileManagementState extends ChangeNotifier {
         return;
       }
 
+      final reader = html.FileReader();
+      reader.readAsArrayBuffer(file);
+      await reader.onLoadEnd.first;
+      final result = reader.result;
+      if (result == null) {
+        isImporting = false;
+        importError = 'Failed to read file';
+        notifyListeners();
+        return;
+      }
+      final bytes = Uint8List.view(result as ByteBuffer);
+      final hexBytes = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+      final completer = Completer<ImportKeysFileResponse>();
+      final sub = ImportKeysFileResponse.stream.listen((response) {
+        if (!completer.isCompleted) completer.complete(response);
+      });
+
+      ImportKeysFileRequest(
+        fileBytesHex: hexBytes,
+        password: password,
+      ).sendSignalToRust();
+
+      final response = await completer.future.timeout(
+        const Duration(seconds: 30),
+        onTimeout: () => ImportKeysFileResponse(
+          success: false,
+          error: 'Timeout waiting for decryption',
+          creationTimestamp: 0,
+          watchOnly: false,
+        ),
+      );
+      await sub.cancel();
+
+      if (!response.success) {
+        isImporting = false;
+        importError = response.error ?? 'Failed to decrypt .keys file';
+        notifyListeners();
+        _walletState.showSnackBar?.call(
+          'Import failed: ${response.error}',
+          backgroundColor: Colors.red,
+          seconds: 4,
+        );
+        return;
+      }
+
+      final mnemonic = response.mnemonic;
+      if (mnemonic == null || mnemonic.isEmpty) {
+        isImporting = false;
+        importError = response.watchOnly
+            ? 'View-only wallet import not yet supported'
+            : 'No mnemonic recovered from .keys file';
+        notifyListeners();
+        _walletState.showSnackBar?.call(importError!, backgroundColor: Colors.orange, seconds: 4);
+        return;
+      }
+
       if (_scanState.isContinuousScanning) {
         WalletScanService.pauseContinuousScan();
         _scanState.isContinuousScanning = false;
         _scanState.isContinuousPaused = false;
       }
 
-      final importResult = await WalletPersistenceBrowser.importWallet(
-        file: file,
-        walletId: walletId,
-        password: password,
-        shouldOverwrite: shouldOverwrite,
-      );
+      final walletName = file.name.replaceAll('.keys', '');
+      final network = _walletState.network.isNotEmpty ? _walletState.network : 'stagenet';
+
+      _walletState.seedController.text = mnemonic;
+      _walletState.network = network;
+      _walletState.walletId = walletName.isNotEmpty ? walletName : 'imported';
+      _walletState.deriveAddress();
 
       isImporting = false;
-      if (!importResult.success) {
-        importError = importResult.error;
-      } else {
-        importError = null;
-      }
+      importError = null;
       notifyListeners();
 
-      if (importResult.success) {
-        if (!context.mounted) return;
-        await _walletState.switchWallet(walletId,
-            loadWalletData: () => loadWalletData(context, password: password));
-
-        // Only derive encryption key if load actually succeeded
-        if (loadError == null) {
-          final derived = await WalletPersistenceBrowser.deriveEncryptionKey(password);
-          if (derived != null) {
-            _cachedKeyHex = derived.keyHex;
-            _cachedSaltHex = derived.saltHex;
-            _startAutoSaveTimer();
-          }
-        }
-
-        final msg = shouldOverwrite
-            ? 'Wallet "$walletId" overwritten successfully'
-            : 'Wallet "$walletId" imported successfully';
-        _walletState.showSnackBar?.call(msg, seconds: 3);
-      } else {
-        _walletState.showSnackBar?.call('Import failed: ${importResult.error}', backgroundColor: Colors.red, seconds: 4);
-      }
+      _walletState.showSnackBar?.call(
+        'Imported ${response.watchOnly ? "view-only " : ""}wallet from ${file.name}',
+        seconds: 3,
+      );
     } catch (e) {
       isImporting = false;
       importError = 'Import failed: $e';

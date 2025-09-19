@@ -2561,14 +2561,10 @@ impl WalletActor {
                 let view_public = hex::decode(&keys.public_view_key)
                     .map_err(|e| format!("view pub hex: {e}"))?;
 
-                let mut spend_secret_arr = [0u8; 32];
-                let mut view_secret_arr = [0u8; 32];
-                let mut spend_public_arr = [0u8; 32];
-                let mut view_public_arr = [0u8; 32];
-                spend_secret_arr.copy_from_slice(&spend_secret);
-                view_secret_arr.copy_from_slice(&view_secret);
-                spend_public_arr.copy_from_slice(&spend_public);
-                view_public_arr.copy_from_slice(&view_public);
+                let spend_secret: [u8; 32] = spend_secret.try_into().unwrap();
+                let view_secret: [u8; 32] = view_secret.try_into().unwrap();
+                let spend_public: [u8; 32] = spend_public.try_into().unwrap();
+                let view_public: [u8; 32] = view_public.try_into().unwrap();
 
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -2588,10 +2584,10 @@ impl WalletActor {
                 };
 
                 let wallet = monero_rust::ImportedKeysFile {
-                    spend_secret_key: spend_secret_arr,
-                    view_secret_key: view_secret_arr,
-                    spend_public_key: spend_public_arr,
-                    view_public_key: view_public_arr,
+                    spend_secret_key: spend_secret,
+                    view_secret_key: view_secret,
+                    spend_public_key: spend_public,
+                    view_public_key: view_public,
                     creation_timestamp: now,
                     watch_only: false,
                     seed_language: Some("English".to_string()),
