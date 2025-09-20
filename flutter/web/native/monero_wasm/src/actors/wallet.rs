@@ -2549,7 +2549,7 @@ impl WalletActor {
         let mut receiver = crate::ffi_web::get_export_keys_file_request_receiver();
         while let Some(request) = receiver.recv().await {
             let result = (|| -> Result<Vec<u8>, String> {
-                let keys = monero_rust::derive_keys(&request.seed, &request.network)
+                let keys = monero_rust::derive_keys(&request.seed, &request.network, "")
                     .map_err(|e| format!("derive keys: {e}"))?;
 
                 let spend_secret = hex::decode(&keys.secret_spend_key)
