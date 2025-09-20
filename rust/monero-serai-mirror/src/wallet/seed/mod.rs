@@ -114,28 +114,25 @@ impl Seed {
     }
   }
 
-  /// Return the key bytes with an optional polyseed passphrase.
+  /// Return the key bytes with an optional seed offset passphrase.
   ///
-  /// Per the polyseed spec, the passphrase is appended to the PBKDF2 salt
-  /// ("POLYSEED key" + passphrase). Classic seeds ignore the passphrase.
+  /// This implements Monero's seed offset mechanism (`cryptonote::decrypt_key`):
+  /// `final_key = base_key - cn_slow_hash(passphrase)` (ed25519 scalar subtraction).
+  /// The offset applies to both Classic (25-word) and Polyseed (16-word) seeds.
+  /// When the passphrase is empty, this returns the same result as `key_bytes()`.
   pub fn key_bytes_with_passphrase(&self, passphrase: &str) -> Zeroizing<[u8; 32]> {
-    match self {
-      Seed::Classic(seed) => seed.entropy(),
-      Seed::Polyseed(seed) => {
-        if passphrase.is_empty() {
-          seed.key()
-        } else {
-          use pbkdf2::pbkdf2_hmac;
-          use sha3::Sha3_256;
-
-          let mut salt = b"POLYSEED key".to_vec();
-          salt.extend_from_slice(passphrase.as_bytes());
-          let mut key = Zeroizing::new([0u8; 32]);
-          pbkdf2_hmac::<Sha3_256>(seed.entropy().as_slice(), &salt, 10000, key.as_mut());
-          key
-        }
-      }
+    let base_key = self.key_bytes();
+    if passphrase.is_empty() {
+      return base_key;
     }
+
+    // Monero's decrypt_key: sc_sub(key, key, cn_slow_hash(passphrase))
+    use curve25519_dalek::scalar::Scalar;
+    let hash = cuprate_cryptonight::cryptonight_hash_v0(passphrase.as_bytes());
+    let key_scalar = Scalar::from_bytes_mod_order(*base_key);
+    let hash_scalar = Scalar::from_bytes_mod_order(hash);
+    let result = key_scalar - hash_scalar;
+    Zeroizing::new(result.to_bytes())
   }
 
   /// Return the birthday (creation timestamp) for this seed.
