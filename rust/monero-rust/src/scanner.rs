@@ -2815,4 +2815,27 @@ mod tests {
         let result = hex_to_hash("0011");
         assert!(result.is_err());
     }
+
+    /// Feather Wallet test vector: polyseed + passphrase "hunter2" through derive_keys.
+    #[test]
+    fn test_derive_keys_polyseed_passphrase_feather_vector() {
+        let seed = "second exhibit rebuild laptop drive come off yard infant session subject treat steel antique liberty hybrid";
+
+        // Mainnet keys
+        let keys = derive_keys(seed, "mainnet", "hunter2").unwrap();
+        assert_eq!(keys.secret_spend_key, "de2d315b23e82c235bbc0186f684bccd2f98d273f59bd67b85d30de82a0da609");
+        assert_eq!(keys.secret_view_key, "86e3c9adf4a17cbd673424acdf3545725f8d61c34b37c39b215af0abf0baf803");
+        assert_eq!(keys.public_spend_key, "6b7c22bf7b1498cd84ac6065cd1f97a2f8bf226cd3a9e1cdb5a2f31f8c534a64");
+        assert_eq!(keys.public_view_key, "b18aeb91845ef4f41406473ac7b40c63dc8393b6f62077a45868471db9187dc5");
+        assert_eq!(keys.address, "45hMUyzqCAsbNnW7zsSZBkUG2hc25zi3abQe7yNm8fJZHqrVd7Ftcwuhps98hYDwXRHhnGcdy7gbQUVMdVkwTGYCPKtmRaA");
+
+        // Stagenet keys (the Feather wallet was on Stagenet)
+        let keys_stagenet = derive_keys(seed, "stagenet", "hunter2").unwrap();
+        assert_eq!(keys_stagenet.address, "55uPZpunqmybNnW7zsSZBkUG2hc25zi3abQe7yNm8fJZHqrVd7Ftcwuhps98hYDwXRHhnGcdy7gbQUVMdVkwTGYCPH5r3dN");
+
+        // Without passphrase: different keys
+        let keys_no_pass = derive_keys(seed, "mainnet", "").unwrap();
+        assert_ne!(keys_no_pass.address, keys.address);
+    }
+
 }

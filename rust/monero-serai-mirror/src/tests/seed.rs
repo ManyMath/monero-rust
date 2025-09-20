@@ -312,3 +312,67 @@ fn test_polyseed_stagenet() {
     "Stagenet account 1 subaddress 1 mismatch"
   );
 }
+
+/// Feather Wallet test vector: polyseed with passphrase "hunter2".
+/// Cross-validated against Feather 2.7.0 (shoot_passphrase_hunter2.feather).
+#[test]
+fn test_polyseed_passphrase_feather_vector() {
+  let seed_phrase = "shoot exhibit rebuild laptop drive come off yard infant session subject tree steak antique liar hybrid";
+  let passphrase = "hunter2";
+
+  let seed = Seed::from_string(Zeroizing::new(seed_phrase.to_string())).unwrap();
+
+  // With passphrase: must produce the Feather-validated keys
+  let key_with = seed.key_bytes_with_passphrase(passphrase);
+  let spend_scalar_with = Scalar::from_bytes_mod_order(*key_with);
+  let spend_point_with = &spend_scalar_with * &ED25519_BASEPOINT_TABLE;
+  let view_scalar_with = hash_to_scalar(&spend_scalar_with.to_bytes());
+  let view_point_with = &view_scalar_with * &ED25519_BASEPOINT_TABLE;
+
+  assert_eq!(
+    hex::encode(spend_scalar_with.to_bytes()),
+    "08813258e8b396b2629ae9ecccd95ae33ec269ab0813754f43edfae937304909",
+    "Secret spend key mismatch"
+  );
+  assert_eq!(
+    hex::encode(view_scalar_with.to_bytes()),
+    "1be97a06de0e8e32952e41fa80023e5e0d96af4e61d6d1c2f521f94d12c3170b",
+    "Secret view key mismatch"
+  );
+  assert_eq!(
+    hex::encode(spend_point_with.compress().to_bytes()),
+    "b4e3d0ed0ab2a22cb567d2edb7d33e402d0bf1a38b75fb1adb7cca6116f2b18e",
+    "Public spend key mismatch"
+  );
+  assert_eq!(
+    hex::encode(view_point_with.compress().to_bytes()),
+    "c9efbf531801051471e29c7c2cc36458e10f5a4f2041842c818ed1654c938fde",
+    "Public view key mismatch"
+  );
+
+  let view_pair_with = ViewPair::new(spend_point_with, Zeroizing::new(view_scalar_with));
+
+  // Verify Stagenet address (the Feather wallet was on Stagenet)
+  let address_stagenet = view_pair_with.address(Network::Stagenet, AddressSpec::Standard);
+  assert_eq!(
+    address_stagenet.to_string(),
+    "58gjGtb7WkZ8UjKHj1GQsPBjb4To7AS585VYujqCfgEcQtEMx2CKgHA4RLmRYqjsG7FsErzHZbeUb8SmMihoYme6S9wf8gy",
+    "Stagenet address mismatch"
+  );
+
+  // Also verify Mainnet address
+  let address_mainnet = view_pair_with.address(Network::Mainnet, AddressSpec::Standard);
+  assert_eq!(
+    address_mainnet.to_string(),
+    "48UhC3g9s9T8UjKHj1GQsPBjb4To7AS585VYujqCfgEcQtEMx2CKgHA4RLmRYqjsG7FsErzHZbeUb8SmMihoYme6S4MBnaZ",
+    "Mainnet address mismatch"
+  );
+
+  // Without passphrase: must produce DIFFERENT keys
+  let key_without = seed.key_bytes_with_passphrase("");
+  let spend_scalar_without = Scalar::from_bytes_mod_order(*key_without);
+  assert_ne!(
+    spend_scalar_without, spend_scalar_with,
+    "Passphrase must change the derived spend key"
+  );
+}
