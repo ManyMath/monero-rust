@@ -442,7 +442,8 @@ impl<R: RpcConnection> Rpc<R> {
     let indexes: OIndexes = self
       .bin_call(
         "get_o_indexes.bin",
-        monero_epee_bin_serde::to_bytes(&Request { txid: hash }).unwrap(),
+        monero_epee_bin_serde::to_bytes(&Request { txid: hash })
+          .map_err(|_| RpcError::InternalError("epee serialization failed for get_o_indexes request"))?,
       )
       .await?;
 
@@ -719,7 +720,8 @@ impl<R: RpcConnection> Rpc<R> {
     let res: GetBlocksFastResponse = self
       .bin_call(
         "getblocks.bin",
-        monero_epee_bin_serde::to_bytes(&req).unwrap(),
+        monero_epee_bin_serde::to_bytes(&req)
+          .map_err(|_| RpcError::InternalError("epee serialization failed for getblocks.bin request"))?,
       )
       .await?;
 

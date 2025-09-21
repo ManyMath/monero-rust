@@ -1229,7 +1229,7 @@ pub async fn process_batch_multi_wallet_response(
     });
 
     let mut cached_scanners = if cache_valid {
-        cached.unwrap()
+        cached.expect("invariant: cache_valid implies Some(cached)")
     } else {
         drop(cached);
         let mut entries = Vec::with_capacity(wallet_configs.len());

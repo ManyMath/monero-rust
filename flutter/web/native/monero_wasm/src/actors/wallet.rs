@@ -2561,10 +2561,18 @@ impl WalletActor {
                 let view_public = hex::decode(&keys.public_view_key)
                     .map_err(|e| format!("view pub hex: {e}"))?;
 
-                let spend_secret: [u8; 32] = spend_secret.try_into().unwrap();
-                let view_secret: [u8; 32] = view_secret.try_into().unwrap();
-                let spend_public: [u8; 32] = spend_public.try_into().unwrap();
-                let view_public: [u8; 32] = view_public.try_into().unwrap();
+                let spend_secret: [u8; 32] = spend_secret
+                    .try_into()
+                    .map_err(|_| "spend secret key is not 32 bytes".to_string())?;
+                let view_secret: [u8; 32] = view_secret
+                    .try_into()
+                    .map_err(|_| "view secret key is not 32 bytes".to_string())?;
+                let spend_public: [u8; 32] = spend_public
+                    .try_into()
+                    .map_err(|_| "spend public key is not 32 bytes".to_string())?;
+                let view_public: [u8; 32] = view_public
+                    .try_into()
+                    .map_err(|_| "view public key is not 32 bytes".to_string())?;
 
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)

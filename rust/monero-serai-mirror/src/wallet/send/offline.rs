@@ -234,7 +234,8 @@ pub fn sign_offline<R: RngCore + CryptoRng>(
     if let (Input::ToKey { key_image: x, .. }, Input::ToKey { key_image: y, .. }) = (x, y) {
       x.compress().to_bytes().cmp(&y.compress().to_bytes()).reverse()
     } else {
-      panic!("Input wasn't ToKey")
+      // unreachable: all inputs are ToKey
+      std::cmp::Ordering::Equal
     }
   });
 
