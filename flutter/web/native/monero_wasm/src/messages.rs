@@ -215,6 +215,7 @@ pub struct SignUnsignedTx {
 pub struct ExportKeyImages {
     pub seed: String,
     pub network: String,
+    pub passphrase: String,
 }
 
 #[derive(Debug, Clone)]

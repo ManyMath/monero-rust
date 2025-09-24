@@ -249,6 +249,7 @@ impl TxBuilderActor {
             let _ = self_addr.notify(ExportKeyImages {
                 seed: resolved_seed,
                 network: request.network,
+                passphrase: request.passphrase.clone(),
             }).await;
         }
     }
@@ -930,25 +931,24 @@ impl Notifiable<ExportKeyImages> for TxBuilderActor {
             let wallet_data_result = wallet_addr.send(GetWalletData).await;
             match wallet_data_result {
                 Ok(wallet_data) => {
-                    // sort to match import ordering
-                    let mut sorted_outputs: Vec<_> = wallet_data.outputs.iter()
+                    // Sort outputs to match import ordering
+                    let mut sorted_outputs: Vec<monero_rust::WalletOutput> = wallet_data.outputs.iter()
                         .filter(|o| !o.key_image.is_empty())
+                        .cloned()
                         .collect();
                     sorted_outputs.sort_by(|a, b| {
                         a.block_height.cmp(&b.block_height)
                             .then(a.output_index.cmp(&b.output_index))
                     });
-                    let key_images: Vec<monero_rust::epee_compat::ExportedKeyImage> = sorted_outputs.iter()
-                        .map(|o| monero_rust::epee_compat::ExportedKeyImage {
-                            key_image: o.key_image.clone(),
-                            tx_hash: o.tx_hash.clone(),
-                            output_index: o.output_index,
-                        })
-                        .collect();
 
-                    let count = key_images.len() as u64;
+                    let count = sorted_outputs.len() as u64;
 
-                    match monero_rust::epee_compat::export_key_images(&key_images) {
+                    // Use v3 format with per-key-image ring signatures and view-key encryption
+                    match monero_rust::key_image_signing::export_key_images_from_outputs(
+                        &_msg.seed,
+                        &_msg.passphrase,
+                        &sorted_outputs,
+                    ) {
                         Ok(data) => {
                             KeyImagesExportedResponse {
                                 success: true,
@@ -1009,7 +1009,7 @@ impl Notifiable<ImportKeyImages> for TxBuilderActor {
                 }
             };
 
-            let key_images = match monero_rust::epee_compat::import_key_images(&data) {
+            let key_images = match monero_rust::epee_compat::import_key_images(&data, None) {
                 Ok(kis) => kis,
                 Err(e) => {
                     KeyImagesImportedResponse {

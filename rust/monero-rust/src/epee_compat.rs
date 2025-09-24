@@ -1,9 +1,12 @@
-//! Simplified key image export/import format for offline transaction signing.
+//! Key image export/import with support for both legacy EPEE and Monero v3 formats.
 //!
-//! NOTE: This is a project-internal format. It uses the same magic bytes as
-//! Monero's signed_key_images v3 format but does NOT include the signature
-//! field required for full interoperability with Feather Wallet, monero-wallet-cli,
-//! or XmrSigner. For cross-wallet interop, signatures must be added.
+//! The old EPEE-based export format is deprecated but retained for backward
+//! compatibility. New exports should use `key_image_signing::export_key_images_v3`
+//! for full interoperability with Feather Wallet and monero-wallet-cli.
+//!
+//! The `import_key_images` function auto-detects the format: it tries EPEE first,
+//! and if that fails, falls back to the v3 encrypted binary format (requires
+//! the view secret key for decryption).
 
 use serde::{Deserialize, Serialize};
 
@@ -36,6 +39,7 @@ pub fn strip_magic<'a>(magic: &[u8], data: &'a [u8]) -> Result<&'a [u8], String>
     Ok(&data[magic.len()..])
 }
 
+#[deprecated(note = "Use key_image_signing::export_key_images_v3 for interop-compatible format")]
 pub fn export_key_images(key_images: &[ExportedKeyImage]) -> Result<Vec<u8>, String> {
     #[derive(Serialize)]
     struct KeyImageExport {
@@ -63,9 +67,16 @@ pub fn export_key_images(key_images: &[ExportedKeyImage]) -> Result<Vec<u8>, Str
     Ok(wrap_with_magic(KEY_IMAGES_MAGIC, &epee_data))
 }
 
-pub fn import_key_images(data: &[u8]) -> Result<Vec<String>, String> {
+/// Import key images from either old EPEE format or new v3 encrypted format.
+///
+/// - If `view_secret_key` is `None`, only old EPEE format is supported.
+/// - If `view_secret_key` is `Some`, tries old EPEE format first, then v3.
+pub fn import_key_images(data: &[u8], view_secret_key: Option<&[u8; 32]>) -> Result<Vec<String>, String> {
     let payload = strip_magic(KEY_IMAGES_MAGIC, data)?;
 
+    // Try old EPEE format first.
+    // Note: EPEE serializes Vec<u8> as a byte array, so we must use
+    // serde_bytes::ByteBuf for deserialization to handle this correctly.
     #[derive(Deserialize)]
     struct KeyImageExport {
         key_images: Vec<KeyImageEntry>,
@@ -73,13 +84,23 @@ pub fn import_key_images(data: &[u8]) -> Result<Vec<String>, String> {
 
     #[derive(Deserialize)]
     struct KeyImageEntry {
+        #[serde(with = "serde_bytes")]
         key_image: Vec<u8>,
     }
 
-    let export: KeyImageExport = monero_epee_bin_serde::from_bytes(payload)
-        .map_err(|e| format!("epee deserialize: {:?}", e))?;
+    if let Ok(export) = monero_epee_bin_serde::from_bytes::<KeyImageExport, _>(payload) {
+        return Ok(export.key_images.into_iter().map(|e| hex::encode(e.key_image)).collect());
+    }
 
-    Ok(export.key_images.into_iter().map(|e| hex::encode(e.key_image)).collect())
+    // EPEE failed -- try v3 encrypted format if view key is provided
+    match view_secret_key {
+        Some(vsk) => {
+            let (key_images, _pub_spend, _pub_view) =
+                crate::key_image_signing::import_key_images_v3(data, vsk)?;
+            Ok(key_images.iter().map(hex::encode).collect())
+        }
+        None => Err("Data is not in old EPEE format and no view secret key provided for v3 decryption".to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -105,5 +126,36 @@ mod tests {
     fn test_magic_too_short() {
         let result = strip_magic(UNSIGNED_TX_MAGIC, b"short");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_backward_compat_import_old_epee_format() {
+        // Create data in the old EPEE format
+        let key_images = vec![
+            ExportedKeyImage {
+                key_image: "a".repeat(64), // 32 bytes as hex
+                tx_hash: "b".repeat(64),
+                output_index: 0,
+            },
+        ];
+
+        #[allow(deprecated)]
+        let exported = export_key_images(&key_images).expect("old export should work");
+
+        // Import with None view key (old format only)
+        let imported = import_key_images(&exported, None).expect("old import should work");
+        assert_eq!(imported.len(), 1);
+        assert_eq!(imported[0], "a".repeat(64));
+    }
+
+    #[test]
+    fn test_import_rejects_non_epee_without_view_key() {
+        // Construct data that looks like it has magic but isn't EPEE
+        let mut data = Vec::new();
+        data.extend_from_slice(KEY_IMAGES_MAGIC);
+        data.extend_from_slice(b"this is not epee data at all!");
+
+        let result = import_key_images(&data, None);
+        assert!(result.is_err(), "Non-EPEE data without view key should fail");
     }
 }
