@@ -21,7 +21,7 @@ use sha3::{Digest, Keccak256};
 
 use crate::wallet_output::WalletOutput;
 use std::collections::{HashMap, HashSet};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
@@ -211,7 +211,7 @@ pub struct WalletScanData {
 }
 
 /// Configuration for a single wallet in multi-wallet scanning
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Zeroize, ZeroizeOnDrop)]
 pub struct WalletScanConfig {
     pub mnemonic: String,
     pub network: String,
@@ -219,7 +219,7 @@ pub struct WalletScanConfig {
     pub passphrase: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Zeroize, ZeroizeOnDrop)]
 pub struct DerivedKeys {
     pub secret_spend_key: String,
     pub secret_view_key: String,
@@ -228,7 +228,7 @@ pub struct DerivedKeys {
     pub address: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Zeroize)]
 pub struct Lookahead {
     pub account: u32,
     pub subaddress: u32,

@@ -153,7 +153,7 @@ pub mod native {
         tx: &Transaction,
         tx_id: &str,
         view_pair: ViewPair,
-        spend_key: Scalar,
+        spend_key: Zeroizing<Scalar>,
         lookahead: Lookahead,
     ) -> Vec<ChangeOutputInfo> {
         let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
@@ -175,7 +175,7 @@ pub mod native {
                 let subaddress_index = output.metadata.subaddress.map(|idx| (idx.account(), idx.address()));
                 let received_output_bytes = hex::encode(output.serialize());
 
-                let one_time_key_scalar = Zeroizing::new(spend_key + key_offset_scalar);
+                let one_time_key_scalar = Zeroizing::new(*spend_key + key_offset_scalar);
                 let key_image_point = generate_key_image(&one_time_key_scalar);
                 let key_image = hex::encode(key_image_point.compress().to_bytes());
 
@@ -204,11 +204,11 @@ pub mod native {
         }
     }
 
-    fn spend_key_from_seed(seed: &Seed) -> Scalar {
+    fn spend_key_from_seed(seed: &Seed) -> Zeroizing<Scalar> {
         let entropy = seed.entropy();
         let mut spend_bytes = [0u8; 32];
         spend_bytes.copy_from_slice(&entropy[..]);
-        Scalar::from_bytes_mod_order(spend_bytes)
+        Zeroizing::new(Scalar::from_bytes_mod_order(spend_bytes))
     }
 
     fn view_pair_from_seed(seed: &Seed) -> ViewPair {
@@ -582,7 +582,7 @@ pub mod native {
             .collect();
 
         let tx = signable
-            .sign(&mut rng, &rpc, &Zeroizing::new(spend_key))
+            .sign(&mut rng, &rpc, &spend_key)
             .await
             .map_err(|e| format!("Failed to sign transaction: {:?}", e))?;
 
@@ -729,7 +729,7 @@ pub mod native {
             .collect();
 
         let tx = signable
-            .sign(&mut rng, &rpc, &Zeroizing::new(spend_key))
+            .sign(&mut rng, &rpc, &spend_key)
             .await
             .map_err(|e| format!("Failed to sign sweep transaction: {:?}", e))?;
 
@@ -1042,7 +1042,7 @@ pub mod native {
 
         let mut rng = rand::rngs::OsRng;
         let (tx, tx_key, tx_key_additional) =
-            sign_offline(&mut rng, &Zeroizing::new(spend_key), unsigned)
+            sign_offline(&mut rng, &spend_key, unsigned)
                 .map_err(|e| format!("Failed to sign offline: {:?}", e))?;
 
         let tx_id = hex::encode(tx.hash());

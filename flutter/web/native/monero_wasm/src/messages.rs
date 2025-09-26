@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use zeroize::Zeroizing;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletState {
@@ -89,8 +90,8 @@ pub struct BroadcastTransaction {
 pub struct StartContinuousScan {
     pub node_url: String,
     pub start_height: u64,
-    pub seed: String,
-    pub passphrase: String,
+    pub seed: Zeroizing<String>,
+    pub passphrase: Zeroizing<String>,
     pub network: String,
     pub account_lookahead: u32,
     pub subaddress_lookahead: u32,
@@ -112,8 +113,8 @@ pub struct UpdateScanState {
     pub current_height: u64,
     pub target_height: u64,
     pub node_url: String,
-    pub seed: String,
-    pub passphrase: String,
+    pub seed: Zeroizing<String>,
+    pub passphrase: Zeroizing<String>,
     pub network: String,
     pub account_lookahead: u32,
     pub subaddress_lookahead: u32,
@@ -143,8 +144,8 @@ pub struct HandleReorg {
     pub target_height: u64,
     pub batch_start_height: u64,
     pub node_url: String,
-    pub seed: String,
-    pub passphrase: String,
+    pub seed: Zeroizing<String>,
+    pub passphrase: Zeroizing<String>,
     pub network: String,
     pub account_lookahead: u32,
     pub subaddress_lookahead: u32,

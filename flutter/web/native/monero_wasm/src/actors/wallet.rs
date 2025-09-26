@@ -7,6 +7,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use tokio::task::JoinSet;
 use tokio_with_wasm::alias as tokio;
+use zeroize::Zeroizing;
 
 /// Cross-platform spawn_local: uses wasm_bindgen_futures on WASM,
 /// tokio::task::spawn_local on native (requires a LocalSet or
@@ -172,7 +173,7 @@ enum ScanType {
 pub struct WalletActor {
     core_state: monero_rust::WalletState,
     address: String,
-    seed: Option<String>,
+    seed: Option<Zeroizing<String>>,
     network: Option<String>,
     _owned_tasks: JoinSet<()>,
     // Shared scan state
@@ -182,8 +183,8 @@ pub struct WalletActor {
     scan_current_height: u64,
     scan_target_height: u64,
     scan_node_url: String,
-    scan_seed: String,
-    scan_passphrase: String,
+    scan_seed: Zeroizing<String>,
+    scan_passphrase: Zeroizing<String>,
     scan_network: String,
     scan_account_lookahead: u32,
     scan_subaddress_lookahead: u32,
@@ -236,8 +237,8 @@ impl WalletActor {
             scan_current_height: 0,
             scan_target_height: 0,
             scan_node_url: String::new(),
-            scan_seed: String::new(),
-            scan_passphrase: String::new(),
+            scan_seed: Zeroizing::new(String::new()),
+            scan_passphrase: Zeroizing::new(String::new()),
             scan_network: String::new(),
             scan_account_lookahead: 0,
             scan_subaddress_lookahead: 0,
@@ -593,11 +594,11 @@ impl WalletActor {
             match monero_rust::derive_keys(&resolved, &request.network, &request.passphrase) {
                 Ok(keys) => {
                     KeysDerivedResponse {
-                        address: keys.address,
-                        secret_spend_key: keys.secret_spend_key,
-                        secret_view_key: keys.secret_view_key,
-                        public_spend_key: keys.public_spend_key,
-                        public_view_key: keys.public_view_key,
+                        address: keys.address.clone(),
+                        secret_spend_key: keys.secret_spend_key.clone(),
+                        secret_view_key: keys.secret_view_key.clone(),
+                        public_spend_key: keys.public_spend_key.clone(),
+                        public_view_key: keys.public_view_key.clone(),
                         success: true,
                         error: None,
                         error_code: None,
@@ -809,8 +810,8 @@ impl WalletActor {
                 .notify(StartContinuousScan {
                     node_url: request.node_url,
                     start_height: request.start_height,
-                    seed: resolved_seed,
-                    passphrase: request.passphrase,
+                    seed: Zeroizing::new(resolved_seed),
+                    passphrase: Zeroizing::new(request.passphrase),
                     network: request.network,
                     account_lookahead: request.account_lookahead,
                     subaddress_lookahead: request.subaddress_lookahead,
@@ -1229,7 +1230,7 @@ impl Notifiable<RestoreOutputs> for WalletActor {
             "[RestoreOutputs] outputs={}, daemon_height={}, current_height={}, has_block_hashes={}",
             msg.outputs.len(), msg.daemon_height, msg.current_height, msg.block_hashes_json.is_some()
         );
-        self.seed = Some(msg.seed);
+        self.seed = Some(Zeroizing::new(msg.seed));
         self.network = Some(msg.network);
         self.core_state.daemon_height = msg.daemon_height;
         self.core_state.current_height = msg.current_height;
@@ -1379,7 +1380,7 @@ impl Notifiable<StoreOutputs> for WalletActor {
             self.core_state.outputs().len() + msg.outputs.len(),
             msg.block_hashes.len()
         );
-        self.seed = Some(msg.seed);
+        self.seed = Some(Zeroizing::new(msg.seed));
         self.network = Some(msg.network);
         self.core_state.daemon_height = msg.daemon_height;
         self.core_state.add_outputs(msg.outputs);
@@ -1409,7 +1410,7 @@ impl Handler<GetWalletData> for WalletActor {
 
     async fn handle(&mut self, _msg: GetWalletData, _ctx: &Context<Self>) -> Self::Result {
         WalletData {
-            seed: self.seed.clone(),
+            seed: self.seed.as_deref().map(String::from),
             network: self.network.clone(),
             outputs: self.core_state.outputs().to_vec(),
             pending_key_images: self.core_state.pending_key_images(),
@@ -1812,7 +1813,7 @@ impl Notifiable<ContinueScan> for WalletActor {
                     // stay current even when a batch has no new outputs.
                     let _ = self_addr
                         .notify(StoreOutputs {
-                            seed: seed.clone(),
+                            seed: seed.to_string(),
                             network: network.clone(),
                             outputs: processed.outputs_to_store,
                             daemon_height: processed.daemon_height,
@@ -2057,8 +2058,8 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                             target_height,
                             batch_start_height,
                             node_url,
-                            seed: first_wallet.seed.clone(),
-                            passphrase: first_wallet.passphrase.clone(),
+                            seed: Zeroizing::new(first_wallet.seed.clone()),
+                            passphrase: Zeroizing::new(first_wallet.passphrase.clone()),
                             network: first_wallet.network.clone(),
                             account_lookahead: first_wallet.account_lookahead,
                             subaddress_lookahead: first_wallet.subaddress_lookahead,
