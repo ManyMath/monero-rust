@@ -260,7 +260,7 @@ void _send(String fnName, Map<String, dynamic> data) {
 }
 
 // ---------------------------------------------------------------------------
-// DartSignal types (Dart -> Rust, 35 total)
+// DartSignal types (Dart -> Rust, 37 total)
 // Each has sendSignalToRust().
 // ---------------------------------------------------------------------------
 
@@ -891,7 +891,7 @@ class ExportKeysFileRequest {
 }
 
 // ---------------------------------------------------------------------------
-// RustSignal types (Rust -> Dart, 33 total)
+// RustSignal types (Rust -> Dart, 34 total)
 // Each has fromJson() and a static stream getter.
 // ---------------------------------------------------------------------------
 

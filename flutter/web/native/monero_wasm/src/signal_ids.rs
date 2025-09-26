@@ -39,6 +39,8 @@ pub const CREATE_UNSIGNED_TRANSACTION_REQUEST: u32 = 32;
 pub const SIGN_UNSIGNED_TRANSACTION_REQUEST: u32 = 33;
 pub const EXPORT_KEY_IMAGES_REQUEST: u32 = 34;
 pub const IMPORT_KEY_IMAGES_REQUEST: u32 = 35;
+pub const IMPORT_KEYS_FILE_REQUEST: u32 = 36;
+pub const EXPORT_KEYS_FILE_REQUEST: u32 = 37;
 
 // -- RustSignal IDs (Rust -> Dart) --
 pub const MONERO_TEST_RESPONSE: u32 = 101;
@@ -73,6 +75,8 @@ pub const UNSIGNED_TRANSACTION_CREATED_RESPONSE: u32 = 129;
 pub const TRANSACTION_SIGNED_OFFLINE_RESPONSE: u32 = 130;
 pub const KEY_IMAGES_EXPORTED_RESPONSE: u32 = 131;
 pub const KEY_IMAGES_IMPORTED_RESPONSE: u32 = 132;
+pub const IMPORT_KEYS_FILE_RESPONSE: u32 = 133;
+pub const EXPORT_KEYS_FILE_RESPONSE: u32 = 134;
 
 /// Map a RustSignal type name to its numeric ID for native FFI dispatch.
 ///
@@ -114,6 +118,8 @@ pub(crate) fn rust_signal_id_for_name(name: &str) -> u32 {
         "TransactionSignedOfflineResponse" => TRANSACTION_SIGNED_OFFLINE_RESPONSE,
         "KeyImagesExportedResponse" => KEY_IMAGES_EXPORTED_RESPONSE,
         "KeyImagesImportedResponse" => KEY_IMAGES_IMPORTED_RESPONSE,
+        "ImportKeysFileResponse" => IMPORT_KEYS_FILE_RESPONSE,
+        "ExportKeysFileResponse" => EXPORT_KEYS_FILE_RESPONSE,
         _ => {
             eprintln!("unknown RustSignal type name: {name}");
             0
@@ -209,6 +215,10 @@ pub(crate) fn route_dart_signal(signal_id: u32, data: Vec<u8>) {
             crate::ffi_web::send_export_key_images_request(json_str),
         IMPORT_KEY_IMAGES_REQUEST =>
             crate::ffi_web::send_import_key_images_request(json_str),
+        IMPORT_KEYS_FILE_REQUEST =>
+            crate::ffi_web::send_import_keys_file_request(json_str),
+        EXPORT_KEYS_FILE_REQUEST =>
+            crate::ffi_web::send_export_keys_file_request(json_str),
         _ => {
             eprintln!("route_dart_signal: unknown signal_id: {signal_id}");
             return;

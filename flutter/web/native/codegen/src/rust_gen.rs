@@ -106,7 +106,59 @@ pub fn generate_signal_ids(signals: &[SignalClass]) -> String {
     }
 
     out.push('\n');
-    out.push_str(SIGNAL_IDS_SUFFIX);
+
+    // -- rust_signal_id_for_name function --
+    out.push_str("/// Maps a RustSignal type name to its numeric ID.\n");
+    out.push_str("#[cfg(not(target_arch = \"wasm32\"))]\n");
+    out.push_str("pub(crate) fn rust_signal_id_for_name(name: &str) -> u32 {\n");
+    out.push_str("    match name {\n");
+    for sig in &rust2dart {
+        let const_name = pascal_to_screaming_snake(&sig.name);
+        out.push_str(&format!(
+            "        \"{}\" => {},\n",
+            sig.name, const_name
+        ));
+    }
+    out.push_str("        _ => {\n");
+    out.push_str("            eprintln!(\"unknown RustSignal type name: {name}\");\n");
+    out.push_str("            0\n");
+    out.push_str("        }\n");
+    out.push_str("    }\n");
+    out.push_str("}\n");
+
+    out.push('\n');
+
+    // -- route_dart_signal function --
+    out.push_str("/// Dispatches an incoming DartSignal by ID to its channel.\n");
+    out.push_str("#[cfg(not(target_arch = \"wasm32\"))]\n");
+    out.push_str("pub(crate) fn route_dart_signal(signal_id: u32, data: Vec<u8>) {\n");
+    out.push_str("    let json_str = match std::str::from_utf8(&data) {\n");
+    out.push_str("        Ok(s) => s,\n");
+    out.push_str("        Err(e) => {\n");
+    out.push_str("            eprintln!(\"route_dart_signal: invalid UTF-8 for signal_id {signal_id}: {e}\");\n");
+    out.push_str("            return;\n");
+    out.push_str("        }\n");
+    out.push_str("    };\n");
+    out.push('\n');
+    out.push_str("    let result: Result<(), String> = match signal_id {\n");
+    for sig in &dart2rust {
+        let const_name = pascal_to_screaming_snake(&sig.name);
+        let snake_name = pascal_to_snake(&sig.name);
+        out.push_str(&format!(
+            "        {} =>\n            crate::ffi_web::send_{}(json_str),\n",
+            const_name, snake_name
+        ));
+    }
+    out.push_str("        _ => {\n");
+    out.push_str("            eprintln!(\"route_dart_signal: unknown signal_id: {signal_id}\");\n");
+    out.push_str("            return;\n");
+    out.push_str("        }\n");
+    out.push_str("    };\n");
+    out.push('\n');
+    out.push_str("    if let Err(e) = result {\n");
+    out.push_str("        eprintln!(\"route_dart_signal: failed to dispatch signal_id {signal_id}: {e}\");\n");
+    out.push_str("    }\n");
+    out.push_str("}\n");
 
     out
 }
@@ -294,19 +346,3 @@ pub async fn start_rust_runtime() {
 }
 "#;
 
-const SIGNAL_IDS_SUFFIX: &str = r#"/// Route an incoming DartSignal to the appropriate handler.
-///
-/// This is the native-FFI equivalent of the wasm-bindgen signal routing.
-/// For now this is a stub — full routing would deserialize each signal
-/// via JSON and dispatch to the actor mailboxes.
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn route_dart_signal(_signal_id: u32, _data: Vec<u8>) {
-    // TODO: match on signal_id, JSON-deserialize, and send to actors.
-    // Example:
-    // match signal_id {
-    //     MONERO_TEST_REQUEST => { ... }
-    //     CREATE_WALLET_REQUEST => { ... }
-    //     _ => { eprintln!("unknown signal_id: {signal_id}"); }
-    // }
-}
-"#;

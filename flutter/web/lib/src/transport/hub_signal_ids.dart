@@ -40,6 +40,8 @@ class HubSignalIds {
   static const int signUnsignedTransactionRequest = 33;
   static const int exportKeyImagesRequest = 34;
   static const int importKeyImagesRequest = 35;
+  static const int importKeysFileRequest = 36;
+  static const int exportKeysFileRequest = 37;
 
   // -- RustSignal IDs (Rust -> Dart) --
   static const int moneroTestResponse = 101;
@@ -74,4 +76,6 @@ class HubSignalIds {
   static const int transactionSignedOfflineResponse = 130;
   static const int keyImagesExportedResponse = 131;
   static const int keyImagesImportedResponse = 132;
+  static const int importKeysFileResponse = 133;
+  static const int exportKeysFileResponse = 134;
 }
