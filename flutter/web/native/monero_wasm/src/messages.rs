@@ -96,6 +96,7 @@ pub struct StartContinuousScan {
     pub account_lookahead: u32,
     pub subaddress_lookahead: u32,
     pub accounts_to_scan: Option<Vec<u32>>,
+    pub allow_insecure_http: bool,
 }
 
 #[derive(Debug, Clone)]

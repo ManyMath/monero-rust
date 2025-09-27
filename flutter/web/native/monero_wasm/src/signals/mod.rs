@@ -395,6 +395,8 @@ pub struct StartContinuousScanRequest {
     pub passphrase: String,
     #[serde(default)]
     pub bip39_account_index: u32,
+    #[serde(default)]
+    pub allow_insecure_http: bool,
 }
 
 #[derive(Deserialize)]

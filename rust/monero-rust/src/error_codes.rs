@@ -75,6 +75,33 @@ pub fn validate_node_url(url: &str) -> Result<(), ErrorResponse> {
     Ok(())
 }
 
+/// Network-aware URL validator. Rejects HTTP on mainnet unless allow_http is true.
+/// For stagenet/testnet, HTTP is allowed but a warning is logged.
+pub fn validate_node_url_for_network(
+    url: &str,
+    network: Network,
+    allow_http: bool,
+) -> Result<(), ErrorResponse> {
+    validate_node_url(url)?;
+    let is_http = url.trim().starts_with("http://");
+    if is_http && network == Network::Mainnet && !allow_http {
+        return Err(ErrorResponse::new(
+            ERR_RPC_MAINNET_HTTP_NOT_ALLOWED,
+            "Mainnet RPC connections require HTTPS",
+        )
+        .with_hint(
+            "Use an https:// URL, or set allow_insecure_http: true for development testing",
+        ));
+    }
+    if is_http {
+        log::warn!(
+            "Insecure HTTP connection for {} RPC ({})",
+            network.as_str(),
+            url.trim()
+        );
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorResponse {
@@ -213,6 +240,7 @@ pub const ERR_RPC_PRUNED_TX: u32 = 2004;
 pub const ERR_RPC_INVALID_TX: u32 = 2005;
 pub const ERR_RPC_INTERNAL: u32 = 2006;
 pub const ERR_RPC_INVALID_POINT: u32 = 2007;
+pub const ERR_RPC_MAINNET_HTTP_NOT_ALLOWED: u32 = 2008;
 
 // Cryptographic (3000–3099)
 pub const ERR_SEED_INVALID_LENGTH: u32 = 3000;
@@ -327,5 +355,44 @@ impl From<AddressError> for ErrorResponse {
                     .with_hint("The address belongs to a different Monero network")
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_https_enforcement {
+    use super::*;
+
+    #[test]
+    fn test_validate_node_url_for_network_mainnet_http_rejected() {
+        let err = validate_node_url_for_network("http://127.0.0.1:18081", Network::Mainnet, false)
+            .unwrap_err();
+        assert_eq!(err.code, ERR_RPC_MAINNET_HTTP_NOT_ALLOWED);
+        assert!(err.message.contains("HTTPS"));
+    }
+
+    #[test]
+    fn test_validate_node_url_for_network_mainnet_https_allowed() {
+        assert!(validate_node_url_for_network("https://node.example.com", Network::Mainnet, false).is_ok());
+    }
+
+    #[test]
+    fn test_validate_node_url_for_network_stagenet_http_allowed() {
+        assert!(validate_node_url_for_network("http://stagenet.example.com", Network::Stagenet, false).is_ok());
+    }
+
+    #[test]
+    fn test_validate_node_url_for_network_testnet_http_allowed() {
+        assert!(validate_node_url_for_network("http://testnet.example.com", Network::Testnet, false).is_ok());
+    }
+
+    #[test]
+    fn test_validate_node_url_for_network_mainnet_allow_http_override() {
+        assert!(validate_node_url_for_network("http://127.0.0.1:18081", Network::Mainnet, true).is_ok());
+    }
+
+    #[test]
+    fn test_validate_node_url_for_network_empty_url_delegates() {
+        let err = validate_node_url_for_network("", Network::Mainnet, false).unwrap_err();
+        assert_eq!(err.code, ERR_INVALID_URL);
     }
 }

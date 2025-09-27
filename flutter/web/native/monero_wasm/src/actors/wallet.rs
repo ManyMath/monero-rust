@@ -816,6 +816,7 @@ impl WalletActor {
                     account_lookahead: request.account_lookahead,
                     subaddress_lookahead: request.subaddress_lookahead,
                     accounts_to_scan: request.accounts_to_scan,
+                    allow_insecure_http: request.allow_insecure_http,
                 })
                 .await;
         }
@@ -1525,9 +1526,57 @@ impl Notifiable<StartContinuousScan> for WalletActor {
         let network = msg.network.clone();
         let account_lookahead = msg.account_lookahead;
         let subaddress_lookahead = msg.subaddress_lookahead;
+        let allow_insecure_http = msg.allow_insecure_http;
         let mut self_addr = ctx.address();
 
         spawn_local(async move {
+            // Validate URL for network BEFORE bump_generation (per RPCS-01)
+            let parsed_network = match monero_rust::error_codes::Network::parse(&network) {
+                Ok(n) => n,
+                Err(err) => {
+                    BlockScanResponse {
+                        success: false,
+                        error: Some(err.message.clone()),
+                        error_code: Some(err.code),
+                        error_hint: err.hint,
+                        error_transient: Some(err.transient),
+                        block_height: 0,
+                        block_hash: String::new(),
+                        block_timestamp: 0,
+                        tx_count: 0,
+                        outputs: Vec::new(),
+                        daemon_height: 0,
+                        spent_key_images: Vec::new(),
+                        spent_key_image_tx_hashes: Vec::new(),
+                    }
+                    .send_signal_to_dart();
+                    return;
+                }
+            };
+            if let Err(err) = monero_rust::error_codes::validate_node_url_for_network(
+                &node_url,
+                parsed_network,
+                allow_insecure_http,
+            ) {
+                BlockScanResponse {
+                    success: false,
+                    error: Some(err.message.clone()),
+                    error_code: Some(err.code),
+                    error_hint: err.hint,
+                    error_transient: Some(err.transient),
+                    block_height: 0,
+                    block_hash: String::new(),
+                    block_timestamp: 0,
+                    tx_count: 0,
+                    outputs: Vec::new(),
+                    daemon_height: 0,
+                    spent_key_images: Vec::new(),
+                    spent_key_image_tx_hashes: Vec::new(),
+                }
+                .send_signal_to_dart();
+                return;
+            }
+
             bump_generation();
 
             match monero_rust::get_daemon_height(&node_url).await {
