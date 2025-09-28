@@ -98,10 +98,10 @@ fn tree_hash(hashes: &[[u8; 32]]) -> [u8; 32] {
     }
 }
 
-/// Compute a Monero block ID from a parsed Block.
+/// Computes a Monero block ID.
 ///
-/// block_id = keccak256(header || tree_hash(tx_hashes) || varint(tx_count))
-fn compute_block_id(block: &Block) -> [u8; 32] {
+/// block_id = keccak256(header_blob || tree_hash(tx_hashes) || varint(tx_count))
+pub fn compute_block_id(block: &Block) -> [u8; 32] {
     let miner_tx_hash: [u8; 32] = Keccak256::digest(block.miner_tx.serialize()).into();
     let mut tx_hashes = Vec::with_capacity(1 + block.txs.len());
     tx_hashes.push(miner_tx_hash);
