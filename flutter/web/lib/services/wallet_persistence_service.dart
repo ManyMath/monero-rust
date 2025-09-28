@@ -2,6 +2,7 @@ import 'dart:convert';
 import '../src/ffi/signal_types.dart';
 import '../models/wallet_instance.dart';
 import '../models/wallet_transaction.dart';
+import 'local_storage_backend.dart';
 import 'wallet_storage_service.dart';
 import 'crypto_backend.dart';
 import 'wallet_serializer.dart';
@@ -61,7 +62,11 @@ class WalletPersistenceService {
         return SaveWalletResult.error('Encryption failed');
       }
 
-      _storage.set(storageKey, encryptedData);
+      if (_storage is LocalStorageBackend) {
+        _storage.atomicSet(storageKey, encryptedData);
+      } else {
+        _storage.set(storageKey, encryptedData);
+      }
       return SaveWalletResult.success();
     } catch (e) {
       return SaveWalletResult.error('Save failed: $e');
@@ -113,7 +118,11 @@ class WalletPersistenceService {
         return SaveWalletResult.error('Encryption with derived key failed');
       }
 
-      _storage.set(storageKey, encryptedData);
+      if (_storage is LocalStorageBackend) {
+        _storage.atomicSet(storageKey, encryptedData);
+      } else {
+        _storage.set(storageKey, encryptedData);
+      }
       return SaveWalletResult.success();
     } catch (e) {
       return SaveWalletResult.error('Save failed: $e');
@@ -127,6 +136,9 @@ class WalletPersistenceService {
     try {
       final storageKey = getStorageKey(walletId);
 
+      if (_storage is LocalStorageBackend) {
+        _storage.maybeRecover(storageKey);
+      }
       final encryptedData = _storage.get(storageKey);
       if (encryptedData == null) {
         return LoadWalletResult.error(
@@ -166,7 +178,9 @@ class WalletPersistenceService {
   List<String> listWallets() {
     final walletIds = <String>[];
     for (final key in _storage.keys) {
-      if (key.startsWith('monero_wallet_')) {
+      if (key.startsWith('monero_wallet_') &&
+          !key.endsWith('_staging') &&
+          !key.endsWith('_wip')) {
         walletIds.add(key.substring('monero_wallet_'.length));
       }
     }
