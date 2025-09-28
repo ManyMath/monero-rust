@@ -77,6 +77,8 @@ pub use scanner::{
     process_fetched_batch_multi_wallet, process_fetched_batch_multi_wallet_cached,
     // History-aware scanning
     scan_blocks_batch_with_history_url, fetch_blocks_batch_with_history_url,
+    // Fingerprint computation
+    spend_key_fingerprint,
 };
 
 #[cfg(not(target_arch = "wasm32"))]

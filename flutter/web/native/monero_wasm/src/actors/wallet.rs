@@ -73,8 +73,9 @@ fn bump_generation() -> u64 {
         next
     });
     PREFETCH_SLOT.with(|s| { s.borrow_mut().take(); });
-    SCANNER_CACHE.with(|s| { s.borrow_mut().take(); });
-    MULTI_SCANNER_CACHE.with(|s| { s.borrow_mut().take(); });
+    // SCANNER_CACHE and MULTI_SCANNER_CACHE are not cleared here; fingerprint-based
+    // lookup handles wallet change detection. The prefetch slot is height-specific
+    // and always stale after a generation bump.
     PREFETCH_GENERATION.with(|g| g.get())
 }
 
@@ -118,6 +119,23 @@ fn take_scanner_cache(generation: u64) -> Option<monero_rust::CachedScanner> {
         let matches = {
             let slot = s.borrow();
             matches!(&*slot, Some((g, _)) if *g == generation)
+        };
+        if matches {
+            s.borrow_mut().take().map(|(_, cached)| cached)
+        } else {
+            None
+        }
+    })
+}
+
+/// Takes the scanner cache entry whose fingerprint matches `fingerprint`.
+fn take_scanner_cache_by_fingerprint(
+    fingerprint: &[u8; 32],
+) -> Option<monero_rust::CachedScanner> {
+    SCANNER_CACHE.with(|s| {
+        let matches = {
+            let slot = s.borrow();
+            matches!(&*slot, Some((_, cached)) if &cached.fingerprint() == fingerprint)
         };
         if matches {
             s.borrow_mut().take().map(|(_, cached)| cached)
@@ -1777,8 +1795,11 @@ impl Notifiable<ContinueScan> for WalletActor {
                 });
             }
 
-            // 3. Process current batch (reuse cached scanner if available)
-            let cached_scanner = take_scanner_cache(scan_gen);
+            // 3. Process current batch (reuse cached scanner if available via fingerprint match)
+            let cached_scanner = match monero_rust::spend_key_fingerprint(&seed, &passphrase) {
+                Ok(fp) => take_scanner_cache_by_fingerprint(&fp),
+                Err(_) => None, // fingerprint failure is non-fatal; scanner will be rebuilt
+            };
             match monero_rust::process_fetched_batch_cached(
                 fetched,
                 &seed,

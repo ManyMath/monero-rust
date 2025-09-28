@@ -28,7 +28,9 @@ use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::task::JoinSet;
 
-/// How often to yield to the browser event loop during batch processing.
+/// Yield interval for the non-WASM code path; WASM uses time-based yielding (~16 ms).
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(dead_code)]
 const YIELD_EVERY_N_BLOCKS: usize = 50;
 
 /// Yield to other tasks on wasm; do nothing on native targets.
@@ -267,6 +269,15 @@ fn spend_key_from_seed(seed: &Seed, passphrase: &str) -> EdwardsPoint {
     &spend_scalar * &ED25519_BASEPOINT_TABLE
 }
 
+/// Returns the compressed public spend key for `mnemonic`/`passphrase`.
+///
+/// Matches the value stored in `CachedScanner::fingerprint`.
+pub fn spend_key_fingerprint(mnemonic: &str, passphrase: &str) -> Result<[u8; 32], String> {
+    let seed = resolve_seed(mnemonic)?;
+    let spend_point = spend_key_from_seed(&seed, passphrase);
+    Ok(spend_point.compress().to_bytes())
+}
+
 fn view_key_from_seed(seed: &Seed, passphrase: &str) -> Scalar {
     let key_bytes = seed.key_bytes_with_passphrase(passphrase);
     let mut spend_bytes = [0u8; 32];
@@ -411,6 +422,11 @@ fn expand_subaddresses_if_needed(
 }
 
 impl CachedScanner {
+    /// Returns the compressed public spend key fingerprint used to identify this cached scanner.
+    pub fn fingerprint(&self) -> [u8; 32] {
+        self.fingerprint
+    }
+
     fn expand_if_needed(&mut self, found: SubaddressIndex) -> bool {
         expand_subaddresses_if_needed(
             &mut self.scanner, &mut self.watermark, self.lookahead, found,
@@ -949,6 +965,9 @@ pub async fn process_batch_response(
     let daemon_height = response.current_height;
     let mut results = Vec::with_capacity(response.blocks.len());
 
+    #[cfg(target_arch = "wasm32")]
+    let mut last_yield_ms = js_sys::Date::now();
+
     for (block_idx, block_entry) in response.blocks.iter().enumerate() {
         let block_height = response.start_height + block_idx as u64;
 
@@ -1127,8 +1146,13 @@ pub async fn process_batch_response(
             });
         }
 
-        if block_idx % YIELD_EVERY_N_BLOCKS == YIELD_EVERY_N_BLOCKS - 1 {
-            yield_to_event_loop().await;
+        #[cfg(target_arch = "wasm32")]
+        {
+            let now = js_sys::Date::now();
+            if now - last_yield_ms >= 16.0 {
+                yield_to_event_loop().await;
+                last_yield_ms = js_sys::Date::now();
+            }
         }
     }
 
@@ -1257,6 +1281,9 @@ pub async fn process_batch_multi_wallet_response(
     };
 
     let mut results = Vec::with_capacity(response.blocks.len());
+
+    #[cfg(target_arch = "wasm32")]
+    let mut last_yield_ms = js_sys::Date::now();
 
     for (block_idx, block_entry) in response.blocks.iter().enumerate() {
         let block_height = response.start_height + block_idx as u64;
@@ -1459,8 +1486,13 @@ pub async fn process_batch_multi_wallet_response(
             });
         }
 
-        if block_idx % YIELD_EVERY_N_BLOCKS == YIELD_EVERY_N_BLOCKS - 1 {
-            yield_to_event_loop().await;
+        #[cfg(target_arch = "wasm32")]
+        {
+            let now = js_sys::Date::now();
+            if now - last_yield_ms >= 16.0 {
+                yield_to_event_loop().await;
+                last_yield_ms = js_sys::Date::now();
+            }
         }
     }
 
