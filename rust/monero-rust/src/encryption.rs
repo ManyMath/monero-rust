@@ -162,6 +162,10 @@ mod tests {
         let plaintext = b"Hello, World! This is a test message.";
 
         let encrypted = encrypt(plaintext, password).expect("Encryption failed");
+        // Encrypted data must be larger than plaintext (has salt + nonce + tag)
+        assert!(encrypted.len() > plaintext.len());
+        // Must start with 16-byte salt + 12-byte nonce = 28 bytes overhead minimum
+        assert!(encrypted.len() >= plaintext.len() + 28);
         let decrypted = decrypt(&encrypted, password).expect("Decryption failed");
 
         assert_eq!(plaintext, decrypted.as_slice());
@@ -221,5 +225,29 @@ mod tests {
         let decrypted = decrypt(&encrypted, password).expect("Decryption failed");
 
         assert_eq!(plaintext, decrypted);
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_with_realistic_wallet_json() {
+        let wallet_json = r#"[{"tx_hash":"abc123","output_index":0,"amount":1000000000000,"key":"deadbeef","key_image":"ki_abc"}]"#;
+        let password = "strong_password_42";
+        let encrypted = encrypt(wallet_json.as_bytes(), password).expect("Encryption failed");
+        let decrypted = decrypt(&encrypted, password).expect("Decryption failed");
+        assert_eq!(wallet_json.as_bytes(), &decrypted[..]);
+    }
+
+    #[test]
+    fn test_encrypt_produces_different_ciphertext_each_call() {
+        let plaintext = b"same plaintext";
+        let password = "same_password";
+        let enc1 = encrypt(plaintext, password).expect("Encryption failed");
+        let enc2 = encrypt(plaintext, password).expect("Encryption failed");
+        // Different salt + nonce = different ciphertext
+        assert_ne!(enc1, enc2);
+        // But both decrypt to same plaintext
+        assert_eq!(
+            decrypt(&enc1, password).expect("Decryption failed"),
+            decrypt(&enc2, password).expect("Decryption failed"),
+        );
     }
 }
