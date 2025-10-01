@@ -563,12 +563,11 @@ mod tests {
         let outcome = process_batch_with_reorg_detection(
             &results, &mut state, None, 1000, 100,
         ).unwrap();
-        match outcome {
-            ScanBatchOutcome::Reorg(info) => {
-                assert_eq!(info.split_height, 101);
-            }
-            _ => panic!("Expected Reorg"),
-        }
+        let info = match outcome {
+            ScanBatchOutcome::Reorg(info) => info,
+            other => panic!("Expected ScanBatchOutcome::Reorg, got {:?}", other),
+        };
+        assert_eq!(info.split_height, 101);
     }
 
     #[test]
@@ -624,16 +623,15 @@ mod tests {
             &results, &mut state, None, 1000, 100,
         ).unwrap();
 
-        match outcome {
-            ScanBatchOutcome::Reorg(info) => {
-                assert_eq!(info.split_height, 101);
-                assert_eq!(info.outputs_removed, 1); // tx_remove
-                assert_eq!(info.outputs_unspent, 1); // tx_keep unspent
-                assert_eq!(info.blocks_detached, 5); // 105 - 101 + 1
-                assert_eq!(info.unspent_key_images, vec!["ki_tx_keep".to_string()]);
-            }
-            _ => panic!("Expected Reorg"),
-        }
+        let info = match outcome {
+            ScanBatchOutcome::Reorg(info) => info,
+            other => panic!("Expected ScanBatchOutcome::Reorg, got {:?}", other),
+        };
+        assert_eq!(info.split_height, 101);
+        assert_eq!(info.outputs_removed, 1); // tx_remove
+        assert_eq!(info.outputs_unspent, 1); // tx_keep unspent
+        assert_eq!(info.blocks_detached, 5); // 105 - 101 + 1
+        assert_eq!(info.unspent_key_images, vec!["ki_tx_keep".to_string()]);
 
         // State rolled back
         assert_eq!(state.outputs().len(), 1);
@@ -660,13 +658,12 @@ mod tests {
         let outcome = process_batch_with_reorg_detection(
             &results, &mut state, Some(&[0]), 1000, 100,
         ).unwrap();
-        match outcome {
-            ScanBatchOutcome::Normal(batch) => {
-                assert_eq!(batch.outputs_to_store.len(), 1);
-                assert_eq!(batch.outputs_to_store[0].tx_hash, "tx1");
-            }
-            _ => panic!("Expected Normal"),
-        }
+        let batch = match outcome {
+            ScanBatchOutcome::Normal(batch) => batch,
+            other => panic!("Expected ScanBatchOutcome::Normal, got {:?}", other),
+        };
+        assert_eq!(batch.outputs_to_store.len(), 1);
+        assert_eq!(batch.outputs_to_store[0].tx_hash, "tx1");
     }
 
     #[test]
@@ -703,18 +700,17 @@ mod tests {
         let outcome = process_batch_with_reorg_detection(
             &results, &mut state, None, 1000, 100,
         ).unwrap();
-        match outcome {
-            ScanBatchOutcome::Normal(batch) => {
-                assert_eq!(batch.block_hashes.len(), 2);
-                // Caller can record these into state
-                for (h, hash) in &batch.block_hashes {
-                    state.record_block_hash(*h, hash.clone());
-                }
-                assert_eq!(state.block_hashes.get_hash(100), Some("hash_100"));
-                assert_eq!(state.block_hashes.get_hash(101), Some("hash_101"));
-            }
-            _ => panic!("Expected Normal"),
+        let batch = match outcome {
+            ScanBatchOutcome::Normal(batch) => batch,
+            other => panic!("Expected ScanBatchOutcome::Normal, got {:?}", other),
+        };
+        assert_eq!(batch.block_hashes.len(), 2);
+        // Caller can record these into state
+        for (h, hash) in &batch.block_hashes {
+            state.record_block_hash(*h, hash.clone());
         }
+        assert_eq!(state.block_hashes.get_hash(100), Some("hash_100"));
+        assert_eq!(state.block_hashes.get_hash(101), Some("hash_101"));
     }
 
     #[test]
@@ -731,11 +727,10 @@ mod tests {
         let outcome = process_batch_with_reorg_detection(
             &results, &mut state, None, 1000, 100,
         ).unwrap();
-        match outcome {
-            ScanBatchOutcome::Reorg(info) => {
-                assert_eq!(info.split_height, 100);
-            }
-            _ => panic!("Expected Reorg"),
-        }
+        let info = match outcome {
+            ScanBatchOutcome::Reorg(info) => info,
+            other => panic!("Expected ScanBatchOutcome::Reorg, got {:?}", other),
+        };
+        assert_eq!(info.split_height, 100);
     }
 }
