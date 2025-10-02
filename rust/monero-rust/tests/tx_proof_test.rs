@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use monero_rust::tx_proof::{generate_out_proof_v2, verify_out_proof_v2};
 
 #[derive(Deserialize)]
 struct CheckResult {
@@ -147,5 +148,114 @@ fn test_proof_d_point_is_valid_curve_point() {
     assert!(
         d_point.is_some(),
         "D in the proof should be a valid ed25519 curve point"
+    );
+}
+
+/// OutProofV2 generate-then-verify roundtrip.
+#[test]
+fn test_out_proof_v2_generate_verify_roundtrip() {
+    // Test parameters (stagenet)
+    let tx_id = "46d9f3eaf8d25b6a5d0847ad0beaece8b153d1b8c25ce317934ec17223025806";
+    let tx_key = "0200000000000000000000000000000000000000000000000000000000000000";
+    let address = "55LTR8KniP4LQGJSPtbYDacR7dz8RBFnsfAKMaMuwUNYX6aQbBcovzDPyrQF9KXF9tVU6Xk3K8no1BywnJX6GvZX8yJsXvt";
+    let message = "cross-validation test";
+
+    // Generate proof
+    let proof = generate_out_proof_v2(tx_id, tx_key, address, message, "stagenet")
+        .expect("generate_out_proof_v2 must succeed");
+
+    // Verify proof structure
+    assert!(
+        proof.signature.starts_with("OutProofV2"),
+        "Signature must have OutProofV2 prefix"
+    );
+    assert!(
+        proof.formatted.contains("BEGIN OUTPROOF"),
+        "Formatted output must contain BEGIN OUTPROOF"
+    );
+    assert!(
+        proof.formatted.contains(message),
+        "Formatted output must contain the message"
+    );
+
+    // Compute R = tx_key * G for verification
+    let tx_key_bytes = hex::decode(tx_key).unwrap();
+    let mut r_bytes = [0u8; 32];
+    r_bytes.copy_from_slice(&tx_key_bytes);
+    let r = curve25519_dalek::scalar::Scalar::from_bytes_mod_order(r_bytes);
+    let r_point = &r * &curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
+    let r_pub_hex = hex::encode(r_point.compress().to_bytes());
+
+    // Verify the generated proof
+    let verified =
+        verify_out_proof_v2(tx_id, address, message, &proof.signature, "stagenet", &r_pub_hex)
+            .expect("verify_out_proof_v2 must not error");
+    assert!(verified, "Generated proof must verify successfully");
+}
+
+/// Wrong message fails verification.
+#[test]
+fn test_out_proof_v2_message_mismatch_fails() {
+    let tx_id = "46d9f3eaf8d25b6a5d0847ad0beaece8b153d1b8c25ce317934ec17223025806";
+    let tx_key = "0300000000000000000000000000000000000000000000000000000000000000";
+    let address = "55LTR8KniP4LQGJSPtbYDacR7dz8RBFnsfAKMaMuwUNYX6aQbBcovzDPyrQF9KXF9tVU6Xk3K8no1BywnJX6GvZX8yJsXvt";
+
+    let proof = generate_out_proof_v2(tx_id, tx_key, address, "correct message", "stagenet")
+        .expect("generate must succeed");
+
+    let tx_key_bytes = hex::decode(tx_key).unwrap();
+    let mut r_bytes = [0u8; 32];
+    r_bytes.copy_from_slice(&tx_key_bytes);
+    let r = curve25519_dalek::scalar::Scalar::from_bytes_mod_order(r_bytes);
+    let r_point = &r * &curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
+    let r_pub_hex = hex::encode(r_point.compress().to_bytes());
+
+    // Verify with wrong message should fail
+    let verified = verify_out_proof_v2(
+        tx_id,
+        address,
+        "wrong message",
+        &proof.signature,
+        "stagenet",
+        &r_pub_hex,
+    )
+    .expect("verify must not error");
+    assert!(!verified, "Proof with wrong message must verify as false");
+}
+
+/// Verifies InProofV2 fixture matches the same `prefix + base58(96 bytes)` format.
+#[test]
+fn test_fixture_cross_validates_proof_format() {
+    let fixture = load_fixture();
+
+    // Fixture signature is InProofV2 (confirmed by research)
+    assert!(
+        fixture.signature.starts_with("InProofV2"),
+        "Fixture should be InProofV2, got prefix: {}",
+        &fixture.signature[..10.min(fixture.signature.len())]
+    );
+
+    // Structure matches OutProofV2: prefix + base58(96 bytes = D + c + s)
+    let payload_str = fixture.signature.strip_prefix("InProofV2").unwrap();
+    let decoded = base58_monero::decode(payload_str).expect("base58 decode must succeed");
+    assert_eq!(
+        decoded.len(),
+        96,
+        "V2 proof payload must be 96 bytes (D + c + s)"
+    );
+
+    // D is a valid compressed Edwards point (first 32 bytes)
+    let d_bytes: [u8; 32] = decoded[0..32].try_into().unwrap();
+    let d_point = curve25519_dalek::edwards::CompressedEdwardsY(d_bytes).decompress();
+    assert!(d_point.is_some(), "D must be a valid curve point");
+
+    // The fixture was verified by monero-wallet-cli (check.good == true)
+    assert!(
+        fixture.check.good,
+        "monero-wallet-cli verified this proof as good"
+    );
+    assert!(
+        fixture.check.received > 0,
+        "Received amount must be non-zero"
     );
 }
