@@ -16,14 +16,25 @@ path = "src/lib.rs"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-monero-serai-mirror = "0.1.4-alpha"
+# Core wallet/address functionality from monero-oxide.
+monero-wallet = { path = "../monero-oxide-mirror/monero-oxide/wallet", default-features = false, features = ["std"] }
+# Simple HTTP RPC client compatible with monero-oxide Rpc trait (used by examples/tests).
+monero_simple_request_rpc = { package = "monero-simple-request-rpc", path = "../monero-oxide-mirror/monero-oxide/rpc/simple-request", default-features = false }
 rand_core = "0.6.4"
 zeroize = "1.6.0"
-curve25519-dalek = { version = "^3.2", features = ["std"] }
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize", "group"] }
 sha3 = "0.10.8"
-monero-generators-mirror = "0.3.0"
 hex = "0.4.3"
 tokio = { version = "1.29.1", features = ["full"] }
+
+# Transitional: use serai's Seed for mnemonic encode/decode only.
+#
+# TODO: Remove all monero-serai and monero-serai-mirror usages.
+monero-serai-mirror = { path = "../serai-mirror/coins/monero", optional = true }
+
+[features]
+default = ["serai-seed"]
+serai-seed = ["monero-serai-mirror"]
 
 [build-dependencies]
 cbindgen = "0.24.0"

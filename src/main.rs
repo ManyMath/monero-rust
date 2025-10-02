@@ -1,33 +1,23 @@
 // This file mostly exists in order to just test functionality via `cargo run`
 
-use monero_serai_mirror::{
-    // random_scalar,
-    rpc::{HttpRpc},
-    wallet::{
-        // ViewPair, Scanner,
-        // address::{AddressError, Network, AddressType, AddressSpec, AddressMeta, MoneroAddress},
-        // SpendableOutput,
-        seed::{Seed, Language},
-        address::{AddressType, AddressMeta, AddressSpec, MoneroAddress, Network, SubaddressIndex},
-        Scanner,
-        ViewPair,
-    },
+use monero_wallet::{
+    ViewPair, Scanner,
+    address::{AddressType, MoneroAddress, Network, SubaddressIndex},
 };
-// use monero_serai::*;
+use monero_wallet::rpc::Rpc;
+use monero_simple_request_rpc::SimpleRequestRpc;
+#[cfg(feature = "serai-seed")]
+use monero_serai_mirror::wallet::seed::{Seed, Language};
 
 use rand_core::OsRng; // for generating a random seed
 
-use curve25519_dalek::{
-    edwards::EdwardsPoint,
-    scalar::Scalar,
-    constants::ED25519_BASEPOINT_TABLE,
-};
+use curve25519_dalek::{edwards::EdwardsPoint, scalar::Scalar, constants::ED25519_BASEPOINT_TABLE};
 
 use sha3::{Digest, Keccak256}; // for generating the view key
 
 use zeroize::Zeroizing;
 
-use std::collections::HashSet;
+// use std::collections::HashSet;
 
 use tokio; // for async main
 
@@ -87,16 +77,12 @@ fn digest_mnemonic(mnemonic: &str, network: &Network) {
     let spend: [u8; 32] = *seed.entropy();
     println!("Private spend key: {:?}", hex::encode(spend));
     let spend_scalar = Scalar::from_bytes_mod_order(spend);
-    let spend_point: EdwardsPoint = &spend_scalar * &ED25519_BASEPOINT_TABLE;
+    let spend_point: EdwardsPoint = &spend_scalar * ED25519_BASEPOINT_TABLE;
     let view: [u8; 32] = Keccak256::digest(&spend).into();
     let view_scalar = Scalar::from_bytes_mod_order(view);
     println!("Private view key: {:?}", hex::encode(view_scalar.to_bytes()));
-    let view_point: EdwardsPoint = &view_scalar * &ED25519_BASEPOINT_TABLE;
-    let address = MoneroAddress::new(
-        AddressMeta::new(*network, AddressType::Standard),
-        spend_point,
-        view_point,
-    );
+    let view_point: EdwardsPoint = &view_scalar * ED25519_BASEPOINT_TABLE;
+    let address = MoneroAddress::new(*network, AddressType::Legacy, spend_point, view_point);
     println!("Public address: {:?}", address.to_string());
     // TODO: find out why this doesn't work/match
     // let subaddress = MoneroAddress::new(
@@ -105,10 +91,10 @@ fn digest_mnemonic(mnemonic: &str, network: &Network) {
     //     view_point,
     // );
     // println!("Subaddress: {:?}", subaddress.to_string());
-    let view = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
+    let view = ViewPair::new(spend_point, Zeroizing::new(view_scalar)).expect("invalid spend key");
     // let view_address = view.address(network, AddressSpec::Standard);
     // assert view_address = _address
-    let view_subaddress = view.address(*network, AddressSpec::Subaddress(SubaddressIndex::new(0, 1).unwrap()));
+    let view_subaddress = view.subaddress(*network, SubaddressIndex::new(0, 1).unwrap());
     // AddressSpec::Subaddress(SubaddressIndex::new(0, 1).unwrap())
     println!("Subaddress(0, 1): {:?}", view_subaddress.to_string());
 }
@@ -119,7 +105,7 @@ async fn test_output_detection() {
     let seed = Seed::from_string(Zeroizing::new("honked bagpipe alpine juicy faked afoot jostle claim cowl tunnel orphans negative pheasants feast jetting quote frown teeming cycling tribal womanly hills cottage daytime daytime".to_string())).unwrap();
     let spend: [u8; 32] = *seed.entropy();
     let spend_scalar = Scalar::from_bytes_mod_order(spend);
-    let spend_point: EdwardsPoint = &spend_scalar * &ED25519_BASEPOINT_TABLE;
+    let spend_point: EdwardsPoint = &spend_scalar * ED25519_BASEPOINT_TABLE;
     let view: [u8; 32] = Keccak256::digest(&spend).into();
     let view_scalar = Scalar::from_bytes_mod_order(view);
     // let view_point: EdwardsPoint = &view_scalar * &ED25519_BASEPOINT_TABLE;
@@ -128,34 +114,42 @@ async fn test_output_detection() {
     //     spend_point,
     //     view_point,
     // );
-    let view = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
+    let view = ViewPair::new(spend_point, Zeroizing::new(view_scalar)).expect("invalid spend key");
 
-    let mut scanner = Scanner::from_view(view.clone(), Some(HashSet::new()));
+    let mut scanner = Scanner::new(view.clone());
     scanner.register_subaddress(SubaddressIndex::new(0, 1).unwrap());
     // let rpc = rpc().await;
     // let start = rpc.get_height().await.unwrap();
     // let rpc = HttpRpc::new("http://127.0.0.1:38081".to_string()).unwrap(); // for local stagenet daemon testing
-    let rpc = HttpRpc::new("http://stagenet.community.rino.io:38081".to_string()).unwrap(); // for remote stagenet daemon testing
+    let rpc = SimpleRequestRpc::new("http://stagenet.community.rino.io:38081".to_string()).await.unwrap();
     // let rpc = HttpRpc::new("https://monero.stackwallet.com:18081".to_string()).unwrap(); // for remote mainnet testing
     // let height = rpc.get_height().await.unwrap();
     // println!("Block height: {:?}", height.to_string());
     // block 1384526 a5918cf3adadfabee8675011d574aa5cea619d7cedd62a58bd81d391dc4234db has tx 07a561e60118c0a485b20bbfac787fd8efead96a9f422d9dff4a86f2985db7c5, 10.000000000000 XMR to 58aWiYGUeqZc5idYcx31rYR58K1EVsCYkN6thrZppU1MGqMowPh1BYy4frVWH5RjGLPWthZy9sRGm5ZC4fgX44HUCmqtGUf
-    let block = rpc.get_block_by_number(1384526).await.unwrap(); // looking for a 10
-    // scanner.scan(rpc, &block).await.unwrap().swap_remove(0).ignore_timelock().swap_remove(0)
-    let scan = scanner.scan(&rpc, &block).await.unwrap().swap_remove(0).ignore_timelock().swap_remove(0);
+    let block = rpc.get_scannable_block_by_number(1384526).await.unwrap();
+    let scan = scanner.scan(block).unwrap().not_additionally_locked().swap_remove(0);
     // println!("Address scan result: {:?}", scan);
-    println!("Address scan result: detected output {:?}:{:?}, {:?} XMR", hex::encode(scan.output.absolute.tx), scan.output.absolute.o, scan.output.data.commitment.amount);
+    println!(
+        "Address scan result: detected output {:?}:{:?}, {:?} XMR",
+        hex::encode(scan.transaction()),
+        scan.index_in_transaction(),
+        scan.commitment().amount
+    );
     // assert hex::encode(scan.output.absolute.tx) = 07a561e60118c0a485b20bbfac787fd8efead96a9f422d9dff4a86f2985db7c5
     // block 1385227 1136a5aeb0c952753c74a411f61f3a184c42491494cc562435b269ea91d992b1 has tx d3a1e2cadfeed4868a3175667fd4bb35dbd9bf8a1fa583b5545ec4737905e3ac, 5.000000000000 XMR to 75fvgGHHE1aAqex6Pq51hu9vG4GJd9zbsRKHxZymPa9xNPwNkK5g16idhG1Qn8C9eGdAGPXZ4E8Cz1gsotu3AynFVFBGca6
     // let block = rpc.get_block_by_number(1385227).await.unwrap(); // looking for a 10
     // block 1385233 1aed4f97379f5267c63f54bbeadb6a1325f0966935e87aef1674df1c202af785 has tx d8008ba2da5fd2360da4ff819d03ba4da13ae0283ee26f34c7a5eda185563942, 420.000000000000 XMR to 75fvgGHHE1aAqex6Pq51hu9vG4GJd9zbsRKHxZymPa9xNPwNkK5g16idhG1Qn8C9eGdAGPXZ4E8Cz1gsotu3AynFVFBGca6
     // TODO figure out how to get multiple outputs, this is picking up our own coinbase tx (I had to mine to get this tx confirmed :P)
     // block 1385271 6a8b22fe5b48f2b183492ac4750cf0d9058a3822041b8778ce70c9a1842577cb has tx fdb44c6c645e21b8ec64e7412b5ab1cf661a7ad6c2a3f8a3077e6a8d87ded210, 420.000000000000 XMR to 75fvgGHHE1aAqex6Pq51hu9vG4GJd9zbsRKHxZymPa9xNPwNkK5g16idhG1Qn8C9eGdAGPXZ4E8Cz1gsotu3AynFVFBGca6
-    let block = rpc.get_block_by_number(1385271).await.unwrap();
-    // let scan = scanner.scan(&rpc, &block).await.unwrap().swap_remove(0).ignore_timelock().swap_remove(0);
-    let scan = scanner.scan(&rpc, &block).await.unwrap().swap_remove(0).ignore_timelock().swap_remove(0);
+    let block = rpc.get_scannable_block_by_number(1385271).await.unwrap();
+    let scan = scanner.scan(block).unwrap().not_additionally_locked().swap_remove(0);
     // println!("Subaddress scan result: {:?}", scan);
-    println!("Subaddress scan result: detected output {:?}:{:?}, {:?} XMR", hex::encode(scan.output.absolute.tx), scan.output.absolute.o, scan.output.data.commitment.amount);
+    println!(
+        "Subaddress scan result: detected output {:?}:{:?}, {:?} XMR",
+        hex::encode(scan.transaction()),
+        scan.index_in_transaction(),
+        scan.commitment().amount
+    );
     // assert hex::encode(scan.output.absolute.tx) = fdb44c6c645e21b8ec64e7412b5ab1cf661a7ad6c2a3f8a3077e6a8d87ded210
 }
 
