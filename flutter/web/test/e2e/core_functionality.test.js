@@ -2,6 +2,41 @@ const puppeteer = require('puppeteer');
 const path = require('path');
 const fs = require('fs');
 
+/** Send `signalFnName` and resolve when `responseTypeName` is received. */
+async function sendSignalAndWait(page, signalFnName, requestJson, responseTypeName, timeoutMs = 10000) {
+  return page.evaluate(
+    ({ signalFnName, requestJson, responseTypeName, timeoutMs }) => {
+      return new Promise((resolve, reject) => {
+        const timeout = setTimeout(
+          () => reject(new Error(`Timeout waiting for ${responseTypeName} after ${timeoutMs}ms`)),
+          timeoutMs
+        );
+        const origCallback = window._rustSignalCallback;
+        window.wasmBindings.register_rust_signal_callback((typeName, json) => {
+          if (origCallback) {
+            try { origCallback(typeName, json); } catch (e) { /* ignore */ }
+          }
+          if (typeName === responseTypeName) {
+            clearTimeout(timeout);
+            resolve(JSON.parse(json));
+          }
+        });
+        window.wasmBindings[signalFnName](requestJson);
+      });
+    },
+    { signalFnName, requestJson, responseTypeName, timeoutMs }
+  );
+}
+
+/** Navigate to a fresh extension page and wait for WASM initialization. */
+async function reloadExtensionPage(browser, extId) {
+  const newPage = await browser.newPage();
+  await newPage.goto(`chrome-extension://${extId}/index.html`);
+  await newPage.waitForSelector('flt-glass-pane', { timeout: 15000 });
+  await new Promise(resolve => setTimeout(resolve, 3000));
+  return newPage;
+}
+
 describe('Core Monero WASM', () => {
   let browser;
   let extPage;
