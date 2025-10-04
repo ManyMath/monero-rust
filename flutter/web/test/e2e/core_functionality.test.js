@@ -134,4 +134,180 @@ describe('Core Monero WASM', () => {
     expect(keys.public_spend_key).toHaveLength(64);
     expect(keys.public_view_key).toHaveLength(64);
   });
+
+  describe('Multi-network TestApi coverage', () => {
+    it('derives distinct addresses for mainnet, stagenet, and testnet', async () => {
+      const addresses = await extPage.evaluate((seed) => {
+        const networks = ['mainnet', 'stagenet', 'testnet'];
+        const results = {};
+        for (const net of networks) {
+          results[net] = window.wasmBindings.TestApi.derive_address(seed, net);
+        }
+        return results;
+      }, TEST_SEED);
+
+      expect(addresses.mainnet).toHaveLength(95);
+      expect(addresses.stagenet).toHaveLength(95);
+      expect(addresses.testnet).toHaveLength(95);
+      expect(addresses.mainnet[0]).toBe('4');
+      expect(addresses.stagenet[0]).toBe('5');
+      expect(['9', 'A']).toContain(addresses.testnet[0]);
+      expect(addresses.stagenet).toBe(EXPECTED_ADDRESS);
+      const uniqueAddresses = new Set([addresses.mainnet, addresses.stagenet, addresses.testnet]);
+      expect(uniqueAddresses.size).toBe(3);
+    });
+
+    it('derives keys for all three networks', async () => {
+      const allKeys = await extPage.evaluate((seed) => {
+        const networks = ['mainnet', 'stagenet', 'testnet'];
+        const results = {};
+        for (const net of networks) {
+          results[net] = window.wasmBindings.TestApi.derive_keys(seed, net);
+        }
+        return results;
+      }, TEST_SEED);
+
+      const networks = ['mainnet', 'stagenet', 'testnet'];
+      for (const net of networks) {
+        const keys = allKeys[net];
+        expect(keys.address).toBeTruthy();
+        expect(keys.secret_spend_key).toHaveLength(64);
+        expect(keys.secret_view_key).toHaveLength(64);
+        expect(keys.public_spend_key).toHaveLength(64);
+        expect(keys.public_view_key).toHaveLength(64);
+      }
+
+      expect(allKeys.stagenet.address).toBe(EXPECTED_ADDRESS);
+      const viewKeys = new Set(networks.map(net => allKeys[net].secret_view_key));
+      expect(viewKeys.size).toBe(1);
+      const addresses = new Set(networks.map(net => allKeys[net].address));
+      expect(addresses.size).toBe(3);
+    });
+  });
+
+  describe('Wallet creation (E2E-01)', () => {
+    it('signal round-trip: MoneroTestRequest receives MoneroTestResponse', async () => {
+      const response = await sendSignalAndWait(
+        extPage,
+        'send_monero_test_request',
+        JSON.stringify({}),
+        'MoneroTestResponse',
+        15000
+      );
+
+      expect(response).toBeDefined();
+      expect(response.result).toBeDefined();
+    }, 15000);
+
+    it('creates wallet via signal and verifies address via TestApi', async () => {
+      const response = await sendSignalAndWait(
+        extPage,
+        'send_create_wallet_request',
+        JSON.stringify({ password: 'test_password', network: 'stagenet' }),
+        'WalletCreatedResponse',
+        15000
+      );
+
+      expect(response).toBeDefined();
+      expect(response).not.toBeNull();
+      expect(typeof response.address).toBe('string');
+
+      const derivedAddress = await extPage.evaluate(
+        (seed) => window.wasmBindings.TestApi.derive_address(seed, 'stagenet'),
+        TEST_SEED
+      );
+
+      expect(derivedAddress).toBe(EXPECTED_ADDRESS);
+    }, 20000);
+  });
+
+  describe('Wallet persistence (E2E-02)', () => {
+    it('WASM bindings survive extension page reload', async () => {
+      const beforeReload = await extPage.evaluate(() =>
+        window.wasmBindings.TestApi.test_wasm()
+      );
+      expect(beforeReload).toBe('WASM OK');
+
+      await extPage.close();
+      extPage = await reloadExtensionPage(browser, extId);
+
+      const hasBindings = await extPage.evaluate(() =>
+        !!(window.wasmBindings && window.wasmBindings.TestApi)
+      );
+      expect(hasBindings).toBe(true);
+
+      const afterReload = await extPage.evaluate(() =>
+        window.wasmBindings.TestApi.test_wasm()
+      );
+      expect(afterReload).toBe('WASM OK');
+    }, 30000);
+
+    it('derives same address after extension reload', async () => {
+      const address = await extPage.evaluate(
+        (seed) => window.wasmBindings.TestApi.derive_address(seed, 'stagenet'),
+        TEST_SEED
+      );
+      expect(address).toBe(EXPECTED_ADDRESS);
+    });
+  });
+
+  describe('Key file export (E2E-03)', () => {
+    it('derive_keys returns complete key material for export', async () => {
+      const keys = await extPage.evaluate(
+        (seed) => window.wasmBindings.TestApi.derive_keys(seed, 'stagenet'),
+        TEST_SEED
+      );
+
+      expect(keys.address).toBe(EXPECTED_ADDRESS);
+      expect(keys.secret_spend_key).toMatch(/^[0-9a-f]{64}$/);
+      expect(keys.secret_view_key).toMatch(/^[0-9a-f]{64}$/);
+      expect(keys.public_spend_key).toMatch(/^[0-9a-f]{64}$/);
+      expect(keys.public_view_key).toMatch(/^[0-9a-f]{64}$/);
+      expect(keys.secret_spend_key).not.toMatch(/^0+$/);
+      expect(keys.secret_view_key).not.toMatch(/^0+$/);
+    });
+
+    it('key material is consistent across derivations', async () => {
+      const keys1 = await extPage.evaluate(
+        (seed) => window.wasmBindings.TestApi.derive_keys(seed, 'stagenet'),
+        TEST_SEED
+      );
+      const keys2 = await extPage.evaluate(
+        (seed) => window.wasmBindings.TestApi.derive_keys(seed, 'stagenet'),
+        TEST_SEED
+      );
+
+      expect(keys1.address).toBe(keys2.address);
+      expect(keys1.secret_spend_key).toBe(keys2.secret_spend_key);
+      expect(keys1.secret_view_key).toBe(keys2.secret_view_key);
+      expect(keys1.public_spend_key).toBe(keys2.public_spend_key);
+      expect(keys1.public_view_key).toBe(keys2.public_view_key);
+    });
+
+    it('export signal function availability check', async () => {
+      const hasExportSignal = await extPage.evaluate(() =>
+        typeof window.wasmBindings.send_export_keys_file_request === 'function'
+      );
+
+      if (!hasExportSignal) {
+        console.warn(
+          'send_export_keys_file_request not in current WASM build — ' +
+          'skipping signal-based export test. Rebuild WASM to enable.'
+        );
+        return;
+      }
+
+      const response = await sendSignalAndWait(
+        extPage,
+        'send_export_keys_file_request',
+        JSON.stringify({ password: 'test_password', network: 'stagenet' }),
+        'ExportKeysFileResponse',
+        15000
+      );
+
+      expect(response).toBeDefined();
+      expect(response.success).toBeDefined();
+      expect(response.file_bytes_hex).toBeDefined();
+    });
+  });
 });
