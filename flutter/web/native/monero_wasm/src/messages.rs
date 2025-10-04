@@ -224,6 +224,8 @@ pub struct ExportKeyImages {
 pub struct ImportKeyImages {
     pub data_hex: String,
     pub node_url: String,
+    pub seed: String,
+    pub passphrase: String,
 }
 
 /// Assign key images to wallet outputs positionally (for view-only wallet import).

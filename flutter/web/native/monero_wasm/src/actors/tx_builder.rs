@@ -256,11 +256,27 @@ impl TxBuilderActor {
 
     async fn listen_to_import_key_images(mut self_addr: Address<Self>) {
         let mut receiver = crate::ffi_web::get_import_key_images_request_receiver();
-        while let Some(dart_msg) = receiver.recv().await {
-            let request = dart_msg;
+        while let Some(request) = receiver.recv().await {
+            let resolved_seed = match super::wallet::pre_resolve_bip39(
+                &request.seed, &request.passphrase, request.bip39_account_index,
+            ) {
+                Ok(s) => s,
+                Err(e) => {
+                    KeyImagesImportedResponse {
+                        success: false,
+                        error: Some(e),
+                        error_code: None, error_hint: None, error_transient: None,
+                        imported_count: 0,
+                        spent_count: 0,
+                    }.send_signal_to_dart();
+                    continue;
+                }
+            };
             let _ = self_addr.notify(ImportKeyImages {
                 data_hex: request.data_hex,
                 node_url: request.node_url,
+                seed: resolved_seed,
+                passphrase: request.passphrase.clone(),
             }).await;
         }
     }
@@ -1009,7 +1025,9 @@ impl Notifiable<ImportKeyImages> for TxBuilderActor {
                 }
             };
 
-            let key_images = match monero_rust::epee_compat::import_key_images(&data, None) {
+            let key_images = match monero_rust::key_image_signing::import_key_images_from_seed(
+                &msg.seed, &msg.passphrase, &data,
+            ) {
                 Ok(kis) => kis,
                 Err(e) => {
                     KeyImagesImportedResponse {

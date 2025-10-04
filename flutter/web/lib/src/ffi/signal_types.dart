@@ -851,11 +851,23 @@ class ExportKeyImagesRequest {
 class ImportKeyImagesRequest {
   final String dataHex;
   final String nodeUrl;
-  const ImportKeyImagesRequest({required this.dataHex, required this.nodeUrl});
+  final String seed;
+  final String passphrase;
+  final int bip39AccountIndex;
+  const ImportKeyImagesRequest({
+    required this.dataHex,
+    required this.nodeUrl,
+    required this.seed,
+    this.passphrase = '',
+    this.bip39AccountIndex = 0,
+  });
 
   void sendSignalToRust() => _send('send_import_key_images_request', {
     'data_hex': dataHex,
     'node_url': nodeUrl,
+    'seed': seed,
+    'passphrase': passphrase,
+    'bip39_account_index': bip39AccountIndex,
   });
 }
 

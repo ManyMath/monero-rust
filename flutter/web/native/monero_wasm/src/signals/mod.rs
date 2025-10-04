@@ -716,6 +716,11 @@ pub struct ExportKeyImagesRequest {
 pub struct ImportKeyImagesRequest {
     pub data_hex: String,
     pub node_url: String,
+    pub seed: String,
+    #[serde(default)]
+    pub passphrase: String,
+    #[serde(default)]
+    pub bip39_account_index: u32,
 }
 
 #[derive(Serialize)]

@@ -92,7 +92,7 @@ pub fn import_key_images(data: &[u8], view_secret_key: Option<&[u8; 32]>) -> Res
         return Ok(export.key_images.into_iter().map(|e| hex::encode(e.key_image)).collect());
     }
 
-    // EPEE failed -- try v3 encrypted format if view key is provided
+    // EPEE failed; try v3 encrypted format if view key is provided
     match view_secret_key {
         Some(vsk) => {
             let (key_images, _pub_spend, _pub_view) =

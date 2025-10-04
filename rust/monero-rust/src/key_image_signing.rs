@@ -348,17 +348,14 @@ pub fn export_key_images_from_outputs(
     // Resolve seed
     let seed = crate::scanner::resolve_seed(seed_phrase)?;
 
-    // Derive spend scalar with passphrase (Monero seed offset)
     let key_bytes = seed.key_bytes_with_passphrase(passphrase);
-    let mut spend_bytes = [0u8; 32];
-    spend_bytes.copy_from_slice(&key_bytes[..]);
-    let spend_scalar = Scalar::from_bytes_mod_order(spend_bytes);
+    let spend_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(*key_bytes));
 
     // Derive view key from spend scalar
-    let pub_spend_key = (&spend_scalar * &ED25519_BASEPOINT_TABLE).compress().to_bytes();
+    let pub_spend_key = (&*spend_scalar * &ED25519_BASEPOINT_TABLE).compress().to_bytes();
     let view_bytes: [u8; 32] = Keccak256::digest(spend_scalar.to_bytes()).into();
-    let view_scalar = Scalar::from_bytes_mod_order(view_bytes);
-    let pub_view_key = (&view_scalar * &ED25519_BASEPOINT_TABLE).compress().to_bytes();
+    let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(view_bytes));
+    let pub_view_key = (&*view_scalar * &ED25519_BASEPOINT_TABLE).compress().to_bytes();
     let view_secret_key = view_scalar.to_bytes();
 
     // Build KeyImageExportEntry list from sorted outputs
@@ -391,12 +388,27 @@ pub fn export_key_images_from_outputs(
 
     export_key_images_v3(
         &entries?,
-        &spend_scalar,
+        &*spend_scalar,
         &pub_spend_key,
         &pub_view_key,
         &view_secret_key,
         0,
     )
+}
+
+/// Derives the view key from `seed_phrase`/`passphrase` and imports key images (EPEE or v3).
+pub fn import_key_images_from_seed(
+    seed_phrase: &str,
+    passphrase: &str,
+    data: &[u8],
+) -> Result<Vec<String>, String> {
+    let seed = crate::scanner::resolve_seed(seed_phrase)?;
+    let key_bytes = seed.key_bytes_with_passphrase(passphrase);
+    let spend_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(*key_bytes));
+    let view_bytes: [u8; 32] = Keccak256::digest(spend_scalar.to_bytes()).into();
+    let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(view_bytes));
+    let view_secret_key = view_scalar.to_bytes();
+    crate::epee_compat::import_key_images(data, Some(&view_secret_key))
 }
 
 #[cfg(test)]
@@ -673,5 +685,42 @@ mod tests {
         for (i, entry) in entries.iter().enumerate() {
             assert_eq!(imported_kis[i], entry.key_image, "Key image {} mismatch", i);
         }
+    }
+
+    /// v3 export -> `epee_compat::import_key_images(Some(vsk))` roundtrip.
+    #[test]
+    fn test_import_key_images_v3_via_epee_compat() {
+        let (spend_scalar, view_scalar, _, _, pub_spend_bytes, pub_view_bytes) = test_keys();
+        let view_secret_bytes = view_scalar.to_bytes();
+
+        // Create entries and export v3
+        let mut entries = Vec::new();
+        for i in 0u8..3 {
+            let offset_seed = format!("test key offset {}", i);
+            let offset_bytes: [u8; 32] = Keccak256::digest(offset_seed.as_bytes()).into();
+            let key_offset = Scalar::from_bytes_mod_order(offset_bytes);
+            let ephemeral_sec = Zeroizing::new(&spend_scalar + &key_offset);
+            let pub_key = &*ephemeral_sec * &ED25519_BASEPOINT_TABLE;
+            let key_image_point = generate_key_image(&ephemeral_sec);
+            let key_image = key_image_point.compress().to_bytes();
+            entries.push(KeyImageExportEntry { key_image, pub_key, key_offset });
+        }
+        let exported = export_key_images_v3(
+            &entries, &spend_scalar, &pub_spend_bytes, &pub_view_bytes, &view_secret_bytes, 0,
+        ).expect("Export should succeed");
+
+        let imported = crate::epee_compat::import_key_images(&exported, Some(&view_secret_bytes))
+            .expect("v3 import with view key should succeed");
+        assert_eq!(imported.len(), 3);
+        for (i, entry) in entries.iter().enumerate() {
+            assert_eq!(imported[i], hex::encode(entry.key_image));
+        }
+    }
+
+    #[test]
+    fn test_import_key_images_from_seed_exists() {
+        // Verify function is wired by confirming an invalid seed returns an error.
+        let result = import_key_images_from_seed("invalid seed phrase", "", &[0u8; 32]);
+        assert!(result.is_err(), "Invalid seed should produce an error");
     }
 }
