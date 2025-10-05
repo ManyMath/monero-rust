@@ -13,7 +13,7 @@ path = "src/main.rs"
 [lib]
 name = "monero_rust"
 path = "src/lib.rs"
-crate-type = ["rlib", "cdylib", "staticlib"]
+crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 monero-serai-mirror = "0.1.4-alpha"
