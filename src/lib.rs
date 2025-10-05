@@ -3,11 +3,9 @@ use monero_wallet::{
     ViewPair,
 };
 
-// Transitional mnemonic support via serai (feature-gated).
-#[cfg(feature = "serai-seed")]
-pub use monero_serai_mirror::wallet::seed::Language;
-#[cfg(feature = "serai-seed")]
-use monero_serai_mirror::wallet::seed::Seed;
+// Mnemonic support via monero-seed.
+pub use monero_seed::Language;
+use monero_seed::Seed;
 
 // Re-export Network for external users/tests.
 pub use monero_wallet::address::Network;
@@ -19,8 +17,34 @@ use sha3::{Digest, Keccak256};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 
+/// Helper function to parse a mnemonic seed by trying all supported languages.
+fn seed_from_string(mnemonic: &str) -> Result<(Language, Seed), String> {
+    let languages = [
+        Language::English,
+        Language::Chinese,
+        Language::Dutch,
+        Language::French,
+        Language::Spanish,
+        Language::German,
+        Language::Italian,
+        Language::Portuguese,
+        Language::Japanese,
+        Language::Russian,
+        Language::Esperanto,
+        Language::Lojban,
+        Language::DeprecatedEnglish,
+    ];
+
+    for lang in languages {
+        if let Ok(seed) = Seed::from_string(lang, Zeroizing::new(mnemonic.to_string())) {
+            return Ok((lang, seed));
+        }
+    }
+
+    Err("Invalid mnemonic: not valid in any supported language".to_string())
+}
+
 pub struct MoneroWallet {
-    #[cfg(feature = "serai-seed")]
     seed: Seed,
     view_pair: ViewPair,
     network: Network,
@@ -46,18 +70,8 @@ impl MoneroWallet {
     /// let wallet = MoneroWallet::new(&mnemonic, Network::Mainnet).unwrap();
     /// ```
     pub fn new(mnemonic: &str, network: Network) -> Result<Self, String> {
-        // Derive spend/view from mnemonic via serai's Seed (temporary).
-        //
-        // TODO: Remove all monero-serai and monero-serai-mirror usages.
-        #[cfg(feature = "serai-seed")]
-        let seed = Seed::from_string(Zeroizing::new(mnemonic.to_string()))
-            .map_err(|_| "Invalid mnemonic".to_string())?;
-        #[cfg(feature = "serai-seed")]
+        let (_lang, seed) = seed_from_string(mnemonic)?;
         let spend: [u8; 32] = *seed.entropy();
-
-        #[cfg(not(feature = "serai-seed"))]
-        return Err("Mnemonic support disabled (no seed backend)".into());
-
         let spend_scalar: Scalar = Scalar::from_bytes_mod_order(spend);
         let spend_point: EdwardsPoint = &spend_scalar * ED25519_BASEPOINT_TABLE;
         let view: [u8; 32] = Keccak256::digest(&spend).into();
@@ -66,7 +80,6 @@ impl MoneroWallet {
             .map_err(|e| e.to_string())?;
 
         Ok(MoneroWallet {
-            #[cfg(feature = "serai-seed")]
             seed,
             view_pair,
             network,
@@ -89,9 +102,8 @@ impl MoneroWallet {
     /// use monero_rust::{MoneroWallet, Language};
     /// let mnemonic = MoneroWallet::generate_mnemonic(Language::English);
     /// ```
-    #[cfg(feature = "serai-seed")]
     pub fn generate_mnemonic(language: Language) -> String {
-        Seed::to_string(&Seed::new(&mut OsRng, language)).to_string()
+        Seed::new(&mut OsRng, language).to_string().to_string()
     }
 
     /// Returns the mnemonic seed of the wallet.
@@ -99,9 +111,8 @@ impl MoneroWallet {
     /// # Returns
     ///
     /// A `String` representing the mnemonic seed.
-    #[cfg(feature = "serai-seed")]
     pub fn get_seed(&self) -> String {
-        Seed::to_string(&self.seed).to_string()
+        self.seed.to_string().to_string()
     }
 
     /// Returns the primary address of the wallet.
@@ -137,10 +148,7 @@ impl MoneroWallet {
     ///
     /// A `String` representing the private spend key in hexadecimal format.
     pub fn get_private_spend_key(&self) -> String {
-        #[cfg(feature = "serai-seed")]
-        { hex::encode(self.seed.entropy()) }
-        #[cfg(not(feature = "serai-seed"))]
-        { String::from("") }
+        hex::encode(self.seed.entropy())
     }
 
     /// Returns the private view key of the wallet.
@@ -149,13 +157,8 @@ impl MoneroWallet {
     ///
     /// A `String` representing the private view key in hexadecimal format.
     pub fn get_private_view_key(&self) -> String {
-        #[cfg(feature = "serai-seed")]
-        {
-            let view: [u8; 32] = Keccak256::digest(self.seed.entropy()).into();
-            hex::encode(view)
-        }
-        #[cfg(not(feature = "serai-seed"))]
-        { String::from("") }
+        let view: [u8; 32] = Keccak256::digest(self.seed.entropy()).into();
+        hex::encode(view)
     }
 
     /// Returns the public spend key of the wallet.
@@ -184,33 +187,40 @@ fn to_c_string(s: String) -> *mut c_char {
     CString::new(s).unwrap_or_else(|_| CString::new("").unwrap()).into_raw()
 }
 
+/// Frees a C string allocated by this library.
+///
+/// # Safety
+/// Must only be called on strings allocated by this library's functions.
+/// Must not be called more than once on the same pointer.
+#[no_mangle]
+pub extern "C" fn free_string(ptr: *mut c_char) {
+    if !ptr.is_null() {
+        unsafe {
+            let _ = CString::from_raw(ptr);
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn generate_mnemonic(language: u8) -> *mut c_char {
-    #[cfg(feature = "serai-seed")]
-    {
-        // Mapping expected by Dart code/tests: 0=German, 1=English, 2=Spanish, ... , 12=Old English.
-        let lang = match language {
-            0 => Language::German,
-            1 => Language::English,
-            2 => Language::Spanish,
-            3 => Language::French,
-            4 => Language::Dutch,
-            5 => Language::Italian,
-            6 => Language::Portuguese,
-            7 => Language::Japanese,
-            8 => Language::Russian,
-            9 => Language::Esperanto,
-            10 => Language::Lojban,
-            11 => Language::Chinese,
-            12 => Language::EnglishOld,
-            _ => Language::English,
-        };
-        to_c_string(MoneroWallet::generate_mnemonic(lang))
-    }
-    #[cfg(not(feature = "serai-seed"))]
-    {
-        to_c_string(String::new())
-    }
+    // Mapping expected by Dart code/tests: 0=German, 1=English, 2=Spanish, ... , 12=Old English.
+    let lang = match language {
+        0 => Language::German,
+        1 => Language::English,
+        2 => Language::Spanish,
+        3 => Language::French,
+        4 => Language::Dutch,
+        5 => Language::Italian,
+        6 => Language::Portuguese,
+        7 => Language::Japanese,
+        8 => Language::Russian,
+        9 => Language::Esperanto,
+        10 => Language::Lojban,
+        11 => Language::Chinese,
+        12 => Language::DeprecatedEnglish,
+        _ => Language::English,
+    };
+    to_c_string(MoneroWallet::generate_mnemonic(lang))
 }
 
 #[no_mangle]
@@ -255,7 +265,6 @@ pub extern "C" fn generate_address(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use monero_serai_mirror::wallet::seed::Language;
 
     #[test]
     fn test_wallet_creation() {

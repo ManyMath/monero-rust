@@ -6,8 +6,7 @@ use monero_wallet::{
 };
 use monero_wallet::rpc::Rpc;
 use monero_simple_request_rpc::SimpleRequestRpc;
-#[cfg(feature = "serai-seed")]
-use monero_serai_mirror::wallet::seed::{Seed, Language};
+use monero_seed::{Seed, Language};
 
 use rand_core::OsRng; // for generating a random seed
 
@@ -49,7 +48,7 @@ fn test_address_generation() {
     println!("\nRunning generation example...");
     // roundabout way to get a random mnemonic
     let seed = &Seed::new(&mut OsRng, Language::English);
-    let mnemonic = &Seed::to_string(seed);
+    let mnemonic = &seed.to_string();
     digest_mnemonic(mnemonic.as_str(), &Network::Mainnet);
 
     // stagenet example
@@ -72,8 +71,8 @@ fn test_address_generation() {
 }
 
 fn digest_mnemonic(mnemonic: &str, network: &Network) {
-    let seed = Seed::from_string(Zeroizing::new(mnemonic.to_string())).unwrap();
-    println!("Seed (mnemonic): {:?}", Seed::to_string(&seed).as_str());
+    let seed = Seed::from_string(Language::English, Zeroizing::new(mnemonic.to_string())).unwrap();
+    println!("Seed (mnemonic): {:?}", seed.to_string().as_str());
     let spend: [u8; 32] = *seed.entropy();
     println!("Private spend key: {:?}", hex::encode(spend));
     let spend_scalar = Scalar::from_bytes_mod_order(spend);
@@ -102,7 +101,7 @@ fn digest_mnemonic(mnemonic: &str, network: &Network) {
 async fn test_output_detection() {
     println!("\nRunning output detection example...");
     // let network: Network = Network::Stagenet;
-    let seed = Seed::from_string(Zeroizing::new("honked bagpipe alpine juicy faked afoot jostle claim cowl tunnel orphans negative pheasants feast jetting quote frown teeming cycling tribal womanly hills cottage daytime daytime".to_string())).unwrap();
+    let seed = Seed::from_string(Language::English, Zeroizing::new("honked bagpipe alpine juicy faked afoot jostle claim cowl tunnel orphans negative pheasants feast jetting quote frown teeming cycling tribal womanly hills cottage daytime daytime".to_string())).unwrap();
     let spend: [u8; 32] = *seed.entropy();
     let spend_scalar = Scalar::from_bytes_mod_order(spend);
     let spend_point: EdwardsPoint = &spend_scalar * ED25519_BASEPOINT_TABLE;

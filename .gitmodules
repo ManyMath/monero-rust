@@ -1,0 +1,7 @@
+[submodule "vendored/monero-wallet-util"]
+	path = vendored/monero-wallet-util
+	url = https://github.com/kayabaNerve/monero-wallet-util
+	branch = develop
+[submodule "vendored/monero-oxide"]
+	path = vendored/monero-oxide
+	url = https://github.com/monero-oxide/monero-oxide.git
