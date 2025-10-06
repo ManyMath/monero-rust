@@ -18,11 +18,11 @@
 
 
 /**
- * Frees a C string allocated by this library
+ * Frees a C string allocated by this library.
  *
  * # Safety
- * Must only be called on strings allocated by this library's functions
- * Must not be called more than once on the same pointer
+ * Must only be called on strings allocated by this library's functions.
+ * Must not be called more than once on the same pointer.
  */
 void free_string(char *ptr);
 
