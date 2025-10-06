@@ -83,19 +83,132 @@ describe('Offline Signal Tests', () => {
   }, 15000);
 
   describe('Wallet Restoration', () => {
-    // tests added in later commits
+    it('restores wallet from seed and reports zero balance', async () => {
+      await extPage.evaluate(({ fn, json }) => {
+        window.wasmBindings[fn](json);
+      }, {
+        fn: 'send_restore_wallet_data_request',
+        json: JSON.stringify({
+          seed: HONKED_SEED,
+          network: 'stagenet',
+          outputs: [],
+          daemon_height: 0,
+          current_height: 0,
+        }),
+      });
+
+      await new Promise(r => setTimeout(r, 500));
+
+      const balance = await sendSignalAndWait(
+        extPage, 'send_get_balance_request', '{}', 'BalanceResponse', 10000
+      );
+
+      expect(balance).toBeDefined();
+      expect(balance.confirmed).toBe(0);
+      expect(balance.unconfirmed).toBe(0);
+    }, 30000);
+
+    it('converts BIP39 mnemonic to 25-word legacy seed', async () => {
+      const response = await sendSignalAndWait(
+        extPage,
+        'send_convert_bip39_to_legacy_request',
+        JSON.stringify({ bip39_mnemonic: BIP39_TEST_MNEMONIC, account_index: 0 }),
+        'Bip39LegacySeedResponse',
+        10000
+      );
+
+      expect(response.success).toBe(true);
+      expect(response.legacy_seed.split(' ')).toHaveLength(25);
+      for (const word of response.legacy_seed.split(' ')) {
+        expect(word).toMatch(/^[a-z]+$/);
+      }
+    }, 15000);
+
+    it('imports keys file and returns all four key hex fields', async () => {
+      const exportResp = await sendSignalAndWait(
+        extPage,
+        'send_export_keys_file_request',
+        JSON.stringify({ seed: HONKED_SEED, network: 'stagenet', password: '' }),
+        'ExportKeysFileResponse',
+        10000
+      );
+      expect(exportResp.success).toBe(true);
+      expect(exportResp.file_bytes_hex).toBeTruthy();
+
+      const importResp = await sendSignalAndWait(
+        extPage,
+        'send_import_keys_file_request',
+        JSON.stringify({ file_bytes_hex: exportResp.file_bytes_hex, password: '' }),
+        'ImportKeysFileResponse',
+        10000
+      );
+
+      expect(importResp.success).toBe(true);
+      expect(importResp.spend_secret_key).toMatch(/^[0-9a-f]{64}$/);
+      expect(importResp.view_secret_key).toMatch(/^[0-9a-f]{64}$/);
+      expect(importResp.spend_public_key).toMatch(/^[0-9a-f]{64}$/);
+      expect(importResp.view_public_key).toMatch(/^[0-9a-f]{64}$/);
+    }, 20000);
   });
 
   describe('Keys Export', () => {
-    // tests added in later commits
+    it('exports keys file with non-empty file_bytes_hex', async () => {
+      const response = await sendSignalAndWait(
+        extPage,
+        'send_export_keys_file_request',
+        JSON.stringify({ seed: HONKED_SEED, network: 'stagenet', password: '' }),
+        'ExportKeysFileResponse',
+        10000
+      );
+
+      expect(response.success).toBe(true);
+      expect(response.file_bytes_hex).toBeTruthy();
+      expect(response.file_bytes_hex).toMatch(/^[0-9a-f]+$/i);
+    }, 15000);
   });
 
   describe('Subaddress Derivation', () => {
-    // tests added in later commits
+    it('derives subaddress for account 0 index 1, distinct from primary address', async () => {
+      const response = await sendSignalAndWait(
+        extPage,
+        'send_derive_subaddress_request',
+        JSON.stringify({ seed: HONKED_SEED, network: 'stagenet', account: 0, address_index: 1 }),
+        'SubaddressDerivedResponse',
+        10000
+      );
+
+      expect(response.success).toBe(true);
+      expect(response.address.length).toBe(95);
+      expect(response.address).not.toBe(HONKED_ADDRESS);
+      expect(response.address[0]).toBe('7'); // stagenet subaddresses start with '7'
+    }, 15000);
   });
 
   describe('Seed Birthday', () => {
-    // tests added in later commits
+    it('retrieves non-null birthday for a polyseed', async () => {
+      // Classic 25-word seeds return null for birthday; polyseed has one.
+      const seedResp = await sendSignalAndWait(
+        extPage,
+        'send_generate_seed_request',
+        JSON.stringify({ seed_type: 'polyseed' }),
+        'SeedGeneratedResponse',
+        10000
+      );
+      expect(seedResp.success).toBe(true);
+      expect(seedResp.seed.split(' ')).toHaveLength(16);
+
+      const birthdayResp = await sendSignalAndWait(
+        extPage,
+        'send_get_seed_birthday_request',
+        JSON.stringify({ seed: seedResp.seed }),
+        'SeedBirthdayResponse',
+        10000
+      );
+
+      expect(birthdayResp.success).toBe(true);
+      expect(birthdayResp.birthday).not.toBeNull();
+      expect(birthdayResp.birthday).toBeGreaterThan(0);
+    }, 20000);
   });
 
   const describeIfNode = nodeAvailable ? describe : describe.skip;
