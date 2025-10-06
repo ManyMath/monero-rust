@@ -111,22 +111,8 @@ fn store_prefetch(generation: u64, height: u64, data: monero_rust::FetchedBlocks
 }
 
 // ---------------------------------------------------------------------------
-// Scanner cache infrastructure (keyed by generation)
+// Scanner cache infrastructure (keyed by fingerprint)
 // ---------------------------------------------------------------------------
-
-fn take_scanner_cache(generation: u64) -> Option<monero_rust::CachedScanner> {
-    SCANNER_CACHE.with(|s| {
-        let matches = {
-            let slot = s.borrow();
-            matches!(&*slot, Some((g, _)) if *g == generation)
-        };
-        if matches {
-            s.borrow_mut().take().map(|(_, cached)| cached)
-        } else {
-            None
-        }
-    })
-}
 
 /// Takes the scanner cache entry whose fingerprint matches `fingerprint`.
 fn take_scanner_cache_by_fingerprint(
