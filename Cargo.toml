@@ -13,17 +13,22 @@ path = "src/main.rs"
 [lib]
 name = "monero_rust"
 path = "src/lib.rs"
-crate-type = ["cdylib", "staticlib"]
+crate-type = ["rlib", "cdylib", "staticlib"]
 
 [dependencies]
-monero-serai-mirror = "0.1.4-alpha"
+# Core wallet/address functionality from monero-oxide (vendored as submodule).
+monero-wallet = { path = "vendored/monero-oxide/monero-oxide/wallet", default-features = false, features = ["std"] }
+# Simple HTTP RPC client compatible with monero-oxide Rpc trait (used by examples/tests).
+monero_simple_request_rpc = { package = "monero-simple-request-rpc", path = "vendored/monero-oxide/monero-oxide/rpc/simple-request", default-features = false }
 rand_core = "0.6.4"
 zeroize = "1.6.0"
-curve25519-dalek = { version = "^3.2", features = ["std"] }
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize", "group"] }
 sha3 = "0.10.8"
-monero-generators-mirror = "0.3.0"
 hex = "0.4.3"
 tokio = { version = "1.29.1", features = ["full"] }
+
+# Seed/mnemonic support via vendored monero-seed.
+monero-seed = { path = "vendored/monero-wallet-util/seed", default-features = false }
 
 [build-dependencies]
 cbindgen = "0.24.0"

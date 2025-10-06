@@ -18,14 +18,14 @@
 
 
 /**
- * Generates an address from a mnemonic
+ * Frees a C string allocated by this library
+ *
+ * # Safety
+ * Must only be called on strings allocated by this library's functions
+ * Must not be called more than once on the same pointer
  */
-const char *generate_address(const char *mnemonic,
-                             uint8_t network,
-                             uint32_t account,
-                             uint32_t index);
+void free_string(char *ptr);
 
-/**
- * Generates a mnemonic in the specified language
- */
-const char *generate_mnemonic(uint8_t language);
+char *generate_address(const char *mnemonic, uint8_t network, uint32_t account, uint32_t index);
+
+char *generate_mnemonic(uint8_t language);

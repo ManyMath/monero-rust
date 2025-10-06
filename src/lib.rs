@@ -1,23 +1,48 @@
-use monero_serai_mirror::{
-    wallet::{
-        seed::Seed,
-        address::{AddressType, AddressMeta, AddressSpec, MoneroAddress, SubaddressIndex},
-        ViewPair,
-    },
+use monero_wallet::{
+    address::{AddressType, MoneroAddress, SubaddressIndex},
+    ViewPair,
 };
 
-// Re-export for tests.
-pub use monero_serai_mirror::wallet::seed::Language;
-pub use monero_serai_mirror::wallet::address::Network;
+// Mnemonic support via monero-seed.
+pub use monero_seed::Language;
+use monero_seed::Seed;
+
+// Re-export Network for external users/tests.
+pub use monero_wallet::address::Network;
 
 use rand_core::OsRng;
 use zeroize::{Zeroizing};
-use curve25519_dalek::{
-    edwards::EdwardsPoint,
-    scalar::Scalar,
-    constants::ED25519_BASEPOINT_TABLE,
-};
+use curve25519_dalek::{edwards::EdwardsPoint, scalar::Scalar, constants::ED25519_BASEPOINT_TABLE};
 use sha3::{Digest, Keccak256};
+use std::ffi::{CStr, CString};
+use std::os::raw::c_char;
+
+/// Helper function to parse a mnemonic seed by trying all supported languages.
+fn seed_from_string(mnemonic: &str) -> Result<(Language, Seed), String> {
+    let languages = [
+        Language::English,
+        Language::Chinese,
+        Language::Dutch,
+        Language::French,
+        Language::Spanish,
+        Language::German,
+        Language::Italian,
+        Language::Portuguese,
+        Language::Japanese,
+        Language::Russian,
+        Language::Esperanto,
+        Language::Lojban,
+        Language::DeprecatedEnglish,
+    ];
+
+    for lang in languages {
+        if let Ok(seed) = Seed::from_string(lang, Zeroizing::new(mnemonic.to_string())) {
+            return Ok((lang, seed));
+        }
+    }
+
+    Err("Invalid mnemonic: not valid in any supported language".to_string())
+}
 
 pub struct MoneroWallet {
     seed: Seed,
@@ -45,13 +70,14 @@ impl MoneroWallet {
     /// let wallet = MoneroWallet::new(&mnemonic, Network::Mainnet).unwrap();
     /// ```
     pub fn new(mnemonic: &str, network: Network) -> Result<Self, String> {
-        let seed = Seed::from_string(Zeroizing::new(mnemonic.to_string())).map_err(|_| "Invalid mnemonic".to_string())?;
+        let (_lang, seed) = seed_from_string(mnemonic)?;
         let spend: [u8; 32] = *seed.entropy();
         let spend_scalar: Scalar = Scalar::from_bytes_mod_order(spend);
-        let spend_point: EdwardsPoint = &spend_scalar * &ED25519_BASEPOINT_TABLE;
+        let spend_point: EdwardsPoint = &spend_scalar * ED25519_BASEPOINT_TABLE;
         let view: [u8; 32] = Keccak256::digest(&spend).into();
         let view_scalar: Scalar = Scalar::from_bytes_mod_order(view);
-        let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
+        let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar))
+            .map_err(|e| e.to_string())?;
 
         Ok(MoneroWallet {
             seed,
@@ -77,7 +103,7 @@ impl MoneroWallet {
     /// let mnemonic = MoneroWallet::generate_mnemonic(Language::English);
     /// ```
     pub fn generate_mnemonic(language: Language) -> String {
-        Seed::to_string(&Seed::new(&mut OsRng, language)).to_string()
+        Seed::new(&mut OsRng, language).to_string().to_string()
     }
 
     /// Returns the mnemonic seed of the wallet.
@@ -86,7 +112,7 @@ impl MoneroWallet {
     ///
     /// A `String` representing the mnemonic seed.
     pub fn get_seed(&self) -> String {
-        Seed::to_string(&self.seed).to_string()
+        self.seed.to_string().to_string()
     }
 
     /// Returns the primary address of the wallet.
@@ -95,14 +121,9 @@ impl MoneroWallet {
     ///
     /// A `String` representing the primary address.
     pub fn get_primary_address(&self) -> String {
-        let spend_point = &self.view_pair.spend();
-        let view_point = &self.view_pair.view();
-        let address = MoneroAddress::new(
-            AddressMeta::new(self.network, AddressType::Standard),
-            *spend_point,
-            *view_point,
-        );
-        address.to_string()
+        let spend_point = self.view_pair.spend();
+        let view_point = self.view_pair.view();
+        MoneroAddress::new(self.network, AddressType::Legacy, spend_point, view_point).to_string()
     }
 
     /// Returns the subaddress of the wallet for the given account and index.
@@ -117,7 +138,7 @@ impl MoneroWallet {
     /// Returns an error if the subaddress index is invalid.
     pub fn get_subaddress(&self, account: u32, index: u32) -> Result<String, String> {
         let subaddress_index = SubaddressIndex::new(account, index).ok_or("Invalid subaddress index".to_string())?;
-        let address = self.view_pair.address(self.network, AddressSpec::Subaddress(subaddress_index));
+        let address = self.view_pair.subaddress(self.network, subaddress_index);
         Ok(address.to_string())
     }
 
@@ -161,10 +182,89 @@ impl MoneroWallet {
     }
 }
 
+// C FFI helpers
+fn to_c_string(s: String) -> *mut c_char {
+    CString::new(s).unwrap_or_else(|_| CString::new("").unwrap()).into_raw()
+}
+
+/// Frees a C string allocated by this library.
+///
+/// # Safety
+/// Must only be called on strings allocated by this library's functions.
+/// Must not be called more than once on the same pointer.
+#[no_mangle]
+pub extern "C" fn free_string(ptr: *mut c_char) {
+    if !ptr.is_null() {
+        unsafe {
+            let _ = CString::from_raw(ptr);
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn generate_mnemonic(language: u8) -> *mut c_char {
+    // Mapping expected by Dart code/tests: 0=German, 1=English, 2=Spanish, ... , 12=Old English.
+    let lang = match language {
+        0 => Language::German,
+        1 => Language::English,
+        2 => Language::Spanish,
+        3 => Language::French,
+        4 => Language::Dutch,
+        5 => Language::Italian,
+        6 => Language::Portuguese,
+        7 => Language::Japanese,
+        8 => Language::Russian,
+        9 => Language::Esperanto,
+        10 => Language::Lojban,
+        11 => Language::Chinese,
+        12 => Language::DeprecatedEnglish,
+        _ => Language::English,
+    };
+    to_c_string(MoneroWallet::generate_mnemonic(lang))
+}
+
+#[no_mangle]
+pub extern "C" fn generate_address(
+    mnemonic: *const c_char,
+    network: u8,
+    account: u32,
+    index: u32,
+) -> *mut c_char {
+    // Safety: assumes mnemonic is a valid, null-terminated UTF-8 C string.
+    if mnemonic.is_null() {
+        return to_c_string(String::new());
+    }
+    let c_str = unsafe { CStr::from_ptr(mnemonic) };
+    let mnemonic_str = match c_str.to_str() {
+        Ok(s) => s,
+        Err(_) => return to_c_string(String::new()),
+    };
+
+    let net = match network {
+        0 => Network::Mainnet,
+        1 => Network::Testnet,
+        2 => Network::Stagenet,
+        _ => Network::Mainnet,
+    };
+
+    let wallet = match MoneroWallet::new(mnemonic_str, net) {
+        Ok(w) => w,
+        Err(_) => return to_c_string(String::new()),
+    };
+
+    if account == 0 && index == 0 {
+        return to_c_string(wallet.get_primary_address());
+    }
+
+    match wallet.get_subaddress(account, index) {
+        Ok(addr) => to_c_string(addr),
+        Err(_) => to_c_string(String::new()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use monero_serai_mirror::wallet::seed::Language;
 
     #[test]
     fn test_wallet_creation() {
