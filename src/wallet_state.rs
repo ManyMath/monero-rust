@@ -1,0 +1,746 @@
+//! Wallet state with encryption support.
+
+use crate::types::{KeyImage, SerializableOutput, Transaction, TxKey};
+use curve25519_dalek::scalar::Scalar;
+use monero_seed::Seed;
+use monero_wallet::{address::Network, ViewPair};
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use zeroize::Zeroizing;
+
+#[derive(Serialize)]
+pub struct WalletState {
+    #[serde(default = "default_version")]
+    pub version: u32,
+
+    /// None for view-only wallets
+    #[serde(serialize_with = "serialize_seed_option")]
+    pub seed: Option<Zeroizing<Seed>>,
+
+    /// Reconstructed from seed on deserialization
+    #[serde(skip)]
+    pub view_pair: ViewPair,
+
+    /// For view-only wallets only
+    pub view_only_spend_public: Option<[u8; 32]>,
+    #[serde(
+        serialize_with = "serialize_view_key_option",
+        deserialize_with = "deserialize_view_key_option"
+    )]
+    pub view_only_view_private: Option<Zeroizing<[u8; 32]>>,
+
+    /// None for view-only wallets
+    #[serde(
+        serialize_with = "serialize_spend_key",
+        deserialize_with = "deserialize_spend_key"
+    )]
+    pub spend_key: Option<Zeroizing<Scalar>>,
+
+    #[serde(
+        serialize_with = "serialize_network",
+        deserialize_with = "deserialize_network"
+    )]
+    pub network: Network,
+    pub seed_language: String,
+
+    pub outputs: HashMap<KeyImage, SerializableOutput>,
+    /// Excluded from spending until thawed
+    pub frozen_outputs: HashSet<KeyImage>,
+    pub spent_outputs: HashSet<KeyImage>,
+
+    pub transactions: HashMap<[u8; 32], Transaction>,
+    /// For payment proofs
+    pub tx_keys: HashMap<[u8; 32], TxKey>,
+
+    pub refresh_from_height: u64,
+    pub current_scanned_height: u64,
+    pub daemon_height: u64,
+    #[serde(skip)]
+    pub is_syncing: bool,
+
+    pub daemon_address: Option<String>,
+    pub is_connected: bool,
+
+    pub password_salt: [u8; 32],
+    /// For password verification only, not encryption
+    pub password_hash: [u8; 32],
+    pub wallet_path: PathBuf,
+    pub is_closed: bool,
+
+    /// Keccak256 of public keys for integrity check
+    #[serde(rename = "keys_checksum")]
+    pub keys_checksum: [u8; 32],
+
+    #[serde(skip)]
+    pub auto_save_enabled: bool,
+}
+
+const WALLET_VERSION: u32 = 1;
+
+fn default_version() -> u32 {
+    WALLET_VERSION
+}
+
+fn compute_keys_checksum(view_pair: &ViewPair) -> [u8; 32] {
+    use sha3::{Digest, Keccak256};
+
+    let spend_bytes = view_pair.spend().compress().to_bytes();
+    let view_bytes = view_pair.view().compress().to_bytes();
+
+    let mut hasher = Keccak256::new();
+    hasher.update(&spend_bytes);
+    hasher.update(&view_bytes);
+    hasher.finalize().into()
+}
+
+fn serialize_seed_option<S>(
+    seed: &Option<Zeroizing<Seed>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match seed {
+        Some(s) => serializer.serialize_some(&*s.entropy() as &[u8]),
+        None => serializer.serialize_none(),
+    }
+}
+
+fn serialize_view_key_option<S>(
+    key: &Option<Zeroizing<[u8; 32]>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match key {
+        Some(k) => serializer.serialize_some(&**k),
+        None => serializer.serialize_none(),
+    }
+}
+
+fn deserialize_view_key_option<'de, D>(
+    deserializer: D,
+) -> Result<Option<Zeroizing<[u8; 32]>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt: Option<[u8; 32]> = Option::deserialize(deserializer)?;
+    Ok(opt.map(Zeroizing::new))
+}
+
+mod serde_zeroizing_option {
+    use super::*;
+    use serde::{Deserializer, Serializer};
+
+    pub fn serialize<S>(
+        value: &Option<Zeroizing<[u8; 32]>>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        super::serialize_view_key_option(value, serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Zeroizing<[u8; 32]>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        super::deserialize_view_key_option(deserializer)
+    }
+}
+
+fn serialize_network<S>(network: &Network, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let network_u8 = match network {
+        Network::Mainnet => 0u8,
+        Network::Testnet => 1u8,
+        Network::Stagenet => 2u8,
+    };
+    serializer.serialize_u8(network_u8)
+}
+
+fn deserialize_network<'de, D>(deserializer: D) -> Result<Network, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let network_u8: u8 = Deserialize::deserialize(deserializer)?;
+    match network_u8 {
+        0 => Ok(Network::Mainnet),
+        1 => Ok(Network::Testnet),
+        2 => Ok(Network::Stagenet),
+        _ => Err(serde::de::Error::custom("Invalid network type")),
+    }
+}
+
+fn serialize_spend_key<S>(
+    spend_key: &Option<Zeroizing<Scalar>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match spend_key {
+        Some(key) => serializer.serialize_some(&*Zeroizing::new(key.to_bytes())),
+        None => serializer.serialize_none(),
+    }
+}
+
+fn deserialize_spend_key<'de, D>(
+    deserializer: D,
+) -> Result<Option<Zeroizing<Scalar>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let bytes: Option<[u8; 32]> = Deserialize::deserialize(deserializer)?;
+    Ok(bytes.map(|b| Zeroizing::new(Scalar::from_bytes_mod_order(b))))
+}
+
+impl WalletState {
+    pub fn hash_password(password: &str, salt: &[u8; 32]) -> Result<[u8; 32], String> {
+        use argon2::{
+            password_hash::{PasswordHasher, SaltString},
+            Algorithm, Argon2, ParamsBuilder, Version,
+        };
+
+        let mut builder = ParamsBuilder::new();
+        builder.m_cost(65536);
+        builder.t_cost(3);
+        builder.p_cost(4);
+        builder.output_len(32);
+        let params = builder.build().map_err(|e| e.to_string())?;
+        let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+
+        let salt_string = SaltString::encode_b64(salt).map_err(|e| e.to_string())?;
+        let password_hash = argon2
+            .hash_password(password.as_bytes(), &salt_string)
+            .map_err(|e| e.to_string())?;
+
+        let hash_bytes = password_hash.hash.ok_or("missing hash")?;
+        if hash_bytes.len() != 32 {
+            return Err(format!("bad hash length: {}", hash_bytes.len()));
+        }
+
+        let mut result = [0u8; 32];
+        result.copy_from_slice(hash_bytes.as_bytes());
+        Ok(result)
+    }
+
+    pub fn generate_salt() -> [u8; 32] {
+        use rand_core::RngCore;
+        let mut salt = [0u8; 32];
+        rand_core::OsRng.fill_bytes(&mut salt);
+        salt
+    }
+
+    pub fn verify_password(
+        password: &str,
+        salt: &[u8; 32],
+        expected_hash: &[u8; 32],
+    ) -> Result<(), String> {
+        let computed_hash = Self::hash_password(password, salt)?;
+        use subtle::ConstantTimeEq;
+        if computed_hash.ct_eq(expected_hash).into() {
+            Ok(())
+        } else {
+            Err("invalid password".to_string())
+        }
+    }
+
+    pub fn new(
+        seed: Seed,
+        seed_language: String,
+        network: Network,
+        password: &str,
+        wallet_path: PathBuf,
+        refresh_from_height: u64,
+    ) -> Result<Self, String> {
+        let password_salt = Self::generate_salt();
+        let password_hash = Self::hash_password(password, &password_salt)?;
+        use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, edwards::EdwardsPoint};
+        use sha3::{Digest, Keccak256};
+
+        let spend: [u8; 32] = *seed.entropy();
+        let spend_scalar = Scalar::from_bytes_mod_order(spend);
+        let spend_point: EdwardsPoint = &spend_scalar * ED25519_BASEPOINT_TABLE;
+        let view: [u8; 32] = Keccak256::digest(&spend).into();
+        let view_scalar = Scalar::from_bytes_mod_order(view);
+        let view_pair =
+            ViewPair::new(spend_point, Zeroizing::new(view_scalar)).map_err(|e| e.to_string())?;
+        let keys_checksum = compute_keys_checksum(&view_pair);
+
+        Ok(Self {
+            version: WALLET_VERSION,
+            seed: Some(Zeroizing::new(seed)),
+            view_pair,
+            view_only_spend_public: None, // Not a view-only wallet
+            view_only_view_private: None, // Not a view-only wallet
+            spend_key: Some(Zeroizing::new(spend_scalar)),
+            network,
+            seed_language,
+            outputs: HashMap::new(),
+            frozen_outputs: HashSet::new(),
+            spent_outputs: HashSet::new(),
+            transactions: HashMap::new(),
+            tx_keys: HashMap::new(),
+            refresh_from_height,
+            current_scanned_height: refresh_from_height,
+            daemon_height: 0,
+            is_syncing: false,
+            daemon_address: None,
+            is_connected: false,
+            password_salt,
+            password_hash,
+            wallet_path,
+            is_closed: false,
+            keys_checksum,
+            auto_save_enabled: false,
+        })
+    }
+
+    pub fn new_view_only(
+        spend_public_key: [u8; 32],
+        view_private_key: [u8; 32],
+        network: Network,
+        password: &str,
+        wallet_path: PathBuf,
+        refresh_from_height: u64,
+    ) -> Result<Self, String> {
+        let password_salt = Self::generate_salt();
+        let password_hash = Self::hash_password(password, &password_salt)?;
+        use curve25519_dalek::edwards::CompressedEdwardsY;
+
+        let spend_point = CompressedEdwardsY(spend_public_key)
+            .decompress()
+            .ok_or("invalid spend public key")?;
+        let view_scalar = Scalar::from_bytes_mod_order(view_private_key);
+        let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar))
+            .map_err(|e| e.to_string())?;
+        let keys_checksum = compute_keys_checksum(&view_pair);
+
+        Ok(Self {
+            version: WALLET_VERSION,
+            seed: None,
+            view_pair,
+            view_only_spend_public: Some(spend_public_key),
+            view_only_view_private: Some(Zeroizing::new(view_private_key)),
+            spend_key: None,
+            network,
+            seed_language: String::from("N/A"),
+            outputs: HashMap::new(),
+            frozen_outputs: HashSet::new(),
+            spent_outputs: HashSet::new(),
+            transactions: HashMap::new(),
+            tx_keys: HashMap::new(),
+            refresh_from_height,
+            current_scanned_height: refresh_from_height,
+            daemon_height: 0,
+            is_syncing: false,
+            daemon_address: None,
+            is_connected: false,
+            password_salt,
+            password_hash,
+            wallet_path,
+            is_closed: false,
+            keys_checksum,
+            auto_save_enabled: false,
+        })
+    }
+
+    pub fn is_view_only(&self) -> bool {
+        self.spend_key.is_none()
+    }
+
+    pub fn get_balance(&self) -> u64 {
+        self.outputs
+            .iter()
+            .filter(|(ki, _)| !self.spent_outputs.contains(*ki))
+            .map(|(_, output)| output.amount)
+            .sum()
+    }
+
+    /// Spendable balance (10+ confirmations, not frozen)
+    pub fn get_unlocked_balance(&self) -> u64 {
+        const LOCK_BLOCKS: u64 = 10;
+        self.outputs
+            .iter()
+            .filter(|(ki, output)| {
+                !self.spent_outputs.contains(*ki)
+                    && !self.frozen_outputs.contains(*ki)
+                    && self.daemon_height >= output.height.saturating_add(LOCK_BLOCKS)
+            })
+            .map(|(_, output)| output.amount)
+            .sum()
+    }
+
+    pub fn is_synced(&self) -> bool {
+        self.is_connected && self.current_scanned_height >= self.daemon_height
+    }
+}
+
+impl<'de> Deserialize<'de> for WalletState {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct WalletStateHelper {
+            #[serde(default = "default_version")]
+            version: u32,
+            seed: Option<Vec<u8>>,
+            #[serde(default)]
+            view_only_spend_public: Option<[u8; 32]>,
+            #[serde(default, with = "serde_zeroizing_option")]
+            view_only_view_private: Option<Zeroizing<[u8; 32]>>,
+            #[serde(deserialize_with = "deserialize_spend_key")]
+            spend_key: Option<Zeroizing<Scalar>>,
+            #[serde(deserialize_with = "deserialize_network")]
+            network: Network,
+            seed_language: String,
+            outputs: HashMap<KeyImage, SerializableOutput>,
+            frozen_outputs: HashSet<KeyImage>,
+            spent_outputs: HashSet<KeyImage>,
+            transactions: HashMap<[u8; 32], Transaction>,
+            tx_keys: HashMap<[u8; 32], TxKey>,
+            refresh_from_height: u64,
+            current_scanned_height: u64,
+            daemon_height: u64,
+            daemon_address: Option<String>,
+            is_connected: bool,
+            password_salt: [u8; 32],
+            password_hash: [u8; 32],
+            wallet_path: PathBuf,
+            is_closed: bool,
+            #[serde(rename = "keys_checksum")]
+            keys_checksum: [u8; 32],
+        }
+
+        let helper = WalletStateHelper::deserialize(deserializer)?;
+
+        if helper.version > WALLET_VERSION {
+            return Err(serde::de::Error::custom(format!(
+                "wallet version {} > supported {}",
+                helper.version, WALLET_VERSION
+            )));
+        }
+
+        use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, edwards::EdwardsPoint};
+        use sha3::{Digest, Keccak256};
+
+        let (seed_opt, view_pair) = if let Some(seed_bytes) = helper.seed {
+            if seed_bytes.len() != 32 {
+                return Err(serde::de::Error::custom("bad seed length"));
+            }
+
+            let mut entropy = Zeroizing::new([0u8; 32]);
+            entropy.copy_from_slice(&seed_bytes);
+
+            use monero_seed::Language;
+            let language = match helper.seed_language.as_str() {
+                "Chinese" => Language::Chinese,
+                "English" => Language::English,
+                "Dutch" => Language::Dutch,
+                "French" => Language::French,
+                "Spanish" => Language::Spanish,
+                "German" => Language::German,
+                "Italian" => Language::Italian,
+                "Portuguese" => Language::Portuguese,
+                "Japanese" => Language::Japanese,
+                "Russian" => Language::Russian,
+                "Esperanto" => Language::Esperanto,
+                "Lojban" => Language::Lojban,
+                "DeprecatedEnglish" => Language::DeprecatedEnglish,
+                _ => Language::English,
+            };
+
+            let seed = Seed::from_entropy(language, entropy)
+                .ok_or_else(|| serde::de::Error::custom("invalid seed entropy"))?;
+
+            let spend: [u8; 32] = *seed.entropy();
+            let spend_scalar = Scalar::from_bytes_mod_order(spend);
+            let spend_point: EdwardsPoint = &spend_scalar * ED25519_BASEPOINT_TABLE;
+            let view: [u8; 32] = Keccak256::digest(&spend).into();
+            let view_scalar = Scalar::from_bytes_mod_order(view);
+            let vp = ViewPair::new(spend_point, Zeroizing::new(view_scalar))
+                .map_err(|e| serde::de::Error::custom(e.to_string()))?;
+
+            let reconstructed_checksum = compute_keys_checksum(&vp);
+            if reconstructed_checksum != helper.keys_checksum {
+                return Err(serde::de::Error::custom("keys checksum mismatch - possible corruption"));
+            }
+
+            (Some(Zeroizing::new(seed)), vp)
+        } else {
+            let spend_public = helper.view_only_spend_public
+                .as_ref()
+                .ok_or_else(|| serde::de::Error::custom("missing spend public key"))?;
+            let view_private = helper.view_only_view_private
+                .as_ref()
+                .ok_or_else(|| serde::de::Error::custom("missing view private key"))?;
+
+            let spend_point = curve25519_dalek::edwards::CompressedEdwardsY(*spend_public)
+                .decompress()
+                .ok_or_else(|| serde::de::Error::custom("invalid spend public key"))?;
+            let view_scalar = Scalar::from_bytes_mod_order(**view_private);
+
+            let vp = ViewPair::new(spend_point, Zeroizing::new(view_scalar))
+                .map_err(|e| serde::de::Error::custom(e.to_string()))?;
+
+            let reconstructed_checksum = compute_keys_checksum(&vp);
+            if reconstructed_checksum != helper.keys_checksum {
+                return Err(serde::de::Error::custom("keys checksum mismatch - possible corruption"));
+            }
+
+            (None, vp)
+        };
+
+        Ok(WalletState {
+            version: helper.version,
+            seed: seed_opt,
+            view_pair,
+            view_only_spend_public: helper.view_only_spend_public,
+            view_only_view_private: helper.view_only_view_private,
+            spend_key: helper.spend_key,
+            network: helper.network,
+            seed_language: helper.seed_language,
+            outputs: helper.outputs,
+            frozen_outputs: helper.frozen_outputs,
+            spent_outputs: helper.spent_outputs,
+            transactions: helper.transactions,
+            tx_keys: helper.tx_keys,
+            refresh_from_height: helper.refresh_from_height,
+            current_scanned_height: helper.current_scanned_height,
+            daemon_height: helper.daemon_height,
+            is_syncing: false,
+            daemon_address: helper.daemon_address,
+            is_connected: helper.is_connected,
+            password_salt: helper.password_salt,
+            password_hash: helper.password_hash,
+            wallet_path: helper.wallet_path,
+            is_closed: helper.is_closed,
+            keys_checksum: helper.keys_checksum,
+            auto_save_enabled: false,
+        })
+    }
+}
+
+impl Default for WalletState {
+    fn default() -> Self {
+        use rand_core::OsRng;
+
+        let seed = Seed::new(&mut OsRng, monero_seed::Language::English);
+        Self::new(
+            seed,
+            String::from("English"),
+            Network::Mainnet,
+            "default_password",
+            PathBuf::from("wallet.bin"),
+            0,
+        )
+        .expect("Failed to create default WalletState")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wallet_state_creation() {
+        use rand_core::OsRng;
+
+        let seed = Seed::new(&mut OsRng, monero_seed::Language::English);
+        let wallet_state = WalletState::new(
+            seed,
+            String::from("English"),
+            Network::Mainnet,
+            "test_password",
+            PathBuf::from("test_wallet.bin"),
+            0,
+        )
+        .unwrap();
+
+        assert!(!wallet_state.is_view_only());
+        assert!(!wallet_state.is_closed);
+        assert_eq!(wallet_state.network, Network::Mainnet);
+        assert_eq!(wallet_state.get_balance(), 0);
+    }
+
+    #[test]
+    fn test_view_only_wallet() {
+        use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, edwards::EdwardsPoint};
+
+        let spend_scalar = Scalar::from_bytes_mod_order([1u8; 32]);
+        let spend_point: EdwardsPoint = &spend_scalar * ED25519_BASEPOINT_TABLE;
+        let spend_public_key = spend_point.compress().to_bytes();
+        let view_private_key = [2u8; 32];
+
+        let wallet_state = WalletState::new_view_only(
+            spend_public_key,
+            view_private_key,
+            Network::Testnet,
+            "test_password",
+            PathBuf::from("view_only.bin"),
+            100,
+        )
+        .expect("Failed to create view-only wallet");
+
+        assert!(wallet_state.is_view_only());
+        assert_eq!(wallet_state.network, Network::Testnet);
+        assert_eq!(wallet_state.refresh_from_height, 100);
+    }
+
+    #[test]
+    fn test_balance_calculation() {
+        use rand_core::OsRng;
+
+        let seed = Seed::new(&mut OsRng, monero_seed::Language::English);
+        let mut wallet_state = WalletState::new(
+            seed,
+            String::from("English"),
+            Network::Mainnet,
+            "test_password",
+            PathBuf::from("test.bin"),
+            0,
+        )
+        .unwrap();
+
+        // Add some outputs
+        let output1 = SerializableOutput {
+            tx_hash: [1u8; 32],
+            output_index: 0,
+            amount: 1000000000000,
+            key_image: [1u8; 32],
+            subaddress_indices: (0, 0),
+            height: 100,
+            unlocked: true,
+            spent: false,
+            frozen: false,
+        };
+
+        let output2 = SerializableOutput {
+            tx_hash: [2u8; 32],
+            output_index: 0,
+            amount: 2000000000000,
+            key_image: [2u8; 32],
+            subaddress_indices: (0, 1),
+            height: 110,
+            unlocked: true,
+            spent: false,
+            frozen: false,
+        };
+
+        wallet_state.outputs.insert([1u8; 32], output1);
+        wallet_state.outputs.insert([2u8; 32], output2);
+
+        assert_eq!(wallet_state.get_balance(), 3000000000000);
+
+        // Mark one as spent
+        wallet_state.spent_outputs.insert([1u8; 32]);
+        assert_eq!(wallet_state.get_balance(), 2000000000000);
+    }
+
+    #[test]
+    fn test_password_hashing() {
+        let password = "my_secure_password_123!";
+        let salt = WalletState::generate_salt();
+
+        // Hash the password
+        let hash1 = WalletState::hash_password(password, &salt).expect("Failed to hash password");
+        let hash2 = WalletState::hash_password(password, &salt).expect("Failed to hash password");
+
+        // Same password with same salt should produce same hash
+        assert_eq!(hash1, hash2);
+
+        // Different salt should produce different hash
+        let different_salt = WalletState::generate_salt();
+        let hash3 = WalletState::hash_password(password, &different_salt)
+            .expect("Failed to hash password");
+        assert_ne!(hash1, hash3);
+
+        // Different password should produce different hash
+        let hash4 = WalletState::hash_password("different_password", &salt)
+            .expect("Failed to hash password");
+        assert_ne!(hash1, hash4);
+    }
+
+    #[test]
+    fn test_password_verification() {
+        let password = "correct_password";
+        let wrong_password = "wrong_password";
+        let salt = WalletState::generate_salt();
+        let hash = WalletState::hash_password(password, &salt).expect("Failed to hash password");
+
+        // Correct password should verify
+        assert!(WalletState::verify_password(password, &salt, &hash).is_ok());
+
+        // Wrong password should fail
+        assert!(WalletState::verify_password(wrong_password, &salt, &hash).is_err());
+
+        // Wrong salt should fail
+        let wrong_salt = WalletState::generate_salt();
+        assert!(WalletState::verify_password(password, &wrong_salt, &hash).is_err());
+    }
+
+    #[test]
+    fn test_wallet_stores_password_correctly() {
+        use rand_core::OsRng;
+
+        let password = "wallet_password_456";
+        let seed = Seed::new(&mut OsRng, monero_seed::Language::English);
+        let wallet_state = WalletState::new(
+            seed,
+            String::from("English"),
+            Network::Mainnet,
+            password,
+            PathBuf::from("test.bin"),
+            0,
+        )
+        .unwrap();
+
+        // Verify the stored password hash
+        assert!(
+            WalletState::verify_password(password, &wallet_state.password_salt, &wallet_state.password_hash).is_ok()
+        );
+
+        // Wrong password should fail
+        assert!(
+            WalletState::verify_password("wrong", &wallet_state.password_salt, &wallet_state.password_hash).is_err()
+        );
+    }
+
+    #[test]
+    fn test_is_synced() {
+        use rand_core::OsRng;
+
+        let seed = Seed::new(&mut OsRng, monero_seed::Language::English);
+        let mut wallet_state = WalletState::new(
+            seed,
+            String::from("English"),
+            Network::Mainnet,
+            "test_password",
+            PathBuf::from("test.bin"),
+            0,
+        )
+        .unwrap();
+
+        // Not synced if not connected
+        assert!(!wallet_state.is_synced());
+
+        wallet_state.is_connected = true;
+        wallet_state.daemon_height = 100;
+        wallet_state.current_scanned_height = 50;
+
+        // Not synced if behind
+        assert!(!wallet_state.is_synced());
+
+        wallet_state.current_scanned_height = 100;
+
+        // Synced when caught up
+        assert!(wallet_state.is_synced());
+    }
+}

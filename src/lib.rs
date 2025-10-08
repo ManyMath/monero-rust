@@ -1,13 +1,14 @@
+pub mod types;
+pub mod wallet_state;
+
 use monero_wallet::{
     address::{AddressType, MoneroAddress, SubaddressIndex},
     ViewPair,
 };
 
-// Mnemonic support via monero-seed.
 pub use monero_seed::Language;
 use monero_seed::Seed;
-
-// Re-export Network for external users/tests.
+pub use wallet_state::WalletState;
 pub use monero_wallet::address::Network;
 
 use rand_core::OsRng;
@@ -17,7 +18,6 @@ use sha3::{Digest, Keccak256};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 
-/// Helper function to parse a mnemonic seed by trying all supported languages.
 fn seed_from_string(mnemonic: &str) -> Result<(Language, Seed), String> {
     let languages = [
         Language::English,
@@ -51,24 +51,6 @@ pub struct MoneroWallet {
 }
 
 impl MoneroWallet {
-    /// Creates a new MoneroWallet from a mnemonic and network type.
-    ///
-    /// # Arguments
-    ///
-    /// * `mnemonic` - A string slice that holds the mnemonic seed phrase.
-    /// * `network` - The Monero network type (Mainnet, Testnet, or Stagenet).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the mnemonic is invalid.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use monero_rust::{MoneroWallet, Language, Network};
-    /// let mnemonic = MoneroWallet::generate_mnemonic(Language::English);
-    /// let wallet = MoneroWallet::new(&mnemonic, Network::Mainnet).unwrap();
-    /// ```
     pub fn new(mnemonic: &str, network: Network) -> Result<Self, String> {
         let (_lang, seed) = seed_from_string(mnemonic)?;
         let spend: [u8; 32] = *seed.entropy();
@@ -86,112 +68,52 @@ impl MoneroWallet {
         })
     }
 
-    /// Generates a new mnemonic seed in the specified language.
-    ///
-    /// # Arguments
-    ///
-    /// * `language` - The language for the mnemonic seed.
-    ///
-    /// # Returns
-    ///
-    /// A `String` representing the mnemonic seed.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use monero_rust::{MoneroWallet, Language};
-    /// let mnemonic = MoneroWallet::generate_mnemonic(Language::English);
-    /// ```
     pub fn generate_mnemonic(language: Language) -> String {
         Seed::new(&mut OsRng, language).to_string().to_string()
     }
 
-    /// Returns the mnemonic seed of the wallet.
-    ///
-    /// # Returns
-    ///
-    /// A `String` representing the mnemonic seed.
     pub fn get_seed(&self) -> String {
         self.seed.to_string().to_string()
     }
 
-    /// Returns the primary address of the wallet.
-    ///
-    /// # Returns
-    ///
-    /// A `String` representing the primary address.
     pub fn get_primary_address(&self) -> String {
         let spend_point = self.view_pair.spend();
         let view_point = self.view_pair.view();
         MoneroAddress::new(self.network, AddressType::Legacy, spend_point, view_point).to_string()
     }
 
-    /// Returns the subaddress of the wallet for the given account and index.
-    ///
-    /// # Arguments
-    ///
-    /// * `account` - The account index.
-    /// * `index` - The subaddress index.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subaddress index is invalid.
     pub fn get_subaddress(&self, account: u32, index: u32) -> Result<String, String> {
         let subaddress_index = SubaddressIndex::new(account, index).ok_or("Invalid subaddress index".to_string())?;
         let address = self.view_pair.subaddress(self.network, subaddress_index);
         Ok(address.to_string())
     }
 
-    /// Returns the private spend key of the wallet.
-    ///
-    /// # Returns
-    ///
-    /// A `String` representing the private spend key in hexadecimal format.
     pub fn get_private_spend_key(&self) -> String {
         hex::encode(self.seed.entropy())
     }
 
-    /// Returns the private view key of the wallet.
-    ///
-    /// # Returns
-    ///
-    /// A `String` representing the private view key in hexadecimal format.
     pub fn get_private_view_key(&self) -> String {
         let view: [u8; 32] = Keccak256::digest(self.seed.entropy()).into();
         hex::encode(view)
     }
 
-    /// Returns the public spend key of the wallet.
-    ///
-    /// # Returns
-    ///
-    /// A `String` representing the public spend key in hexadecimal format.
     pub fn get_public_spend_key(&self) -> String {
         let spend_point = &self.view_pair.spend();
         hex::encode(spend_point.compress().to_bytes())
     }
 
-    /// Returns the public view key of the wallet.
-    ///
-    /// # Returns
-    ///
-    /// A `String` representing the public view key in hexadecimal format.
     pub fn get_public_view_key(&self) -> String {
         let view_point = &self.view_pair.view();
         hex::encode(view_point.compress().to_bytes())
     }
 }
 
-// C FFI helpers
 fn to_c_string(s: String) -> *mut c_char {
     CString::new(s).unwrap_or_else(|_| CString::new("").unwrap()).into_raw()
 }
 
-/// Frees a C string allocated by this library.
-///
 /// # Safety
-/// Must only be called on strings allocated by this library's functions.
-/// Must not be called more than once on the same pointer.
+/// ptr must be from this library
 #[no_mangle]
 pub extern "C" fn free_string(ptr: *mut c_char) {
     if !ptr.is_null() {
@@ -203,7 +125,6 @@ pub extern "C" fn free_string(ptr: *mut c_char) {
 
 #[no_mangle]
 pub extern "C" fn generate_mnemonic(language: u8) -> *mut c_char {
-    // Mapping expected by Dart code/tests: 0=German, 1=English, 2=Spanish, ... , 12=Old English.
     let lang = match language {
         0 => Language::German,
         1 => Language::English,
@@ -230,7 +151,6 @@ pub extern "C" fn generate_address(
     account: u32,
     index: u32,
 ) -> *mut c_char {
-    // Safety: assumes mnemonic is a valid, null-terminated UTF-8 C string.
     if mnemonic.is_null() {
         return to_c_string(String::new());
     }
