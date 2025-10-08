@@ -151,5 +151,42 @@ describe('Persistence & Node-Query Tests', () => {
     }, 20000);
   });
 
-  // Node-Query tests added in later commits
+  const describeIfNode = nodeAvailable ? describe : describe.skip;
+
+  describeIfNode('Node-Query', () => {
+    let daemonHeight;
+
+    it('queries daemon height and receives positive height', async () => {
+      const response = await sendSignalAndWait(
+        extPage,
+        'send_query_daemon_height_request',
+        JSON.stringify({ node_url: 'http://127.0.0.1:38081' }),
+        'DaemonHeightResponse',
+        15000
+      );
+
+      expect(response.success).toBe(true);
+      expect(typeof response.daemon_height).toBe('number');
+      expect(response.daemon_height).toBeGreaterThan(0);
+
+      daemonHeight = response.daemon_height;
+    }, 20000);
+
+    it('gets block height from timestamp with plausible result', async () => {
+      const response = await sendSignalAndWait(
+        extPage,
+        'send_get_block_height_from_timestamp_request',
+        JSON.stringify({ timestamp: 1704067200, node_url: 'http://127.0.0.1:38081' }),
+        'BlockHeightFromTimestampResponse',
+        15000
+      );
+
+      expect(response.success).toBe(true);
+      expect(typeof response.block_height).toBe('number');
+      expect(response.block_height).toBeGreaterThan(0);
+      if (daemonHeight) {
+        expect(response.block_height).toBeLessThan(daemonHeight);
+      }
+    }, 20000);
+  });
 });
