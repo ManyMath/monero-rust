@@ -1,12 +1,16 @@
 //! Wallet state with encryption support.
 
+use crate::crypto::{decrypt_wallet_data, encrypt_wallet_data, generate_nonce};
 use crate::types::{KeyImage, SerializableOutput, Transaction, TxKey};
+use crate::WalletError;
 use curve25519_dalek::scalar::Scalar;
 use monero_seed::Seed;
 use monero_wallet::{address::Network, ViewPair};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::fs::{self, OpenOptions};
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
 
 #[derive(Serialize)]
@@ -380,6 +384,140 @@ impl WalletState {
     pub fn is_synced(&self) -> bool {
         self.is_connected && self.current_scanned_height >= self.daemon_height
     }
+
+    // ========================================================================
+    // FILE I/O - Encrypted wallet persistence
+    // ========================================================================
+
+    /// Magic bytes identifying a monero-rust wallet file: "MNRS"
+    const MAGIC_BYTES: &'static [u8; 4] = b"MNRS";
+
+    /// Size of the fixed header in bytes (magic + version + salt + nonce)
+    const HEADER_SIZE: usize = 4 + 4 + 32 + 12; // 52 bytes
+
+    /// Saves wallet to configured path
+    pub fn save(&self, password: &str) -> Result<(), WalletError> {
+        let path = self.wallet_path.clone();
+        self.save_to_file(&path, password)
+    }
+
+    pub fn save_to_file<P: AsRef<Path>>(&self, path: P, password: &str) -> Result<(), WalletError> {
+        if self.is_closed {
+            return Err(WalletError::WalletClosed);
+        }
+
+        Self::verify_password(password, &self.password_salt, &self.password_hash)
+            .map_err(|_| WalletError::InvalidPassword)?;
+
+        let path = path.as_ref();
+        let serialized_data = bincode::serialize(self)
+            .map_err(|e| WalletError::SerializationError(format!("Failed to serialize wallet: {}", e)))?;
+
+        let nonce = generate_nonce();
+        let encrypted_data = encrypt_wallet_data(
+            &serialized_data,
+            password,
+            &self.password_salt,
+            &nonce,
+        )
+        .map_err(WalletError::EncryptionError)?;
+
+        let mut file_contents = Vec::with_capacity(Self::HEADER_SIZE + encrypted_data.len());
+        file_contents.extend_from_slice(Self::MAGIC_BYTES);
+        file_contents.extend_from_slice(&self.version.to_le_bytes());
+        file_contents.extend_from_slice(&self.password_salt);
+        file_contents.extend_from_slice(&nonce);
+        file_contents.extend_from_slice(&encrypted_data);
+
+        let temp_path = path.with_extension("tmp");
+
+        #[cfg(unix)]
+        let mut temp_file = {
+            use std::os::unix::fs::OpenOptionsExt;
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&temp_path)?
+        };
+
+        #[cfg(not(unix))]
+        let mut temp_file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)?;
+
+        temp_file.write_all(&file_contents)?;
+        temp_file.sync_all()?;
+        drop(temp_file);
+
+        match fs::rename(&temp_path, path) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let _ = fs::remove_file(&temp_path);
+                Err(WalletError::IoError(e))
+            }
+        }
+    }
+
+    pub fn load_from_file<P: AsRef<Path>>(path: P, password: &str) -> Result<Self, WalletError> {
+        let path = path.as_ref();
+
+        let mut file = fs::File::open(path)?;
+        let mut file_contents = Vec::new();
+        file.read_to_end(&mut file_contents)?;
+
+        if file_contents.len() < Self::HEADER_SIZE {
+            return Err(WalletError::CorruptedFile(format!(
+                "File too small: expected at least {} bytes, got {}",
+                Self::HEADER_SIZE,
+                file_contents.len()
+            )));
+        }
+
+        let magic = &file_contents[0..4];
+        if magic != Self::MAGIC_BYTES {
+            return Err(WalletError::CorruptedFile(format!(
+                "Invalid magic bytes: expected {:?}, got {:?}",
+                Self::MAGIC_BYTES,
+                magic
+            )));
+        }
+
+        let version_bytes: [u8; 4] = file_contents[4..8]
+            .try_into()
+            .map_err(|_| WalletError::CorruptedFile("Failed to read version".to_string()))?;
+        let version = u32::from_le_bytes(version_bytes);
+
+        if version > WALLET_VERSION {
+            return Err(WalletError::UnsupportedVersion(version));
+        }
+
+        let salt: [u8; 32] = file_contents[8..40]
+            .try_into()
+            .map_err(|_| WalletError::CorruptedFile("Failed to read salt".to_string()))?;
+
+        let nonce: [u8; 12] = file_contents[40..52]
+            .try_into()
+            .map_err(|_| WalletError::CorruptedFile("Failed to read nonce".to_string()))?;
+
+        let encrypted_data = &file_contents[52..];
+
+        let decrypted_data = Zeroizing::new(
+            decrypt_wallet_data(encrypted_data, password, &salt, &nonce).map_err(|e| {
+                if e.contains("invalid password") || e.contains("corrupted") {
+                    WalletError::InvalidPassword
+                } else {
+                    WalletError::EncryptionError(e)
+                }
+            })?,
+        );
+
+        let wallet: WalletState = bincode::deserialize(&*decrypted_data)
+            .map_err(|e| WalletError::SerializationError(format!("Failed to deserialize wallet: {}", e)))?;
+
+        Ok(wallet)
+    }
 }
 
 impl<'de> Deserialize<'de> for WalletState {
@@ -521,7 +659,7 @@ impl<'de> Deserialize<'de> for WalletState {
             password_salt: helper.password_salt,
             password_hash: helper.password_hash,
             wallet_path: helper.wallet_path,
-            is_closed: helper.is_closed,
+            is_closed: false,
             keys_checksum: helper.keys_checksum,
             auto_save_enabled: false,
         })
