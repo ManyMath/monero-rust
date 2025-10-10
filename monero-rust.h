@@ -17,6 +17,8 @@
 #include <stdlib.h>
 
 
+typedef struct WalletState WalletState;
+
 /**
  * # Safety
  * ptr must be from this library
@@ -26,3 +28,21 @@ void free_string(char *ptr);
 char *generate_address(const char *mnemonic, uint8_t network, uint32_t account, uint32_t index);
 
 char *generate_mnemonic(uint8_t language);
+
+/**
+ * # Safety
+ * Must only be called once per wallet allocated by wallet_load().
+ */
+void wallet_free(struct WalletState *wallet);
+
+/**
+ * # Safety
+ * Path and password must be null-terminated UTF-8. Caller must free with wallet_free().
+ */
+struct WalletState *wallet_load(const char *path, const char *password);
+
+/**
+ * # Safety
+ * Wallet pointer must be valid. Password must be null-terminated UTF-8.
+ */
+int32_t wallet_save(const struct WalletState *wallet, const char *password);
