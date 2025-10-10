@@ -18,6 +18,55 @@ use curve25519_dalek::{edwards::EdwardsPoint, scalar::Scalar, constants::ED25519
 use sha3::{Digest, Keccak256};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
+#[derive(Debug)]
+pub enum WalletError {
+    IoError(std::io::Error),
+    EncryptionError(String),
+    InvalidPassword,
+    CorruptedFile(String),
+    UnsupportedVersion(u32),
+    SerializationError(String),
+    WalletClosed,
+    Other(String),
+}
+
+impl std::fmt::Display for WalletError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WalletError::IoError(e) => write!(f, "I/O error: {}", e),
+            WalletError::EncryptionError(msg) => write!(f, "Encryption error: {}", msg),
+            WalletError::InvalidPassword => write!(f, "Invalid password"),
+            WalletError::CorruptedFile(msg) => write!(f, "Corrupted wallet file: {}", msg),
+            WalletError::UnsupportedVersion(v) => write!(f, "Unsupported wallet version: {}", v),
+            WalletError::SerializationError(msg) => write!(f, "Serialization error: {}", msg),
+            WalletError::WalletClosed => write!(f, "Wallet is closed"),
+            WalletError::Other(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
+impl std::error::Error for WalletError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            WalletError::IoError(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for WalletError {
+    fn from(err: std::io::Error) -> Self {
+        WalletError::IoError(err)
+    }
+}
+
+impl From<String> for WalletError {
+    fn from(err: String) -> Self {
+        WalletError::Other(err)
+    }
+}
 
 fn seed_from_string(mnemonic: &str) -> Result<(Language, Seed), String> {
     let languages = [
