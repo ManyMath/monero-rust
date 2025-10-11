@@ -5,7 +5,7 @@ use crate::types::{KeyImage, SerializableOutput, Transaction, TxKey};
 use crate::WalletError;
 use curve25519_dalek::scalar::Scalar;
 use monero_seed::Seed;
-use monero_wallet::{address::Network, ViewPair};
+use monero_wallet::{address::Network, rpc::Rpc, ViewPair};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
@@ -78,6 +78,23 @@ pub struct WalletState {
 
     #[serde(skip)]
     pub auto_save_enabled: bool,
+
+    /// RPC client (runtime only, re-establish after loading)
+    #[serde(skip)]
+    pub rpc_client: std::sync::Arc<tokio::sync::RwLock<Option<monero_simple_request_rpc::SimpleRequestRpc>>>,
+
+    #[serde(skip)]
+    pub health_check_handle: Option<tokio::task::JoinHandle<()>>,
+
+    #[serde(skip)]
+    pub reconnection_policy: crate::rpc::ReconnectionPolicy,
+
+    #[serde(skip)]
+    pub reconnection_attempts: u32,
+
+    /// Stored for reconnection (includes credentials, not persisted for security)
+    #[serde(skip)]
+    pub connection_config: Option<crate::rpc::ConnectionConfig>,
 }
 
 const WALLET_VERSION: u32 = 1;
@@ -303,6 +320,11 @@ impl WalletState {
             is_closed: false,
             keys_checksum,
             auto_save_enabled: false,
+            rpc_client: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
+            health_check_handle: None,
+            reconnection_policy: crate::rpc::ReconnectionPolicy::default(),
+            reconnection_attempts: 0,
+            connection_config: None,
         })
     }
 
@@ -352,6 +374,11 @@ impl WalletState {
             is_closed: false,
             keys_checksum,
             auto_save_enabled: false,
+            rpc_client: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
+            health_check_handle: None,
+            reconnection_policy: crate::rpc::ReconnectionPolicy::default(),
+            reconnection_attempts: 0,
+            connection_config: None,
         })
     }
 
@@ -383,6 +410,151 @@ impl WalletState {
 
     pub fn is_synced(&self) -> bool {
         self.is_connected && self.current_scanned_height >= self.daemon_height
+    }
+
+    // ========================================================================
+    // RPC CONNECTION MANAGEMENT
+    // ========================================================================
+
+    /// Connect to a Monero daemon. Disconnects any existing connection first.
+    pub async fn connect(&mut self, config: crate::rpc::ConnectionConfig) -> Result<(), WalletError> {
+        use monero_simple_request_rpc::SimpleRequestRpc;
+
+        // Already connected to this daemon
+        if self.is_connected && self.daemon_address.as_ref() == Some(&config.daemon_address) {
+            return Ok(());
+        }
+
+        if self.is_connected {
+            self.disconnect().await;
+        }
+
+        let url = config.build_url();
+        let rpc = SimpleRequestRpc::with_custom_timeout(url.as_str().to_string(), config.timeout)
+            .await
+            .map_err(WalletError::RpcError)?;
+
+        let daemon_height = rpc.get_height().await.map_err(WalletError::RpcError)?;
+
+        self.daemon_address = Some(config.daemon_address.clone());
+        self.daemon_height = daemon_height as u64;
+        self.is_connected = true;
+        self.reconnection_attempts = 0;
+        self.connection_config = Some(config);
+
+        {
+            let mut client = self.rpc_client.write().await;
+            *client = Some(rpc);
+        }
+
+        self.start_health_check().await;
+        Ok(())
+    }
+
+    pub async fn disconnect(&mut self) {
+        self.stop_health_check().await;
+
+        {
+            let mut client = self.rpc_client.write().await;
+            *client = None;
+        }
+
+        self.connection_config = None;
+        self.is_connected = false;
+        self.reconnection_attempts = 0;
+    }
+
+    pub fn is_connected_to_daemon(&self) -> bool {
+        self.is_connected
+    }
+
+    async fn get_rpc(&self) -> Result<monero_simple_request_rpc::SimpleRequestRpc, WalletError> {
+        let client = self.rpc_client.read().await;
+        client.clone().ok_or(WalletError::NotConnected)
+    }
+
+    pub async fn check_connection(&mut self) -> Result<(), WalletError> {
+        let rpc = self.get_rpc().await?;
+
+        match rpc.get_height().await {
+            Ok(height) => {
+                self.daemon_height = height as u64;
+                self.is_connected = true;
+                self.reconnection_attempts = 0;
+                Ok(())
+            }
+            Err(e) => {
+                self.is_connected = false;
+                Err(WalletError::RpcError(e))
+            }
+        }
+    }
+
+    async fn start_health_check(&mut self) {
+        self.stop_health_check().await;
+
+        let rpc_client = self.rpc_client.clone();
+        let interval = self.reconnection_policy.health_check_interval;
+        let policy = self.reconnection_policy.clone();
+        let config = self.connection_config.clone();
+
+        let handle = tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+
+            loop {
+                ticker.tick().await;
+
+                let rpc = {
+                    let lock = rpc_client.read().await;
+                    lock.clone()
+                };
+
+                let Some(rpc) = rpc else {
+                    break;
+                };
+
+                if rpc.get_height().await.is_err() {
+                    Self::attempt_reconnect(rpc_client.clone(), config.clone(), policy.clone()).await;
+                }
+            }
+        });
+
+        self.health_check_handle = Some(handle);
+    }
+
+    async fn stop_health_check(&mut self) {
+        if let Some(handle) = self.health_check_handle.take() {
+            handle.abort();
+            let _ = handle.await;
+        }
+    }
+
+    async fn attempt_reconnect(
+        rpc_client: std::sync::Arc<tokio::sync::RwLock<Option<monero_simple_request_rpc::SimpleRequestRpc>>>,
+        config: Option<crate::rpc::ConnectionConfig>,
+        policy: crate::rpc::ReconnectionPolicy,
+    ) {
+        use monero_simple_request_rpc::SimpleRequestRpc;
+
+        let Some(config) = config else { return };
+
+        for attempt in 0..policy.max_attempts {
+            tokio::time::sleep(policy.delay_for_attempt(attempt)).await;
+
+            let url = config.build_url();
+            let Ok(new_rpc) = SimpleRequestRpc::with_custom_timeout(
+                url.as_str().to_string(),
+                config.timeout,
+            ).await else {
+                continue;
+            };
+
+            if new_rpc.get_height().await.is_ok() {
+                let mut lock = rpc_client.write().await;
+                *lock = Some(new_rpc);
+                return;
+            }
+        }
     }
 
     // ========================================================================
@@ -662,6 +834,11 @@ impl<'de> Deserialize<'de> for WalletState {
             is_closed: false,
             keys_checksum: helper.keys_checksum,
             auto_save_enabled: false,
+            rpc_client: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
+            health_check_handle: None,
+            reconnection_policy: crate::rpc::ReconnectionPolicy::default(),
+            reconnection_attempts: 0,
+            connection_config: None,
         })
     }
 }

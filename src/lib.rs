@@ -12,6 +12,7 @@ pub use monero_seed::Language;
 use monero_seed::Seed;
 pub use wallet_state::WalletState;
 pub use monero_wallet::address::Network;
+pub use rpc::{ConnectionConfig, ReconnectionPolicy};
 
 use rand_core::OsRng;
 use zeroize::{Zeroizing};
@@ -30,6 +31,8 @@ pub enum WalletError {
     UnsupportedVersion(u32),
     SerializationError(String),
     WalletClosed,
+    NotConnected,
+    RpcError(monero_rpc::RpcError),
     Other(String),
 }
 
@@ -43,6 +46,8 @@ impl std::fmt::Display for WalletError {
             WalletError::UnsupportedVersion(v) => write!(f, "Unsupported wallet version: {}", v),
             WalletError::SerializationError(msg) => write!(f, "Serialization error: {}", msg),
             WalletError::WalletClosed => write!(f, "Wallet is closed"),
+            WalletError::NotConnected => write!(f, "Not connected to daemon"),
+            WalletError::RpcError(e) => write!(f, "RPC error: {}", e),
             WalletError::Other(msg) => write!(f, "{}", msg),
         }
     }
@@ -52,6 +57,7 @@ impl std::error::Error for WalletError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             WalletError::IoError(e) => Some(e),
+            WalletError::RpcError(e) => Some(e),
             _ => None,
         }
     }
@@ -66,6 +72,12 @@ impl From<std::io::Error> for WalletError {
 impl From<String> for WalletError {
     fn from(err: String) -> Self {
         WalletError::Other(err)
+    }
+}
+
+impl From<monero_rpc::RpcError> for WalletError {
+    fn from(err: monero_rpc::RpcError) -> Self {
+        WalletError::RpcError(err)
     }
 }
 
