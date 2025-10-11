@@ -709,18 +709,21 @@ pub async fn scan_block_for_outputs_with_url_and_lookahead(
 
     #[cfg(target_arch = "wasm32")]
     {
-        use crate::rpc_serai::WasmRpcConnection;
-        use monero_serai::rpc::Rpc;
-        let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
-        scan_block_for_outputs_with_lookahead(
-            &rpc,
+        let results = scan_blocks_batch_with_url(
+            node_url,
             block_height,
             mnemonic,
             network_str,
             lookahead,
+            false,
             passphrase,
         )
-        .await
+        .await?;
+
+        results
+            .into_iter()
+            .next()
+            .ok_or_else(|| format!("No block data returned for height {}", block_height))
     }
 }
 
@@ -2106,9 +2109,18 @@ pub async fn scan_block_multi_wallet_with_url(
     block_height: u64,
     wallet_configs: Vec<WalletScanConfig>,
 ) -> Result<MultiWalletScanResult, String> {
-    use crate::rpc_serai::WasmRpcConnection;
-    let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
-    scan_block_multi_wallet_wasm(&rpc, block_height, wallet_configs).await
+    let results = scan_blocks_batch_multi_wallet_with_url(
+        node_url,
+        block_height,
+        wallet_configs,
+        false,
+    )
+    .await?;
+
+    results
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("No block data returned for height {}", block_height))
 }
 
 pub async fn scan_mempool_for_outputs(
