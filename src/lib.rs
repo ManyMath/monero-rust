@@ -1,4 +1,5 @@
 pub mod crypto;
+pub mod rpc;
 pub mod types;
 pub mod wallet_state;
 

@@ -39,6 +39,7 @@ bincode = "1.3"
 aes-gcm = "0.10"
 argon2 = "0.5"
 subtle = "2.5" # Constant-time operations for password comparison
+urlencoding = "2.1"
 
 [build-dependencies]
 cbindgen = "0.24.0"
