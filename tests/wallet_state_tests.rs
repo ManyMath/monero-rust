@@ -709,3 +709,189 @@ fn test_wallet_atomic_write_integrity() {
         wallet_state.seed.as_ref().expect("Seed should be Some").to_string()
     );
 }
+
+#[test]
+fn test_getters_on_normal_wallet() {
+    use tempfile::tempdir;
+
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let wallet_path = temp_dir.path().join("test_getter_wallet.bin");
+    let password = "test_password_123";
+
+    let seed = Seed::new(&mut OsRng, Language::English);
+    let wallet = WalletState::new(
+        seed,
+        String::from("English"),
+        Network::Mainnet,
+        password,
+        wallet_path.clone(),
+        0,
+    )
+    .expect("Failed to create wallet");
+
+    let seed_result = wallet.get_seed();
+    assert!(seed_result.is_some());
+    let seed_string = seed_result.unwrap();
+    assert!(!seed_string.is_empty());
+    assert_eq!(seed_string.split_whitespace().count(), 25);
+
+    assert_eq!(wallet.get_seed_language(), "English");
+
+    let spend_key = wallet.get_private_spend_key();
+    assert!(spend_key.is_some());
+    let spend_key_hex = spend_key.unwrap();
+    assert_eq!(spend_key_hex.len(), 64);
+    assert!(spend_key_hex.chars().all(|c| c.is_ascii_hexdigit()));
+
+    let view_key = wallet.get_private_view_key();
+    assert_eq!(view_key.len(), 64);
+    assert!(view_key.chars().all(|c| c.is_ascii_hexdigit()));
+
+    let pub_spend = wallet.get_public_spend_key();
+    assert_eq!(pub_spend.len(), 64);
+    assert!(pub_spend.chars().all(|c| c.is_ascii_hexdigit()));
+
+    let pub_view = wallet.get_public_view_key();
+    assert_eq!(pub_view.len(), 64);
+    assert!(pub_view.chars().all(|c| c.is_ascii_hexdigit()));
+
+    assert_eq!(wallet.get_path(), wallet_path.as_path());
+    assert!(!wallet.is_view_only());
+    assert!(!wallet.is_closed);
+}
+
+#[test]
+fn test_getters_on_view_only_wallet() {
+    use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar, edwards::EdwardsPoint};
+    use sha3::{Digest, Keccak256};
+    use tempfile::tempdir;
+
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let wallet_path = temp_dir.path().join("test_view_only_getter_wallet.bin");
+    let password = "view_only_password";
+
+    let seed = Seed::new(&mut OsRng, Language::Spanish);
+    let spend: [u8; 32] = *seed.entropy();
+    let spend_scalar = Scalar::from_bytes_mod_order(spend);
+    let spend_point: EdwardsPoint = &spend_scalar * ED25519_BASEPOINT_TABLE;
+    let view: [u8; 32] = Keccak256::digest(&spend).into();
+
+    let wallet = WalletState::new_view_only(
+        spend_point.compress().to_bytes(),
+        view,
+        Network::Testnet,
+        password,
+        wallet_path.clone(),
+        0,
+    )
+    .expect("Failed to create view-only wallet");
+
+    assert!(wallet.get_seed().is_none());
+    assert!(wallet.get_private_spend_key().is_none());
+
+    let view_key = wallet.get_private_view_key();
+    assert_eq!(view_key.len(), 64);
+    assert!(view_key.chars().all(|c| c.is_ascii_hexdigit()));
+
+    let pub_spend = wallet.get_public_spend_key();
+    assert_eq!(pub_spend.len(), 64);
+    assert!(pub_spend.chars().all(|c| c.is_ascii_hexdigit()));
+
+    let pub_view = wallet.get_public_view_key();
+    assert_eq!(pub_view.len(), 64);
+    assert!(pub_view.chars().all(|c| c.is_ascii_hexdigit()));
+
+    assert!(wallet.is_view_only());
+    assert_eq!(wallet.get_path(), wallet_path.as_path());
+}
+
+#[test]
+fn test_getter_key_consistency() {
+    use tempfile::tempdir;
+
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let wallet_path = temp_dir.path().join("test_consistency_wallet.bin");
+    let password = "consistency_test";
+
+    let seed = Seed::new(&mut OsRng, Language::English);
+    let wallet = WalletState::new(
+        seed,
+        String::from("English"),
+        Network::Mainnet,
+        password,
+        wallet_path,
+        0,
+    )
+    .expect("Failed to create wallet");
+
+    assert_eq!(wallet.get_seed(), wallet.get_seed());
+    assert_eq!(wallet.get_private_spend_key(), wallet.get_private_spend_key());
+    assert_eq!(wallet.get_private_view_key(), wallet.get_private_view_key());
+    assert_eq!(wallet.get_public_spend_key(), wallet.get_public_spend_key());
+    assert_eq!(wallet.get_public_view_key(), wallet.get_public_view_key());
+}
+
+#[test]
+fn test_getter_after_save_and_load() {
+    use tempfile::tempdir;
+
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let wallet_path = temp_dir.path().join("test_persistence_getter_wallet.bin");
+    let password = "test_password_456";
+
+    let seed = Seed::new(&mut OsRng, Language::German);
+    let original_wallet = WalletState::new(
+        seed,
+        String::from("German"),
+        Network::Stagenet,
+        password,
+        wallet_path.clone(),
+        0,
+    )
+    .expect("Failed to create wallet");
+
+    let original_seed = original_wallet.get_seed().unwrap();
+    let original_language = original_wallet.get_seed_language().to_string();
+    let original_priv_spend = original_wallet.get_private_spend_key().unwrap();
+    let original_priv_view = original_wallet.get_private_view_key();
+    let original_pub_spend = original_wallet.get_public_spend_key();
+    let original_pub_view = original_wallet.get_public_view_key();
+
+    original_wallet.save(password).expect("Failed to save wallet");
+
+    let loaded_wallet = WalletState::load_from_file(&wallet_path, password)
+        .expect("Failed to load wallet");
+
+    assert_eq!(loaded_wallet.get_seed().unwrap(), original_seed);
+    assert_eq!(loaded_wallet.get_seed_language(), original_language);
+    assert_eq!(loaded_wallet.get_private_spend_key().unwrap(), original_priv_spend);
+    assert_eq!(loaded_wallet.get_private_view_key(), original_priv_view);
+    assert_eq!(loaded_wallet.get_public_spend_key(), original_pub_spend);
+    assert_eq!(loaded_wallet.get_public_view_key(), original_pub_view);
+    assert_eq!(loaded_wallet.get_path(), wallet_path.as_path());
+    assert!(!loaded_wallet.is_view_only());
+}
+
+#[test]
+fn test_getter_is_closed_flag() {
+    use tempfile::tempdir;
+
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let wallet_path = temp_dir.path().join("test_closed_wallet.bin");
+    let password = "closed_test";
+
+    let seed = Seed::new(&mut OsRng, Language::English);
+    let mut wallet = WalletState::new(
+        seed,
+        String::from("English"),
+        Network::Mainnet,
+        password,
+        wallet_path,
+        0,
+    )
+    .expect("Failed to create wallet");
+
+    assert!(!wallet.is_closed);
+    wallet.is_closed = true;
+    assert!(wallet.is_closed);
+}
