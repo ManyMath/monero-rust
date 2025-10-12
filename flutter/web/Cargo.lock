@@ -1373,6 +1373,7 @@ dependencies = [
  "gloo-timers",
  "hex",
  "js-sys",
+ "log",
  "monero-epee-bin-serde",
  "monero-serai",
  "rand",

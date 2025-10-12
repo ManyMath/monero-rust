@@ -27,12 +27,144 @@ function probeNode(url = 'http://127.0.0.1:38081/get_info', timeoutMs = 3000) {
   });
 }
 
+function jsonRpcUrl(nodeUrl) {
+  const trimmed = nodeUrl.replace(/\/+$/, '');
+  return trimmed.endsWith('/json_rpc') ? trimmed : `${trimmed}/json_rpc`;
+}
+
+function rpcUrl(nodeUrl, path) {
+  const trimmed = nodeUrl.replace(/\/+$/, '');
+  const base = trimmed.endsWith('/json_rpc') ? trimmed.slice(0, -'/json_rpc'.length) : trimmed;
+  return `${base}${path}`;
+}
+
+function callJsonRpc(nodeUrl, method, params = {}, timeoutMs = 10000) {
+  const http = require('http');
+  const payload = JSON.stringify({
+    jsonrpc: '2.0',
+    id: '0',
+    method,
+    params,
+  });
+  const rpcUrl = new URL(jsonRpcUrl(nodeUrl));
+
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        hostname: rpcUrl.hostname,
+        port: rpcUrl.port || 80,
+        path: rpcUrl.pathname,
+        method: 'POST',
+        timeout: timeoutMs,
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+        },
+      },
+      (res) => {
+        let body = '';
+        res.on('data', (chunk) => {
+          body += chunk;
+        });
+        res.on('end', () => {
+          if (res.statusCode !== 200) {
+            reject(new Error(`RPC ${method} failed with HTTP ${res.statusCode}: ${body}`));
+            return;
+          }
+          try {
+            const parsed = JSON.parse(body);
+            if (parsed.error) {
+              reject(new Error(`RPC ${method} returned error: ${JSON.stringify(parsed.error)}`));
+              return;
+            }
+            resolve(parsed.result || {});
+          } catch (error) {
+            reject(new Error(`RPC ${method} returned invalid JSON: ${error.message}`));
+          }
+        });
+      }
+    );
+    req.on('error', reject);
+    req.on('timeout', () => {
+      req.destroy(new Error(`RPC ${method} timed out after ${timeoutMs}ms`));
+    });
+    req.write(payload);
+    req.end();
+  });
+}
+
+function callRpc(nodeUrl, path, params = {}, timeoutMs = 10000) {
+  const http = require('http');
+  const payload = JSON.stringify(params);
+  const endpoint = new URL(rpcUrl(nodeUrl, path));
+
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        hostname: endpoint.hostname,
+        port: endpoint.port || 80,
+        path: endpoint.pathname,
+        method: 'POST',
+        timeout: timeoutMs,
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+        },
+      },
+      (res) => {
+        let body = '';
+        res.on('data', (chunk) => {
+          body += chunk;
+        });
+        res.on('end', () => {
+          if (res.statusCode !== 200) {
+            reject(new Error(`RPC ${path} failed with HTTP ${res.statusCode}: ${body}`));
+            return;
+          }
+          try {
+            resolve(JSON.parse(body));
+          } catch (error) {
+            reject(new Error(`RPC ${path} returned invalid JSON: ${error.message}`));
+          }
+        });
+      }
+    );
+    req.on('error', reject);
+    req.on('timeout', () => {
+      req.destroy(new Error(`RPC ${path} timed out after ${timeoutMs}ms`));
+    });
+    req.write(payload);
+    req.end();
+  });
+}
+
+async function flushDoNotRelayTransactions(nodeUrl = 'http://127.0.0.1:38081') {
+  const pool = await callRpc(nodeUrl, '/get_transaction_pool');
+  const txIds = (pool.transactions || [])
+    .filter((tx) => tx.do_not_relay)
+    .map((tx) => tx.id_hash);
+
+  if (!txIds.length) {
+    return [];
+  }
+
+  await callJsonRpc(nodeUrl, 'flush_txpool', { txids: txIds });
+  return txIds;
+}
+
 // ---------------------------------------------------------------------------
 // Signal round-trip helper
 // ---------------------------------------------------------------------------
 
 /** Send `signalFnName` and resolve when `responseTypeName` is received. */
 async function sendSignalAndWait(page, signalFnName, requestJson, responseTypeName, timeoutMs = 10000) {
+  await page.waitForFunction(
+    () =>
+      !!window.wasmBindings &&
+      typeof window.wasmBindings.register_rust_signal_callback === 'function',
+    { timeout: timeoutMs }
+  );
+
   return page.evaluate(
     ({ signalFnName, requestJson, responseTypeName, timeoutMs }) => {
       return new Promise((resolve, reject) => {
@@ -62,7 +194,12 @@ async function reloadExtensionPage(browser, extId) {
   const newPage = await browser.newPage();
   await newPage.goto(`chrome-extension://${extId}/index.html`);
   await newPage.waitForSelector('flt-glass-pane', { timeout: 15000 });
-  await new Promise(resolve => setTimeout(resolve, 3000));
+  await newPage.waitForFunction(
+    () =>
+      !!window.wasmBindings &&
+      typeof window.wasmBindings.register_rust_signal_callback === 'function',
+    { timeout: 15000 }
+  );
   return newPage;
 }
 
@@ -74,4 +211,5 @@ module.exports = {
   sendSignalAndWait,
   reloadExtensionPage,
   probeNode,
+  flushDoNotRelayTransactions,
 };

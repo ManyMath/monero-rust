@@ -24,7 +24,9 @@ pub fn classify_broadcast_error(error: &str) -> (bool, bool) {
     let lower = error.to_lowercase();
     let is_double_spend = lower.contains("double spend")
         || lower.contains("already spent")
-        || lower.contains("key image already spent");
+        || lower.contains("key image already spent")
+        || lower.contains("\"double_spend\":true")
+        || lower.contains("\"double_spend\": true");
     let is_retryable = !is_double_spend
         && (lower.contains("connection")
             || lower.contains("timeout")
@@ -97,6 +99,13 @@ mod tests {
     fn classify_case_insensitive() {
         let (ds, _) = classify_broadcast_error("DOUBLE SPEND");
         assert!(ds);
+    }
+
+    #[test]
+    fn classify_json_double_spend_flag() {
+        let (ds, retry) = classify_broadcast_error("{\"double_spend\": true, \"status\": \"Failed\"}");
+        assert!(ds);
+        assert!(!retry);
     }
 
     #[test]

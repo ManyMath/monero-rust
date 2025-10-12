@@ -84,6 +84,7 @@ pub struct BroadcastTransaction {
     pub spent_output_hashes: Vec<String>,
     pub tx_id: String,
     pub spent_key_images: Vec<String>,
+    pub do_not_relay: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -234,4 +235,3 @@ pub struct ImportKeyImages {
 pub struct UpdateOutputKeyImages {
     pub key_images: Vec<String>,
 }
-

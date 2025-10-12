@@ -491,12 +491,14 @@ class BroadcastTransactionRequest {
   final List<String> spentOutputHashes;
   final String txId;
   final List<String> spentKeyImages;
+  final bool doNotRelay;
   const BroadcastTransactionRequest({
     required this.nodeUrl,
     required this.txBlob,
     required this.spentOutputHashes,
     this.txId = '',
     this.spentKeyImages = const [],
+    this.doNotRelay = false,
   });
 
   void sendSignalToRust() => _send('send_broadcast_transaction_request', {
@@ -505,6 +507,7 @@ class BroadcastTransactionRequest {
     'spent_output_hashes': spentOutputHashes,
     'tx_id': txId,
     'spent_key_images': spentKeyImages,
+    'do_not_relay': doNotRelay,
   });
 }
 

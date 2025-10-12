@@ -437,6 +437,7 @@ void main() {
         spentOutputHashes: ['hash1:0', 'hash2:1'],
         txId: 'txid123',
         spentKeyImages: ['ki1', 'ki2', 'ki3'],
+        doNotRelay: true,
       );
 
       final json = {
@@ -445,10 +446,12 @@ void main() {
         'spent_output_hashes': req.spentOutputHashes,
         'tx_id': req.txId,
         'spent_key_images': req.spentKeyImages,
+        'do_not_relay': req.doNotRelay,
       };
 
       expect(json['spent_key_images'], ['ki1', 'ki2', 'ki3']);
       expect(json['spent_output_hashes'], ['hash1:0', 'hash2:1']);
+      expect(json['do_not_relay'], true);
     });
   });
 

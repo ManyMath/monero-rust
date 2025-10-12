@@ -141,6 +141,7 @@ impl TxBuilderActor {
                 spent_output_hashes: request.spent_output_hashes,
                 tx_id: request.tx_id,
                 spent_key_images: request.spent_key_images,
+                do_not_relay: request.do_not_relay,
             }).await;
         }
     }
@@ -686,32 +687,35 @@ impl Notifiable<BroadcastTransaction> for TxBuilderActor {
         let tx_id = msg.tx_id.clone();
         let spent_key_images = msg.spent_key_images.clone();
         let spent_output_hashes = msg.spent_output_hashes.clone();
+        let do_not_relay = msg.do_not_relay;
 
         log::info!("Broadcasting transaction...");
 
         // Spawn in local task to avoid Send requirements
         spawn_local(async move {
-            match monero_rust::native::broadcast_transaction(&msg.node_url, &msg.tx_blob).await {
+            match monero_rust::native::broadcast_transaction(&msg.node_url, &msg.tx_blob, do_not_relay).await {
                 Ok(()) => {
                     log::info!("Transaction broadcast successful!");
 
-                    // Add pending spends instead of marking outputs as spent
-                    if let Some(mut wallet) = wallet_actor {
+                    // Only mutate wallet pending state when the transaction was actually relayed.
+                    if !do_not_relay {
+                        if let Some(mut wallet) = wallet_actor {
                         // Build PendingSpendInfo by zipping key images with output hashes
-                        let spends: Vec<PendingSpendInfo> = spent_key_images
-                            .iter()
-                            .zip(spent_output_hashes.iter())
-                            .map(|(ki, oh)| PendingSpendInfo {
-                                key_image: ki.clone(),
-                                output_key: oh.clone(),
-                                amount: 0, // amount will be resolved from wallet state
-                            })
-                            .collect();
+                            let spends: Vec<PendingSpendInfo> = spent_key_images
+                                .iter()
+                                .zip(spent_output_hashes.iter())
+                                .map(|(ki, oh)| PendingSpendInfo {
+                                    key_image: ki.clone(),
+                                    output_key: oh.clone(),
+                                    amount: 0, // amount will be resolved from wallet state
+                                })
+                                .collect();
 
-                        let _ = wallet.notify(AddPendingSpends {
-                            tx_id: tx_id.clone(),
-                            spends,
-                        }).await;
+                            let _ = wallet.notify(AddPendingSpends {
+                                tx_id: tx_id.clone(),
+                                spends,
+                            }).await;
+                        }
                     }
 
                     TransactionBroadcastResponse {

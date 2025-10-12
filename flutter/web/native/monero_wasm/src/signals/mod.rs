@@ -349,6 +349,8 @@ pub struct BroadcastTransactionRequest {
     pub tx_id: String,
     #[serde(default)]
     pub spent_key_images: Vec<String>,
+    #[serde(default)]
+    pub do_not_relay: bool,
 }
 
 #[derive(Serialize)]

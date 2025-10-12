@@ -23,9 +23,34 @@ pub mod native {
 
     use crate::scanner::{resolve_seed, register_subaddresses, Lookahead, DEFAULT_LOOKAHEAD};
     use serde::{Deserialize, Serialize};
+    use serde_json::Value;
     use sha3::{Digest, Keccak256};
     use std::collections::HashSet;
     use zeroize::Zeroizing;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn raw_tx_endpoint(node_url: &str) -> String {
+        let trimmed = node_url.trim_end_matches('/');
+        let base = trimmed.strip_suffix("/json_rpc").unwrap_or(trimmed);
+        format!("{}/send_raw_transaction", base)
+    }
+
+    fn check_send_raw_transaction_response(body: &str) -> Result<(), String> {
+        let value: Value = serde_json::from_str(body)
+            .map_err(|e| format!("Invalid send_raw_transaction response: {:?}", e))?;
+        match value.get("status").and_then(Value::as_str) {
+            Some("OK") => Ok(()),
+            Some(status) => {
+                let reason = value
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .filter(|reason| !reason.is_empty())
+                    .unwrap_or(body);
+                Err(format!("{status}: {reason}"))
+            }
+            None => Err(format!("Unexpected send_raw_transaction response: {body}")),
+        }
+    }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct ChangeOutputInfo {
@@ -760,6 +785,7 @@ pub mod native {
     pub async fn broadcast_transaction(
         node_url: &str,
         tx_blob_hex: &str,
+        do_not_relay: bool,
     ) -> Result<(), String> {
         let tx_bytes = hex::decode(tx_blob_hex)
             .map_err(|e| format!("Invalid hex: {:?}", e))?;
@@ -767,20 +793,35 @@ pub mod native {
         let tx = Transaction::read::<&[u8]>(&mut tx_bytes.as_ref())
             .map_err(|e| format!("Invalid transaction: {:?}", e))?;
 
-        let rpc = HttpRpc::new(node_url.to_string())
+        let _rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
 
-        rpc.publish_transaction(&tx)
+        let response = reqwest::Client::new()
+            .post(raw_tx_endpoint(node_url))
+            .json(&serde_json::json!({
+                "tx_as_hex": hex::encode(tx.serialize()),
+                "do_not_relay": do_not_relay,
+            }))
+            .send()
             .await
             .map_err(|e| format!("Failed to broadcast: {:?}", e))?;
 
-        Ok(())
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|e| format!("Failed to read daemon response: {:?}", e))?;
+        if !status.is_success() {
+            return Err(format!("HTTP {}: {}", status, body));
+        }
+        check_send_raw_transaction_response(&body)
     }
 
     #[cfg(target_arch = "wasm32")]
     pub async fn broadcast_transaction(
         node_url: &str,
         tx_blob_hex: &str,
+        do_not_relay: bool,
     ) -> Result<(), String> {
         let tx_bytes = hex::decode(tx_blob_hex)
             .map_err(|e| format!("Invalid hex: {:?}", e))?;
@@ -788,13 +829,20 @@ pub mod native {
         let tx = Transaction::read::<&[u8]>(&mut tx_bytes.as_ref())
             .map_err(|e| format!("Invalid transaction: {:?}", e))?;
 
-        let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
+        let conn = WasmRpcConnection::new(node_url.to_string());
+        let body = serde_json::to_vec(&serde_json::json!({
+            "tx_as_hex": hex::encode(tx.serialize()),
+            "do_not_relay": do_not_relay,
+        }))
+        .map_err(|e| format!("Failed to serialize broadcast request: {:?}", e))?;
 
-        rpc.publish_transaction(&tx)
+        let response = conn
+            .post("send_raw_transaction", body)
             .await
             .map_err(|e| format!("Failed to broadcast: {:?}", e))?;
-
-        Ok(())
+        let response = String::from_utf8(response)
+            .map_err(|e| format!("Invalid UTF-8 daemon response: {:?}", e))?;
+        check_send_raw_transaction_response(&response)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
