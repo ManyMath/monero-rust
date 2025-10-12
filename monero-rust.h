@@ -37,6 +37,58 @@ void wallet_free(struct WalletState *wallet);
 
 /**
  * # Safety
+ * Caller must free with free_string(). Returns null if path isn't valid UTF-8.
+ */
+char *wallet_get_path(const struct WalletState *wallet);
+
+/**
+ * # Safety
+ * Caller must free with free_string(). Returns null for view-only wallets.
+ */
+char *wallet_get_private_spend_key(const struct WalletState *wallet);
+
+/**
+ * # Safety
+ * Caller must free with free_string().
+ */
+char *wallet_get_private_view_key(const struct WalletState *wallet);
+
+/**
+ * # Safety
+ * Caller must free with free_string().
+ */
+char *wallet_get_public_spend_key(const struct WalletState *wallet);
+
+/**
+ * # Safety
+ * Caller must free with free_string().
+ */
+char *wallet_get_public_view_key(const struct WalletState *wallet);
+
+/**
+ * # Safety
+ * Caller must free with free_string(). Returns null for view-only wallets.
+ */
+char *wallet_get_seed(const struct WalletState *wallet);
+
+/**
+ * # Safety
+ * Caller must free with free_string().
+ */
+char *wallet_get_seed_language(const struct WalletState *wallet);
+
+/**
+ * Returns 1 if closed, 0 if open, -1 on null pointer, -5 on panic.
+ */
+int32_t wallet_is_closed(const struct WalletState *wallet);
+
+/**
+ * Returns 1 if view-only, 0 if normal, -1 on null pointer, -5 on panic.
+ */
+int32_t wallet_is_view_only(const struct WalletState *wallet);
+
+/**
+ * # Safety
  * Path and password must be null-terminated UTF-8. Caller must free with wallet_free().
  */
 struct WalletState *wallet_load(const char *path, const char *password);
