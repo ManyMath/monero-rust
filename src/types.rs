@@ -113,7 +113,8 @@ where
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SerializableOutput {
     pub tx_hash: [u8; 32],
-    pub output_index: u8,
+    /// u64 to support large transactions
+    pub output_index: u64,
     pub amount: u64,
     pub key_image: KeyImage,
     pub subaddress_indices: (u32, u32),

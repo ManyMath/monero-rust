@@ -223,7 +223,7 @@ fn test_wallet_state_balance_calculations_persist() {
     for i in 0..5 {
         let output = SerializableOutput {
             tx_hash: [i; 32],
-            output_index: i,
+            output_index: i as u64,
             amount: (i as u64 + 1) * 1000000000000,
             key_image: [i; 32],
             subaddress_indices: (0, i as u32),
@@ -642,7 +642,7 @@ fn test_wallet_file_io_with_outputs_and_transactions() {
     for i in 0..10 {
         let output = SerializableOutput {
             tx_hash: [i; 32],
-            output_index: i,
+            output_index: i as u64,
             amount: (i as u64 + 1) * 1000000000000,
             key_image: [i + 10; 32],
             subaddress_indices: (0, i as u32),
