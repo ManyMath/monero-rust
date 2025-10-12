@@ -412,6 +412,50 @@ impl WalletState {
         self.is_connected && self.current_scanned_height >= self.daemon_height
     }
 
+    /// Returns the mnemonic seed, or None for view-only wallets.
+    pub fn get_seed(&self) -> Option<String> {
+        self.seed.as_ref().map(|seed| (*seed.to_string()).clone())
+    }
+
+    pub fn get_seed_language(&self) -> &str {
+        &self.seed_language
+    }
+
+    /// Returns the private spend key as hex, or None for view-only wallets.
+    pub fn get_private_spend_key(&self) -> Option<String> {
+        self.spend_key.as_ref().map(|key| {
+            let bytes = Zeroizing::new(key.to_bytes());
+            hex::encode(&*bytes)
+        })
+    }
+
+    /// Returns the private view key as hex.
+    pub fn get_private_view_key(&self) -> String {
+        use sha3::{Digest, Keccak256};
+
+        if let Some(seed) = &self.seed {
+            let view_bytes: [u8; 32] = Keccak256::digest(seed.entropy()).into();
+            let view = Zeroizing::new(view_bytes);
+            hex::encode(&*view)
+        } else if let Some(view_private) = &self.view_only_view_private {
+            hex::encode(&**view_private)
+        } else {
+            panic!("WalletState has neither seed nor view key")
+        }
+    }
+
+    pub fn get_public_spend_key(&self) -> String {
+        hex::encode(self.view_pair.spend().compress().to_bytes())
+    }
+
+    pub fn get_public_view_key(&self) -> String {
+        hex::encode(self.view_pair.view().compress().to_bytes())
+    }
+
+    pub fn get_path(&self) -> &std::path::Path {
+        &self.wallet_path
+    }
+
     // ========================================================================
     // RPC CONNECTION MANAGEMENT
     // ========================================================================
