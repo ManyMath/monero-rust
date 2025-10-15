@@ -36,8 +36,13 @@ Test:
 ```sh
 cd flutter/web
 flutter test
-npm install && npm test
+npm install
+npm run test:signal-e2e -- test/e2e/multi_wallet_scan.test.js
+npm test
 ```
+
+`npm run test:signal-e2e -- <jest paths...>` is the dedicated Puppeteer/Jest signal entrypoint.
+`npm test` remains the broader repo-style path and still runs the Rust test suite before signal E2E, so unrelated Rust regressions can still fail that path.
 
 ## Notes
 This runs as a browser extension to bypass CORS restrictions when talking to Monero nodes. Most nodes don't send headers that allow arbitrary web origins. The extension sidesteps this for testing purposes.

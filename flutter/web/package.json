@@ -4,11 +4,14 @@
   "description": "E2E tests for Monero WASM Browser Extension",
   "private": true,
   "scripts": {
-    "pretest": "dart run tool/build_extension.dart",
-    "test": "npm run test:rust && jest --runInBand",
+    "test": "npm run test:repo",
+    "test:repo": "npm run build && npm run test:rust && npm run test:signal-e2e:raw",
     "test:rust": "cd ../../rust/monero-rust && cargo test --features mock-rpc --lib && cargo test --features mock-rpc --test tx_construction_test --test honked_bagpipe_tx",
     "test:rust:all": "cd ../../rust/monero-rust && cargo test --features mock-rpc",
-    "test:e2e": "jest test/e2e/core_functionality.test.js",
+    "test:signal-e2e": "npm run build && npm run test:signal-e2e:raw --",
+    "test:signal-e2e:raw": "jest --runInBand",
+    "test:signal-e2e:v1.2": "npm run build && npm run test:signal-e2e:raw -- test/e2e/multi_wallet_scan.test.js && npm run test:signal-e2e:raw -- test/e2e/mempool_live_tx.test.js && npm run test:signal-e2e:raw -- test/e2e/async_events_state_monitoring.test.js && npm run test:signal-e2e:raw -- test/e2e/error_edge_cases.test.js",
+    "test:e2e": "npm run test:signal-e2e -- test/e2e/core_functionality.test.js",
     "build": "dart run tool/build_extension.dart"
   },
   "devDependencies": {
@@ -21,6 +24,10 @@
     "testEnvironment": "node",
     "testTimeout": 30000,
     "verbose": true,
+    "modulePathIgnorePatterns": [
+      "<rootDir>/build/",
+      "<rootDir>/web/pkg/"
+    ],
     "testMatch": [
       "**/test/e2e/**/*.test.js"
     ]

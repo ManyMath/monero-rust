@@ -44,5 +44,10 @@ flutter test
 E2E:
 ```sh
 npm install
+npm run test:signal-e2e -- test/e2e/multi_wallet_scan.test.js
+npm run test:signal-e2e:v1.2
 npm test
 ```
+
+Use `npm run test:signal-e2e -- <jest paths...>` for the dedicated signal-level Puppeteer/Jest entrypoint.
+Use `npm test` only for the broader repo-style path that also runs the Rust suite; unrelated Rust regressions can still fail that command.
