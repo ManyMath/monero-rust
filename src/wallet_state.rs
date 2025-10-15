@@ -5,8 +5,10 @@ use crate::types::{KeyImage, SerializableOutput, Transaction, TxKey};
 use crate::WalletError;
 use curve25519_dalek::scalar::Scalar;
 use monero_seed::Seed;
+use monero_generators::biased_hash_to_point;
 use monero_wallet::{address::{Network, SubaddressIndex}, rpc::Rpc, Scanner, ViewPair};
 use serde::{Deserialize, Serialize};
+use std::ops::Deref;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
@@ -731,16 +733,27 @@ impl WalletState {
         Ok(())
     }
 
-    /// Computes a key image for an output.
-    /// TODO: Proper key image computation (x * H_p(P)) for full wallets.
-    /// Currently uses a placeholder hash that works for scanning but not spending.
+    /// Computes the key image for an output.
+    /// Full wallets use the proper formula: (spend_key + key_offset) * H_p(output_key).
+    /// View-only wallets use a deterministic placeholder since they lack the spend key.
     fn compute_key_image(&self, wallet_output: &monero_wallet::WalletOutput) -> Result<KeyImage, WalletError> {
-        use sha3::{Digest, Keccak256};
-
-        let mut hasher = Keccak256::new();
-        hasher.update(wallet_output.transaction());
-        hasher.update(&wallet_output.index_in_transaction().to_le_bytes());
-        Ok(hasher.finalize().into())
+        match &self.spend_key {
+            Some(spend_key) => {
+                let output_key = wallet_output.key();
+                let key_offset = wallet_output.key_offset();
+                let effective_spend_key = spend_key.deref() + key_offset;
+                let hash_point = biased_hash_to_point(output_key.compress().to_bytes());
+                let key_image_point = effective_spend_key * hash_point;
+                Ok(key_image_point.compress().to_bytes())
+            }
+            None => {
+                use sha3::{Digest, Keccak256};
+                let mut hasher = Keccak256::new();
+                hasher.update(wallet_output.transaction());
+                hasher.update(&wallet_output.index_in_transaction().to_le_bytes());
+                Ok(hasher.finalize().into())
+            }
+        }
     }
 
     // ========================================================================

@@ -21,6 +21,7 @@ monero-wallet = { path = "vendored/monero-oxide/monero-oxide/wallet", default-fe
 # Simple HTTP RPC client compatible with monero-oxide Rpc trait (used by examples/tests).
 monero_simple_request_rpc = { package = "monero-simple-request-rpc", path = "vendored/monero-oxide/monero-oxide/rpc/simple-request", default-features = false }
 monero-rpc = { path = "vendored/monero-oxide/monero-oxide/rpc", default-features = false, features = ["std"] }
+monero-generators = { path = "vendored/monero-oxide/monero-oxide/generators", default-features = false }
 rand_core = "0.6.4"
 zeroize = "1.6.0"
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize", "group"] }
