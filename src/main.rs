@@ -165,13 +165,3 @@ async fn test_output_detection() {
 //
 //     rpc
 // }
-
-#[cfg(test)]
-mod tests {
-    // use super::*;
-
-    #[test]
-    fn it_works() {
-        // TODO
-    }
-}

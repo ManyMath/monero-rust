@@ -17,6 +17,10 @@
 #include <stdlib.h>
 
 
+#define NONCE_SIZE 12
+
+#define SALT_SIZE 32
+
 typedef struct WalletState WalletState;
 
 /**
