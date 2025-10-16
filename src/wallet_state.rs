@@ -663,13 +663,34 @@ impl WalletState {
         let scan_result = self
             .scanner
             .scan(block)
-            .map_err(|e| WalletError::Other(format!("scan error: {:?}", e)))?;
+            .map_err(|e| WalletError::Other(format!("failed to scan block {}: {}", block_height, e)))?;
 
         let outputs = scan_result.not_additionally_locked();
         let count = outputs.len();
 
+        // Convert all outputs first without mutating state
+        let mut converted = Vec::with_capacity(count);
         for wallet_output in outputs {
-            self.process_discovered_output(wallet_output, block_height)?;
+            converted.push(self.convert_to_serializable(wallet_output, block_height)?);
+        }
+
+        // Apply all changes atomically
+        for output in converted {
+            let key_image = output.key_image;
+            if let Some(existing) = self.outputs.get(&key_image) {
+                if existing.tx_hash == output.tx_hash && existing.output_index == output.output_index {
+                    self.outputs.insert(key_image, output);
+                    continue;
+                }
+                return Err(WalletError::Other(format!(
+                    "key image collision at block {}: {} already maps to {}:{}, cannot insert {}:{}",
+                    block_height,
+                    hex::encode(key_image),
+                    hex::encode(existing.tx_hash), existing.output_index,
+                    hex::encode(output.tx_hash), output.output_index
+                )));
+            }
+            self.outputs.insert(key_image, output);
         }
 
         self.current_scanned_height = block_height;
@@ -691,21 +712,20 @@ impl WalletState {
         self.scan_block(block, height).await
     }
 
-    fn process_discovered_output(
-        &mut self,
+    fn convert_to_serializable(
+        &self,
         wallet_output: monero_wallet::WalletOutput,
         block_height: u64,
-    ) -> Result<(), WalletError> {
+    ) -> Result<SerializableOutput, WalletError> {
         let key_image = self.compute_key_image(&wallet_output)?;
-        let tx_hash = wallet_output.transaction();
 
         let subaddress_indices = wallet_output
             .subaddress()
             .map(|idx| (idx.account(), idx.address()))
             .unwrap_or((0, 0));
 
-        let output = SerializableOutput {
-            tx_hash,
+        Ok(SerializableOutput {
+            tx_hash: wallet_output.transaction(),
             output_index: wallet_output.index_in_transaction(),
             amount: wallet_output.commitment().amount,
             key_image,
@@ -714,23 +734,7 @@ impl WalletState {
             unlocked: false,
             spent: false,
             frozen: false,
-        };
-
-        if let Some(existing) = self.outputs.get(&key_image) {
-            if existing.tx_hash == tx_hash && existing.output_index == output.output_index {
-                self.outputs.insert(key_image, output);
-                return Ok(());
-            }
-            return Err(WalletError::Other(format!(
-                "key image collision: {} already maps to {}:{}, cannot insert {}:{}",
-                hex::encode(key_image),
-                hex::encode(existing.tx_hash), existing.output_index,
-                hex::encode(tx_hash), output.output_index
-            )));
-        }
-
-        self.outputs.insert(key_image, output);
-        Ok(())
+        })
     }
 
     /// Computes the key image for an output.
