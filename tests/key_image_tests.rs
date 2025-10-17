@@ -2,12 +2,36 @@
 //!
 //! Validates that our key image computation matches monero-oxide and uses correct formulas.
 
-use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
+use curve25519_dalek::{
+    constants::ED25519_BASEPOINT_TABLE,
+    edwards::{CompressedEdwardsY, EdwardsPoint},
+    scalar::Scalar,
+};
 use monero_generators::biased_hash_to_point;
+use monero_seed::{Language, Seed};
 use rand_core::OsRng;
 use sha3::{Digest, Keccak256};
 use std::ops::Deref;
 use zeroize::Zeroizing;
+
+fn keccak256_to_scalar(data: &[u8]) -> Scalar {
+    Scalar::from_bytes_mod_order(Keccak256::digest(data).into())
+}
+
+fn write_varint(value: usize) -> Vec<u8> {
+    if value < 0x80 {
+        vec![value as u8]
+    } else {
+        panic!("varint >= 128 not implemented");
+    }
+}
+
+fn compute_key_offset(ecdh_point: &EdwardsPoint, output_index: usize) -> Scalar {
+    let cofactor_mul = ecdh_point.mul_by_cofactor();
+    let mut output_derivation = cofactor_mul.compress().to_bytes().to_vec();
+    output_derivation.extend(write_varint(output_index));
+    keccak256_to_scalar(&output_derivation)
+}
 
 /// Verify our key image formula matches monero-oxide.
 /// Formula: key_image = (spend_key + key_offset) * H_p(output_key)
@@ -156,4 +180,68 @@ fn test_same_output_same_key_image() {
     for ki in &key_images {
         assert_eq!(*ki, first);
     }
+}
+
+/// Complete test vector from monero-wallet-cli with tx secret key.
+///
+/// Mnemonic: "hemlock jubilee eden hacksaw boil superior inroads epoxy exhale orders cavernous
+///            second brunt saved richly lower upgrade hitched launching deepest mostly playful
+///            layout lower eden"
+/// TX: 3e6d5c0fb465bd375be02aa92f5ab54a80d7b222de58a42a9d1a58a492dc8c8e
+/// TX secret key (r): 25af62811cc2b11052e6c33886b1449cf628f4c15c1d2a8fd8bde2ca0617a400
+/// Amount: 0.005 XMR, global index 9682770
+#[test]
+fn test_key_image_with_complete_vector() {
+    const EXPECTED_KEY_IMAGE: &str =
+        "6bfc252ca5f153655fc99b3627d1bd0b62d06947b6a89c77c202d43352098549";
+    const OUTPUT_PUBKEY: &str = "cc5eaba178da7120abf3baef8ba8c015a06be428b0a9fcf802fb0e1d3e99d0ab";
+    const TX_SECRET_KEY: &str = "25af62811cc2b11052e6c33886b1449cf628f4c15c1d2a8fd8bde2ca0617a400";
+    const OUTPUT_INDEX: usize = 0;
+    const MNEMONIC: &str = "hemlock jubilee eden hacksaw boil superior inroads epoxy exhale \
+                            orders cavernous second brunt saved richly lower upgrade hitched \
+                            launching deepest mostly playful layout lower eden";
+
+    // Derive keys from mnemonic
+    let seed =
+        Seed::from_string(Language::English, Zeroizing::new(MNEMONIC.to_string())).unwrap();
+    let spend_key_bytes: [u8; 32] = *seed.entropy();
+    let spend_key = Zeroizing::new(Scalar::from_bytes_mod_order(spend_key_bytes));
+
+    let keccak_output: [u8; 32] = Keccak256::digest(spend_key_bytes).into();
+    let view_key = Zeroizing::new(Scalar::from_bytes_mod_order(keccak_output));
+
+    // TX public key from secret key
+    let tx_secret_bytes = hex::decode(TX_SECRET_KEY).unwrap();
+    let mut tx_secret_array = [0u8; 32];
+    tx_secret_array.copy_from_slice(&tx_secret_bytes);
+    let tx_secret = Scalar::from_bytes_mod_order(tx_secret_array);
+    let tx_pubkey = &tx_secret * ED25519_BASEPOINT_TABLE;
+
+    // ECDH shared secret
+    let ecdh = view_key.deref() * tx_pubkey;
+
+    // Parse output pubkey
+    let output_pubkey_bytes = hex::decode(OUTPUT_PUBKEY).unwrap();
+    let output_pubkey = CompressedEdwardsY::from_slice(&output_pubkey_bytes)
+        .unwrap()
+        .decompress()
+        .unwrap();
+
+    // Compute key_offset and verify output pubkey reconstruction
+    let key_offset = compute_key_offset(&ecdh, OUTPUT_INDEX);
+    let effective_spend_key = spend_key.deref() + key_offset;
+    let reconstructed_output = (&effective_spend_key * ED25519_BASEPOINT_TABLE).compress();
+
+    assert_eq!(
+        reconstructed_output.to_bytes(),
+        output_pubkey.compress().to_bytes(),
+        "Output pubkey reconstruction failed"
+    );
+
+    // Compute and verify key image
+    let hash_point = biased_hash_to_point(output_pubkey.compress().to_bytes());
+    let key_image = (effective_spend_key * hash_point).compress().to_bytes();
+
+    let expected = hex::decode(EXPECTED_KEY_IMAGE).unwrap();
+    assert_eq!(key_image.as_slice(), expected.as_slice());
 }
