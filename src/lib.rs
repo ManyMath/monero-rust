@@ -21,6 +21,7 @@ use sha3::{Digest, Keccak256};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::LazyLock;
 
 #[derive(Debug)]
 pub enum WalletError {
@@ -471,4 +472,141 @@ pub extern "C" fn wallet_is_closed(wallet: *const WalletState) -> i32 {
         eprintln!("PANIC in wallet_is_closed");
         -5
     })
+}
+
+// ==================== SYNC FFI ====================
+
+static GLOBAL_RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
+    tokio::runtime::Runtime::new().expect("Failed to create tokio runtime")
+});
+
+/// Starts syncing. Returns 0 on success, -1 null, -2 not connected, -3 closed, -5 panic.
+#[no_mangle]
+pub extern "C" fn wallet_start_syncing(wallet: *mut WalletState) -> i32 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() {
+            return -1;
+        }
+        let wallet_ref = unsafe { &mut *wallet };
+        match GLOBAL_RUNTIME.block_on(wallet_ref.start_syncing()) {
+            Ok(()) => 0,
+            Err(WalletError::NotConnected) => -2,
+            Err(WalletError::WalletClosed) => -3,
+            Err(_) => -4,
+        }
+    }));
+    result.unwrap_or(-5)
+}
+
+/// Stops syncing. Returns 0 on success, -1 null, -5 panic.
+#[no_mangle]
+pub extern "C" fn wallet_stop_syncing(wallet: *mut WalletState) -> i32 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() {
+            return -1;
+        }
+        let wallet_ref = unsafe { &mut *wallet };
+        GLOBAL_RUNTIME.block_on(wallet_ref.stop_syncing());
+        0
+    }));
+    result.unwrap_or(-5)
+}
+
+/// Scans one block. Returns 1 if scanned, 0 if synced, -1 null, -2 not connected, -3 closed, -4 error, -5 panic.
+#[no_mangle]
+pub extern "C" fn wallet_sync_once(wallet: *mut WalletState) -> i32 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() {
+            return -1;
+        }
+        let wallet_ref = unsafe { &mut *wallet };
+        match GLOBAL_RUNTIME.block_on(wallet_ref.sync_once()) {
+            Ok(true) => 1,
+            Ok(false) => 0,
+            Err(WalletError::NotConnected) => -2,
+            Err(WalletError::WalletClosed) => -3,
+            Err(_) => -4,
+        }
+    }));
+    result.unwrap_or(-5)
+}
+
+/// Returns refresh height, 0 on null/panic.
+#[no_mangle]
+pub extern "C" fn wallet_get_refresh_from_height(wallet: *const WalletState) -> u64 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() {
+            return 0;
+        }
+        let wallet_ref = unsafe { &*wallet };
+        wallet_ref.get_refresh_from_height()
+    }));
+    result.unwrap_or(0)
+}
+
+/// Sets refresh height. Returns 0 on success, -1 null, -5 panic.
+#[no_mangle]
+pub extern "C" fn wallet_set_refresh_from_height(wallet: *mut WalletState, height: u64) -> i32 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() {
+            return -1;
+        }
+        let wallet_ref = unsafe { &mut *wallet };
+        wallet_ref.set_refresh_from_height(height);
+        0
+    }));
+    result.unwrap_or(-5)
+}
+
+/// Clears outputs/txs and resets to refresh height. Returns 0 on success, -1 null, -5 panic.
+#[no_mangle]
+pub extern "C" fn wallet_rescan_blockchain(wallet: *mut WalletState) -> i32 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() {
+            return -1;
+        }
+        let wallet_ref = unsafe { &mut *wallet };
+        wallet_ref.rescan_blockchain();
+        0
+    }));
+    result.unwrap_or(-5)
+}
+
+/// Returns 1 if syncing, 0 if not, -1 null, -5 panic.
+#[no_mangle]
+pub extern "C" fn wallet_is_syncing(wallet: *const WalletState) -> i32 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() {
+            return -1;
+        }
+        let wallet_ref = unsafe { &*wallet };
+        if wallet_ref.is_syncing { 1 } else { 0 }
+    }));
+    result.unwrap_or(-5)
+}
+
+/// Returns current scanned height, 0 on null/panic.
+#[no_mangle]
+pub extern "C" fn wallet_get_current_height(wallet: *const WalletState) -> u64 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() {
+            return 0;
+        }
+        let wallet_ref = unsafe { &*wallet };
+        wallet_ref.current_scanned_height
+    }));
+    result.unwrap_or(0)
+}
+
+/// Returns daemon height, 0 on null/panic.
+#[no_mangle]
+pub extern "C" fn wallet_get_daemon_height(wallet: *const WalletState) -> u64 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() {
+            return 0;
+        }
+        let wallet_ref = unsafe { &*wallet };
+        wallet_ref.daemon_height
+    }));
+    result.unwrap_or(0)
 }
