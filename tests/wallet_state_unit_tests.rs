@@ -1,6 +1,6 @@
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 use monero_rust::types::SerializableOutput;
-use monero_rust::{Network, WalletState};
+use monero_rust::{Network, WalletError, WalletState};
 use monero_seed::Seed;
 use rand_core::OsRng;
 use std::path::PathBuf;
@@ -269,4 +269,175 @@ fn test_subaddresses_persist() {
     assert!(registered.contains(&(0, 1)));
     assert!(registered.contains(&(0, 2)));
     assert!(registered.contains(&(1, 0)));
+}
+
+// ==================== SYNC TESTS ====================
+
+#[tokio::test]
+async fn test_start_syncing_requires_connection() {
+    let mut wallet = create_test_wallet();
+    let result = wallet.start_syncing().await;
+    assert!(matches!(result, Err(WalletError::NotConnected)));
+}
+
+#[tokio::test]
+async fn test_start_syncing_idempotent() {
+    let mut wallet = create_test_wallet();
+    wallet.is_connected = true;
+
+    wallet.start_syncing().await.unwrap();
+    assert!(wallet.is_syncing);
+
+    wallet.start_syncing().await.unwrap();
+    assert!(wallet.is_syncing);
+}
+
+#[tokio::test]
+async fn test_stop_syncing() {
+    let mut wallet = create_test_wallet();
+    wallet.is_connected = true;
+
+    wallet.start_syncing().await.unwrap();
+    assert!(wallet.is_syncing);
+
+    wallet.stop_syncing().await;
+    assert!(!wallet.is_syncing);
+}
+
+#[tokio::test]
+async fn test_sync_once_requires_connection() {
+    let mut wallet = create_test_wallet();
+    let result = wallet.sync_once().await;
+    assert!(matches!(result, Err(WalletError::NotConnected)));
+}
+
+#[tokio::test]
+async fn test_sync_once_closed_wallet() {
+    let mut wallet = create_test_wallet();
+    wallet.is_closed = true;
+    let result = wallet.sync_once().await;
+    assert!(matches!(result, Err(WalletError::WalletClosed)));
+}
+
+#[test]
+fn test_sync_interval_default() {
+    let wallet = create_test_wallet();
+    assert_eq!(wallet.sync_interval, std::time::Duration::from_secs(1));
+}
+
+#[test]
+fn test_sync_fields_not_serialized() {
+    let wallet = create_test_wallet();
+    assert!(wallet.sync_handle.is_none());
+    assert!(wallet.sync_progress_callback.is_none());
+    assert!(!wallet.is_syncing);
+}
+
+#[test]
+fn test_get_refresh_from_height() {
+    let seed = Seed::new(&mut OsRng, monero_seed::Language::English);
+    let wallet = WalletState::new(
+        seed,
+        String::from("English"),
+        Network::Stagenet,
+        "password",
+        PathBuf::from("test.bin"),
+        123456,
+    )
+    .unwrap();
+
+    assert_eq!(wallet.get_refresh_from_height(), 123456);
+}
+
+#[test]
+fn test_set_refresh_from_height() {
+    let mut wallet = create_test_wallet();
+
+    wallet.set_refresh_from_height(200000);
+
+    assert_eq!(wallet.get_refresh_from_height(), 200000);
+    assert_eq!(wallet.current_scanned_height, 200000);
+}
+
+#[test]
+fn test_rescan_blockchain_clears_outputs() {
+    let mut wallet = create_test_wallet();
+    wallet.current_scanned_height = 100500;
+
+    let output = SerializableOutput {
+        tx_hash: [1u8; 32],
+        output_index: 0,
+        amount: 1000000000000,
+        key_image: [3u8; 32],
+        subaddress_indices: (0, 0),
+        height: 100500,
+        unlocked: true,
+        spent: false,
+        frozen: false,
+    };
+    wallet.outputs.insert([3u8; 32], output);
+
+    assert_eq!(wallet.outputs.len(), 1);
+
+    wallet.rescan_blockchain();
+
+    assert_eq!(wallet.outputs.len(), 0);
+    assert_eq!(wallet.current_scanned_height, 0);
+}
+
+#[test]
+fn test_rescan_blockchain_clears_tracking_sets() {
+    let mut wallet = create_test_wallet();
+
+    wallet.spent_outputs.insert([1u8; 32]);
+    wallet.frozen_outputs.insert([2u8; 32]);
+
+    assert_eq!(wallet.spent_outputs.len(), 1);
+    assert_eq!(wallet.frozen_outputs.len(), 1);
+
+    wallet.rescan_blockchain();
+
+    assert!(wallet.spent_outputs.is_empty());
+    assert!(wallet.frozen_outputs.is_empty());
+}
+
+#[test]
+fn test_rescan_preserves_keys() {
+    let seed = Seed::new(&mut OsRng, monero_seed::Language::English);
+    let seed_string = seed.to_string().to_string();
+
+    let mut wallet = WalletState::new(
+        seed,
+        String::from("English"),
+        Network::Stagenet,
+        "password",
+        PathBuf::from("test.bin"),
+        100000,
+    )
+    .unwrap();
+
+    wallet.register_subaddress(0, 1).unwrap();
+    let subaddresses = wallet.get_registered_subaddresses();
+
+    wallet.rescan_blockchain();
+
+    assert_eq!(*wallet.seed.as_ref().unwrap().to_string(), seed_string);
+    assert_eq!(wallet.get_registered_subaddresses(), subaddresses);
+    assert_eq!(wallet.network, Network::Stagenet);
+}
+
+#[test]
+fn test_set_sync_progress_callback() {
+    use std::sync::Arc;
+
+    let mut wallet = create_test_wallet();
+
+    let callback = Arc::new(Box::new(|_current: u64, _daemon: u64| {})
+        as Box<dyn Fn(u64, u64) + Send + Sync>);
+
+    wallet.set_sync_progress_callback(Some(callback));
+    assert!(wallet.sync_progress_callback.is_some());
+
+    wallet.set_sync_progress_callback(None);
+    assert!(wallet.sync_progress_callback.is_none());
 }
