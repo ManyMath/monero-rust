@@ -40,6 +40,16 @@ char *generate_mnemonic(uint8_t language);
 void wallet_free(struct WalletState *wallet);
 
 /**
+ * Returns current scanned height, 0 on null/panic.
+ */
+uint64_t wallet_get_current_height(const struct WalletState *wallet);
+
+/**
+ * Returns daemon height, 0 on null/panic.
+ */
+uint64_t wallet_get_daemon_height(const struct WalletState *wallet);
+
+/**
  * # Safety
  * Caller must free with free_string(). Returns null if path isn't valid UTF-8.
  */
@@ -70,6 +80,11 @@ char *wallet_get_public_spend_key(const struct WalletState *wallet);
 char *wallet_get_public_view_key(const struct WalletState *wallet);
 
 /**
+ * Returns refresh height, 0 on null/panic.
+ */
+uint64_t wallet_get_refresh_from_height(const struct WalletState *wallet);
+
+/**
  * # Safety
  * Caller must free with free_string(). Returns null for view-only wallets.
  */
@@ -87,6 +102,11 @@ char *wallet_get_seed_language(const struct WalletState *wallet);
 int32_t wallet_is_closed(const struct WalletState *wallet);
 
 /**
+ * Returns 1 if syncing, 0 if not, -1 null, -5 panic.
+ */
+int32_t wallet_is_syncing(const struct WalletState *wallet);
+
+/**
  * Returns 1 if view-only, 0 if normal, -1 on null pointer, -5 on panic.
  */
 int32_t wallet_is_view_only(const struct WalletState *wallet);
@@ -98,7 +118,32 @@ int32_t wallet_is_view_only(const struct WalletState *wallet);
 struct WalletState *wallet_load(const char *path, const char *password);
 
 /**
+ * Clears outputs/txs and resets to refresh height. Returns 0 on success, -1 null, -5 panic.
+ */
+int32_t wallet_rescan_blockchain(struct WalletState *wallet);
+
+/**
  * # Safety
  * Wallet pointer must be valid. Password must be null-terminated UTF-8.
  */
 int32_t wallet_save(const struct WalletState *wallet, const char *password);
+
+/**
+ * Sets refresh height. Returns 0 on success, -1 null, -5 panic.
+ */
+int32_t wallet_set_refresh_from_height(struct WalletState *wallet, uint64_t height);
+
+/**
+ * Starts syncing. Returns 0 on success, -1 null, -2 not connected, -3 closed, -5 panic.
+ */
+int32_t wallet_start_syncing(struct WalletState *wallet);
+
+/**
+ * Stops syncing. Returns 0 on success, -1 null, -5 panic.
+ */
+int32_t wallet_stop_syncing(struct WalletState *wallet);
+
+/**
+ * Scans one block. Returns 1 if scanned, 0 if synced, -1 null, -2 not connected, -3 closed, -4 error, -5 panic.
+ */
+int32_t wallet_sync_once(struct WalletState *wallet);
