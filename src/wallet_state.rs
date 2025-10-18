@@ -108,6 +108,15 @@ pub struct WalletState {
         deserialize_with = "deserialize_subaddress_vec"
     )]
     pub registered_subaddresses: Vec<SubaddressIndex>,
+
+    #[serde(skip)]
+    pub sync_handle: Option<tokio::task::JoinHandle<()>>,
+
+    #[serde(skip)]
+    pub sync_interval: std::time::Duration,
+
+    #[serde(skip)]
+    pub sync_progress_callback: Option<std::sync::Arc<Box<dyn Fn(u64, u64) + Send + Sync>>>,
 }
 
 const WALLET_VERSION: u32 = 1;
@@ -367,6 +376,9 @@ impl WalletState {
             connection_config: None,
             scanner,
             registered_subaddresses: Vec::new(),
+            sync_handle: None,
+            sync_interval: std::time::Duration::from_secs(1),
+            sync_progress_callback: None,
         })
     }
 
@@ -424,6 +436,9 @@ impl WalletState {
             connection_config: None,
             scanner,
             registered_subaddresses: Vec::new(),
+            sync_handle: None,
+            sync_interval: std::time::Duration::from_secs(1),
+            sync_progress_callback: None,
         })
     }
 
@@ -815,6 +830,122 @@ impl WalletState {
     }
 
     // ========================================================================
+    // SYNC LOOP
+    // ========================================================================
+
+    pub fn set_sync_progress_callback(
+        &mut self,
+        callback: Option<std::sync::Arc<Box<dyn Fn(u64, u64) + Send + Sync>>>,
+    ) {
+        self.sync_progress_callback = callback;
+    }
+
+    /// Marks the wallet as syncing and validates preconditions.
+    /// Call this before `sync_once()`.
+    pub async fn start_syncing(&mut self) -> Result<(), WalletError> {
+        if self.is_syncing {
+            return Ok(());
+        }
+        if !self.is_connected {
+            return Err(WalletError::NotConnected);
+        }
+        if self.is_closed {
+            return Err(WalletError::WalletClosed);
+        }
+        self.is_syncing = true;
+        Ok(())
+    }
+
+    /// Scans one block if available. Returns true if a block was scanned.
+    pub async fn sync_once(&mut self) -> Result<bool, WalletError> {
+        if self.is_closed {
+            return Err(WalletError::WalletClosed);
+        }
+        if !self.is_connected {
+            return Err(WalletError::NotConnected);
+        }
+        if !self.is_syncing {
+            return Err(WalletError::Other("Call start_syncing() first".to_string()));
+        }
+
+        let rpc = self.get_rpc().await?;
+        let daemon_height = rpc.get_height().await.map_err(WalletError::RpcError)? as u64;
+        self.daemon_height = daemon_height;
+
+        if self.current_scanned_height >= daemon_height {
+            if let Some(ref cb) = self.sync_progress_callback {
+                cb(self.current_scanned_height, daemon_height);
+            }
+            return Ok(false);
+        }
+
+        if let Some(fork_height) = self.detect_reorganization().await? {
+            self.handle_reorganization(fork_height);
+        }
+
+        let next_height = self.current_scanned_height + 1;
+
+        const MAX_RETRIES: u32 = 3;
+        let mut last_error = None;
+
+        for attempt in 0..MAX_RETRIES {
+            match self.scan_block_by_height(next_height).await {
+                Ok(_) => {
+                    if let Some(ref cb) = self.sync_progress_callback {
+                        cb(self.current_scanned_height, daemon_height);
+                    }
+                    return Ok(true);
+                }
+                Err(e) => {
+                    last_error = Some(e);
+                    if attempt + 1 < MAX_RETRIES {
+                        let delay = std::time::Duration::from_secs(2u64.pow(attempt));
+                        eprintln!(
+                            "Block {} scan failed (attempt {}/{}), retrying in {:?}",
+                            next_height, attempt + 1, MAX_RETRIES, delay
+                        );
+                        tokio::time::sleep(delay).await;
+                    }
+                }
+            }
+        }
+
+        Err(last_error.unwrap())
+    }
+
+    /// Clears the syncing flag.
+    pub async fn stop_syncing(&mut self) {
+        self.is_syncing = false;
+        if let Some(handle) = self.sync_handle.take() {
+            handle.abort();
+            let _ = handle.await;
+        }
+    }
+
+    // ========================================================================
+    // HEIGHT MANAGEMENT
+    // ========================================================================
+
+    pub fn get_refresh_from_height(&self) -> u64 {
+        self.refresh_from_height
+    }
+
+    pub fn set_refresh_from_height(&mut self, height: u64) {
+        self.refresh_from_height = height;
+        self.current_scanned_height = height;
+    }
+
+    /// Clears all cached data and resets to refresh height.
+    pub fn rescan_blockchain(&mut self) {
+        self.outputs.clear();
+        self.spent_outputs.clear();
+        self.frozen_outputs.clear();
+        self.transactions.clear();
+        self.tx_keys.clear();
+        self.current_scanned_height = self.refresh_from_height;
+    }
+
+    // ========================================================================
     // SUBADDRESS MANAGEMENT
     // ========================================================================
 
@@ -1157,6 +1288,9 @@ impl<'de> Deserialize<'de> for WalletState {
             connection_config: None,
             scanner,
             registered_subaddresses,
+            sync_handle: None,
+            sync_interval: std::time::Duration::from_secs(1),
+            sync_progress_callback: None,
         })
     }
 }
