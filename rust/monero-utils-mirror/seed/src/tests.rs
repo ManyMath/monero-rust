@@ -3,7 +3,11 @@ use rand_core::OsRng;
 
 use curve25519_dalek::scalar::Scalar;
 
-use monero_primitives::keccak256;
+use sha3::{Digest, Keccak256};
+
+fn keccak256(data: impl AsRef<[u8]>) -> [u8; 32] {
+  Keccak256::digest(data.as_ref()).into()
+}
 
 use crate::*;
 
@@ -207,8 +211,8 @@ fn test_original_seed() {
       let spend: [u8; 32] = hex::decode(vector.spend).unwrap().try_into().unwrap();
       // For originalal seeds, Monero directly uses the entropy as a spend key
       assert_eq!(
-        Option::<Scalar>::from(Scalar::from_canonical_bytes(*seed.entropy())),
-        Option::<Scalar>::from(Scalar::from_canonical_bytes(spend)),
+        Scalar::from_canonical_bytes(*seed.entropy()),
+        Scalar::from_canonical_bytes(spend),
       );
 
       let view: [u8; 32] = hex::decode(vector.view).unwrap().try_into().unwrap();

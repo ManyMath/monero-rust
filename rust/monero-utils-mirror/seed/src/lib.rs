@@ -1,5 +1,5 @@
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
-#![doc = include_str!("../README.md")]
+//! Rust implementation of Monero's seed algorithm.
 #![deny(missing_docs)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -323,11 +323,10 @@ impl Seed {
     let entropy = seed_to_bytes(lang, &words)?;
 
     // Make sure this is a valid scalar
-    let scalar = Scalar::from_canonical_bytes(*entropy);
-    if scalar.is_none().into() {
+    let Some(mut scalar) = Scalar::from_canonical_bytes(*entropy) else {
       Err(SeedError::InvalidSeed)?;
-    }
-    let mut scalar = scalar.unwrap();
+      unreachable!()
+    };
     scalar.zeroize();
 
     // Call from_entropy so a trimmed seed becomes a full seed
@@ -337,7 +336,7 @@ impl Seed {
   /// Create a seed from entropy.
   #[allow(clippy::needless_pass_by_value)]
   pub fn from_entropy(lang: Language, entropy: Zeroizing<[u8; 32]>) -> Option<Seed> {
-    Option::from(Scalar::from_canonical_bytes(*entropy))
+    Scalar::from_canonical_bytes(*entropy)
       .map(|scalar| key_to_seed(lang, Zeroizing::new(scalar)))
   }
 
