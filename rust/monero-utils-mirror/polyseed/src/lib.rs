@@ -4,7 +4,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 use core::fmt;
-use std_shims::{sync::LazyLock, string::String, collections::HashMap};
+use std_shims::{sync::LazyLock, vec::Vec, string::String, collections::HashMap};
 #[cfg(feature = "std")]
 use std::time::{SystemTime, UNIX_EPOCH};
 
