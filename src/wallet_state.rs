@@ -6,6 +6,7 @@ use crate::WalletError;
 use curve25519_dalek::scalar::Scalar;
 use monero_seed::Seed;
 use monero_generators::biased_hash_to_point;
+use monero_oxide::transaction::Input as TxInput;
 use monero_wallet::{address::{Network, SubaddressIndex}, rpc::Rpc, Scanner, ViewPair};
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
@@ -472,6 +473,22 @@ impl WalletState {
         self.is_connected && self.current_scanned_height >= self.daemon_height
     }
 
+    pub fn get_outputs_count(&self) -> usize {
+        self.outputs.len()
+    }
+
+    pub fn get_spent_outputs_count(&self) -> usize {
+        self.spent_outputs.len()
+    }
+
+    pub fn is_output_spent(&self, key_image: &KeyImage) -> bool {
+        self.spent_outputs.contains(key_image)
+    }
+
+    pub fn get_transaction_count(&self) -> usize {
+        self.transactions.len()
+    }
+
     /// Returns the mnemonic seed, or None for view-only wallets.
     pub fn get_seed(&self) -> Option<String> {
         self.seed.as_ref().map(|seed| (*seed.to_string()).clone())
@@ -665,6 +682,113 @@ impl WalletState {
     // BLOCKCHAIN SCANNING
     // ========================================================================
 
+    /// Scans transaction inputs to find which of our outputs were spent.
+    fn detect_spent_outputs_in_block(
+        &self,
+        block: &monero_rpc::ScannableBlock,
+    ) -> HashSet<KeyImage> {
+        let mut spent = HashSet::new();
+
+        macro_rules! check_inputs {
+            ($tx:expr) => {
+                for input in $tx.prefix().inputs.iter() {
+                    if let TxInput::ToKey { key_image, .. } = input {
+                        let ki = key_image.to_bytes();
+                        if self.outputs.contains_key(&ki) {
+                            spent.insert(ki);
+                        }
+                    }
+                }
+            };
+        }
+
+        check_inputs!(block.block.miner_transaction());
+        for tx in &block.transactions {
+            check_inputs!(tx);
+        }
+
+        spent
+    }
+
+    /// Creates transaction records for any txs involving this wallet.
+    fn create_transaction_records(
+        &self,
+        discovered_outputs: &[SerializableOutput],
+        spent_in_block: &HashSet<KeyImage>,
+        block: &monero_rpc::ScannableBlock,
+        block_height: u64,
+    ) -> HashMap<[u8; 32], Transaction> {
+        use crate::types::TransactionDirection;
+        let mut transactions = HashMap::new();
+
+        // Group outputs by tx
+        let mut outputs_by_tx: HashMap<[u8; 32], Vec<&SerializableOutput>> = HashMap::new();
+        for output in discovered_outputs {
+            outputs_by_tx.entry(output.tx_hash).or_default().push(output);
+        }
+
+        // Build map of tx_hash -> key images we own that were spent by that tx
+        let mut tx_spent_kis: HashMap<[u8; 32], Vec<KeyImage>> = HashMap::new();
+
+        macro_rules! collect_spent {
+            ($tx:expr, $hash:expr) => {
+                for input in $tx.prefix().inputs.iter() {
+                    if let TxInput::ToKey { key_image, .. } = input {
+                        let ki = key_image.to_bytes();
+                        if spent_in_block.contains(&ki) {
+                            tx_spent_kis.entry($hash).or_default().push(ki);
+                        }
+                    }
+                }
+            };
+        }
+
+        let miner_hash = block.block.miner_transaction().hash();
+        collect_spent!(block.block.miner_transaction(), miner_hash);
+
+        for (i, tx) in block.transactions.iter().enumerate() {
+            let hash = block.block.transactions[i];
+            collect_spent!(tx, hash);
+        }
+
+        for (tx_hash, outputs) in outputs_by_tx {
+            let timestamp = block.block.header.timestamp;
+            let spends_ours = tx_spent_kis.contains_key(&tx_hash);
+
+            let received: u64 = outputs.iter().map(|o| o.amount).sum();
+            let spent_amt: u64 = if spends_ours {
+                tx_spent_kis.get(&tx_hash)
+                    .map(|kis| kis.iter().filter_map(|ki| self.outputs.get(ki)).map(|o| o.amount).sum())
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+
+            let (direction, amount) = if spends_ours {
+                (TransactionDirection::Outgoing, (received as i64) - (spent_amt as i64))
+            } else {
+                (TransactionDirection::Incoming, received as i64)
+            };
+
+            let payment_id = outputs.first().and_then(|o| o.payment_id.clone());
+
+            transactions.insert(tx_hash, Transaction {
+                txid: tx_hash,
+                height: Some(block_height),
+                timestamp,
+                amount,
+                fee: None,
+                destinations: vec![],
+                payment_id,
+                direction,
+                confirmations: 0,
+                is_pending: false,
+            });
+        }
+
+        transactions
+    }
+
     /// Scans a block for owned outputs. Returns the number of outputs found.
     pub async fn scan_block(
         &mut self,
@@ -675,6 +799,9 @@ impl WalletState {
             return Err(WalletError::WalletClosed);
         }
 
+        // Clone before scanning since scan() consumes the block
+        let block_for_analysis = block.clone();
+
         let scan_result = self
             .scanner
             .scan(block)
@@ -683,13 +810,25 @@ impl WalletState {
         let outputs = scan_result.not_additionally_locked();
         let count = outputs.len();
 
-        // Convert all outputs first without mutating state
+        // Convert outputs without mutating state yet
         let mut converted = Vec::with_capacity(count);
         for wallet_output in outputs {
             converted.push(self.convert_to_serializable(wallet_output, block_height)?);
         }
 
+        // Detect spent outputs and create tx records
+        let spent_in_block = self.detect_spent_outputs_in_block(&block_for_analysis);
+        let new_txs = self.create_transaction_records(&converted, &spent_in_block, &block_for_analysis, block_height);
+
         // Apply all changes atomically
+        for ki in spent_in_block {
+            self.spent_outputs.insert(ki);
+        }
+
+        for (hash, tx) in new_txs {
+            self.transactions.insert(hash, tx);
+        }
+
         for output in converted {
             let key_image = output.key_image;
             if let Some(existing) = self.outputs.get(&key_image) {
@@ -739,6 +878,9 @@ impl WalletState {
             .map(|idx| (idx.account(), idx.address()))
             .unwrap_or((0, 0));
 
+        // payment_id extraction would require changes to monero-wallet (PaymentId is pub(crate))
+        let payment_id = None;
+
         Ok(SerializableOutput {
             tx_hash: wallet_output.transaction(),
             output_index: wallet_output.index_in_transaction(),
@@ -749,6 +891,7 @@ impl WalletState {
             unlocked: false,
             spent: false,
             frozen: false,
+            payment_id,
         })
     }
 

@@ -122,6 +122,7 @@ pub struct SerializableOutput {
     pub unlocked: bool,
     pub spent: bool,
     pub frozen: bool,
+    pub payment_id: Option<Vec<u8>>,
 }
 
 impl Transaction {

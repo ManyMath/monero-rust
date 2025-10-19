@@ -64,6 +64,7 @@ fn test_balance_calculation() {
         unlocked: true,
         spent: false,
         frozen: false,
+        payment_id: None,
     };
 
     let output2 = SerializableOutput {
@@ -76,6 +77,7 @@ fn test_balance_calculation() {
         unlocked: true,
         spent: false,
         frozen: false,
+        payment_id: None,
     };
 
     wallet.outputs.insert([1u8; 32], output1);
@@ -199,6 +201,7 @@ fn test_handle_reorganization() {
             unlocked: false,
             spent: false,
             frozen: false,
+            payment_id: None,
         };
         wallet.outputs.insert([i as u8; 32], output);
     }
@@ -226,6 +229,7 @@ fn test_reorg_cleans_hashsets() {
         unlocked: false,
         spent: false,
         frozen: false,
+        payment_id: None,
     };
     wallet.outputs.insert([1u8; 32], output);
     wallet.spent_outputs.insert([1u8; 32]);
@@ -374,6 +378,7 @@ fn test_rescan_blockchain_clears_outputs() {
         unlocked: true,
         spent: false,
         frozen: false,
+        payment_id: None,
     };
     wallet.outputs.insert([3u8; 32], output);
 

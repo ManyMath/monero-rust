@@ -16,7 +16,7 @@ path = "src/lib.rs"
 crate-type = ["rlib", "cdylib", "staticlib"]
 
 [dependencies]
-# Core wallet/address functionality from monero-oxide (vendored as submodule).
+monero-oxide = { path = "vendored/monero-oxide/monero-oxide", default-features = false }
 monero-wallet = { path = "vendored/monero-oxide/monero-oxide/wallet", default-features = false, features = ["std"] }
 # Simple HTTP RPC client compatible with monero-oxide Rpc trait (used by examples/tests).
 monero_simple_request_rpc = { package = "monero-simple-request-rpc", path = "vendored/monero-oxide/monero-oxide/rpc/simple-request", default-features = false }
