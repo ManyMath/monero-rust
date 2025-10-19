@@ -1,9 +1,9 @@
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
-#![doc = include_str!("../README.md")]
+//! Additional utility functions for monero-wallet.
 #![deny(missing_docs)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
-pub use monero_wallet::*;
+pub use monero_serai::*;
 
 /// Seed creation and parsing functionality.
 pub mod seed;

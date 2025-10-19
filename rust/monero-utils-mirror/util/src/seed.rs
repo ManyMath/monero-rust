@@ -8,7 +8,7 @@ pub use monero_seed as original;
 pub use polyseed;
 
 use original::{SeedError as OriginalSeedError, Seed as OriginalSeed};
-use polyseed::{PolyseedError, Polyseed};
+use polyseed::{Coin, PolyseedError, Polyseed};
 
 /// An error from working with seeds.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -44,8 +44,12 @@ impl From<PolyseedError> for SeedError {
     match error {
       PolyseedError::UnsupportedFeatures => SeedError::UnsupportedFeatures,
       PolyseedError::InvalidEntropy => SeedError::InvalidEntropy,
-      PolyseedError::InvalidSeed => SeedError::InvalidSeed,
+      PolyseedError::InvalidSeed | PolyseedError::InvalidWordCount => SeedError::InvalidSeed,
       PolyseedError::InvalidChecksum => SeedError::InvalidChecksum,
+      PolyseedError::InvalidFormat | PolyseedError::MultipleLanguagesMatch => {
+        SeedError::InvalidSeed
+      }
+      _ => SeedError::InvalidSeed,
     }
   }
 }
@@ -90,7 +94,9 @@ impl Seed {
   pub fn from_string(seed_type: SeedType, words: Zeroizing<String>) -> Result<Seed, SeedError> {
     match seed_type {
       SeedType::Original(lang) => Ok(OriginalSeed::from_string(lang, words).map(Seed::Original)?),
-      SeedType::Polyseed(lang) => Ok(Polyseed::from_string(lang, words).map(Seed::Polyseed)?),
+      SeedType::Polyseed(lang) => {
+        Ok(Polyseed::from_string(lang, words, Coin::Monero, 0).map(Seed::Polyseed)?)
+      }
     }
   }
 
@@ -119,7 +125,7 @@ impl Seed {
   pub fn to_string(&self) -> Zeroizing<String> {
     match self {
       Seed::Original(seed) => seed.to_string(),
-      Seed::Polyseed(seed) => seed.to_string(),
+      Seed::Polyseed(seed) => seed.to_string(Coin::Monero),
     }
   }
 
@@ -136,7 +142,7 @@ impl Seed {
     match self {
       // Original does not differentiate between its entropy and its key
       Seed::Original(seed) => seed.entropy(),
-      Seed::Polyseed(seed) => seed.key(),
+      Seed::Polyseed(seed) => seed.key(Coin::Monero),
     }
   }
 
