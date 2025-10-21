@@ -593,7 +593,7 @@ pub extern "C" fn wallet_get_current_height(wallet: *const WalletState) -> u64 {
             return 0;
         }
         let wallet_ref = unsafe { &*wallet };
-        wallet_ref.current_scanned_height
+        wallet_ref.get_current_syncing_height()
     }));
     result.unwrap_or(0)
 }
@@ -606,7 +606,91 @@ pub extern "C" fn wallet_get_daemon_height(wallet: *const WalletState) -> u64 {
             return 0;
         }
         let wallet_ref = unsafe { &*wallet };
-        wallet_ref.daemon_height
+        wallet_ref.get_daemon_height()
+    }));
+    result.unwrap_or(0)
+}
+
+/// Returns total balance in piconeros, 0 on null/panic.
+#[no_mangle]
+pub extern "C" fn wallet_get_balance(wallet: *const WalletState) -> u64 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() {
+            return 0;
+        }
+        let wallet_ref = unsafe { &*wallet };
+        wallet_ref.get_balance()
+    }));
+    result.unwrap_or(0)
+}
+
+/// Returns unlocked (spendable) balance in piconeros, 0 on null/panic.
+#[no_mangle]
+pub extern "C" fn wallet_get_unlocked_balance(wallet: *const WalletState) -> u64 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() {
+            return 0;
+        }
+        let wallet_ref = unsafe { &*wallet };
+        wallet_ref.get_unlocked_balance()
+    }));
+    result.unwrap_or(0)
+}
+
+/// Refreshes output unlock status from daemon. Returns 0 on success,
+/// -1 null, -2 not connected, -3 closed, -4 error, -5 panic.
+#[no_mangle]
+pub extern "C" fn wallet_refresh_outputs(wallet: *mut WalletState) -> i32 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() {
+            return -1;
+        }
+        let wallet_ref = unsafe { &mut *wallet };
+        match GLOBAL_RUNTIME.block_on(wallet_ref.refresh_outputs()) {
+            Ok(()) => 0,
+            Err(WalletError::NotConnected) => -2,
+            Err(WalletError::WalletClosed) => -3,
+            Err(_) => -4,
+        }
+    }));
+    result.unwrap_or(-5)
+}
+
+/// Returns total output count, 0 on null/panic.
+#[no_mangle]
+pub extern "C" fn wallet_get_outputs_count(wallet: *const WalletState) -> u64 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() {
+            return 0;
+        }
+        let wallet_ref = unsafe { &*wallet };
+        wallet_ref.get_outputs_count() as u64
+    }));
+    result.unwrap_or(0)
+}
+
+/// Returns spent output count, 0 on null/panic.
+#[no_mangle]
+pub extern "C" fn wallet_get_spent_outputs_count(wallet: *const WalletState) -> u64 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() {
+            return 0;
+        }
+        let wallet_ref = unsafe { &*wallet };
+        wallet_ref.get_spent_outputs_count() as u64
+    }));
+    result.unwrap_or(0)
+}
+
+/// Returns transaction count, 0 on null/panic.
+#[no_mangle]
+pub extern "C" fn wallet_get_transaction_count(wallet: *const WalletState) -> u64 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() {
+            return 0;
+        }
+        let wallet_ref = unsafe { &*wallet };
+        wallet_ref.get_transaction_count() as u64
     }));
     result.unwrap_or(0)
 }
