@@ -40,6 +40,11 @@ char *generate_mnemonic(uint8_t language);
 void wallet_free(struct WalletState *wallet);
 
 /**
+ * Returns total balance in piconeros, 0 on null/panic.
+ */
+uint64_t wallet_get_balance(const struct WalletState *wallet);
+
+/**
  * Returns current scanned height, 0 on null/panic.
  */
 uint64_t wallet_get_current_height(const struct WalletState *wallet);
@@ -48,6 +53,11 @@ uint64_t wallet_get_current_height(const struct WalletState *wallet);
  * Returns daemon height, 0 on null/panic.
  */
 uint64_t wallet_get_daemon_height(const struct WalletState *wallet);
+
+/**
+ * Returns total output count, 0 on null/panic.
+ */
+uint64_t wallet_get_outputs_count(const struct WalletState *wallet);
 
 /**
  * # Safety
@@ -97,6 +107,21 @@ char *wallet_get_seed(const struct WalletState *wallet);
 char *wallet_get_seed_language(const struct WalletState *wallet);
 
 /**
+ * Returns spent output count, 0 on null/panic.
+ */
+uint64_t wallet_get_spent_outputs_count(const struct WalletState *wallet);
+
+/**
+ * Returns transaction count, 0 on null/panic.
+ */
+uint64_t wallet_get_transaction_count(const struct WalletState *wallet);
+
+/**
+ * Returns unlocked (spendable) balance in piconeros, 0 on null/panic.
+ */
+uint64_t wallet_get_unlocked_balance(const struct WalletState *wallet);
+
+/**
  * Returns 1 if closed, 0 if open, -1 on null pointer, -5 on panic.
  */
 int32_t wallet_is_closed(const struct WalletState *wallet);
@@ -116,6 +141,12 @@ int32_t wallet_is_view_only(const struct WalletState *wallet);
  * Path and password must be null-terminated UTF-8. Caller must free with wallet_free().
  */
 struct WalletState *wallet_load(const char *path, const char *password);
+
+/**
+ * Refreshes output unlock status from daemon. Returns 0 on success,
+ * -1 null, -2 not connected, -3 closed, -4 error, -5 panic.
+ */
+int32_t wallet_refresh_outputs(struct WalletState *wallet);
 
 /**
  * Clears outputs/txs and resets to refresh height. Returns 0 on success, -1 null, -5 panic.
