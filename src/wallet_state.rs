@@ -485,6 +485,59 @@ impl WalletState {
         self.spent_outputs.contains(key_image)
     }
 
+    pub fn is_output_frozen(&self, key_image: &KeyImage) -> bool {
+        self.frozen_outputs.contains(key_image)
+    }
+
+    pub fn freeze_output(&mut self, key_image: &KeyImage) -> Result<(), WalletError> {
+        if self.is_closed {
+            return Err(WalletError::WalletClosed);
+        }
+        if !self.outputs.contains_key(key_image) {
+            return Err(WalletError::Other(format!(
+                "output {} not found",
+                hex::encode(key_image)
+            )));
+        }
+        self.frozen_outputs.insert(*key_image);
+        Ok(())
+    }
+
+    pub fn thaw_output(&mut self, key_image: &KeyImage) -> Result<(), WalletError> {
+        if self.is_closed {
+            return Err(WalletError::WalletClosed);
+        }
+        if !self.outputs.contains_key(key_image) {
+            return Err(WalletError::Other(format!(
+                "output {} not found",
+                hex::encode(key_image)
+            )));
+        }
+        self.frozen_outputs.remove(key_image);
+        Ok(())
+    }
+
+    /// Returns outputs, optionally including spent ones.
+    pub fn get_outputs(&self, include_spent: bool) -> Result<Vec<SerializableOutput>, WalletError> {
+        if self.is_closed {
+            return Err(WalletError::WalletClosed);
+        }
+
+        let mut result = Vec::new();
+        for (key_image, output) in &self.outputs {
+            let is_spent = self.spent_outputs.contains(key_image);
+            if !include_spent && is_spent {
+                continue;
+            }
+
+            let mut out = output.clone();
+            out.spent = is_spent;
+            out.frozen = self.frozen_outputs.contains(key_image);
+            result.push(out);
+        }
+        Ok(result)
+    }
+
     pub fn get_transaction_count(&self) -> usize {
         self.transactions.len()
     }
@@ -609,6 +662,31 @@ impl WalletState {
                 Err(WalletError::RpcError(e))
             }
         }
+    }
+
+    /// Refreshes output unlock status and transaction confirmations from daemon.
+    pub async fn refresh_outputs(&mut self) -> Result<(), WalletError> {
+        if self.is_closed {
+            return Err(WalletError::WalletClosed);
+        }
+        if !self.is_connected {
+            return Err(WalletError::NotConnected);
+        }
+
+        let rpc = self.get_rpc().await?;
+        let daemon_height = rpc.get_height().await.map_err(WalletError::RpcError)? as u64;
+        self.daemon_height = daemon_height;
+
+        const LOCK_BLOCKS: u64 = 10;
+        for output in self.outputs.values_mut() {
+            output.unlocked = daemon_height >= output.height.saturating_add(LOCK_BLOCKS);
+        }
+
+        for tx in self.transactions.values_mut() {
+            tx.update_confirmations(daemon_height);
+        }
+
+        Ok(())
     }
 
     async fn start_health_check(&mut self) {
@@ -1071,6 +1149,14 @@ impl WalletState {
 
     pub fn get_refresh_from_height(&self) -> u64 {
         self.refresh_from_height
+    }
+
+    pub fn get_current_syncing_height(&self) -> u64 {
+        self.current_scanned_height
+    }
+
+    pub fn get_daemon_height(&self) -> u64 {
+        self.daemon_height
     }
 
     pub fn set_refresh_from_height(&mut self, height: u64) {
