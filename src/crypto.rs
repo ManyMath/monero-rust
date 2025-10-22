@@ -70,13 +70,10 @@ pub fn encrypt_wallet_data(
 
     let cipher = Aes256Gcm::new_from_slice(&*key)
         .map_err(|e| format!("Failed to create cipher: {}", e))?;
-
-    let nonce_obj = Nonce::from_slice(nonce);
-
+    let nonce_obj = Nonce::from(*nonce);
     let ciphertext = cipher
-        .encrypt(nonce_obj, data)
+        .encrypt(&nonce_obj, data)
         .map_err(|e| format!("Encryption failed: {}", e))?;
-
     Ok(ciphertext)
 }
 
@@ -88,15 +85,11 @@ pub fn decrypt_wallet_data(
     nonce: &[u8; NONCE_SIZE],
 ) -> Result<Vec<u8>, String> {
     let key = derive_encryption_key(password, salt)?;
-
     let cipher = Aes256Gcm::new_from_slice(&*key)
         .map_err(|e| format!("Failed to create cipher: {}", e))?;
-
-    let nonce_obj = Nonce::from_slice(nonce);
-
+    let nonce_obj = Nonce::from(*nonce);
     let plaintext = cipher
-        .decrypt(nonce_obj, ciphertext)
+        .decrypt(&nonce_obj, ciphertext)
         .map_err(|_| "Decryption failed: invalid password or corrupted data".to_string())?;
-
     Ok(plaintext)
 }
