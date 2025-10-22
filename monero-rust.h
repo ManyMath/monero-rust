@@ -149,6 +149,12 @@ struct WalletState *wallet_load(const char *path, const char *password);
 int32_t wallet_refresh_outputs(struct WalletState *wallet);
 
 /**
+ * Refreshes transaction confirmation counts from daemon. Returns 0 on success,
+ * -1 null, -2 not connected, -3 closed, -4 error, -5 panic.
+ */
+int32_t wallet_refresh_transactions(struct WalletState *wallet);
+
+/**
  * Clears outputs/txs and resets to refresh height. Returns 0 on success, -1 null, -5 panic.
  */
 int32_t wallet_rescan_blockchain(struct WalletState *wallet);
