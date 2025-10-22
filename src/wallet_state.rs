@@ -150,10 +150,9 @@ where
     pairs.serialize(serializer)
 }
 
+#[allow(dead_code)]
 fn deserialize_subaddress_vec<'de, D>(deserializer: D) -> Result<Vec<SubaddressIndex>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
+where D: serde::Deserializer<'de> {
     let pairs: Vec<(u32, u32)> = Vec::deserialize(deserializer)?;
     pairs
         .into_iter()
@@ -202,22 +201,10 @@ where
 
 mod serde_zeroizing_option {
     use super::*;
-    use serde::{Deserializer, Serializer};
-
-    pub fn serialize<S>(
-        value: &Option<Zeroizing<[u8; 32]>>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        super::serialize_view_key_option(value, serializer)
-    }
+    use serde::Deserializer;
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Zeroizing<[u8; 32]>>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
+    where D: Deserializer<'de> {
         super::deserialize_view_key_option(deserializer)
     }
 }
@@ -664,7 +651,7 @@ impl WalletState {
         }
     }
 
-    /// Refreshes output unlock status and transaction confirmations from daemon.
+    /// Refreshes output unlock status from daemon.
     pub async fn refresh_outputs(&mut self) -> Result<(), WalletError> {
         if self.is_closed {
             return Err(WalletError::WalletClosed);
@@ -682,8 +669,34 @@ impl WalletState {
             output.unlocked = daemon_height >= output.height.saturating_add(LOCK_BLOCKS);
         }
 
+        Ok(())
+    }
+
+    /// Refreshes transaction confirmation counts from daemon.
+    pub async fn refresh_transactions(&mut self) -> Result<(), WalletError> {
+        if self.is_closed {
+            return Err(WalletError::WalletClosed);
+        }
+
+        let rpc = self.get_rpc().await?;
+        let daemon_height = match rpc.get_height().await {
+            Ok(height) => height as u64,
+            Err(e) => {
+                self.is_connected = false;
+                return Err(WalletError::RpcError(e));
+            }
+        };
+
+        self.daemon_height = daemon_height;
+
         for tx in self.transactions.values_mut() {
-            tx.update_confirmations(daemon_height);
+            if let Some(tx_height) = tx.height {
+                tx.confirmations = daemon_height.saturating_sub(tx_height).saturating_add(1);
+                tx.is_pending = false;
+            } else {
+                tx.confirmations = 0;
+                tx.is_pending = true;
+            }
         }
 
         Ok(())
@@ -833,7 +846,17 @@ impl WalletState {
             let timestamp = block.block.header.timestamp;
             let spends_ours = tx_spent_kis.contains_key(&tx_hash);
 
-            let received: u64 = outputs.iter().map(|o| o.amount).sum();
+            // Calculate total received (includes previously known outputs from the same tx)
+            let mut received: u64 = outputs.iter().map(|o| o.amount).sum();
+            for (_, output) in self.outputs.iter() {
+                if output.tx_hash == tx_hash {
+                    let is_new = outputs.iter().any(|o| o.key_image == output.key_image);
+                    if !is_new {
+                        received = received.saturating_add(output.amount);
+                    }
+                }
+            }
+
             let spent_amt: u64 = if spends_ours {
                 tx_spent_kis.get(&tx_hash)
                     .map(|kis| kis.iter().filter_map(|ki| self.outputs.get(ki)).map(|o| o.amount).sum())
@@ -843,14 +866,16 @@ impl WalletState {
             };
 
             let (direction, amount) = if spends_ours {
-                (TransactionDirection::Outgoing, (received as i64) - (spent_amt as i64))
+                // Outgoing: amount = spent - received (net loss to wallet)
+                (TransactionDirection::Outgoing, spent_amt.saturating_sub(received))
             } else {
-                (TransactionDirection::Incoming, received as i64)
+                (TransactionDirection::Incoming, received)
             };
 
             let payment_id = outputs.first().and_then(|o| o.payment_id.clone());
 
-            transactions.insert(tx_hash, Transaction {
+            // Only insert if transaction doesn't already exist (prevents duplicates during rescans)
+            transactions.entry(tx_hash).or_insert(Transaction {
                 txid: tx_hash,
                 height: Some(block_height),
                 timestamp,
@@ -904,7 +929,8 @@ impl WalletState {
         }
 
         for (hash, tx) in new_txs {
-            self.transactions.insert(hash, tx);
+            // Only insert if not already present (prevents duplicates during rescans)
+            self.transactions.entry(hash).or_insert(tx);
         }
 
         for output in converted {
@@ -1381,6 +1407,7 @@ impl<'de> Deserialize<'de> for WalletState {
             password_salt: [u8; 32],
             password_hash: [u8; 32],
             wallet_path: PathBuf,
+            #[allow(dead_code)]
             is_closed: bool,
             #[serde(rename = "keys_checksum")]
             keys_checksum: [u8; 32],

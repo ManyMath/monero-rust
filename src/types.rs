@@ -11,8 +11,7 @@ pub struct Transaction {
     pub txid: [u8; 32],
     pub height: Option<u64>,
     pub timestamp: u64,
-    /// Positive for incoming, negative for outgoing (piconeros)
-    pub amount: i64,
+    pub amount: u64,  // absolute amount in piconeros (use direction field for sign)
     pub fee: Option<u64>,
     pub destinations: Vec<String>,
     pub payment_id: Option<Vec<u8>>,
@@ -126,17 +125,12 @@ pub struct SerializableOutput {
 }
 
 impl Transaction {
-    pub fn new_incoming(
-        txid: [u8; 32],
-        height: Option<u64>,
-        timestamp: u64,
-        amount: u64,
-    ) -> Self {
+    pub fn new_incoming(txid: [u8; 32], height: Option<u64>, timestamp: u64, amount: u64) -> Self {
         Self {
             txid,
             height,
             timestamp,
-            amount: amount as i64,
+            amount,
             fee: None,
             destinations: Vec::new(),
             payment_id: None,
@@ -146,19 +140,12 @@ impl Transaction {
         }
     }
 
-    pub fn new_outgoing(
-        txid: [u8; 32],
-        height: Option<u64>,
-        timestamp: u64,
-        amount: u64,
-        fee: u64,
-        destinations: Vec<String>,
-    ) -> Self {
+    pub fn new_outgoing(txid: [u8; 32], height: Option<u64>, timestamp: u64, amount: u64, fee: u64, destinations: Vec<String>) -> Self {
         Self {
             txid,
             height,
             timestamp,
-            amount: -(amount as i64),
+            amount,
             fee: Some(fee),
             destinations,
             payment_id: None,
@@ -170,7 +157,7 @@ impl Transaction {
 
     pub fn update_confirmations(&mut self, daemon_height: u64) {
         if let Some(tx_height) = self.height {
-            self.confirmations = daemon_height.saturating_sub(tx_height) + 1;
+            self.confirmations = daemon_height.saturating_sub(tx_height).saturating_add(1);
         }
     }
 

@@ -77,7 +77,6 @@ pub fn encrypt_wallet_data(
     Ok(ciphertext)
 }
 
-/// Decrypts data using AES-256-GCM with a password-derived key.
 pub fn decrypt_wallet_data(
     ciphertext: &[u8],
     password: &str,

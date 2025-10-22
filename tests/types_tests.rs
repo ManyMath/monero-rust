@@ -18,7 +18,7 @@ fn test_outgoing_transaction() {
     let destinations = vec!["address1".to_string(), "address2".to_string()];
     let tx = Transaction::new_outgoing(txid, None, 1234567890, 1000000000000, 50000000, destinations.clone());
 
-    assert_eq!(tx.amount, -1000000000000);
+    assert_eq!(tx.amount, 1000000000000);
     assert_eq!(tx.fee, Some(50000000));
     assert_eq!(tx.destinations, destinations);
     assert_eq!(tx.direction, TransactionDirection::Outgoing);
