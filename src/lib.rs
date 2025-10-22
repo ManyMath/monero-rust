@@ -656,6 +656,25 @@ pub extern "C" fn wallet_refresh_outputs(wallet: *mut WalletState) -> i32 {
     result.unwrap_or(-5)
 }
 
+/// Refreshes transaction confirmation counts from daemon. Returns 0 on success,
+/// -1 null, -2 not connected, -3 closed, -4 error, -5 panic.
+#[no_mangle]
+pub extern "C" fn wallet_refresh_transactions(wallet: *mut WalletState) -> i32 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() {
+            return -1;
+        }
+        let wallet_ref = unsafe { &mut *wallet };
+        match GLOBAL_RUNTIME.block_on(wallet_ref.refresh_transactions()) {
+            Ok(()) => 0,
+            Err(WalletError::NotConnected) => -2,
+            Err(WalletError::WalletClosed) => -3,
+            Err(_) => -4,
+        }
+    }));
+    result.unwrap_or(-5)
+}
+
 /// Returns total output count, 0 on null/panic.
 #[no_mangle]
 pub extern "C" fn wallet_get_outputs_count(wallet: *const WalletState) -> u64 {
