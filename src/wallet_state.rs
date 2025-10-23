@@ -1,6 +1,9 @@
 //! Wallet state with encryption support.
 
 use crate::crypto::{decrypt_wallet_data, encrypt_wallet_data, generate_nonce};
+
+// Magic number for FFI pointer validation
+const WALLET_MAGIC: u64 = 0x4D4F4E45524F5758; // "MONEROX"
 use crate::types::{KeyImage, SerializableOutput, Transaction, TxKey};
 use crate::WalletError;
 use curve25519_dalek::scalar::Scalar;
@@ -18,6 +21,9 @@ use zeroize::Zeroizing;
 
 #[derive(Serialize)]
 pub struct WalletState {
+    #[serde(skip)]
+    pub magic: u64,
+
     #[serde(default = "default_version")]
     pub version: u32,
 
@@ -65,6 +71,10 @@ pub struct WalletState {
     pub daemon_height: u64,
     #[serde(skip)]
     pub is_syncing: bool,
+
+    /// Recent block hashes for reorg detection (last ~100 blocks)
+    #[serde(default)]
+    pub block_hash_cache: HashMap<u64, [u8; 32]>,
 
     pub daemon_address: Option<String>,
     pub is_connected: bool,
@@ -332,6 +342,7 @@ impl WalletState {
         let scanner = Scanner::new(view_pair.clone());
 
         Ok(Self {
+            magic: WALLET_MAGIC,
             version: WALLET_VERSION,
             seed: Some(Zeroizing::new(seed)),
             view_pair,
@@ -349,6 +360,7 @@ impl WalletState {
             current_scanned_height: refresh_from_height,
             daemon_height: 0,
             is_syncing: false,
+            block_hash_cache: HashMap::new(),
             daemon_address: None,
             is_connected: false,
             password_salt,
@@ -392,6 +404,7 @@ impl WalletState {
         let scanner = Scanner::new(view_pair.clone());
 
         Ok(Self {
+            magic: WALLET_MAGIC,
             version: WALLET_VERSION,
             seed: None,
             view_pair,
@@ -409,6 +422,7 @@ impl WalletState {
             current_scanned_height: refresh_from_height,
             daemon_height: 0,
             is_syncing: false,
+            block_hash_cache: HashMap::new(),
             daemon_address: None,
             is_connected: false,
             password_salt,
@@ -430,6 +444,16 @@ impl WalletState {
         })
     }
 
+    /// Validates that a WalletState pointer looks legit.
+    /// Not foolproof but catches obvious issues like dangling or garbage pointers.
+    pub unsafe fn validate_ptr(ptr: *const WalletState) -> bool {
+        if ptr.is_null() {
+            return false;
+        }
+        // Check magic number - won't catch everything but helps
+        unsafe { (*ptr).magic == WALLET_MAGIC }
+    }
+
     pub fn is_view_only(&self) -> bool {
         self.spend_key.is_none()
     }
@@ -439,7 +463,7 @@ impl WalletState {
             .iter()
             .filter(|(ki, _)| !self.spent_outputs.contains(*ki))
             .map(|(_, output)| output.amount)
-            .sum()
+            .fold(0u64, |acc, amt| acc.saturating_add(amt))
     }
 
     /// Spendable balance (10+ confirmations, not frozen)
@@ -453,7 +477,7 @@ impl WalletState {
                     && self.daemon_height >= output.height.saturating_add(LOCK_BLOCKS)
             })
             .map(|(_, output)| output.amount)
-            .sum()
+            .fold(0u64, |acc, amt| acc.saturating_add(amt))
     }
 
     pub fn is_synced(&self) -> bool {
@@ -847,7 +871,7 @@ impl WalletState {
             let spends_ours = tx_spent_kis.contains_key(&tx_hash);
 
             // Calculate total received (includes previously known outputs from the same tx)
-            let mut received: u64 = outputs.iter().map(|o| o.amount).sum();
+            let mut received: u64 = outputs.iter().map(|o| o.amount).fold(0u64, |a, b| a.saturating_add(b));
             for (_, output) in self.outputs.iter() {
                 if output.tx_hash == tx_hash {
                     let is_new = outputs.iter().any(|o| o.key_image == output.key_image);
@@ -859,7 +883,7 @@ impl WalletState {
 
             let spent_amt: u64 = if spends_ours {
                 tx_spent_kis.get(&tx_hash)
-                    .map(|kis| kis.iter().filter_map(|ki| self.outputs.get(ki)).map(|o| o.amount).sum())
+                    .map(|kis| kis.iter().filter_map(|ki| self.outputs.get(ki)).map(|o| o.amount).fold(0u64, |a, b| a.saturating_add(b)))
                     .unwrap_or(0)
             } else {
                 0
@@ -940,13 +964,15 @@ impl WalletState {
                     self.outputs.insert(key_image, output);
                     continue;
                 }
-                return Err(WalletError::Other(format!(
-                    "key image collision at block {}: {} already maps to {}:{}, cannot insert {}:{}",
+                // Collision with different output - keep existing, skip new
+                eprintln!(
+                    "WARNING: key image collision at block {}: {} already maps to {}:{}, skipping {}:{}",
                     block_height,
                     hex::encode(key_image),
                     hex::encode(existing.tx_hash), existing.output_index,
                     hex::encode(output.tx_hash), output.output_index
-                )));
+                );
+                continue;
             }
             self.outputs.insert(key_image, output);
         }
@@ -961,6 +987,16 @@ impl WalletState {
 
         let height_usize: usize = height.try_into()
             .map_err(|_| WalletError::Other(format!("height {} exceeds platform limit", height)))?;
+
+        // Cache block hash for reorg detection
+        let block_hash = rpc.get_block_hash(height_usize).await.map_err(WalletError::RpcError)?;
+        self.block_hash_cache.insert(height, block_hash);
+        // Keep only last ~100 blocks
+        if self.block_hash_cache.len() > 100 {
+            if let Some(&oldest) = self.block_hash_cache.keys().min() {
+                self.block_hash_cache.remove(&oldest);
+            }
+        }
 
         let block = rpc
             .get_scannable_block_by_number(height_usize)
@@ -1061,16 +1097,40 @@ impl WalletState {
         removed_count
     }
 
-    /// Checks if a reorganization occurred by comparing scanned height with daemon.
+    /// Checks if a reorganization occurred by comparing heights and block hashes.
     pub async fn detect_reorganization(&mut self) -> Result<Option<u64>, WalletError> {
         let rpc = self.get_rpc().await?;
         let daemon_height = rpc.get_height().await.map_err(WalletError::RpcError)? as u64;
-
         self.daemon_height = daemon_height;
 
+        // Obvious reorg: daemon is behind us
         if daemon_height < self.current_scanned_height {
             let fork_height = daemon_height.saturating_sub(10);
+            eprintln!("REORG: daemon height {} < wallet height {}, rewinding to {}",
+                daemon_height, self.current_scanned_height, fork_height);
             return Ok(Some(fork_height));
+        }
+
+        // Check cached block hashes against daemon
+        let check_start = self.current_scanned_height.saturating_sub(100);
+        for height in (check_start..=self.current_scanned_height).rev() {
+            if let Some(cached_hash) = self.block_hash_cache.get(&height) {
+                let h: usize = match height.try_into() {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                match rpc.get_block_hash(h).await {
+                    Ok(daemon_hash) => {
+                        if &daemon_hash != cached_hash {
+                            let fork_height = height.saturating_sub(10);
+                            eprintln!("REORG: block hash mismatch at {}, rewinding to {}",
+                                height, fork_height);
+                            return Ok(Some(fork_height));
+                        }
+                    }
+                    Err(_) => continue,
+                }
+            }
         }
 
         Ok(None)
@@ -1402,6 +1462,8 @@ impl<'de> Deserialize<'de> for WalletState {
             refresh_from_height: u64,
             current_scanned_height: u64,
             daemon_height: u64,
+            #[serde(default)]
+            block_hash_cache: HashMap<u64, [u8; 32]>,
             daemon_address: Option<String>,
             is_connected: bool,
             password_salt: [u8; 32],
@@ -1512,6 +1574,7 @@ impl<'de> Deserialize<'de> for WalletState {
         }
 
         Ok(WalletState {
+            magic: WALLET_MAGIC,
             version: helper.version,
             seed: seed_opt,
             view_pair,
@@ -1529,6 +1592,7 @@ impl<'de> Deserialize<'de> for WalletState {
             current_scanned_height: helper.current_scanned_height,
             daemon_height: helper.daemon_height,
             is_syncing: false,
+            block_hash_cache: helper.block_hash_cache,
             daemon_address: helper.daemon_address,
             is_connected: helper.is_connected,
             password_salt: helper.password_salt,

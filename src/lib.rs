@@ -21,7 +21,8 @@ use sha3::{Digest, Keccak256};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Mutex};
+use std::collections::HashSet;
 
 #[derive(Debug)]
 pub enum WalletError {
@@ -172,15 +173,35 @@ impl MoneroWallet {
     }
 }
 
+// Track allocated FFI strings to prevent double-free
+static STRING_REGISTRY: LazyLock<Mutex<HashSet<usize>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+
 fn to_c_string(s: String) -> *mut c_char {
-    CString::new(s).unwrap_or_else(|_| CString::new("").unwrap()).into_raw()
+    let c_string = CString::new(s).unwrap_or_else(|_| CString::new("").unwrap());
+    let ptr = c_string.into_raw();
+    if let Ok(mut reg) = STRING_REGISTRY.lock() {
+        reg.insert(ptr as usize);
+    }
+    ptr
 }
 
 /// # Safety
 /// ptr must be from this library
 #[no_mangle]
 pub extern "C" fn free_string(ptr: *mut c_char) {
-    if !ptr.is_null() {
+    if ptr.is_null() {
+        return;
+    }
+    let mut should_free = false;
+    if let Ok(mut reg) = STRING_REGISTRY.lock() {
+        if reg.remove(&(ptr as usize)) {
+            should_free = true;
+        } else {
+            eprintln!("WARNING: free_string called on untracked pointer {:p}", ptr);
+            return;
+        }
+    }
+    if should_free {
         unsafe {
             let _ = CString::from_raw(ptr);
         }
@@ -254,6 +275,10 @@ pub extern "C" fn wallet_save(wallet: *const WalletState, password: *const c_cha
         if wallet.is_null() {
             return -1;
         }
+        if !unsafe { WalletState::validate_ptr(wallet) } {
+            eprintln!("wallet_save: invalid wallet pointer");
+            return -1;
+        }
         if password.is_null() {
             return -2;
         }
@@ -319,7 +344,7 @@ pub extern "C" fn wallet_free(wallet: *mut WalletState) {
 #[no_mangle]
 pub extern "C" fn wallet_get_seed(wallet: *const WalletState) -> *mut c_char {
     catch_unwind(AssertUnwindSafe(|| {
-        if wallet.is_null() {
+        if wallet.is_null() || !unsafe { WalletState::validate_ptr(wallet) } {
             return std::ptr::null_mut();
         }
         let wallet_ref = unsafe { &*wallet };
@@ -484,7 +509,7 @@ static GLOBAL_RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
 #[no_mangle]
 pub extern "C" fn wallet_start_syncing(wallet: *mut WalletState) -> i32 {
     let result = catch_unwind(AssertUnwindSafe(|| {
-        if wallet.is_null() {
+        if wallet.is_null() || !unsafe { WalletState::validate_ptr(wallet) } {
             return -1;
         }
         let wallet_ref = unsafe { &mut *wallet };
