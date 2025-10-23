@@ -6,7 +6,7 @@ pub use monero_wallet::WalletOutput;
 
 pub type KeyImage = [u8; 32];
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Transaction {
     pub txid: [u8; 32],
     pub height: Option<u64>,

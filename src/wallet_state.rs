@@ -553,6 +553,22 @@ impl WalletState {
         self.transactions.len()
     }
 
+    pub fn get_tx(&self, txid: &[u8; 32]) -> Option<&Transaction> {
+        self.transactions.get(txid)
+    }
+
+    pub fn get_txs(&self, txids: &[[u8; 32]]) -> Vec<Option<&Transaction>> {
+        txids.iter().map(|txid| self.transactions.get(txid)).collect()
+    }
+
+    pub fn get_all_txs(&self) -> Vec<&Transaction> {
+        self.transactions.values().collect()
+    }
+
+    pub fn get_all_txids(&self) -> Vec<[u8; 32]> {
+        self.transactions.keys().copied().collect()
+    }
+
     /// Returns the mnemonic seed, or None for view-only wallets.
     pub fn get_seed(&self) -> Option<String> {
         self.seed.as_ref().map(|seed| (*seed.to_string()).clone())
