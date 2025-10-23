@@ -40,6 +40,16 @@ char *generate_mnemonic(uint8_t language);
 void wallet_free(struct WalletState *wallet);
 
 /**
+ * Returns JSON array of all txids as hex strings. Caller must free with free_string().
+ */
+char *wallet_get_all_txids(const struct WalletState *wallet);
+
+/**
+ * Returns JSON array of all transactions. Caller must free with free_string().
+ */
+char *wallet_get_all_txs(const struct WalletState *wallet);
+
+/**
  * Returns total balance in piconeros, 0 on null/panic.
  */
 uint64_t wallet_get_balance(const struct WalletState *wallet);
@@ -115,6 +125,18 @@ uint64_t wallet_get_spent_outputs_count(const struct WalletState *wallet);
  * Returns transaction count, 0 on null/panic.
  */
 uint64_t wallet_get_transaction_count(const struct WalletState *wallet);
+
+/**
+ * Returns JSON for a single transaction, or null if not found.
+ * Caller must free with free_string().
+ */
+char *wallet_get_tx(const struct WalletState *wallet, const uint8_t *txid);
+
+/**
+ * Returns JSON array of transactions. Null entries for missing txids.
+ * Caller must free with free_string().
+ */
+char *wallet_get_txs(const struct WalletState *wallet, const uint8_t *txids, uint64_t count);
 
 /**
  * Returns unlocked (spendable) balance in piconeros, 0 on null/panic.
