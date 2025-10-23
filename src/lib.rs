@@ -738,3 +738,131 @@ pub extern "C" fn wallet_get_transaction_count(wallet: *const WalletState) -> u6
     }));
     result.unwrap_or(0)
 }
+
+/// Returns JSON for a single transaction, or null if not found.
+/// Caller must free with free_string().
+#[no_mangle]
+pub extern "C" fn wallet_get_tx(wallet: *const WalletState, txid: *const u8) -> *mut c_char {
+    catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() || txid.is_null() {
+            return std::ptr::null_mut();
+        }
+        if !unsafe { WalletState::validate_ptr(wallet) } {
+            return std::ptr::null_mut();
+        }
+
+        let wallet_ref = unsafe { &*wallet };
+        let txid_arr: [u8; 32] = unsafe {
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(std::slice::from_raw_parts(txid, 32));
+            arr
+        };
+
+        match wallet_ref.get_tx(&txid_arr) {
+            Some(tx) => match serde_json::to_string(tx) {
+                Ok(json) => to_c_string(json),
+                Err(_) => std::ptr::null_mut(),
+            },
+            None => std::ptr::null_mut(),
+        }
+    }))
+    .unwrap_or(std::ptr::null_mut())
+}
+
+/// Returns JSON array of transactions. Null entries for missing txids.
+/// Caller must free with free_string().
+#[no_mangle]
+pub extern "C" fn wallet_get_txs(
+    wallet: *const WalletState,
+    txids: *const u8,
+    count: u64,
+) -> *mut c_char {
+    catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() || txids.is_null() || count == 0 {
+            return std::ptr::null_mut();
+        }
+        if !unsafe { WalletState::validate_ptr(wallet) } {
+            return std::ptr::null_mut();
+        }
+
+        let count_usize = match usize::try_from(count) {
+            Ok(c) => c,
+            Err(_) => return std::ptr::null_mut(),
+        };
+        let total_bytes = match count_usize.checked_mul(32) {
+            Some(b) => b,
+            None => return std::ptr::null_mut(),
+        };
+
+        let wallet_ref = unsafe { &*wallet };
+        let txid_vec: Vec<[u8; 32]> = unsafe {
+            std::slice::from_raw_parts(txids, total_bytes)
+                .chunks_exact(32)
+                .map(|chunk| {
+                    let mut arr = [0u8; 32];
+                    arr.copy_from_slice(chunk);
+                    arr
+                })
+                .collect()
+        };
+
+        let results = wallet_ref.get_txs(&txid_vec);
+        let json_values: Vec<serde_json::Value> = results
+            .iter()
+            .map(|tx_opt| match tx_opt {
+                Some(tx) => serde_json::to_value(tx).unwrap_or(serde_json::Value::Null),
+                None => serde_json::Value::Null,
+            })
+            .collect();
+
+        match serde_json::to_string(&json_values) {
+            Ok(json) => to_c_string(json),
+            Err(_) => std::ptr::null_mut(),
+        }
+    }))
+    .unwrap_or(std::ptr::null_mut())
+}
+
+/// Returns JSON array of all transactions. Caller must free with free_string().
+#[no_mangle]
+pub extern "C" fn wallet_get_all_txs(wallet: *const WalletState) -> *mut c_char {
+    catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() {
+            return std::ptr::null_mut();
+        }
+        if !unsafe { WalletState::validate_ptr(wallet) } {
+            return std::ptr::null_mut();
+        }
+
+        let wallet_ref = unsafe { &*wallet };
+        let all_txs = wallet_ref.get_all_txs();
+
+        match serde_json::to_string(&all_txs) {
+            Ok(json) => to_c_string(json),
+            Err(_) => std::ptr::null_mut(),
+        }
+    }))
+    .unwrap_or(std::ptr::null_mut())
+}
+
+/// Returns JSON array of all txids as hex strings. Caller must free with free_string().
+#[no_mangle]
+pub extern "C" fn wallet_get_all_txids(wallet: *const WalletState) -> *mut c_char {
+    catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() {
+            return std::ptr::null_mut();
+        }
+        if !unsafe { WalletState::validate_ptr(wallet) } {
+            return std::ptr::null_mut();
+        }
+
+        let wallet_ref = unsafe { &*wallet };
+        let txids: Vec<String> = wallet_ref.get_all_txids().iter().map(hex::encode).collect();
+
+        match serde_json::to_string(&txids) {
+            Ok(json) => to_c_string(json),
+            Err(_) => std::ptr::null_mut(),
+        }
+    }))
+    .unwrap_or(std::ptr::null_mut())
+}
