@@ -448,3 +448,70 @@ fn test_nfc_output_japanese() {
   let ascii_spaces = output.chars().filter(|&c| c == ' ').count();
   assert_eq!(ascii_spaces, 0, "Japanese output should not contain ASCII spaces");
 }
+
+#[test]
+fn test_invalid_checksum_on_corrupted_word() {
+  // Known-good seed
+  let good = "raven tail swear infant grief assist regular lamp \
+      duck valid someone little harsh puppy airport language";
+  // Sanity: the good seed parses
+  Polyseed::from_string(Language::English, Zeroizing::new(good.into()), Coin::Monero, 0).unwrap();
+
+  // Replace one word ("tail" → "ability") to corrupt the checksum
+  let bad = "raven ability swear infant grief assist regular lamp \
+      duck valid someone little harsh puppy airport language";
+  let res = Polyseed::from_string(Language::English, Zeroizing::new(bad.into()), Coin::Monero, 0);
+  assert_eq!(res, Err(PolyseedError::InvalidChecksum));
+}
+
+#[test]
+fn test_birthday_edge_cases() {
+  // Before epoch: saturating_sub clamps to 0
+  assert_eq!(birthday_encode(0), 0);
+
+  // Exactly at epoch
+  assert_eq!(birthday_encode(POLYSEED_EPOCH), 0);
+
+  // One time-step after epoch
+  assert_eq!(birthday_encode(POLYSEED_EPOCH + TIME_STEP), 1);
+
+  // Max representable birthday (DATE_MASK = 1023)
+  let max_time = POLYSEED_EPOCH + u64::from(DATE_MASK) * TIME_STEP;
+  assert_eq!(birthday_encode(max_time), DATE_MASK);
+
+  // Beyond max wraps via the mask
+  let beyond = POLYSEED_EPOCH + (u64::from(DATE_MASK) + 1) * TIME_STEP;
+  assert_eq!(birthday_encode(beyond), 0); // wraps to 0
+
+  // Decode round-trips for all edge values
+  assert_eq!(birthday_decode(0), POLYSEED_EPOCH);
+  assert_eq!(birthday_decode(1), POLYSEED_EPOCH + TIME_STEP);
+  assert_eq!(birthday_decode(DATE_MASK), POLYSEED_EPOCH + u64::from(DATE_MASK) * TIME_STEP);
+}
+
+#[test]
+fn test_encrypted_mnemonic_roundtrip() {
+  let seed_str = "raven tail swear infant grief assist regular lamp \
+      duck valid someone little harsh puppy airport language";
+  let original = Polyseed::from_string(Language::English, Zeroizing::new(seed_str.into()), Coin::Monero, 0).unwrap();
+  let original_entropy = original.entropy().clone();
+
+  // Encrypt
+  let mut encrypted = original.clone();
+  encrypted.crypt("roundtrip_test");
+  assert!(encrypted.is_encrypted());
+
+  // Encode to mnemonic
+  let phrase = encrypted.to_string(Coin::Monero);
+
+  // Decode from mnemonic
+  let decoded = Polyseed::from_string(Language::English, phrase, Coin::Monero, 0).unwrap();
+  assert!(decoded.is_encrypted(), "Decoded seed should still be encrypted");
+  assert_eq!(*decoded.entropy(), *encrypted.entropy(), "Encrypted entropy preserved through mnemonic");
+
+  // Decrypt and verify original
+  let mut decrypted = decoded;
+  decrypted.crypt("roundtrip_test");
+  assert!(!decrypted.is_encrypted());
+  assert_eq!(decrypted.entropy(), &original_entropy);
+}
