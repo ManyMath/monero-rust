@@ -35,6 +35,7 @@ pub enum WalletError {
     WalletClosed,
     NotConnected,
     RpcError(monero_rpc::RpcError),
+    InvalidResponse(String),
     Other(String),
 }
 
@@ -50,6 +51,7 @@ impl std::fmt::Display for WalletError {
             WalletError::WalletClosed => write!(f, "Wallet is closed"),
             WalletError::NotConnected => write!(f, "Not connected to daemon"),
             WalletError::RpcError(e) => write!(f, "RPC error: {}", e),
+            WalletError::InvalidResponse(msg) => write!(f, "Invalid response: {}", msg),
             WalletError::Other(msg) => write!(f, "{}", msg),
         }
     }

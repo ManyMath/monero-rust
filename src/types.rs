@@ -18,6 +18,8 @@ pub struct Transaction {
     pub direction: TransactionDirection,
     pub confirmations: u64,
     pub is_pending: bool,
+    #[serde(default)]
+    pub not_found_count: u32, // how many times daemon couldn't find this tx (dropped tx detection)
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -137,6 +139,7 @@ impl Transaction {
             direction: TransactionDirection::Incoming,
             confirmations: 0,
             is_pending: height.is_none(),
+            not_found_count: 0,
         }
     }
 
@@ -152,6 +155,7 @@ impl Transaction {
             direction: TransactionDirection::Outgoing,
             confirmations: 0,
             is_pending: height.is_none(),
+            not_found_count: 0,
         }
     }
 
