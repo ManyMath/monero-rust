@@ -182,17 +182,19 @@ fn test_classic_seed() {
 
 #[test]
 fn test_polyseed() {
-  use polyseed::{Polyseed, Language as PolyseedLanguage};
+  use polyseed::{Polyseed, Coin, Language as PolyseedLanguage};
 
   let seed_phrase = "capital chief route liar question fix clutch water outside pave hamster occur always learn license knife";
 
   let polyseed = Polyseed::from_string(
     PolyseedLanguage::English,
-    Zeroizing::new(seed_phrase.to_string())
+    Zeroizing::new(seed_phrase.to_string()),
+    Coin::Monero,
+    0,
   ).unwrap();
 
   // Derive the spend key from polyseed
-  let key = polyseed.key();
+  let key = polyseed.key(Coin::Monero);
   let spend_scalar = Scalar::from_bytes_mod_order(*key);
   assert_ne!(spend_scalar, Scalar::zero());
   let spend_key = &spend_scalar * &ED25519_BASEPOINT_TABLE;
@@ -264,16 +266,18 @@ fn test_polyseed() {
 
 #[test]
 fn test_polyseed_stagenet() {
-  use polyseed::{Polyseed, Language as PolyseedLanguage};
+  use polyseed::{Polyseed, Coin, Language as PolyseedLanguage};
 
   let seed_phrase = "capital chief route liar question fix clutch water outside pave hamster occur always learn license knife";
 
   let polyseed = Polyseed::from_string(
     PolyseedLanguage::English,
-    Zeroizing::new(seed_phrase.to_string())
+    Zeroizing::new(seed_phrase.to_string()),
+    Coin::Monero,
+    0,
   ).unwrap();
 
-  let key = polyseed.key();
+  let key = polyseed.key(Coin::Monero);
   let spend_scalar = Scalar::from_bytes_mod_order(*key);
   let spend_key = &spend_scalar * &ED25519_BASEPOINT_TABLE;
 

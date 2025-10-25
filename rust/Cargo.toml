@@ -5,5 +5,9 @@ members = [
     "monero-epee-bin-serde",
     "monero-cli",
     "cuprate-cryptonight",
+    "monero-utils-mirror/polyseed",
+    "monero-utils-mirror/seed",
+    "monero-utils-mirror/payment-proofs",
+    "monero-utils-mirror/util",
 ]
 resolver = "2"
