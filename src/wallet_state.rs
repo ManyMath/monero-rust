@@ -267,6 +267,13 @@ where
     Ok(bytes.map(|b| Zeroizing::new(Scalar::from_bytes_mod_order(b))))
 }
 
+#[derive(Debug)]
+struct TransactionMetadata {
+    block_height: Option<u64>,
+    block_timestamp: Option<u64>,
+    in_pool: bool,
+}
+
 impl WalletState {
     pub fn hash_password(password: &str, salt: &[u8; 32]) -> Result<[u8; 32], String> {
         use argon2::{
@@ -712,10 +719,13 @@ impl WalletState {
         Ok(())
     }
 
-    /// Refreshes transaction confirmation counts from daemon.
+    /// Refreshes transaction confirmation counts and pending tx status from daemon.
     pub async fn refresh_transactions(&mut self) -> Result<(), WalletError> {
         if self.is_closed {
             return Err(WalletError::WalletClosed);
+        }
+        if self.is_syncing {
+            return Err(WalletError::Other("cannot refresh while syncing".to_string()));
         }
 
         let rpc = self.get_rpc().await?;
@@ -726,20 +736,144 @@ impl WalletState {
                 return Err(WalletError::RpcError(e));
             }
         };
-
         self.daemon_height = daemon_height;
 
+        // Query pending txs to check if they've been confirmed or dropped
+        let pending_txids: Vec<[u8; 32]> = self.transactions
+            .iter()
+            .filter(|(_, tx)| tx.height.is_none() && tx.is_pending)
+            .map(|(txid, _)| *txid)
+            .collect();
+
+        if !pending_txids.is_empty() {
+            match self.query_transaction_metadata(&rpc, &pending_txids).await {
+                Ok(metadata_map) => {
+                    for (txid, meta) in metadata_map {
+                        if let Some(tx) = self.transactions.get_mut(&txid) {
+                            if let Some(height) = meta.block_height {
+                                tx.height = Some(height);
+                                tx.confirmations = daemon_height.saturating_sub(height).saturating_add(1);
+                                tx.is_pending = false;
+                                tx.not_found_count = 0;
+                                if let Some(ts) = meta.block_timestamp {
+                                    tx.timestamp = ts;
+                                }
+                            } else if meta.in_pool {
+                                tx.confirmations = 0;
+                                tx.is_pending = true;
+                                tx.not_found_count = 0;
+                            } else {
+                                // Not in pool, no block - possibly dropped
+                                tx.not_found_count = tx.not_found_count.saturating_add(1);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    self.is_connected = false;
+                    return Err(e);
+                }
+            }
+        }
+
+        // Update confirmations for already-confirmed txs
         for tx in self.transactions.values_mut() {
             if let Some(tx_height) = tx.height {
                 tx.confirmations = daemon_height.saturating_sub(tx_height).saturating_add(1);
-                tx.is_pending = false;
-            } else {
-                tx.confirmations = 0;
-                tx.is_pending = true;
+                if tx.is_pending {
+                    tx.is_pending = false;
+                }
             }
         }
 
         Ok(())
+    }
+
+    async fn query_transaction_metadata(
+        &self,
+        rpc: &monero_simple_request_rpc::SimpleRequestRpc,
+        txids: &[[u8; 32]],
+    ) -> Result<HashMap<[u8; 32], TransactionMetadata>, WalletError> {
+        use serde_json::{json, Value};
+
+        if txids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let txids_hex: Vec<String> = txids.iter().map(hex::encode).collect();
+        let request = json!({
+            "txs_hashes": txids_hex,
+            "decode_as_json": true,
+        });
+
+        let response: Value = rpc.rpc_call("get_transactions", Some(request))
+            .await
+            .map_err(WalletError::RpcError)?;
+
+        if !response.is_object() {
+            return Err(WalletError::InvalidResponse("expected object".to_string()));
+        }
+
+        let mut result = HashMap::new();
+        let mut missed = HashSet::new();
+
+        // Handle missed txs (not found by daemon)
+        if let Some(arr) = response.get("missed_tx").and_then(|v| v.as_array()) {
+            for h in arr {
+                if let Some(s) = h.as_str() {
+                    if let Ok(bytes) = hex::decode(s) {
+                        if bytes.len() == 32 {
+                            let mut txid = [0u8; 32];
+                            txid.copy_from_slice(&bytes);
+                            missed.insert(txid);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Parse found txs
+        if let Some(txs) = response.get("txs").and_then(|v| v.as_array()) {
+            for entry in txs {
+                if !entry.is_object() {
+                    continue;
+                }
+
+                let txid = match entry.get("tx_hash").and_then(|v| v.as_str()) {
+                    Some(s) => {
+                        let Ok(bytes) = hex::decode(s) else { continue };
+                        if bytes.len() != 32 { continue }
+                        let mut arr = [0u8; 32];
+                        arr.copy_from_slice(&bytes);
+                        arr
+                    }
+                    None => continue,
+                };
+
+                if !txids.contains(&txid) {
+                    continue;
+                }
+
+                let in_pool = entry.get("in_pool").and_then(|v| v.as_bool()).unwrap_or(false);
+                let block_height = entry.get("block_height")
+                    .and_then(|v| v.as_u64())
+                    .and_then(|h| if h == u64::MAX { None } else { Some(h) });
+                let block_timestamp = entry.get("block_timestamp").and_then(|v| v.as_u64());
+
+                result.insert(txid, TransactionMetadata { block_height, block_timestamp, in_pool });
+            }
+        }
+
+        // Insert missed txs with empty metadata
+        for txid in missed {
+            result.insert(txid, TransactionMetadata {
+                block_height: None,
+                block_timestamp: None,
+                in_pool: false,
+            });
+        }
+
+        Ok(result)
     }
 
     async fn start_health_check(&mut self) {
@@ -914,7 +1048,6 @@ impl WalletState {
 
             let payment_id = outputs.first().and_then(|o| o.payment_id.clone());
 
-            // Only insert if transaction doesn't already exist (prevents duplicates during rescans)
             transactions.entry(tx_hash).or_insert(Transaction {
                 txid: tx_hash,
                 height: Some(block_height),
@@ -926,6 +1059,7 @@ impl WalletState {
                 direction,
                 confirmations: 0,
                 is_pending: false,
+                not_found_count: 0,
             });
         }
 
