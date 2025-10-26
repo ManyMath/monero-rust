@@ -133,6 +133,12 @@ uint64_t wallet_get_transaction_count(const struct WalletState *wallet);
 char *wallet_get_tx(const struct WalletState *wallet, const uint8_t *txid);
 
 /**
+ * Returns tx private key as hex string for an outgoing transaction, or null if not found.
+ * Caller must free with free_string().
+ */
+char *wallet_get_tx_key(const struct WalletState *wallet, const uint8_t *txid);
+
+/**
  * Returns JSON array of transactions. Null entries for missing txids.
  * Caller must free with free_string().
  */
@@ -201,6 +207,17 @@ int32_t wallet_start_syncing(struct WalletState *wallet);
  * Stops syncing. Returns 0 on success, -1 null, -5 panic.
  */
 int32_t wallet_stop_syncing(struct WalletState *wallet);
+
+/**
+ * Stores a tx key for an outgoing transaction.
+ * Returns 0 on success, -1 null wallet, -2 null txid, -3 null key,
+ * -4 invalid additional_keys, -5 closed, -6 limit exceeded, -7 panic.
+ */
+int32_t wallet_store_tx_key(struct WalletState *wallet,
+                            const uint8_t *txid,
+                            const uint8_t *tx_private_key,
+                            const uint8_t *additional_keys,
+                            uint64_t additional_keys_count);
 
 /**
  * Scans one block. Returns 1 if scanned, 0 if synced, -1 null, -2 not connected, -3 closed, -4 error, -5 panic.
