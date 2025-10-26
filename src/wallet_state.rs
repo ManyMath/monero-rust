@@ -4,6 +4,9 @@ use crate::crypto::{decrypt_wallet_data, encrypt_wallet_data, generate_nonce};
 
 // Magic number for FFI pointer validation
 const WALLET_MAGIC: u64 = 0x4D4F4E45524F5758; // "MONEROX"
+
+// Prevent unbounded memory growth
+const MAX_TX_KEYS: usize = 10000;
 use crate::types::{KeyImage, SerializableOutput, Transaction, TxKey};
 use crate::WalletError;
 use curve25519_dalek::scalar::Scalar;
@@ -574,6 +577,24 @@ impl WalletState {
 
     pub fn get_all_txids(&self) -> Vec<[u8; 32]> {
         self.transactions.keys().copied().collect()
+    }
+
+    /// Returns tx key for an outgoing transaction (for payment proofs).
+    pub fn get_tx_key(&self, txid: &[u8; 32]) -> Option<&TxKey> {
+        self.tx_keys.get(txid)
+    }
+
+    /// Stores tx key for an outgoing transaction. Fails if wallet is closed or limit exceeded.
+    pub fn store_tx_key(&mut self, txid: [u8; 32], tx_key: TxKey) -> Result<(), WalletError> {
+        if self.is_closed {
+            return Err(WalletError::WalletClosed);
+        }
+        // Allow updates to existing keys without checking limit
+        if !self.tx_keys.contains_key(&txid) && self.tx_keys.len() >= MAX_TX_KEYS {
+            return Err(WalletError::TxKeyLimitExceeded);
+        }
+        self.tx_keys.insert(txid, tx_key);
+        Ok(())
     }
 
     /// Returns the mnemonic seed, or None for view-only wallets.

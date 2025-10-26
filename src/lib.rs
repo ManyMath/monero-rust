@@ -36,6 +36,7 @@ pub enum WalletError {
     NotConnected,
     RpcError(monero_rpc::RpcError),
     InvalidResponse(String),
+    TxKeyLimitExceeded,
     Other(String),
 }
 
@@ -52,6 +53,7 @@ impl std::fmt::Display for WalletError {
             WalletError::NotConnected => write!(f, "Not connected to daemon"),
             WalletError::RpcError(e) => write!(f, "RPC error: {}", e),
             WalletError::InvalidResponse(msg) => write!(f, "Invalid response: {}", msg),
+            WalletError::TxKeyLimitExceeded => write!(f, "Transaction key storage limit exceeded"),
             WalletError::Other(msg) => write!(f, "{}", msg),
         }
     }
@@ -867,4 +869,110 @@ pub extern "C" fn wallet_get_all_txids(wallet: *const WalletState) -> *mut c_cha
         }
     }))
     .unwrap_or(std::ptr::null_mut())
+}
+
+/// Returns tx private key as hex string for an outgoing transaction, or null if not found.
+/// Caller must free with free_string().
+#[no_mangle]
+pub extern "C" fn wallet_get_tx_key(wallet: *const WalletState, txid: *const u8) -> *mut c_char {
+    catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() || txid.is_null() {
+            return std::ptr::null_mut();
+        }
+        if !unsafe { WalletState::validate_ptr(wallet) } {
+            return std::ptr::null_mut();
+        }
+
+        let wallet_ref = unsafe { &*wallet };
+        let txid_arr: [u8; 32] = unsafe {
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(std::slice::from_raw_parts(txid, 32));
+            arr
+        };
+
+        match wallet_ref.get_tx_key(&txid_arr) {
+            Some(tx_key) => to_c_string(hex::encode(*tx_key.tx_private_key)),
+            None => std::ptr::null_mut(),
+        }
+    }))
+    .unwrap_or(std::ptr::null_mut())
+}
+
+/// Stores a tx key for an outgoing transaction.
+/// Returns 0 on success, -1 null wallet, -2 null txid, -3 null key,
+/// -4 invalid additional_keys, -5 closed, -6 limit exceeded, -7 panic.
+#[no_mangle]
+pub extern "C" fn wallet_store_tx_key(
+    wallet: *mut WalletState,
+    txid: *const u8,
+    tx_private_key: *const u8,
+    additional_keys: *const u8,
+    additional_keys_count: u64,
+) -> i32 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() {
+            return -1;
+        }
+        if !unsafe { WalletState::validate_ptr(wallet) } {
+            return -1;
+        }
+        if txid.is_null() {
+            return -2;
+        }
+        if tx_private_key.is_null() {
+            return -3;
+        }
+        if additional_keys_count > 0 && additional_keys.is_null() {
+            return -4;
+        }
+
+        let wallet_ref = unsafe { &mut *wallet };
+        if wallet_ref.is_closed {
+            return -5;
+        }
+
+        let txid_arr: [u8; 32] = unsafe {
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(std::slice::from_raw_parts(txid, 32));
+            arr
+        };
+
+        let key_arr: [u8; 32] = unsafe {
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(std::slice::from_raw_parts(tx_private_key, 32));
+            arr
+        };
+
+        let mut tx_key = crate::types::TxKey::new(txid_arr, key_arr);
+
+        // Parse additional keys if present
+        if additional_keys_count > 0 {
+            let count = match usize::try_from(additional_keys_count) {
+                Ok(c) => c,
+                Err(_) => return -4,
+            };
+            let total_bytes = match count.checked_mul(32) {
+                Some(b) => b,
+                None => return -4,
+            };
+
+            unsafe {
+                let slice = std::slice::from_raw_parts(additional_keys, total_bytes);
+                for chunk in slice.chunks_exact(32) {
+                    let mut key = [0u8; 32];
+                    key.copy_from_slice(chunk);
+                    tx_key.add_additional_key(key);
+                }
+            }
+        }
+
+        match wallet_ref.store_tx_key(txid_arr, tx_key) {
+            Ok(()) => 0,
+            Err(WalletError::WalletClosed) => -5,
+            Err(WalletError::TxKeyLimitExceeded) => -6,
+            Err(_) => -6,
+        }
+    }));
+
+    result.unwrap_or(-7)
 }
