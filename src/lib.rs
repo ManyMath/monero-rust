@@ -24,6 +24,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{LazyLock, Mutex};
 use std::collections::HashSet;
 
+const MAX_TXS_BATCH: u64 = 10000;
+
 #[derive(Debug)]
 pub enum WalletError {
     IoError(std::io::Error),
@@ -786,6 +788,11 @@ pub extern "C" fn wallet_get_txs(
             return std::ptr::null_mut();
         }
         if !unsafe { WalletState::validate_ptr(wallet) } {
+            return std::ptr::null_mut();
+        }
+
+        if count > MAX_TXS_BATCH {
+            eprintln!("[ERROR] wallet_get_txs - count {} exceeds max {}", count, MAX_TXS_BATCH);
             return std::ptr::null_mut();
         }
 
