@@ -40,6 +40,12 @@ char *generate_mnemonic(uint8_t language);
 void wallet_free(struct WalletState *wallet);
 
 /**
+ * Freeze an output by key image. Returns 0 on success,
+ * -1 bad wallet, -2 bad key_image, -3 closed, -4 not found, -5 panic.
+ */
+int32_t wallet_freeze_output(struct WalletState *wallet, const uint8_t *key_image);
+
+/**
  * Returns JSON array of all txids as hex strings. Caller must free with free_string().
  */
 char *wallet_get_all_txids(const struct WalletState *wallet);
@@ -63,6 +69,13 @@ uint64_t wallet_get_current_height(const struct WalletState *wallet);
  * Returns daemon height, 0 on null/panic.
  */
 uint64_t wallet_get_daemon_height(const struct WalletState *wallet);
+
+/**
+ * Returns outputs as JSON. Set include_spent=1 to include spent outputs.
+ * Set refresh=1 to refresh from daemon first.
+ * Returns null on error. Caller must free with free_string().
+ */
+char *wallet_get_outputs(struct WalletState *wallet, int32_t include_spent, int32_t refresh);
 
 /**
  * Returns total output count, 0 on null/panic.
@@ -223,3 +236,9 @@ int32_t wallet_store_tx_key(struct WalletState *wallet,
  * Scans one block. Returns 1 if scanned, 0 if synced, -1 null, -2 not connected, -3 closed, -4 error, -5 panic.
  */
 int32_t wallet_sync_once(struct WalletState *wallet);
+
+/**
+ * Thaw (unfreeze) an output by key image. Returns 0 on success,
+ * -1 bad wallet, -2 bad key_image, -3 closed, -4 not found, -5 panic.
+ */
+int32_t wallet_thaw_output(struct WalletState *wallet, const uint8_t *key_image);
