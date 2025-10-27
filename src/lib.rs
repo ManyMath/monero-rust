@@ -26,6 +26,20 @@ use std::collections::HashSet;
 
 const MAX_TXS_BATCH: u64 = 10000;
 
+#[derive(serde::Serialize)]
+struct OutputJson {
+    tx_hash: String,
+    output_index: u64,
+    amount: u64,
+    key_image: String,
+    subaddress_indices: [u32; 2],
+    height: u64,
+    unlocked: bool,
+    spent: bool,
+    frozen: bool,
+    payment_id: Option<String>,
+}
+
 #[derive(Debug)]
 pub enum WalletError {
     IoError(std::io::Error),
@@ -982,4 +996,131 @@ pub extern "C" fn wallet_store_tx_key(
     }));
 
     result.unwrap_or(-7)
+}
+
+/// Returns outputs as JSON. Set include_spent=1 to include spent outputs.
+/// Set refresh=1 to refresh from daemon first.
+/// Returns null on error. Caller must free with free_string().
+#[no_mangle]
+pub extern "C" fn wallet_get_outputs(
+    wallet: *mut WalletState,
+    include_spent: i32,
+    refresh: i32,
+) -> *mut c_char {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() || !unsafe { WalletState::validate_ptr(wallet) } {
+            return std::ptr::null_mut();
+        }
+
+        let wallet_ref = unsafe { &mut *wallet };
+        if wallet_ref.is_closed {
+            return std::ptr::null_mut();
+        }
+
+        if refresh != 0 {
+            if let Err(e) = GLOBAL_RUNTIME.block_on(wallet_ref.refresh_outputs()) {
+                eprintln!("[ERROR] wallet_get_outputs - refresh failed: {}", e);
+                return std::ptr::null_mut();
+            }
+        }
+
+        let outputs = match wallet_ref.get_outputs(include_spent != 0) {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("[ERROR] wallet_get_outputs - {}", e);
+                return std::ptr::null_mut();
+            }
+        };
+
+        let json_outputs: Vec<OutputJson> = outputs
+            .iter()
+            .map(|o| OutputJson {
+                tx_hash: hex::encode(o.tx_hash),
+                output_index: o.output_index,
+                amount: o.amount,
+                key_image: hex::encode(o.key_image),
+                subaddress_indices: [o.subaddress_indices.0, o.subaddress_indices.1],
+                height: o.height,
+                unlocked: o.unlocked,
+                spent: o.spent,
+                frozen: o.frozen,
+                payment_id: o.payment_id.as_ref().map(hex::encode),
+            })
+            .collect();
+
+        match serde_json::to_string(&json_outputs) {
+            Ok(json) => to_c_string(json),
+            Err(_) => std::ptr::null_mut(),
+        }
+    }));
+
+    result.unwrap_or(std::ptr::null_mut())
+}
+
+/// Freeze an output by key image. Returns 0 on success,
+/// -1 bad wallet, -2 bad key_image, -3 closed, -4 not found, -5 panic.
+#[no_mangle]
+pub extern "C" fn wallet_freeze_output(wallet: *mut WalletState, key_image: *const u8) -> i32 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() || !unsafe { WalletState::validate_ptr(wallet) } {
+            return -1;
+        }
+        if key_image.is_null() {
+            return -2;
+        }
+
+        let wallet_ref = unsafe { &mut *wallet };
+        if wallet_ref.is_closed {
+            return -3;
+        }
+
+        let ki: [u8; 32] = unsafe {
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(std::slice::from_raw_parts(key_image, 32));
+            arr
+        };
+
+        match wallet_ref.freeze_output(&ki) {
+            Ok(()) => 0,
+            Err(WalletError::WalletClosed) => -3,
+            Err(WalletError::Other(msg)) if msg.contains("not found") => -4,
+            Err(_) => -4,
+        }
+    }));
+
+    result.unwrap_or(-5)
+}
+
+/// Thaw (unfreeze) an output by key image. Returns 0 on success,
+/// -1 bad wallet, -2 bad key_image, -3 closed, -4 not found, -5 panic.
+#[no_mangle]
+pub extern "C" fn wallet_thaw_output(wallet: *mut WalletState, key_image: *const u8) -> i32 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() || !unsafe { WalletState::validate_ptr(wallet) } {
+            return -1;
+        }
+        if key_image.is_null() {
+            return -2;
+        }
+
+        let wallet_ref = unsafe { &mut *wallet };
+        if wallet_ref.is_closed {
+            return -3;
+        }
+
+        let ki: [u8; 32] = unsafe {
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(std::slice::from_raw_parts(key_image, 32));
+            arr
+        };
+
+        match wallet_ref.thaw_output(&ki) {
+            Ok(()) => 0,
+            Err(WalletError::WalletClosed) => -3,
+            Err(WalletError::Other(msg)) if msg.contains("not found") => -4,
+            Err(_) => -4,
+        }
+    }));
+
+    result.unwrap_or(-5)
 }
