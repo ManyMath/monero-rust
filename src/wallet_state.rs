@@ -521,6 +521,7 @@ impl WalletState {
             )));
         }
         self.frozen_outputs.insert(*key_image);
+        debug_assert!(self.frozen_outputs.is_subset(&self.outputs.keys().copied().collect()));
         Ok(())
     }
 
@@ -535,7 +536,18 @@ impl WalletState {
             )));
         }
         self.frozen_outputs.remove(key_image);
+        debug_assert!(self.frozen_outputs.is_subset(&self.outputs.keys().copied().collect()));
         Ok(())
+    }
+
+    /// Returns a single output with current spent/frozen flags, or None if not found.
+    pub fn get_output(&self, key_image: &KeyImage) -> Option<SerializableOutput> {
+        self.outputs.get(key_image).map(|output| {
+            let mut out = output.clone();
+            out.spent = self.spent_outputs.contains(key_image);
+            out.frozen = self.frozen_outputs.contains(key_image);
+            out
+        })
     }
 
     /// Returns outputs, optionally including spent ones.
@@ -1257,6 +1269,10 @@ impl WalletState {
             self.spent_outputs.remove(&key_image);
             self.frozen_outputs.remove(&key_image);
         }
+
+        let output_keys: HashSet<_> = self.outputs.keys().copied().collect();
+        debug_assert!(self.frozen_outputs.is_subset(&output_keys));
+        debug_assert!(self.spent_outputs.is_subset(&output_keys));
 
         self.current_scanned_height = fork_height.saturating_sub(1);
 
