@@ -40,7 +40,9 @@ bincode = "1.3"
 # Encryption support for wallet state
 aes-gcm = "0.10"
 argon2 = "0.5"
-subtle = "2.5" # Constant-time operations for password comparison
+chacha20 = "0.9"
+cuprate-cryptonight = { path = "vendored/cuprate-cryptonight" }
+subtle = "2.5"
 urlencoding = "2.1"
 
 [build-dependencies]

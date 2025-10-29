@@ -1,4 +1,7 @@
 //! Wallet encryption and key derivation.
+//!
+//! CryptoNight implementation from Cuprate (https://github.com/Cuprate/cuprate)
+//! Copyright (c) 2023-2024 Cuprate Contributors, MIT License
 
 use aes_gcm::{
     aead::{Aead, KeyInit},
@@ -8,11 +11,18 @@ use argon2::{
     password_hash::{PasswordHasher, SaltString},
     Algorithm, Argon2, ParamsBuilder, Version,
 };
+use chacha20::{
+    cipher::{KeyIvInit, StreamCipher},
+    ChaCha20Legacy,
+};
 use zeroize::Zeroizing;
 
 const KEY_SIZE: usize = 32;
 pub const NONCE_SIZE: usize = 12;
 pub const SALT_SIZE: usize = 32;
+
+pub const CHACHA_KEY_SIZE: usize = 32;
+pub const CHACHA_IV_SIZE: usize = 8;
 
 /// Derives an encryption key from a password using Argon2id.
 pub fn derive_encryption_key(password: &str, salt: &[u8; SALT_SIZE]) -> Result<Zeroizing<[u8; KEY_SIZE]>, String> {
@@ -91,4 +101,33 @@ pub fn decrypt_wallet_data(
         .decrypt(&nonce_obj, ciphertext)
         .map_err(|_| "Decryption failed: invalid password or corrupted data".to_string())?;
     Ok(plaintext)
+}
+
+/// Derives ChaCha20 key using CryptoNight (Monero-compatible).
+/// Uses cn_slow_hash for key derivation matching monero-wallet-cli.
+pub fn derive_chacha_key_cryptonight(secret_key: &[u8; 32], kdf_rounds: u64) -> [u8; CHACHA_KEY_SIZE] {
+    let mut hash = cuprate_cryptonight::cryptonight_hash_v0(secret_key);
+    for _ in 1..kdf_rounds {
+        hash = cuprate_cryptonight::cryptonight_hash_v0(&hash);
+    }
+    hash
+}
+
+pub fn generate_chacha_iv() -> [u8; CHACHA_IV_SIZE] {
+    use rand_core::RngCore;
+    let mut iv = [0u8; CHACHA_IV_SIZE];
+    rand_core::OsRng.fill_bytes(&mut iv);
+    iv
+}
+
+/// ChaCha20 encryption using the DJB variant (8-byte nonce) for Monero compatibility.
+pub fn chacha20_encrypt(data: &[u8], key: &[u8; CHACHA_KEY_SIZE], iv: &[u8; CHACHA_IV_SIZE]) -> Vec<u8> {
+    let mut cipher = ChaCha20Legacy::new(key.into(), iv.into());
+    let mut buffer = data.to_vec();
+    cipher.apply_keystream(&mut buffer);
+    buffer
+}
+
+pub fn chacha20_decrypt(ciphertext: &[u8], key: &[u8; CHACHA_KEY_SIZE], iv: &[u8; CHACHA_IV_SIZE]) -> Vec<u8> {
+    chacha20_encrypt(ciphertext, key, iv)
 }

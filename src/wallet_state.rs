@@ -54,6 +54,12 @@ pub struct WalletState {
     pub spend_key: Option<Zeroizing<Scalar>>,
 
     #[serde(
+        serialize_with = "serialize_spend_key",
+        deserialize_with = "deserialize_spend_key"
+    )]
+    pub view_key: Option<Zeroizing<Scalar>>,
+
+    #[serde(
         serialize_with = "serialize_network",
         deserialize_with = "deserialize_network"
     )]
@@ -356,9 +362,10 @@ impl WalletState {
             version: WALLET_VERSION,
             seed: Some(Zeroizing::new(seed)),
             view_pair,
-            view_only_spend_public: None, // Not a view-only wallet
-            view_only_view_private: None, // Not a view-only wallet
+            view_only_spend_public: None,
+            view_only_view_private: None,
             spend_key: Some(Zeroizing::new(spend_scalar)),
+            view_key: Some(Zeroizing::new(view_scalar)),
             network,
             seed_language,
             outputs: HashMap::new(),
@@ -421,6 +428,7 @@ impl WalletState {
             view_only_spend_public: Some(spend_public_key),
             view_only_view_private: Some(Zeroizing::new(view_private_key)),
             spend_key: None,
+            view_key: Some(Zeroizing::new(view_scalar)),
             network,
             seed_language: String::from("N/A"),
             outputs: HashMap::new(),
@@ -628,16 +636,12 @@ impl WalletState {
 
     /// Returns the private view key as hex.
     pub fn get_private_view_key(&self) -> String {
-        use sha3::{Digest, Keccak256};
-
-        if let Some(seed) = &self.seed {
-            let view_bytes: [u8; 32] = Keccak256::digest(seed.entropy()).into();
-            let view = Zeroizing::new(view_bytes);
-            hex::encode(&*view)
+        if let Some(view_scalar) = &self.view_key {
+            hex::encode(view_scalar.to_bytes())
         } else if let Some(view_private) = &self.view_only_view_private {
             hex::encode(&**view_private)
         } else {
-            panic!("WalletState has neither seed nor view key")
+            panic!("WalletState has no view key")
         }
     }
 
@@ -1620,6 +1624,168 @@ impl WalletState {
 
         Ok(wallet)
     }
+
+    /// Exports key images to a Monero-compatible file.
+    /// If `all` is true, exports all outputs; otherwise only spent ones.
+    pub fn export_key_images<P: AsRef<Path>>(&self, filename: P, all: bool) -> Result<usize, WalletError> {
+        if self.is_closed {
+            return Err(WalletError::WalletClosed);
+        }
+
+        const MAGIC: &[u8] = b"Monero key image export\x03";
+
+        let spend_public = self.view_pair.spend().compress().to_bytes();
+        let view_public = self.view_pair.view().compress().to_bytes();
+
+        let estimated_outputs = if all { self.outputs.len() } else { self.spent_outputs.len() };
+        let mut key_images_data = Vec::with_capacity(4 + 64 + (estimated_outputs * 96));
+
+        // 4-byte offset field (matching Monero format)
+        key_images_data.extend_from_slice(&0u32.to_le_bytes());
+        key_images_data.extend_from_slice(&spend_public);
+        key_images_data.extend_from_slice(&view_public);
+
+        let mut exported_count = 0usize;
+
+        for (key_image, _output) in &self.outputs {
+            if !all && !self.spent_outputs.contains(key_image) {
+                continue;
+            }
+            key_images_data.extend_from_slice(key_image);
+            key_images_data.extend_from_slice(&[0u8; 64]); // Placeholder signature
+            exported_count += 1;
+        }
+
+        let view_key_bytes = self.get_private_view_key();
+        let view_key_array = hex::decode(&view_key_bytes)
+            .map_err(|e| WalletError::EncryptionError(format!("Failed to decode view key: {}", e)))?;
+
+        let mut view_secret_key = [0u8; 32];
+        view_secret_key.copy_from_slice(&view_key_array);
+
+        let chacha_key = crate::crypto::derive_chacha_key_cryptonight(&view_secret_key, 1);
+        let iv = crate::crypto::generate_chacha_iv();
+        let encrypted_data = crate::crypto::chacha20_encrypt(&key_images_data, &chacha_key, &iv);
+
+        let file_path = filename.as_ref();
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(file_path)?;
+
+        file.write_all(MAGIC)?;
+        file.write_all(&iv)?;
+        file.write_all(&encrypted_data)?;
+        file.flush()?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(file_path)?.permissions();
+            perms.set_mode(0o600);
+            fs::set_permissions(file_path, perms)?;
+        }
+
+        Ok(exported_count)
+    }
+
+    /// Imports key images from a Monero-compatible file.
+    /// Returns (newly_spent, already_spent) counts.
+    pub fn import_key_images<P: AsRef<Path>>(&mut self, filename: P) -> Result<(usize, usize), WalletError> {
+        const MAX_KEY_IMAGES: usize = 1_000_000;
+
+        if self.is_closed {
+            return Err(WalletError::WalletClosed);
+        }
+
+        const MAGIC_PREFIX: &[u8] = b"Monero key image export";
+        const MAGIC_LEN: usize = 24;
+        const IV_LEN: usize = 8;
+        const KEY_LEN: usize = 32;
+        const SIG_LEN: usize = 64;
+        const KEY_IMAGE_RECORD_LEN: usize = KEY_LEN + SIG_LEN;
+
+        let mut file = OpenOptions::new().read(true).open(filename)?;
+        let mut file_contents = Vec::new();
+        file.read_to_end(&mut file_contents)?;
+
+        if file_contents.len() < MAGIC_LEN || !file_contents.starts_with(MAGIC_PREFIX) {
+            return Err(WalletError::CorruptedFile("Invalid magic header".to_string()));
+        }
+
+        let version = file_contents[23];
+        if version != 0x02 && version != 0x03 {
+            return Err(WalletError::CorruptedFile(format!("Unsupported version: 0x{:02x}", version)));
+        }
+
+        if file_contents.len() < MAGIC_LEN + IV_LEN {
+            return Err(WalletError::CorruptedFile("File too small for IV".to_string()));
+        }
+
+        let mut iv = [0u8; IV_LEN];
+        iv.copy_from_slice(&file_contents[MAGIC_LEN..MAGIC_LEN + IV_LEN]);
+
+        let encrypted_data = &file_contents[MAGIC_LEN + IV_LEN..];
+
+        let view_key_bytes = self.get_private_view_key();
+        let view_key_array = hex::decode(&view_key_bytes)
+            .map_err(|e| WalletError::EncryptionError(format!("Failed to decode view key: {}", e)))?;
+
+        let mut view_secret_key = [0u8; 32];
+        view_secret_key.copy_from_slice(&view_key_array);
+
+        let chacha_key = crate::crypto::derive_chacha_key_cryptonight(&view_secret_key, 1);
+        let decrypted_data = crate::crypto::chacha20_decrypt(encrypted_data, &chacha_key, &iv);
+
+        const OFFSET_LEN: usize = 4;
+        if decrypted_data.len() < OFFSET_LEN + KEY_LEN + KEY_LEN {
+            return Err(WalletError::CorruptedFile("Decrypted data too small".to_string()));
+        }
+
+        let spend_public = &decrypted_data[OFFSET_LEN..OFFSET_LEN + KEY_LEN];
+        let view_public = &decrypted_data[OFFSET_LEN + KEY_LEN..OFFSET_LEN + KEY_LEN + KEY_LEN];
+
+        let our_spend_public = self.view_pair.spend().compress().to_bytes();
+        let our_view_public = self.view_pair.view().compress().to_bytes();
+
+        if spend_public != our_spend_public {
+            return Err(WalletError::InvalidResponse("Spend key mismatch".to_string()));
+        }
+        if view_public != our_view_public {
+            return Err(WalletError::InvalidResponse("View key mismatch".to_string()));
+        }
+
+        let key_images_data = &decrypted_data[OFFSET_LEN + KEY_LEN + KEY_LEN..];
+        let num_records = key_images_data.len() / KEY_IMAGE_RECORD_LEN;
+
+        if num_records > MAX_KEY_IMAGES {
+            return Err(WalletError::CorruptedFile(format!("Too many key images: {}", num_records)));
+        }
+
+        let mut newly_spent = 0usize;
+        let mut already_spent = 0usize;
+
+        for i in 0..num_records {
+            let offset = i * KEY_IMAGE_RECORD_LEN;
+            let key_image_bytes = &key_images_data[offset..offset + KEY_LEN];
+
+            let mut key_image = [0u8; 32];
+            key_image.copy_from_slice(key_image_bytes);
+
+            if let Some(output) = self.outputs.get_mut(&key_image) {
+                if !self.spent_outputs.contains(&key_image) {
+                    self.spent_outputs.insert(key_image);
+                    output.spent = true;
+                    newly_spent += 1;
+                } else {
+                    already_spent += 1;
+                }
+            }
+        }
+
+        Ok((newly_spent, already_spent))
+    }
 }
 
 impl<'de> Deserialize<'de> for WalletState {
@@ -1638,6 +1804,8 @@ impl<'de> Deserialize<'de> for WalletState {
             view_only_view_private: Option<Zeroizing<[u8; 32]>>,
             #[serde(deserialize_with = "deserialize_spend_key")]
             spend_key: Option<Zeroizing<Scalar>>,
+            #[serde(default, deserialize_with = "deserialize_spend_key")]
+            view_key: Option<Zeroizing<Scalar>>,
             #[serde(deserialize_with = "deserialize_network")]
             network: Network,
             seed_language: String,
@@ -1676,7 +1844,7 @@ impl<'de> Deserialize<'de> for WalletState {
         use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, edwards::EdwardsPoint};
         use sha3::{Digest, Keccak256};
 
-        let (seed_opt, view_pair) = if let Some(seed_bytes) = helper.seed {
+        let (seed_opt, view_pair, view_key) = if let Some(seed_bytes) = helper.seed {
             if seed_bytes.len() != 32 {
                 return Err(serde::de::Error::custom("bad seed length"));
             }
@@ -1710,7 +1878,7 @@ impl<'de> Deserialize<'de> for WalletState {
             let spend_point: EdwardsPoint = &spend_scalar * ED25519_BASEPOINT_TABLE;
             let view: [u8; 32] = Keccak256::digest(&spend).into();
             let view_scalar = Scalar::from_bytes_mod_order(view);
-            let vp = ViewPair::new(spend_point, Zeroizing::new(view_scalar))
+            let vp = ViewPair::new(spend_point, Zeroizing::new(view_scalar.clone()))
                 .map_err(|e| serde::de::Error::custom(e.to_string()))?;
 
             let reconstructed_checksum = compute_keys_checksum(&vp);
@@ -1718,7 +1886,8 @@ impl<'de> Deserialize<'de> for WalletState {
                 return Err(serde::de::Error::custom("keys checksum mismatch - possible corruption"));
             }
 
-            (Some(Zeroizing::new(seed)), vp)
+            let vk = helper.view_key.unwrap_or_else(|| Zeroizing::new(view_scalar));
+            (Some(Zeroizing::new(seed)), vp, Some(vk))
         } else {
             let spend_public = helper.view_only_spend_public
                 .as_ref()
@@ -1732,7 +1901,7 @@ impl<'de> Deserialize<'de> for WalletState {
                 .ok_or_else(|| serde::de::Error::custom("invalid spend public key"))?;
             let view_scalar = Scalar::from_bytes_mod_order(**view_private);
 
-            let vp = ViewPair::new(spend_point, Zeroizing::new(view_scalar))
+            let vp = ViewPair::new(spend_point, Zeroizing::new(view_scalar.clone()))
                 .map_err(|e| serde::de::Error::custom(e.to_string()))?;
 
             let reconstructed_checksum = compute_keys_checksum(&vp);
@@ -1740,7 +1909,8 @@ impl<'de> Deserialize<'de> for WalletState {
                 return Err(serde::de::Error::custom("keys checksum mismatch - possible corruption"));
             }
 
-            (None, vp)
+            let vk = helper.view_key.unwrap_or_else(|| Zeroizing::new(view_scalar));
+            (None, vp, Some(vk))
         };
 
         // Reconstruct scanner and re-register subaddresses
@@ -1768,6 +1938,7 @@ impl<'de> Deserialize<'de> for WalletState {
             view_only_spend_public: helper.view_only_spend_public,
             view_only_view_private: helper.view_only_view_private,
             spend_key: helper.spend_key,
+            view_key,
             network: helper.network,
             seed_language: helper.seed_language,
             outputs: helper.outputs,

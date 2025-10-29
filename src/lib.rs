@@ -1124,3 +1124,87 @@ pub extern "C" fn wallet_thaw_output(wallet: *mut WalletState, key_image: *const
 
     result.unwrap_or(-5)
 }
+
+/// Export key images to file. Returns count on success,
+/// -1 bad wallet, -2 bad filename, -3 closed, -4 export failed, -5 panic.
+#[no_mangle]
+pub extern "C" fn wallet_export_key_images(
+    wallet: *const WalletState,
+    filename: *const c_char,
+    all: i32,
+) -> i64 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() || !unsafe { WalletState::validate_ptr(wallet) } {
+            return -1;
+        }
+        if filename.is_null() {
+            return -2;
+        }
+
+        let filename_str = unsafe {
+            match CStr::from_ptr(filename).to_str() {
+                Ok(s) => s,
+                Err(_) => return -2,
+            }
+        };
+
+        if filename_str.contains("..") {
+            return -2;
+        }
+
+        let wallet_ref = unsafe { &*wallet };
+        if wallet_ref.is_closed {
+            return -3;
+        }
+
+        match wallet_ref.export_key_images(filename_str, all != 0) {
+            Ok(count) => count as i64,
+            Err(WalletError::WalletClosed) => -3,
+            Err(_) => -4,
+        }
+    }));
+
+    result.unwrap_or(-5)
+}
+
+/// Import key images from file. Returns (newly_spent << 32) | already_spent on success,
+/// -1 bad wallet, -2 bad filename, -3 closed, -4 import failed, -5 panic.
+#[no_mangle]
+pub extern "C" fn wallet_import_key_images(wallet: *mut WalletState, filename: *const c_char) -> i64 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() || !unsafe { WalletState::validate_ptr(wallet) } {
+            return -1;
+        }
+        if filename.is_null() {
+            return -2;
+        }
+
+        let filename_str = unsafe {
+            match CStr::from_ptr(filename).to_str() {
+                Ok(s) => s,
+                Err(_) => return -2,
+            }
+        };
+
+        if filename_str.contains("..") {
+            return -2;
+        }
+
+        let wallet_ref = unsafe { &mut *wallet };
+        if wallet_ref.is_closed {
+            return -3;
+        }
+
+        match wallet_ref.import_key_images(filename_str) {
+            Ok((spent, unspent)) => {
+                let spent_u32 = spent.min(u32::MAX as usize) as u32;
+                let unspent_u32 = unspent.min(u32::MAX as usize) as u32;
+                ((spent_u32 as i64) << 32) | (unspent_u32 as i64)
+            }
+            Err(WalletError::WalletClosed) => -3,
+            Err(_) => -4,
+        }
+    }));
+
+    result.unwrap_or(-5)
+}

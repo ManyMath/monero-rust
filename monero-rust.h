@@ -17,6 +17,10 @@
 #include <stdlib.h>
 
 
+#define CHACHA_IV_SIZE 8
+
+#define CHACHA_KEY_SIZE 32
+
 #define NONCE_SIZE 12
 
 #define SALT_SIZE 32
@@ -32,6 +36,14 @@ void free_string(char *ptr);
 char *generate_address(const char *mnemonic, uint8_t network, uint32_t account, uint32_t index);
 
 char *generate_mnemonic(uint8_t language);
+
+/**
+ * Export key images to file. Returns count on success,
+ * -1 bad wallet, -2 bad filename, -3 closed, -4 export failed, -5 panic.
+ */
+int64_t wallet_export_key_images(const struct WalletState *wallet,
+                                 const char *filename,
+                                 int32_t all);
 
 /**
  * # Safety
@@ -161,6 +173,12 @@ char *wallet_get_txs(const struct WalletState *wallet, const uint8_t *txids, uin
  * Returns unlocked (spendable) balance in piconeros, 0 on null/panic.
  */
 uint64_t wallet_get_unlocked_balance(const struct WalletState *wallet);
+
+/**
+ * Import key images from file. Returns (newly_spent << 32) | already_spent on success,
+ * -1 bad wallet, -2 bad filename, -3 closed, -4 import failed, -5 panic.
+ */
+int64_t wallet_import_key_images(struct WalletState *wallet, const char *filename);
 
 /**
  * Returns 1 if closed, 0 if open, -1 on null pointer, -5 on panic.
