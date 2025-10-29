@@ -26,7 +26,9 @@ git submodule update --init --recursive
 - Securely zero memory after secrets are used.
 
 # Acknowledgements
-- Thank you Luke "kayabaNerve" Parker and Serai for `monero-serai` and the 
+- Thank you Luke "kayabaNerve" Parker and Serai for `monero-serai` and the
   Monero Oxide team for `monero-oxide`.
-- Thank you Diego "rehrar" Salazar and Cypher Stack for commissioning me to 
+- Thank you to the Cuprate team (Boog900, hinto-hinai) for their pure Rust
+  CryptoNight implementation enabling monero-wallet-cli compatibility.
+- Thank you Diego "rehrar" Salazar and Cypher Stack for commissioning me to
   prove this concept via the https://github.com/cypherstack/libxmr project.
