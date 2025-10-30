@@ -73,8 +73,8 @@ impl Seed {
     let word_count = words.split_whitespace().count();
     match word_count {
       16 => {
-        use polyseed::{Polyseed, Language as PolyseedLanguage};
-        Polyseed::from_string(PolyseedLanguage::English, words)
+        use polyseed::{Coin, Polyseed, Language as PolyseedLanguage};
+        Polyseed::from_string(PolyseedLanguage::English, words, Coin::Monero, 0)
           .map(Seed::Polyseed)
           .map_err(|_| SeedError::InvalidSeed)
       }
@@ -94,7 +94,7 @@ impl Seed {
   pub fn to_string(&self) -> Zeroizing<String> {
     match self {
       Seed::Classic(seed) => seed.to_string(),
-      Seed::Polyseed(seed) => Zeroizing::new(seed.to_string().to_string()),
+      Seed::Polyseed(seed) => Zeroizing::new(seed.to_string(polyseed::Coin::Monero).to_string()),
     }
   }
 
@@ -110,7 +110,7 @@ impl Seed {
   pub fn key_bytes(&self) -> Zeroizing<[u8; 32]> {
     match self {
       Seed::Classic(seed) => seed.entropy(),
-      Seed::Polyseed(seed) => seed.key(),
+      Seed::Polyseed(seed) => seed.key(polyseed::Coin::Monero),
     }
   }
 
