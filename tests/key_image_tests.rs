@@ -245,3 +245,79 @@ fn test_key_image_with_complete_vector() {
     let expected = hex::decode(EXPECTED_KEY_IMAGE).unwrap();
     assert_eq!(key_image.as_slice(), expected.as_slice());
 }
+
+fn compute_subaddress_derivation(view_key: &Scalar, account: u32, address: u32) -> Scalar {
+    let mut data = b"SubAddr\0".to_vec();
+    data.extend_from_slice(&view_key.to_bytes());
+    data.extend_from_slice(&account.to_le_bytes());
+    data.extend_from_slice(&address.to_le_bytes());
+    keccak256_to_scalar(&data)
+}
+
+#[test]
+fn test_subaddress_derivation_scalar() {
+    const MNEMONIC: &str = "hemlock jubilee eden hacksaw boil superior inroads epoxy exhale \
+                            orders cavernous second brunt saved richly lower upgrade hitched \
+                            launching deepest mostly playful layout lower eden";
+
+    let seed = Seed::from_string(Language::English, Zeroizing::new(MNEMONIC.to_string())).unwrap();
+    let spend_key_bytes: [u8; 32] = *seed.entropy();
+    let keccak_output: [u8; 32] = Keccak256::digest(spend_key_bytes).into();
+    let view_key = Scalar::from_bytes_mod_order(keccak_output);
+
+    let d_0_1 = compute_subaddress_derivation(&view_key, 0, 1);
+    let d_0_2 = compute_subaddress_derivation(&view_key, 0, 2);
+    let d_1_0 = compute_subaddress_derivation(&view_key, 1, 0);
+
+    assert_ne!(d_0_1, Scalar::ZERO);
+    assert_ne!(d_0_1, d_0_2);
+    assert_ne!(d_0_1, d_1_0);
+    assert_ne!(d_0_2, d_1_0);
+}
+
+/// Test vector from monero-wallet-cli with subaddress (0,1) output.
+/// Txid: 68f21d9614a07048329a178a42f0ababfc467a3b3d66f23cde661bc24f476598
+#[test]
+fn test_key_image_with_subaddress_vector() {
+    const EXPECTED_KEY_IMAGE: &str = "3d62a9570c06d94829c2291c6f3f3f9debafcff4cecd58fc05b5ca00365e32b4";
+    const OUTPUT_PUBKEY: &str = "9c2cd583a3971612b035d33586dad0affc37efabc026e3e95199d90f9f62f97e";
+    const TX_PUB_KEY: &str = "c1da8b69f8c050151bf27d1af551e0a99279c749fc94150e5fbe161f22ea578b";
+    const SUBADDRESS: (u32, u32) = (0, 1);
+    const MNEMONIC: &str = "hemlock jubilee eden hacksaw boil superior inroads epoxy exhale \
+                            orders cavernous second brunt saved richly lower upgrade hitched \
+                            launching deepest mostly playful layout lower eden";
+
+    let seed = Seed::from_string(Language::English, Zeroizing::new(MNEMONIC.to_string())).unwrap();
+    let spend_key_bytes: [u8; 32] = *seed.entropy();
+    let spend_key = Zeroizing::new(Scalar::from_bytes_mod_order(spend_key_bytes));
+    let keccak_output: [u8; 32] = Keccak256::digest(spend_key_bytes).into();
+    let view_key = Zeroizing::new(Scalar::from_bytes_mod_order(keccak_output));
+
+    let tx_pubkey_bytes = hex::decode(TX_PUB_KEY).unwrap();
+    let tx_pubkey = CompressedEdwardsY::from_slice(&tx_pubkey_bytes).unwrap().decompress().unwrap();
+    let ecdh = view_key.deref() * tx_pubkey;
+
+    let output_pubkey_bytes = hex::decode(OUTPUT_PUBKEY).unwrap();
+    let output_pubkey = CompressedEdwardsY::from_slice(&output_pubkey_bytes).unwrap().decompress().unwrap();
+
+    let subaddress_derivation = compute_subaddress_derivation(view_key.deref(), SUBADDRESS.0, SUBADDRESS.1);
+
+    let mut found = false;
+    for output_index in 0..2 {
+        let shared_key = compute_key_offset(&ecdh, output_index);
+        let total_key_offset = shared_key + subaddress_derivation;
+        let effective_spend_key = spend_key.deref() + total_key_offset;
+        let reconstructed = (&effective_spend_key * ED25519_BASEPOINT_TABLE).compress();
+
+        if reconstructed.to_bytes() == output_pubkey.compress().to_bytes() {
+            let hash_point = biased_hash_to_point(output_pubkey.compress().to_bytes());
+            let key_image = (effective_spend_key * hash_point).compress().to_bytes();
+            let expected = hex::decode(EXPECTED_KEY_IMAGE).unwrap();
+            assert_eq!(key_image.as_slice(), expected.as_slice());
+            found = true;
+            break;
+        }
+    }
+
+    assert!(found, "Could not reconstruct subaddress output pubkey");
+}

@@ -1208,6 +1208,9 @@ impl WalletState {
         // payment_id extraction would require changes to monero-wallet (PaymentId is pub(crate))
         let payment_id = None;
 
+        let key_offset = Some(wallet_output.key_offset().to_bytes());
+        let output_public_key = Some(wallet_output.key().compress().to_bytes());
+
         Ok(SerializableOutput {
             tx_hash: wallet_output.transaction(),
             output_index: wallet_output.index_in_transaction(),
@@ -1219,6 +1222,8 @@ impl WalletState {
             spent: false,
             frozen: false,
             payment_id,
+            key_offset,
+            output_public_key,
         })
     }
 
@@ -1243,6 +1248,41 @@ impl WalletState {
                 Ok(hasher.finalize().into())
             }
         }
+    }
+
+    fn generate_signature_for_output(
+        &self,
+        key_image: &KeyImage,
+        output: &crate::types::SerializableOutput,
+    ) -> [u8; 64] {
+        use curve25519_dalek::edwards::CompressedEdwardsY;
+
+        let (spend_key, key_offset_bytes, output_pk_bytes) = match (
+            &self.spend_key,
+            &output.key_offset,
+            &output.output_public_key,
+        ) {
+            (Some(sk), Some(ko), Some(pk)) => (sk, ko, pk),
+            _ => return [0u8; 64],
+        };
+
+        let key_offset = match Scalar::from_canonical_bytes(*key_offset_bytes).into_option() {
+            Some(s) => s,
+            None => return [0u8; 64],
+        };
+
+        let output_pk = match CompressedEdwardsY(*output_pk_bytes).decompress() {
+            Some(point) => point,
+            None => return [0u8; 64],
+        };
+
+        let key_image_point = match CompressedEdwardsY(*key_image).decompress() {
+            Some(point) => point,
+            None => return [0u8; 64],
+        };
+
+        let ephemeral_secret = spend_key.deref() + key_offset;
+        crate::crypto::generate_key_image_signature(&ephemeral_secret, &output_pk, &key_image_point)
     }
 
     // ========================================================================
@@ -1647,12 +1687,13 @@ impl WalletState {
 
         let mut exported_count = 0usize;
 
-        for (key_image, _output) in &self.outputs {
+        for (key_image, output) in &self.outputs {
             if !all && !self.spent_outputs.contains(key_image) {
                 continue;
             }
             key_images_data.extend_from_slice(key_image);
-            key_images_data.extend_from_slice(&[0u8; 64]); // Placeholder signature
+            let signature = self.generate_signature_for_output(key_image, output);
+            key_images_data.extend_from_slice(&signature);
             exported_count += 1;
         }
 

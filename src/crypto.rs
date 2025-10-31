@@ -131,3 +131,83 @@ pub fn chacha20_encrypt(data: &[u8], key: &[u8; CHACHA_KEY_SIZE], iv: &[u8; CHAC
 pub fn chacha20_decrypt(ciphertext: &[u8], key: &[u8; CHACHA_KEY_SIZE], iv: &[u8; CHACHA_IV_SIZE]) -> Vec<u8> {
     chacha20_encrypt(ciphertext, key, iv)
 }
+
+fn keccak256_to_scalar(data: &[u8]) -> curve25519_dalek::scalar::Scalar {
+    use sha3::{Digest, Keccak256};
+    let hash: [u8; 32] = Keccak256::digest(data).into();
+    curve25519_dalek::scalar::Scalar::from_bytes_mod_order(hash)
+}
+
+/// Generates a key image signature for export (single-element ring signature).
+pub fn generate_key_image_signature(
+    ephemeral_secret_key: &curve25519_dalek::scalar::Scalar,
+    output_public_key: &curve25519_dalek::edwards::EdwardsPoint,
+    key_image: &curve25519_dalek::edwards::EdwardsPoint,
+) -> [u8; 64] {
+    use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
+    use monero_generators::biased_hash_to_point;
+    use rand_core::RngCore;
+
+    let mut k_bytes = [0u8; 64];
+    rand_core::OsRng.fill_bytes(&mut k_bytes);
+    let k = curve25519_dalek::scalar::Scalar::from_bytes_mod_order_wide(&k_bytes);
+
+    let l_point = &k * ED25519_BASEPOINT_TABLE;
+    let hp = biased_hash_to_point(output_public_key.compress().to_bytes());
+    let r_point = k * hp;
+
+    let mut buf = Vec::with_capacity(96);
+    buf.extend_from_slice(&key_image.compress().to_bytes());
+    buf.extend_from_slice(&l_point.compress().to_bytes());
+    buf.extend_from_slice(&r_point.compress().to_bytes());
+
+    let c = keccak256_to_scalar(&buf);
+    let r = k - (c * ephemeral_secret_key);
+
+    let mut signature = [0u8; 64];
+    signature[..32].copy_from_slice(&c.to_bytes());
+    signature[32..].copy_from_slice(&r.to_bytes());
+    signature
+}
+
+/// Verifies a key image signature.
+pub fn verify_key_image_signature(
+    signature: &[u8; 64],
+    output_public_key: &curve25519_dalek::edwards::EdwardsPoint,
+    key_image: &curve25519_dalek::edwards::EdwardsPoint,
+) -> bool {
+    use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
+    use curve25519_dalek::scalar::Scalar;
+    use curve25519_dalek::traits::VartimeMultiscalarMul;
+    use monero_generators::biased_hash_to_point;
+
+    let c_bytes: [u8; 32] = signature[..32].try_into().unwrap();
+    let r_bytes: [u8; 32] = signature[32..].try_into().unwrap();
+
+    let c = match Scalar::from_canonical_bytes(c_bytes).into_option() {
+        Some(s) => s,
+        None => return false,
+    };
+    let r = match Scalar::from_canonical_bytes(r_bytes).into_option() {
+        Some(s) => s,
+        None => return false,
+    };
+
+    let l_point = curve25519_dalek::edwards::EdwardsPoint::vartime_multiscalar_mul(
+        [r, c],
+        [ED25519_BASEPOINT_POINT, *output_public_key],
+    );
+
+    let hp = biased_hash_to_point(output_public_key.compress().to_bytes());
+    let r_point = curve25519_dalek::edwards::EdwardsPoint::vartime_multiscalar_mul(
+        [r, c],
+        [hp, *key_image],
+    );
+
+    let mut buf = Vec::with_capacity(96);
+    buf.extend_from_slice(&key_image.compress().to_bytes());
+    buf.extend_from_slice(&l_point.compress().to_bytes());
+    buf.extend_from_slice(&r_point.compress().to_bytes());
+
+    keccak256_to_scalar(&buf) == c
+}

@@ -86,6 +86,8 @@ fn test_wallet_state_bincode_serialization_roundtrip() {
         spent: false,
         frozen: false,
         payment_id: None,
+        key_offset: None,
+        output_public_key: None,
     };
     wallet_state.outputs.insert([2u8; 32], output);
     wallet_state.frozen_outputs.insert([3u8; 32]);
@@ -233,6 +235,8 @@ fn test_wallet_state_balance_calculations_persist() {
             spent: i % 2 == 0,
             frozen: false,
             payment_id: None,
+            key_offset: None,
+            output_public_key: None,
         };
         wallet_state.outputs.insert([i; 32], output);
 
@@ -331,6 +335,8 @@ fn test_wallet_save_and_load_roundtrip() {
         spent: false,
         frozen: false,
         payment_id: None,
+        key_offset: None,
+        output_public_key: None,
     };
     wallet_state.outputs.insert([2u8; 32], output);
     wallet_state.frozen_outputs.insert([3u8; 32]);
@@ -654,6 +660,8 @@ fn test_wallet_file_io_with_outputs_and_transactions() {
             spent: i % 3 == 0,
             frozen: i % 4 == 0,
             payment_id: None,
+            key_offset: None,
+            output_public_key: None,
         };
         wallet_state.outputs.insert([i + 10; 32], output);
 

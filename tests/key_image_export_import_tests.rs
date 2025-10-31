@@ -41,6 +41,8 @@ fn create_test_wallet_with_outputs() -> (WalletState, TempDir) {
             spent: i % 2 == 0,
             frozen: false,
             payment_id: None,
+            key_offset: None,
+            output_public_key: None,
         };
 
         wallet.outputs.insert(key_image, output);

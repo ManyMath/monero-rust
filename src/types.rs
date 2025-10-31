@@ -124,6 +124,10 @@ pub struct SerializableOutput {
     pub spent: bool,
     pub frozen: bool,
     pub payment_id: Option<Vec<u8>>,
+    #[serde(default)]
+    pub key_offset: Option<[u8; 32]>,
+    #[serde(default)]
+    pub output_public_key: Option<[u8; 32]>,
 }
 
 impl Transaction {
