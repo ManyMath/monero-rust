@@ -441,3 +441,178 @@ fn test_verify_subaddress_cli_signatures() {
 
     assert!(found, "Subaddress key image not found in export");
 }
+
+/// Comprehensive test: compute key_offset from tx data, verify key images, export with signatures.
+#[test]
+fn test_export_all_outputs_with_real_signatures() {
+    use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
+    use curve25519_dalek::edwards::CompressedEdwardsY;
+    use curve25519_dalek::scalar::Scalar;
+    use monero_generators::biased_hash_to_point;
+    use sha3::{Digest, Keccak256};
+    use std::ops::Deref;
+    use zeroize::Zeroizing;
+
+    // (key_image, output_public_key, tx_pub_key, output_index, amount, subaddress_indices)
+    const TEST_VECTORS: &[(&str, &str, &str, usize, u64, (u32, u32))] = &[
+        ("e0e85f0a080c2fa2baaddb4397499da77000372f04e11b82bc6fcfa3ce2f7108",
+         "cec4da739aa000035decc6e2bc0e4ad385016b8fbe6a2ceb5f45b4b9c7694629",
+         "d7898f0f50688aa7fae5467ad55e01af040b1368faefa3e2bf6390eb73f899a1",
+         1, 10_000_000_000, (0, 0)),
+        ("450025e7b0fe9fd1ee96df0d33294eead3446ad7e1fe1cd9eb84dd92c9cff51d",
+         "ae289cd2191ce674d83e5b6cdd378c733dc627f4a2e81c36d190f4c7010852ed",
+         "a260e23070a9b26614b5debadd23cd8f982dbc120c702944eb442cd4fe2e12c8",
+         0, 752_554_768_712, (0, 0)),
+        ("c0335180f8552682c82df62742c26499ecaedcc586deb282da6c774ae3871132",
+         "52c11ce9b6b8da54658992828cc1c2c8fc6e5b4d49c025576f3551de63fad31b",
+         "534033f0414730a06c9162007554f7a03c78fe264cf580d89544e8d1e0e1357d",
+         0, 752_553_333_328, (0, 0)),
+        ("592b5e2d1ece24ddeaf4803ed4ade6ba77be337ac9c089d049de855186ac59d5",
+         "2af18893293451750177b18ec1a977a260ffb4d46fa4ded4aa7a4fcb70296a49",
+         "4f1950a4e8647e6de9c7e27a8e051e42a5a2f909137b60ab236d02ac8736e8cf",
+         0, 752_550_462_567, (0, 0)),
+        ("6bfc252ca5f153655fc99b3627d1bd0b62d06947b6a89c77c202d43352098549",
+         "cc5eaba178da7120abf3baef8ba8c015a06be428b0a9fcf802fb0e1d3e99d0ab",
+         "TX_SECRET:25af62811cc2b11052e6c33886b1449cf628f4c15c1d2a8fd8bde2ca0617a400",
+         0, 5_000_000_000, (0, 0)),
+        ("52cb6b59208a166be2cde80ea2f4c239515b9b070d3d8c0040e5c342e7d36786",
+         "c2c2a2d1cab531e18d81f2609407bfbacf61c73b9ec83e86b841596dee196a1e",
+         "TX_SECRET:25af62811cc2b11052e6c33886b1449cf628f4c15c1d2a8fd8bde2ca0617a400",
+         1, 4_960_370_000, (0, 0)),
+        ("150841953413906cb2080a3f193a4b784d85904451e3603cd6b05c3a7896394b",
+         "738cbc0ab0ea21c0b1f5ea5bcf12fc6615f6b917901b87983ea40a7a0b2c3422",
+         "396bbab66b7c266ff033f3813204ae7475a2c0322c6da1375f9e722bfaff9387",
+         0, 5_048_231_279, (0, 0)),
+        // Subaddress (0, 1) output
+        ("3d62a9570c06d94829c2291c6f3f3f9debafcff4cecd58fc05b5ca00365e32b4",
+         "9c2cd583a3971612b035d33586dad0affc37efabc026e3e95199d90f9f62f97e",
+         "c1da8b69f8c050151bf27d1af551e0a99279c749fc94150e5fbe161f22ea578b",
+         0, 133_700_000_000, (0, 1)),
+    ];
+
+    fn compute_key_offset(view_key: &Scalar, tx_pub_key: &curve25519_dalek::edwards::EdwardsPoint, output_index: usize) -> Scalar {
+        let ecdh = view_key * tx_pub_key;
+        let cofactor_mul = ecdh.mul_by_cofactor();
+        let mut derivation = cofactor_mul.compress().to_bytes().to_vec();
+        derivation.push(output_index as u8);
+        Scalar::from_bytes_mod_order(Keccak256::digest(&derivation).into())
+    }
+
+    fn compute_subaddress_derivation(view_key: &Scalar, account: u32, address: u32) -> Scalar {
+        let mut data = b"SubAddr\0".to_vec();
+        data.extend_from_slice(&view_key.to_bytes());
+        data.extend_from_slice(&account.to_le_bytes());
+        data.extend_from_slice(&address.to_le_bytes());
+        Scalar::from_bytes_mod_order(Keccak256::digest(&data).into())
+    }
+
+    let temp_dir = TempDir::new().unwrap();
+    let wallet_path = temp_dir.path().join("test_wallet.mw");
+
+    let seed = Seed::from_string(Language::English, zeroize::Zeroizing::new(TEST_SEED.to_string())).unwrap();
+    let mut wallet = WalletState::new(seed.clone(), "English".to_string(), Network::Testnet, "", wallet_path, 0).unwrap();
+
+    let spend_key_bytes: [u8; 32] = *seed.entropy();
+    let spend_key = Zeroizing::new(Scalar::from_bytes_mod_order(spend_key_bytes));
+    let keccak_output: [u8; 32] = Keccak256::digest(spend_key_bytes).into();
+    let view_key = Zeroizing::new(Scalar::from_bytes_mod_order(keccak_output));
+
+    let mut verified_key_images = 0;
+
+    for (i, (expected_ki_hex, output_pk_hex, tx_key_str, output_index, amount, subaddr_indices)) in TEST_VECTORS.iter().enumerate() {
+        let expected_ki = hex::decode(expected_ki_hex).unwrap();
+        let output_pk_bytes = hex::decode(output_pk_hex).unwrap();
+        let output_pubkey = CompressedEdwardsY::from_slice(&output_pk_bytes).unwrap().decompress().unwrap();
+
+        let tx_pubkey = if tx_key_str.starts_with("TX_SECRET:") {
+            let tx_secret_hex = &tx_key_str[10..];
+            let tx_secret_bytes = hex::decode(tx_secret_hex).unwrap();
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&tx_secret_bytes);
+            &Scalar::from_bytes_mod_order(arr) * ED25519_BASEPOINT_TABLE
+        } else {
+            let tx_pk_bytes = hex::decode(tx_key_str).unwrap();
+            CompressedEdwardsY::from_slice(&tx_pk_bytes).unwrap().decompress().unwrap()
+        };
+
+        let mut key_offset = compute_key_offset(view_key.deref(), &tx_pubkey, *output_index);
+        if *subaddr_indices != (0, 0) {
+            key_offset += compute_subaddress_derivation(view_key.deref(), subaddr_indices.0, subaddr_indices.1);
+        }
+
+        let effective_spend_key = spend_key.deref() + key_offset;
+        let reconstructed_pk = &effective_spend_key * ED25519_BASEPOINT_TABLE;
+        assert_eq!(reconstructed_pk.compress().to_bytes(), output_pubkey.compress().to_bytes(), "Output {} pubkey mismatch", i);
+
+        let hash_point = biased_hash_to_point(output_pubkey.compress().to_bytes());
+        let key_image_point = effective_spend_key * hash_point;
+        let computed_ki = key_image_point.compress().to_bytes();
+        assert_eq!(computed_ki.as_slice(), expected_ki.as_slice(), "Output {} key image mismatch", i);
+
+        verified_key_images += 1;
+
+        use monero_rust::types::SerializableOutput;
+        let output = SerializableOutput {
+            tx_hash: [i as u8; 32],
+            output_index: *output_index as u64,
+            amount: *amount,
+            key_image: computed_ki,
+            subaddress_indices: *subaddr_indices,
+            height: 2032114 + i as u64,
+            unlocked: true,
+            spent: false,
+            frozen: false,
+            payment_id: None,
+            key_offset: Some(key_offset.to_bytes()),
+            output_public_key: Some(output_pubkey.compress().to_bytes()),
+        };
+        wallet.outputs.insert(computed_ki, output);
+    }
+
+    assert_eq!(verified_key_images, 8);
+
+    let export_path = temp_dir.path().join("real_signatures_export.bin");
+    let count = wallet.export_key_images(&export_path, true).unwrap();
+    assert_eq!(count, 8);
+
+    let file_data = std::fs::read(&export_path).unwrap();
+    let iv = &file_data[24..32];
+    let encrypted = &file_data[32..];
+
+    let view_key_hex = wallet.get_private_view_key();
+    let view_key_bytes_export = hex::decode(&view_key_hex).unwrap();
+    let mut view_key_array = [0u8; 32];
+    view_key_array.copy_from_slice(&view_key_bytes_export);
+
+    let chacha_key = monero_rust::crypto::derive_chacha_key_cryptonight(&view_key_array, 1);
+    let mut iv_array = [0u8; 8];
+    iv_array.copy_from_slice(iv);
+
+    let decrypted = monero_rust::crypto::chacha20_decrypt(encrypted, &chacha_key, &iv_array);
+    let key_images_data = &decrypted[68..];
+
+    let mut verified_signatures = 0;
+    for (_, (expected_ki_hex, output_pk_hex, _, _, _, _)) in TEST_VECTORS.iter().enumerate() {
+        let expected_ki = hex::decode(expected_ki_hex).unwrap();
+        let output_pk_bytes = hex::decode(output_pk_hex).unwrap();
+
+        for j in 0..8 {
+            let offset = j * 96;
+            let ki_bytes = &key_images_data[offset..offset + 32];
+
+            if ki_bytes == expected_ki.as_slice() {
+                let sig_bytes: [u8; 64] = key_images_data[offset + 32..offset + 96].try_into().unwrap();
+                assert_ne!(sig_bytes, [0u8; 64]);
+
+                let output_pubkey = CompressedEdwardsY::from_slice(&output_pk_bytes).unwrap().decompress().unwrap();
+                let key_image_point = CompressedEdwardsY::from_slice(ki_bytes).unwrap().decompress().unwrap();
+                assert!(monero_rust::crypto::verify_key_image_signature(&sig_bytes, &output_pubkey, &key_image_point));
+
+                verified_signatures += 1;
+                break;
+            }
+        }
+    }
+
+    assert_eq!(verified_signatures, 8);
+}
