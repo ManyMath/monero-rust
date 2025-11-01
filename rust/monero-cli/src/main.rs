@@ -513,7 +513,7 @@ async fn cmd_transfer(
     .await?;
 
     println!("Broadcasting transaction...");
-    monero_rust::native::broadcast_transaction(daemon, &result.tx_blob).await?;
+    monero_rust::native::broadcast_transaction(daemon, &result.tx_blob, false).await?;
 
     let spent_key_set: std::collections::HashSet<String> = selection
         .selected
@@ -668,7 +668,7 @@ async fn cmd_sweep_all(
     .await?;
 
     println!("Broadcasting transaction...");
-    monero_rust::native::broadcast_transaction(daemon, &result.tx_blob).await?;
+    monero_rust::native::broadcast_transaction(daemon, &result.tx_blob, false).await?;
 
     let spent_key_set: std::collections::HashSet<String> = spendable
         .iter()
