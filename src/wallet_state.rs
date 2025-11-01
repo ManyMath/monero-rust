@@ -583,6 +583,24 @@ impl WalletState {
         self.transactions.len()
     }
 
+    pub fn select_inputs_for_transaction(
+        &self,
+        amount: u64,
+        preferred_inputs: Option<Vec<KeyImage>>,
+        sweep_all: bool,
+    ) -> Result<crate::input_selection::SelectedInputs, WalletError> {
+        use crate::input_selection::{InputSelectionConfig, select_inputs};
+
+        let config = InputSelectionConfig {
+            target_amount: amount,
+            fee_per_byte: None,
+            preferred_inputs,
+            sweep_all,
+        };
+
+        select_inputs(self, config).map_err(|e| WalletError::Other(e.to_string()))
+    }
+
     pub fn get_tx(&self, txid: &[u8; 32]) -> Option<&Transaction> {
         self.transactions.get(txid)
     }

@@ -23,6 +23,7 @@ monero_simple_request_rpc = { package = "monero-simple-request-rpc", path = "ven
 monero-rpc = { path = "vendored/monero-oxide/monero-oxide/rpc", default-features = false, features = ["std"] }
 monero-generators = { path = "vendored/monero-oxide/monero-oxide/generators", default-features = false }
 rand_core = "0.6.4"
+rand = "0.8"
 zeroize = "1.6.0"
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize", "group"] }
 sha3 = "0.10.8"

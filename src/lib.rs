@@ -1,4 +1,5 @@
 pub mod crypto;
+pub mod input_selection;
 pub mod rpc;
 pub mod types;
 pub mod wallet_state;
@@ -13,6 +14,7 @@ use monero_seed::Seed;
 pub use wallet_state::WalletState;
 pub use monero_wallet::address::Network;
 pub use rpc::{ConnectionConfig, ReconnectionPolicy};
+pub use input_selection::{InputSelectionConfig, InputSelectionError, SelectedInputs};
 
 use rand_core::OsRng;
 use zeroize::{Zeroizing};
