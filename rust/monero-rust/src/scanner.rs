@@ -70,32 +70,31 @@ fn tree_hash(hashes: &[[u8; 32]]) -> [u8; 32] {
             Keccak256::digest(buf).into()
         }
         n => {
-            let cnt = n.next_power_of_two();
-            let mut buf = vec![[0u8; 32]; cnt];
-            let overflow = n - (cnt / 2);
-            let mut j = 0;
-            for i in 0..overflow {
+            // Per Monero's tree-hash.c: cnt is the largest power of two with
+            // cnt < n <= 2*cnt. The first 2*cnt - n leaves are carried as-is;
+            // the remaining leaves are hashed in pairs from the tail.
+            let mut cnt = n.next_power_of_two() / 2;
+            let carried = 2 * cnt - n;
+            let mut ints = vec![[0u8; 32]; cnt];
+            ints[..carried].copy_from_slice(&hashes[..carried]);
+            let mut i = carried;
+            for int in ints.iter_mut().skip(carried) {
                 let mut hasher = Keccak256::new();
-                hasher.update(hashes[2 * i]);
-                hasher.update(hashes[2 * i + 1]);
-                buf[cnt / 2 + i] = hasher.finalize().into();
-                j = 2 * i + 2;
+                hasher.update(hashes[i]);
+                hasher.update(hashes[i + 1]);
+                *int = hasher.finalize().into();
+                i += 2;
             }
-            for i in overflow..(cnt / 2) {
-                buf[cnt / 2 + i] = hashes[j];
-                j += 1;
-            }
-            let mut level_size = cnt / 2;
-            while level_size > 1 {
-                for i in 0..(level_size / 2) {
+            while cnt > 1 {
+                cnt /= 2;
+                for j in 0..cnt {
                     let mut hasher = Keccak256::new();
-                    hasher.update(buf[level_size + 2 * i]);
-                    hasher.update(buf[level_size + 2 * i + 1]);
-                    buf[level_size / 2 + i] = hasher.finalize().into();
+                    hasher.update(ints[2 * j]);
+                    hasher.update(ints[2 * j + 1]);
+                    ints[j] = hasher.finalize().into();
                 }
-                level_size /= 2;
             }
-            buf[1]
+            ints[0]
         }
     }
 }
@@ -104,7 +103,9 @@ fn tree_hash(hashes: &[[u8; 32]]) -> [u8; 32] {
 ///
 /// block_id = keccak256(header_blob || tree_hash(tx_hashes) || varint(tx_count))
 pub fn compute_block_id(block: &Block) -> [u8; 32] {
-    let miner_tx_hash: [u8; 32] = Keccak256::digest(block.miner_tx.serialize()).into();
+    // The miner tx hash must use Monero's three-part transaction hash for v2
+    // transactions; a plain keccak of the serialization only matches v1.
+    let miner_tx_hash: [u8; 32] = block.miner_tx.hash();
     let mut tx_hashes = Vec::with_capacity(1 + block.txs.len());
     tx_hashes.push(miner_tx_hash);
     tx_hashes.extend_from_slice(&block.txs);
@@ -115,7 +116,11 @@ pub fn compute_block_id(block: &Block) -> [u8; 32] {
     blob.extend_from_slice(&root);
     write_varint_to_buf(tx_hashes.len() as u64, &mut blob);
 
-    Keccak256::digest(&blob).into()
+    // Monero hashes blocks as keccak(varint(len(hashing_blob)) || hashing_blob)
+    let mut prefixed = Vec::with_capacity(blob.len() + 9);
+    write_varint_to_buf(blob.len() as u64, &mut prefixed);
+    prefixed.extend_from_slice(&blob);
+    Keccak256::digest(&prefixed).into()
 }
 
 /// Fallback key image extraction from raw tx bytes when `Transaction::read()` fails.
