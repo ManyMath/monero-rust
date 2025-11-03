@@ -1,4 +1,5 @@
 pub mod crypto;
+pub mod decoy_selection;
 pub mod input_selection;
 pub mod rpc;
 pub mod types;
@@ -15,6 +16,7 @@ pub use wallet_state::WalletState;
 pub use monero_wallet::address::Network;
 pub use rpc::{ConnectionConfig, ReconnectionPolicy};
 pub use input_selection::{InputSelectionConfig, InputSelectionError, SelectedInputs};
+pub use decoy_selection::{DecoySelectionConfig, select_decoys_for_output, select_decoys_for_outputs};
 
 use rand_core::OsRng;
 use zeroize::{Zeroizing};
