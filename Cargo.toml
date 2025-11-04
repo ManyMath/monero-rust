@@ -10,6 +10,10 @@ license = "MIT"
 name = "monero_rust"
 path = "src/main.rs"
 
+[[example]]
+name = "sparse_scanning_demo"
+path = "examples/sparse_scanning_demo.rs"
+
 [lib]
 name = "monero_rust"
 path = "src/lib.rs"

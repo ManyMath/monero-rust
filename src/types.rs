@@ -28,8 +28,7 @@ pub enum TransactionDirection {
     Outgoing,
 }
 
-/// For payment proofs
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TxKey {
     pub txid: [u8; 32],
     #[serde(

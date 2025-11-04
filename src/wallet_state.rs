@@ -22,6 +22,81 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanMode {
+    Sequential,
+    Sparse {
+        blocks: Vec<u64>,
+        #[serde(skip)]
+        next_index: usize,
+    },
+}
+
+impl Default for ScanMode {
+    fn default() -> Self {
+        ScanMode::Sequential
+    }
+}
+
+impl ScanMode {
+    pub fn next_block(&self, current_height: u64) -> Option<u64> {
+        match self {
+            ScanMode::Sequential => Some(current_height + 1),
+            ScanMode::Sparse { blocks, next_index } => {
+                blocks.iter()
+                    .skip(*next_index)
+                    .find(|&&block| block > current_height)
+                    .copied()
+            }
+        }
+    }
+
+    pub fn is_complete(&self, current_height: u64, daemon_height: u64) -> bool {
+        match self {
+            ScanMode::Sequential => current_height >= daemon_height,
+            ScanMode::Sparse { blocks, .. } => {
+                blocks.iter().all(|&block| block <= current_height)
+            }
+        }
+    }
+
+    pub fn progress(&self, current_height: u64, daemon_height: u64) -> (u64, u64) {
+        match self {
+            ScanMode::Sequential => (current_height, daemon_height),
+            ScanMode::Sparse { blocks, .. } => {
+                let scanned = blocks.iter().filter(|&&b| b <= current_height).count() as u64;
+                (scanned, blocks.len() as u64)
+            }
+        }
+    }
+
+    pub fn reset_after_reorg(&mut self, fork_height: u64) {
+        if let ScanMode::Sparse { blocks, next_index } = self {
+            *next_index = blocks.iter()
+                .position(|&block| block >= fork_height)
+                .unwrap_or(blocks.len());
+        }
+    }
+
+    pub fn normalize_sparse(mut blocks: Vec<u64>) -> Result<Vec<u64>, String> {
+        if blocks.is_empty() {
+            return Err("Sparse block list cannot be empty".to_string());
+        }
+        blocks.sort_unstable();
+        blocks.dedup();
+        Ok(blocks)
+    }
+
+    pub fn advance_sparse_index(&mut self) {
+        if let ScanMode::Sparse { next_index, blocks } = self {
+            if *next_index < blocks.len() {
+                *next_index += 1;
+            }
+        }
+    }
+}
+
 #[derive(Serialize)]
 pub struct WalletState {
     #[serde(skip)]
@@ -80,6 +155,9 @@ pub struct WalletState {
     pub daemon_height: u64,
     #[serde(skip)]
     pub is_syncing: bool,
+
+    #[serde(default)]
+    pub scan_mode: ScanMode,
 
     /// Recent block hashes for reorg detection (last ~100 blocks)
     #[serde(default)]
@@ -377,6 +455,7 @@ impl WalletState {
             current_scanned_height: refresh_from_height,
             daemon_height: 0,
             is_syncing: false,
+            scan_mode: ScanMode::Sequential,
             block_hash_cache: HashMap::new(),
             daemon_address: None,
             is_connected: false,
@@ -440,6 +519,7 @@ impl WalletState {
             current_scanned_height: refresh_from_height,
             daemon_height: 0,
             is_syncing: false,
+            scan_mode: ScanMode::Sequential,
             block_hash_cache: HashMap::new(),
             daemon_address: None,
             is_connected: false,
@@ -499,7 +579,7 @@ impl WalletState {
     }
 
     pub fn is_synced(&self) -> bool {
-        self.is_connected && self.current_scanned_height >= self.daemon_height
+        self.is_connected && self.scan_mode.is_complete(self.current_scanned_height, self.daemon_height)
     }
 
     pub fn get_outputs_count(&self) -> usize {
@@ -671,8 +751,76 @@ impl WalletState {
         hex::encode(self.view_pair.view().compress().to_bytes())
     }
 
+    pub fn get_address(&self) -> String {
+        use monero_wallet::address::{AddressType, MoneroAddress};
+        MoneroAddress::new(
+            self.network,
+            AddressType::Legacy,
+            self.view_pair.spend(),
+            self.view_pair.view(),
+        ).to_string()
+    }
+
     pub fn get_path(&self) -> &std::path::Path {
         &self.wallet_path
+    }
+
+    pub fn from_mnemonic(
+        mnemonic: &str,
+        password: Option<&str>,
+        network: Network,
+    ) -> Result<Self, String> {
+        let languages = [
+            monero_seed::Language::English,
+            monero_seed::Language::Chinese,
+            monero_seed::Language::Dutch,
+            monero_seed::Language::French,
+            monero_seed::Language::Spanish,
+            monero_seed::Language::German,
+            monero_seed::Language::Italian,
+            monero_seed::Language::Portuguese,
+            monero_seed::Language::Japanese,
+            monero_seed::Language::Russian,
+            monero_seed::Language::Esperanto,
+            monero_seed::Language::Lojban,
+            monero_seed::Language::DeprecatedEnglish,
+        ];
+
+        let mut seed = None;
+        let mut language = monero_seed::Language::English;
+        for lang in languages {
+            if let Ok(s) = Seed::from_string(lang, Zeroizing::new(mnemonic.to_string())) {
+                seed = Some(s);
+                language = lang;
+                break;
+            }
+        }
+        let seed = seed.ok_or("invalid mnemonic")?;
+
+        let lang_str = match language {
+            monero_seed::Language::English => "English",
+            monero_seed::Language::Chinese => "Chinese",
+            monero_seed::Language::Dutch => "Dutch",
+            monero_seed::Language::French => "French",
+            monero_seed::Language::Spanish => "Spanish",
+            monero_seed::Language::German => "German",
+            monero_seed::Language::Italian => "Italian",
+            monero_seed::Language::Portuguese => "Portuguese",
+            monero_seed::Language::Japanese => "Japanese",
+            monero_seed::Language::Russian => "Russian",
+            monero_seed::Language::Esperanto => "Esperanto",
+            monero_seed::Language::Lojban => "Lojban",
+            monero_seed::Language::DeprecatedEnglish => "DeprecatedEnglish",
+        };
+
+        Self::new(
+            seed,
+            lang_str.to_string(),
+            network,
+            password.unwrap_or(""),
+            std::path::PathBuf::from("/tmp/wallet"),
+            0,
+        )
     }
 
     // ========================================================================
@@ -1337,6 +1485,7 @@ impl WalletState {
         debug_assert!(self.spent_outputs.is_subset(&output_keys));
 
         self.current_scanned_height = fork_height.saturating_sub(1);
+        self.scan_mode.reset_after_reorg(fork_height);
 
         eprintln!(
             "reorg at height {}: removed {} outputs, rewound to {}",
@@ -1396,8 +1545,55 @@ impl WalletState {
         self.sync_progress_callback = callback;
     }
 
-    /// Marks the wallet as syncing and validates preconditions.
-    /// Call this before `sync_once()`.
+    pub fn set_scan_mode(&mut self, mode: ScanMode) -> Result<(), WalletError> {
+        if self.is_syncing {
+            return Err(WalletError::Other(
+                "Cannot change scan mode while syncing".to_string()
+            ));
+        }
+        if let ScanMode::Sparse { ref blocks, .. } = mode {
+            if blocks.is_empty() {
+                return Err(WalletError::Other(
+                    "Sparse block list cannot be empty".to_string()
+                ));
+            }
+        }
+        self.scan_mode = mode;
+        Ok(())
+    }
+
+    pub fn get_scan_mode(&self) -> &ScanMode {
+        &self.scan_mode
+    }
+
+    pub async fn scan_specific_blocks(&mut self, blocks: &[u64]) -> Result<(), WalletError> {
+        let normalized = ScanMode::normalize_sparse(blocks.to_vec())
+            .map_err(WalletError::Other)?;
+        self.set_scan_mode(ScanMode::Sparse {
+            blocks: normalized,
+            next_index: 0,
+        })?;
+        self.start_syncing().await?;
+        loop {
+            if !self.sync_once().await? {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn get_sparse_progress(&self) -> Option<(usize, usize)> {
+        match &self.scan_mode {
+            ScanMode::Sequential => None,
+            ScanMode::Sparse { blocks, .. } => {
+                let scanned = blocks.iter()
+                    .filter(|&&b| b <= self.current_scanned_height)
+                    .count();
+                Some((scanned, blocks.len()))
+            }
+        }
+    }
+
     pub async fn start_syncing(&mut self) -> Result<(), WalletError> {
         if self.is_syncing {
             return Ok(());
@@ -1408,11 +1604,22 @@ impl WalletState {
         if self.is_closed {
             return Err(WalletError::WalletClosed);
         }
+
+        if let ScanMode::Sparse { blocks, next_index } = &mut self.scan_mode {
+            if blocks.is_empty() {
+                return Err(WalletError::Other(
+                    "Sparse block list cannot be empty".to_string()
+                ));
+            }
+            *blocks = ScanMode::normalize_sparse(blocks.clone())
+                .map_err(WalletError::Other)?;
+            *next_index = 0;
+        }
+
         self.is_syncing = true;
         Ok(())
     }
 
-    /// Scans one block if available. Returns true if a block was scanned.
     pub async fn sync_once(&mut self) -> Result<bool, WalletError> {
         if self.is_closed {
             return Err(WalletError::WalletClosed);
@@ -1428,9 +1635,10 @@ impl WalletState {
         let daemon_height = rpc.get_height().await.map_err(WalletError::RpcError)? as u64;
         self.daemon_height = daemon_height;
 
-        if self.current_scanned_height >= daemon_height {
+        if self.scan_mode.is_complete(self.current_scanned_height, daemon_height) {
             if let Some(ref cb) = self.sync_progress_callback {
-                cb(self.current_scanned_height, daemon_height);
+                let (cur, tot) = self.scan_mode.progress(self.current_scanned_height, daemon_height);
+                cb(cur, tot);
             }
             return Ok(false);
         }
@@ -1439,7 +1647,16 @@ impl WalletState {
             self.handle_reorganization(fork_height);
         }
 
-        let next_height = self.current_scanned_height + 1;
+        let next_height = match self.scan_mode.next_block(self.current_scanned_height) {
+            Some(h) => h,
+            None => {
+                if let Some(ref cb) = self.sync_progress_callback {
+                    let (cur, tot) = self.scan_mode.progress(self.current_scanned_height, daemon_height);
+                    cb(cur, tot);
+                }
+                return Ok(false);
+            }
+        };
 
         const MAX_RETRIES: u32 = 3;
         let mut last_error = None;
@@ -1447,8 +1664,10 @@ impl WalletState {
         for attempt in 0..MAX_RETRIES {
             match self.scan_block_by_height(next_height).await {
                 Ok(_) => {
+                    self.scan_mode.advance_sparse_index();
                     if let Some(ref cb) = self.sync_progress_callback {
-                        cb(self.current_scanned_height, daemon_height);
+                        let (cur, tot) = self.scan_mode.progress(self.current_scanned_height, daemon_height);
+                        cb(cur, tot);
                     }
                     return Ok(true);
                 }
@@ -1877,6 +2096,8 @@ impl<'de> Deserialize<'de> for WalletState {
             current_scanned_height: u64,
             daemon_height: u64,
             #[serde(default)]
+            scan_mode: ScanMode,
+            #[serde(default)]
             block_hash_cache: HashMap<u64, [u8; 32]>,
             daemon_address: Option<String>,
             is_connected: bool,
@@ -2009,6 +2230,7 @@ impl<'de> Deserialize<'de> for WalletState {
             current_scanned_height: helper.current_scanned_height,
             daemon_height: helper.daemon_height,
             is_syncing: false,
+            scan_mode: helper.scan_mode,
             block_hash_cache: helper.block_hash_cache,
             daemon_address: helper.daemon_address,
             is_connected: helper.is_connected,

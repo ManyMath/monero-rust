@@ -2,6 +2,7 @@ pub mod crypto;
 pub mod decoy_selection;
 pub mod input_selection;
 pub mod rpc;
+pub mod transaction_builder;
 pub mod types;
 pub mod wallet_state;
 
@@ -12,11 +13,12 @@ use monero_wallet::{
 
 pub use monero_seed::Language;
 use monero_seed::Seed;
-pub use wallet_state::WalletState;
+pub use wallet_state::{WalletState, ScanMode};
 pub use monero_wallet::address::Network;
 pub use rpc::{ConnectionConfig, ReconnectionPolicy};
 pub use input_selection::{InputSelectionConfig, InputSelectionError, SelectedInputs};
 pub use decoy_selection::{DecoySelectionConfig, select_decoys_for_output, select_decoys_for_outputs};
+pub use transaction_builder::{PendingTransaction, TransactionConfig, TransactionPriority};
 
 use rand_core::OsRng;
 use zeroize::{Zeroizing};

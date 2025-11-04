@@ -213,6 +213,7 @@ mod tests {
         use monero_wallet::{ViewPair, Scanner, address::Network};
         use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, scalar::Scalar};
         use zeroize::Zeroizing;
+        use crate::wallet_state::ScanMode;
 
         let spend = ED25519_BASEPOINT_POINT;
         let view = Zeroizing::new(Scalar::from_bytes_mod_order([2u8; 32]));
@@ -238,6 +239,7 @@ mod tests {
             current_scanned_height: 0,
             daemon_height,
             is_syncing: false,
+            scan_mode: ScanMode::Sequential,
             block_hash_cache: HashMap::new(),
             daemon_address: None,
             is_connected: false,
