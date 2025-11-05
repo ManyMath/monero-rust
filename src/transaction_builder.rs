@@ -2,6 +2,7 @@ use crate::{
     WalletError, WalletState,
     input_selection::{InputSelectionConfig, InputSelectionError, select_inputs},
     decoy_selection::{DecoySelectionConfig, select_decoys_for_outputs},
+    fee_calculation,
     types::{KeyImage, TxKey},
 };
 
@@ -256,11 +257,8 @@ impl WalletState {
         let rpc = self.rpc_client.read().await;
         let rpc_ref = rpc.as_ref().ok_or(WalletError::NotConnected)?;
 
-        let fee_rate = rpc_ref.get_fee_rate(priority.to_fee_priority()).await
-            .map_err(WalletError::RpcError)?;
-
-        let estimated_weight = (2 * 2000) + ((num_destinations + 1) * 100);
-        Ok(fee_rate.calculate_fee_from_weight(estimated_weight))
+        let fee_rate = fee_calculation::get_fee_rate_for_priority(rpc_ref, priority).await?;
+        Ok(fee_calculation::estimate_fee(2, num_destinations, &fee_rate, false))
     }
 
     async fn reconstruct_wallet_output(
@@ -268,6 +266,13 @@ impl WalletState {
         rpc: &impl Rpc,
         serializable: &crate::types::SerializableOutput,
     ) -> Result<WalletOutput, WalletError> {
+        let cache_key = (serializable.tx_hash, serializable.output_index);
+
+        // check cache first
+        if let Some(cached) = self.commitment_cache.get(&cache_key) {
+            return Ok(cached.clone());
+        }
+
         let block = rpc.get_block_by_number(serializable.height as usize).await
             .map_err(WalletError::RpcError)?;
 

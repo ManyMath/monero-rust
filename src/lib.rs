@@ -1,5 +1,6 @@
 pub mod crypto;
 pub mod decoy_selection;
+pub mod fee_calculation;
 pub mod input_selection;
 pub mod rpc;
 pub mod transaction_builder;
@@ -19,6 +20,7 @@ pub use rpc::{ConnectionConfig, ReconnectionPolicy};
 pub use input_selection::{InputSelectionConfig, InputSelectionError, SelectedInputs};
 pub use decoy_selection::{DecoySelectionConfig, select_decoys_for_output, select_decoys_for_outputs};
 pub use transaction_builder::{PendingTransaction, TransactionConfig, TransactionPriority};
+pub use fee_calculation::{WeightEstimator, estimate_fee, estimate_sweep_fee};
 
 use rand_core::OsRng;
 use zeroize::{Zeroizing};
@@ -28,9 +30,10 @@ use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{LazyLock, Mutex};
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 
 const MAX_TXS_BATCH: u64 = 10000;
+const STRING_REGISTRY_MAX_SIZE: usize = 10000;
 
 #[derive(serde::Serialize)]
 struct OutputJson {
@@ -199,8 +202,48 @@ impl MoneroWallet {
     }
 }
 
-// Track allocated FFI strings to prevent double-free
-static STRING_REGISTRY: LazyLock<Mutex<HashSet<usize>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+// Track allocated FFI strings with LRU eviction to prevent unbounded memory growth
+struct StringRegistry {
+    tracked: HashSet<usize>,
+    lru_queue: VecDeque<usize>,
+}
+
+impl StringRegistry {
+    fn new() -> Self {
+        Self {
+            tracked: HashSet::new(),
+            lru_queue: VecDeque::new(),
+        }
+    }
+
+    fn insert(&mut self, ptr: usize) {
+        if self.tracked.len() >= STRING_REGISTRY_MAX_SIZE {
+            if let Some(oldest) = self.lru_queue.pop_front() {
+                self.tracked.remove(&oldest);
+                // oldest pointer is intentionally leaked - can't safely free
+                // since C code may still hold it
+            }
+        }
+        if self.tracked.insert(ptr) {
+            self.lru_queue.push_back(ptr);
+        }
+    }
+
+    fn remove(&mut self, ptr: usize) -> bool {
+        if self.tracked.remove(&ptr) {
+            if let Some(pos) = self.lru_queue.iter().position(|&p| p == ptr) {
+                self.lru_queue.remove(pos);
+            }
+            true
+        } else {
+            false
+        }
+    }
+}
+
+static STRING_REGISTRY: LazyLock<Mutex<StringRegistry>> = LazyLock::new(|| {
+    Mutex::new(StringRegistry::new())
+});
 
 fn to_c_string(s: String) -> *mut c_char {
     let c_string = CString::new(s).unwrap_or_else(|_| CString::new("").unwrap());
@@ -220,10 +263,10 @@ pub extern "C" fn free_string(ptr: *mut c_char) {
     }
     let mut should_free = false;
     if let Ok(mut reg) = STRING_REGISTRY.lock() {
-        if reg.remove(&(ptr as usize)) {
+        if reg.remove(ptr as usize) {
             should_free = true;
         } else {
-            eprintln!("WARNING: free_string called on untracked pointer {:p}", ptr);
+            eprintln!("free_string: untracked pointer {:p}", ptr);
             return;
         }
     }

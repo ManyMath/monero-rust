@@ -265,6 +265,7 @@ mod tests {
             sync_handle: None,
             sync_interval: std::time::Duration::from_secs(60),
             sync_progress_callback: None,
+            commitment_cache: std::collections::HashMap::new(),
         }
     }
 

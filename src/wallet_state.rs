@@ -215,6 +215,10 @@ pub struct WalletState {
 
     #[serde(skip)]
     pub sync_progress_callback: Option<std::sync::Arc<Box<dyn Fn(u64, u64) + Send + Sync>>>,
+
+    /// Cache for WalletOutput commitment openings to avoid expensive rescanning
+    #[serde(skip)]
+    pub commitment_cache: HashMap<([u8; 32], u64), monero_wallet::WalletOutput>,
 }
 
 const WALLET_VERSION: u32 = 1;
@@ -475,6 +479,7 @@ impl WalletState {
             sync_handle: None,
             sync_interval: std::time::Duration::from_secs(1),
             sync_progress_callback: None,
+            commitment_cache: HashMap::new(),
         })
     }
 
@@ -539,6 +544,7 @@ impl WalletState {
             sync_handle: None,
             sync_interval: std::time::Duration::from_secs(1),
             sync_progress_callback: None,
+            commitment_cache: HashMap::new(),
         })
     }
 
@@ -548,8 +554,11 @@ impl WalletState {
         if ptr.is_null() {
             return false;
         }
-        // Check magic number - won't catch everything but helps
-        unsafe { (*ptr).magic == WALLET_MAGIC }
+        if (ptr as usize) % std::mem::align_of::<WalletState>() != 0 {
+            return false;
+        }
+        // read_volatile prevents compiler optimizations that could cause UB
+        unsafe { std::ptr::read_volatile(&(*ptr).magic) == WALLET_MAGIC }
     }
 
     pub fn is_view_only(&self) -> bool {
@@ -580,6 +589,66 @@ impl WalletState {
 
     pub fn is_synced(&self) -> bool {
         self.is_connected && self.scan_mode.is_complete(self.current_scanned_height, self.daemon_height)
+    }
+
+    /// Estimate transaction fee for sending a given amount.
+    /// Uses wallet outputs to estimate input count needed.
+    pub async fn estimate_fee(
+        &self,
+        priority: crate::TransactionPriority,
+        amount: u64,
+    ) -> Result<u64, WalletError> {
+        if self.is_closed {
+            return Err(WalletError::WalletClosed);
+        }
+        if !self.is_connected {
+            return Err(WalletError::NotConnected);
+        }
+
+        let rpc = self.rpc_client.read().await;
+        let rpc_ref = rpc.as_ref().ok_or(WalletError::NotConnected)?;
+
+        let fee_rate = crate::fee_calculation::get_fee_rate_for_priority(rpc_ref, priority).await?;
+
+        // estimate input count based on wallet's unspent outputs
+        let mut accumulated = 0u64;
+        let mut estimated_inputs = 0usize;
+
+        let mut unspent_amounts: Vec<u64> = self.outputs
+            .iter()
+            .filter(|(ki, output)| {
+                !self.spent_outputs.contains(*ki)
+                    && !self.frozen_outputs.contains(*ki)
+                    && output.unlocked
+            })
+            .map(|(_, output)| output.amount)
+            .collect();
+
+        unspent_amounts.sort_by(|a, b| b.cmp(a)); // largest first
+
+        for output_amount in unspent_amounts {
+            accumulated = accumulated.saturating_add(output_amount);
+            estimated_inputs += 1;
+
+            // rough fee estimate (~0.001 XMR) to determine when we have enough
+            if accumulated >= amount.saturating_add(1_000_000_000) {
+                break;
+            }
+            if estimated_inputs >= 16 {
+                break;
+            }
+        }
+
+        if estimated_inputs == 0 {
+            estimated_inputs = 2;
+        }
+
+        Ok(crate::fee_calculation::estimate_fee(
+            estimated_inputs,
+            1,
+            &fee_rate,
+            false,
+        ))
     }
 
     pub fn get_outputs_count(&self) -> usize {
@@ -2250,6 +2319,7 @@ impl<'de> Deserialize<'de> for WalletState {
             sync_handle: None,
             sync_interval: std::time::Duration::from_secs(1),
             sync_progress_callback: None,
+            commitment_cache: HashMap::new(),
         })
     }
 }
