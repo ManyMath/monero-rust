@@ -1257,3 +1257,44 @@ pub extern "C" fn wallet_import_key_images(wallet: *mut WalletState, filename: *
 
     result.unwrap_or(-5)
 }
+
+/// Estimate tx fee for given priority and amount.
+/// Returns fee in piconeros or negative error code.
+#[no_mangle]
+pub extern "C" fn wallet_estimate_fee(
+    wallet: *const WalletState,
+    priority: u8,
+    amount: u64,
+) -> i64 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() {
+            return -1;
+        }
+        if !unsafe { WalletState::validate_ptr(wallet) } {
+            return -1;
+        }
+
+        let wallet_ref = unsafe { &*wallet };
+
+        if wallet_ref.is_closed {
+            return -2;
+        }
+        if !wallet_ref.is_connected {
+            return -3;
+        }
+
+        let tx_priority = match TransactionPriority::from_u8(priority) {
+            Ok(p) => p,
+            Err(_) => return -4,
+        };
+
+        match GLOBAL_RUNTIME.block_on(wallet_ref.estimate_fee(tx_priority, amount)) {
+            Ok(fee) => i64::try_from(fee).unwrap_or(i64::MAX),
+            Err(WalletError::WalletClosed) => -2,
+            Err(WalletError::NotConnected) => -3,
+            Err(_) => -5,
+        }
+    }));
+
+    result.unwrap_or(-6)
+}

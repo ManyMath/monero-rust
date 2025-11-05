@@ -38,6 +38,12 @@ char *generate_address(const char *mnemonic, uint8_t network, uint32_t account, 
 char *generate_mnemonic(uint8_t language);
 
 /**
+ * Estimate tx fee for given priority and amount.
+ * Returns fee in piconeros or negative error code.
+ */
+int64_t wallet_estimate_fee(const struct WalletState *wallet, uint8_t priority, uint64_t amount);
+
+/**
  * Export key images to file. Returns count on success,
  * -1 bad wallet, -2 bad filename, -3 closed, -4 export failed, -5 panic.
  */
