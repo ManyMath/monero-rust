@@ -57,7 +57,9 @@ const CRYPT_SALT_HEX: &str = "504f4c5953454544206d61736b00ffff";
 const CRYPT_PASSWORD: &str = "password";
 // The C test mask is a test fixture (injected via mock PBKDF2), not an actual
 // PBKDF2 output. What matters is that both C and Rust pass identical inputs
-// to PBKDF2 (same password bytes, same salt, same iterations).
+// to PBKDF2 (same password bytes, same salt, same iterations). Kept as
+// documentation of the C fixture even though no test consumes it directly.
+#[allow(dead_code)]
 const C_TEST_MASK_HEX: &str =
     "544a8895ffc0451c9b8e281e182d0d73637d1bd7cb6eed8f8435b3138c0cf04e";
 
@@ -627,7 +629,7 @@ fn test_all_coins_produce_correct_salts() {
         (Coin::Wownero, 2),
     ];
 
-    for (coin, coin_raw) in &coins {
+    for (_coin, coin_raw) in &coins {
         let salt = c_keygen_salt(*coin_raw, 100, 0);
 
         // Verify coin bytes at offset 16..20

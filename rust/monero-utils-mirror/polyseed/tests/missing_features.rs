@@ -204,6 +204,28 @@ fn gap7_no_nfc_output_composition() {
 
 }
 
+#[test]
+fn gap7_korean_roundtrip_ascii_spaces() {
+    let ko_seed = Polyseed::from(
+        Language::Korean,
+        0,
+        KOREAN_BIRTHDAY,
+        korean_entropy(),
+    )
+    .unwrap();
+
+    let output = ko_seed.to_string(Coin::Monero);
+
+    // Korean uses ASCII spaces (unlike Japanese's ideographic spaces)
+    assert!(!output.contains('\u{3000}'), "Korean output uses ASCII spaces");
+    assert_eq!(output.split(' ').count(), 16, "Korean seed has 16 words");
+
+    let parsed =
+        Polyseed::from_string(Language::Korean, output.clone(), Coin::Monero, 0).unwrap();
+    assert_eq!(parsed.entropy(), ko_seed.entropy());
+    assert_eq!(parsed.birthday(), ko_seed.birthday());
+}
+
 // Round-trip fidelity with C reference
 
 #[test]
