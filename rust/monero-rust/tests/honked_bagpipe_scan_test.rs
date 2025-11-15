@@ -34,6 +34,7 @@ struct GetTransactionsResponse {
 
 #[derive(serde::Deserialize)]
 struct TxInfo {
+    as_hex: String,
     pruned_as_hex: String,
     tx_hash: String,
     prunable_hash: String,
@@ -50,7 +51,7 @@ fn load_test_vectors() -> Vec<RpcCall> {
         .expect("failed to parse test vectors JSON")
 }
 
-fn get_transaction_info(tx_id: &str) -> (String, String) {
+fn get_transaction_info(tx_id: &str) -> TxInfo {
     let vectors = load_test_vectors();
 
     for call in vectors {
@@ -60,7 +61,7 @@ fn get_transaction_info(tx_id: &str) -> (String, String) {
 
             for tx_info in response.txs {
                 if tx_info.tx_hash == tx_id {
-                    return (tx_info.pruned_as_hex, tx_info.prunable_hash);
+                    return tx_info;
                 }
             }
         }
@@ -97,16 +98,27 @@ fn test_scan_actual_transaction() {
 
     let mut scanner = Scanner::from_view(pair, Some(HashSet::new()));
 
-    let (tx_hex, prunable_hash_hex) = get_transaction_info(TX_ID);
+    let tx_info = get_transaction_info(TX_ID);
 
-    let tx_bytes = hex::decode(&tx_hex).expect("failed to decode transaction hex");
-    let prunable_hash = hex::decode(&prunable_hash_hex).expect("failed to decode prunable hash hex");
-    let mut prunable_hash_array = [0u8; 32];
-    prunable_hash_array.copy_from_slice(&prunable_hash);
+    // The recorded vector came from an un-pruned daemon: pruned_as_hex is
+    // empty and the full transaction is in as_hex. Exercise the pruned
+    // parser only when a pruned blob is actually present.
+    let transaction = if tx_info.pruned_as_hex.is_empty() {
+        let tx_bytes = hex::decode(&tx_info.as_hex).expect("failed to decode transaction hex");
+        Transaction::read::<&[u8]>(&mut tx_bytes.as_ref())
+            .expect("failed to parse full transaction")
+    } else {
+        let tx_bytes =
+            hex::decode(&tx_info.pruned_as_hex).expect("failed to decode transaction hex");
+        let prunable_hash =
+            hex::decode(&tx_info.prunable_hash).expect("failed to decode prunable hash hex");
+        let mut prunable_hash_array = [0u8; 32];
+        prunable_hash_array.copy_from_slice(&prunable_hash);
 
-    let mut cursor = Cursor::new(&tx_bytes);
-    let transaction = parse_pruned_transaction(&mut cursor, prunable_hash_array)
-        .expect("failed to parse pruned transaction");
+        let mut cursor = Cursor::new(&tx_bytes);
+        parse_pruned_transaction(&mut cursor, prunable_hash_array)
+            .expect("failed to parse pruned transaction")
+    };
 
     let scan_result = scanner.scan_transaction(&transaction);
     let outputs = scan_result.ignore_timelock();
