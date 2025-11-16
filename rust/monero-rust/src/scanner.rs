@@ -2866,23 +2866,22 @@ mod tests {
     /// Feather Wallet test vector: polyseed + passphrase "hunter2" through derive_keys.
     #[test]
     fn test_derive_keys_polyseed_passphrase_feather_vector() {
-        let seed = "second exhibit rebuild laptop drive come off yard infant session subject treat steel antique liberty hybrid";
+        let seed = "shoot exhibit rebuild laptop drive come off yard infant session subject tree steak antique liar hybrid";
 
         // Mainnet keys
         let keys = derive_keys(seed, "mainnet", "hunter2").unwrap();
-        assert_eq!(keys.secret_spend_key, "de2d315b23e82c235bbc0186f684bccd2f98d273f59bd67b85d30de82a0da609");
-        assert_eq!(keys.secret_view_key, "86e3c9adf4a17cbd673424acdf3545725f8d61c34b37c39b215af0abf0baf803");
-        assert_eq!(keys.public_spend_key, "6b7c22bf7b1498cd84ac6065cd1f97a2f8bf226cd3a9e1cdb5a2f31f8c534a64");
-        assert_eq!(keys.public_view_key, "b18aeb91845ef4f41406473ac7b40c63dc8393b6f62077a45868471db9187dc5");
-        assert_eq!(keys.address, "45hMUyzqCAsbNnW7zsSZBkUG2hc25zi3abQe7yNm8fJZHqrVd7Ftcwuhps98hYDwXRHhnGcdy7gbQUVMdVkwTGYCPKtmRaA");
+        assert_eq!(keys.secret_spend_key, "08813258e8b396b2629ae9ecccd95ae33ec269ab0813754f43edfae937304909");
+        assert_eq!(keys.secret_view_key, "1be97a06de0e8e32952e41fa80023e5e0d96af4e61d6d1c2f521f94d12c3170b");
+        assert_eq!(keys.public_spend_key, "b4e3d0ed0ab2a22cb567d2edb7d33e402d0bf1a38b75fb1adb7cca6116f2b18e");
+        assert_eq!(keys.public_view_key, "c9efbf531801051471e29c7c2cc36458e10f5a4f2041842c818ed1654c938fde");
+        assert_eq!(keys.address, "48UhC3g9s9T8UjKHj1GQsPBjb4To7AS585VYujqCfgEcQtEMx2CKgHA4RLmRYqjsG7FsErzHZbeUb8SmMihoYme6S4MBnaZ");
 
         // Stagenet keys (the Feather wallet was on Stagenet)
         let keys_stagenet = derive_keys(seed, "stagenet", "hunter2").unwrap();
-        assert_eq!(keys_stagenet.address, "55uPZpunqmybNnW7zsSZBkUG2hc25zi3abQe7yNm8fJZHqrVd7Ftcwuhps98hYDwXRHhnGcdy7gbQUVMdVkwTGYCPH5r3dN");
+        assert_eq!(keys_stagenet.address, "58gjGtb7WkZ8UjKHj1GQsPBjb4To7AS585VYujqCfgEcQtEMx2CKgHA4RLmRYqjsG7FsErzHZbeUb8SmMihoYme6S9wf8gy");
 
         // Without passphrase: different keys
         let keys_no_pass = derive_keys(seed, "mainnet", "").unwrap();
         assert_ne!(keys_no_pass.address, keys.address);
     }
-
 }
