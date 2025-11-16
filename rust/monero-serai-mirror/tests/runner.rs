@@ -73,8 +73,28 @@ pub async fn get_miner_tx_output(rpc: &Rpc<HttpRpc>, view: &ViewPair) -> Spendab
   scanner.scan(rpc, &block).await.unwrap().swap_remove(0).ignore_timelock().swap_remove(0)
 }
 
+pub const REGTEST_NODE: &str = "http://127.0.0.1:18081";
+
+/// Soft-skip when no local regtest node is reachable, matching the
+/// describeIfNode convention used by the rest of the test suites.
+pub async fn regtest_available() -> bool {
+  match HttpRpc::new(REGTEST_NODE.to_string()) {
+    Ok(rpc) => match rpc.get_height().await {
+      Ok(_) => true,
+      Err(e) => {
+        eprintln!("Skipped: no local regtest node at {} ({:?})", REGTEST_NODE, e);
+        false
+      }
+    },
+    Err(e) => {
+      eprintln!("Skipped: no local regtest node at {} ({:?})", REGTEST_NODE, e);
+      false
+    }
+  }
+}
+
 pub async fn rpc() -> Rpc<HttpRpc> {
-  let rpc = HttpRpc::new("http://127.0.0.1:18081".to_string()).unwrap();
+  let rpc = HttpRpc::new(REGTEST_NODE.to_string()).unwrap();
 
   // Only run once
   if rpc.get_height().await.unwrap() != 1 {
@@ -107,6 +127,9 @@ macro_rules! async_sequential {
     $(
       #[tokio::test]
       async fn $name() {
+        if !runner::regtest_available().await {
+          return;
+        }
         let guard = runner::SEQUENTIAL.lock().await;
         let local = tokio::task::LocalSet::new();
         local.run_until(async move {
