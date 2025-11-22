@@ -6,6 +6,7 @@
 // Core modules
 pub mod abstractions;
 pub mod bip39_conv;
+pub mod chain_config;
 pub mod coin_selection;
 pub mod encryption;
 pub mod error_codes;
