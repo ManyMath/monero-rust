@@ -1,5 +1,5 @@
 # monero-rust/flutter/web
-Flutter web extension demonstrating monero-rust.  Runs as an extension rather 
+Flutter web extension demonstrating monero-wasm.  Runs as an extension rather 
 than a local webserver because of CORS restrictions.
 
 ## Requirements
@@ -32,7 +32,7 @@ dart run tool/build_ui.dart
 ## Testing
 Rust:
 ```sh
-cd native/monero-rust
+cd native/monero-wasm
 cargo test --lib
 ```
 
