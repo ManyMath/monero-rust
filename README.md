@@ -1,25 +1,24 @@
 # monero-rust
-Rust Monero wallet tooling compiled to WebAssembly, with a Flutter web extension example.
+Monorepo for Rust Monero wallet tooling compiled to WebAssembly with a Flutter web extension example.
 
-## Requirements
-- Flutter 3.24.4+
-- Rust 1.82.0+
-- rinf CLI: `cargo install rinf`
+## monero-wasm
+A WebAssembly library providing Monero wallet primitives.  Designed for browser environments with platform-specific abstractions for networking, storage, and time.
 
-## Structure
-### rust/monero-rust
-WebAssembly library providing Monero wallet primitives for browser environments. Abstracts networking, storage, and time for web platform constraints.
+### Prerequisites
+- Flutter 3.24.3+
+- Rust 1.89.0+
+- `rinf` CLI: `cargo install rinf`
 
-Test:
+### Testing monero-wasm
 ```sh
-cd rust/monero-rust
+cd rust/monero-wasm
 cargo test --lib
 ```
 
-### flutter/web
-Flutter web extension demonstrating monero-rust. See `flutter/web/README.md` for details.
+## Flutter web extension
+A Flutter web extension demonstrating monero-wasm integration.  See `flutter/web/README.md`.
 
-Build:
+### Building the Extension
 ```sh
 cd flutter/web
 flutter pub get
@@ -28,11 +27,15 @@ rinf wasm
 dart run tool/build_extension.dart
 ```
 
-Output goes to `build/extension/` (unpacked) and `build/monero-extension.zip`.
+Output: `build/extension/` (unpacked) and `build/monero-extension.zip`
 
-Load in Chrome: open `chrome://extensions`, enable Developer mode, click "Load unpacked", select `build/extension/`.
+### Loading in Chrome
+- Navigate to `chrome://extensions`.
+- Enable Developer mode.
+- Click "Load unpacked".
+- Select `build/extension/` directory.
 
-Test:
+### Running Extension Tests
 ```sh
 cd flutter/web
 flutter test
@@ -43,6 +46,13 @@ npm test
 
 `npm run test:signal-e2e -- <jest paths...>` is the dedicated Puppeteer/Jest signal entrypoint.
 `npm test` remains the broader repo-style path and still runs the Rust test suite before signal E2E, so unrelated Rust regressions can still fail that path.
+
+### Constraints
+The example app runs as a browser extension because Monero RPC nodes don't typically send CORS headers allowing arbitrary web origins.  Running as an extension bypasses these restrictions, enabling direct communication with nodes for testing.  This is one of monero-wasm's several web- or extension-based constraints:
+- CORS restrictions apply when making RPC calls to Monero nodes.
+- All network calls must go through the browser's `fetch` API.
+- Storage uses browser localStorage/IndexedDB via traits.
+- No filesystem or native OS dependencies.
 
 ## Notes
 This runs as a browser extension to bypass CORS restrictions when talking to Monero nodes. Most nodes don't send headers that allow arbitrary web origins. The extension sidesteps this for testing purposes.
