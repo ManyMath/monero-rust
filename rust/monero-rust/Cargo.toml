@@ -28,6 +28,7 @@ cipher = "0.4"
 argon2 = "0.5"
 serde_bytes = "0.11"
 cuprate-cryptonight = { path = "../cuprate-cryptonight" }
+monero-epee-bin-serde = { path = "../monero-epee-bin-serde" }
 
 # BIP39/BIP32
 bip39 = { version = "2", features = ["rand"] }
