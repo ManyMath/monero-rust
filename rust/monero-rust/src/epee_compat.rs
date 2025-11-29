@@ -103,6 +103,31 @@ pub fn import_key_images(data: &[u8], view_secret_key: Option<&[u8; 32]>) -> Res
     }
 }
 
+#[cfg(all(test, target_arch = "wasm32"))]
+mod wasm_tests {
+    use super::*;
+    use wasm_bindgen_test::*;
+
+    #[wasm_bindgen_test]
+    fn epee_magic_wrap_strip_roundtrip_wasm() {
+        let data = b"hello wasm";
+        let wrapped = wrap_with_magic(UNSIGNED_TX_MAGIC, data);
+        let stripped = strip_magic(UNSIGNED_TX_MAGIC, &wrapped).unwrap();
+        assert_eq!(stripped, data);
+    }
+
+    #[wasm_bindgen_test]
+    fn epee_magic_mismatch_wasm() {
+        let wrapped = wrap_with_magic(UNSIGNED_TX_MAGIC, b"data");
+        assert!(strip_magic(SIGNED_TX_MAGIC, &wrapped).is_err());
+    }
+
+    #[wasm_bindgen_test]
+    fn epee_magic_too_short_wasm() {
+        assert!(strip_magic(UNSIGNED_TX_MAGIC, b"x").is_err());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

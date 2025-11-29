@@ -69,6 +69,27 @@ impl ChainConfig {
     }
 }
 
+#[cfg(all(test, target_arch = "wasm32"))]
+mod wasm_tests {
+    use super::*;
+    use wasm_bindgen_test::*;
+
+    #[wasm_bindgen_test]
+    fn chain_config_stagenet_genesis_wasm() {
+        let cfg = ChainConfig::monero_stagenet("http://localhost:38081".into());
+        // Monero stagenet genesis: 76ee3cc9...
+        assert_eq!(cfg.genesis_hash[0], 0x76);
+        assert_eq!(cfg.label, "monero-stagenet");
+    }
+
+    #[wasm_bindgen_test]
+    fn chain_config_child_differs_wasm() {
+        let monero = ChainConfig::monero_stagenet("http://a".into());
+        let child = ChainConfig::child_stagenet("http://b".into());
+        assert_ne!(monero.genesis_hash, child.genesis_hash);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

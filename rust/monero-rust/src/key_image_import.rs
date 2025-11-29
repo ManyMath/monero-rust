@@ -211,6 +211,39 @@ pub fn extract_key_image_hex(signed_key_images: &[SignedKeyImage]) -> Vec<String
         .collect()
 }
 
+#[cfg(all(test, target_arch = "wasm32"))]
+mod wasm_tests {
+    use super::*;
+    use wasm_bindgen_test::*;
+
+    #[wasm_bindgen_test]
+    fn parse_rpc_export_wasm() {
+        let json = r#"{
+            "result": {
+                "offset": 2,
+                "signed_key_images": [
+                    {
+                        "key_image": "0000000000000000000000000000000000000000000000000000000000000001",
+                        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                    }
+                ]
+            }
+        }"#;
+        let (offset, skis) = parse_rpc_export(json).unwrap();
+        assert_eq!(offset, 2);
+        assert_eq!(skis.len(), 1);
+        assert_eq!(skis[0].key_image[31], 0x01);
+    }
+
+    #[wasm_bindgen_test]
+    fn extract_key_image_hex_wasm() {
+        let ski = SignedKeyImage { key_image: [0xab; 32], signature: [0u8; 64] };
+        let hexes = extract_key_image_hex(&[ski]);
+        assert_eq!(hexes.len(), 1);
+        assert!(hexes[0].starts_with("abab"));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
