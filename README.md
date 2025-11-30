@@ -7,17 +7,17 @@ Rust Monero wallet tooling compiled to WebAssembly, with a Flutter web extension
 - rinf CLI: `cargo install rinf`
 
 ## Structure
-### rust/monero-wasm
+### rust/monero-rust
 WebAssembly library providing Monero wallet primitives for browser environments. Abstracts networking, storage, and time for web platform constraints.
 
 Test:
 ```sh
-cd rust/monero-wasm
+cd rust/monero-rust
 cargo test --lib
 ```
 
 ### flutter/web
-Flutter web extension demonstrating monero-wasm. See `flutter/web/README.md` for details.
+Flutter web extension demonstrating monero-rust. See `flutter/web/README.md` for details.
 
 Build:
 ```sh
@@ -45,7 +45,7 @@ npm test
 `npm test` remains the broader repo-style path and still runs the Rust test suite before signal E2E, so unrelated Rust regressions can still fail that path.
 
 ### Constraints
-The example app runs as a browser extension because Monero RPC nodes don't typically send CORS headers allowing arbitrary web origins.  Running as an extension bypasses these restrictions, enabling direct communication with nodes for testing.  This is one of monero-wasm's several web- or extension-based constraints:
+The example app runs as a browser extension because Monero RPC nodes don't typically send CORS headers allowing arbitrary web origins.  Running as an extension bypasses these restrictions, enabling direct communication with nodes for testing.  This is one of monero-rust's several web- or extension-based constraints:
 - CORS restrictions apply when making RPC calls to Monero nodes.
 - All network calls must go through the browser's `fetch` API.
 - Storage uses browser localStorage/IndexedDB via traits.
