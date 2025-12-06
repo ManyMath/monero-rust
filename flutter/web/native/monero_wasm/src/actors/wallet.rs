@@ -39,7 +39,11 @@ pub(crate) fn current_time_secs() -> u64 {
 
 /// Pre-convert BIP39 12-word seeds to legacy format using the given passphrase
 /// and account index. Non-BIP39 seeds pass through unchanged.
+/// View-only seeds (prefixed with `viewonly:`) pass through unchanged.
 pub(crate) fn pre_resolve_bip39(seed: &str, passphrase: &str, account_index: u32) -> Result<String, String> {
+    if seed.starts_with("viewonly:") {
+        return Ok(seed.to_string());
+    }
     if seed.split_whitespace().count() == 12 {
         monero_rust::bip39_to_legacy_mnemonic(seed, passphrase, account_index)
     } else {
