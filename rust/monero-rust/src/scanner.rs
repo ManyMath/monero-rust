@@ -3,7 +3,11 @@
 //! This module provides wallet scanning functionality that works across
 //! both native and WASM targets through generic RpcConnection support.
 
-use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, edwards::EdwardsPoint, scalar::Scalar};
+use curve25519_dalek::{
+    constants::ED25519_BASEPOINT_TABLE,
+    edwards::{CompressedEdwardsY, EdwardsPoint},
+    scalar::Scalar,
+};
 use monero_serai::{
     block::Block,
     rpc::{GetBlocksFastResponse, Rpc, RpcConnection},
@@ -494,6 +498,67 @@ pub fn resolve_seed(mnemonic: &str) -> Result<Seed, String> {
     resolve_seed_bip39(mnemonic, "", 0)
 }
 
+/// Detect `viewonly:<secret_view_key_hex>:<public_spend_key_hex>` sentinel.
+/// Returns `(view_scalar, spend_point)` if the prefix matches.
+pub fn parse_view_only_keys(seed: &str) -> Option<(Scalar, EdwardsPoint)> {
+    let rest = seed.strip_prefix("viewonly:")?;
+    let mut parts = rest.splitn(2, ':');
+    let view_hex = parts.next()?;
+    let spend_hex = parts.next()?;
+    if view_hex.len() != 64 || spend_hex.len() != 64 {
+        return None;
+    }
+    let view_bytes: [u8; 32] = hex::decode(view_hex).ok()?.try_into().ok()?;
+    let spend_bytes: [u8; 32] = hex::decode(spend_hex).ok()?.try_into().ok()?;
+    let view_scalar = Scalar::from_canonical_bytes(view_bytes)?;
+    let spend_point = CompressedEdwardsY(spend_bytes).decompress()?;
+    Some((view_scalar, spend_point))
+}
+
+/// Derive keys for a view-only wallet (no secret spend key available).
+pub fn derive_keys_from_view_only(
+    secret_view_key_hex: &str,
+    public_spend_key_hex: &str,
+    network_str: &str,
+) -> Result<DerivedKeys, String> {
+    let network = parse_network(network_str)?;
+    let (view_scalar, spend_point) =
+        parse_view_only_keys(&format!("viewonly:{}:{}", secret_view_key_hex, public_spend_key_hex))
+            .ok_or_else(|| "Invalid view-only key hex".to_string())?;
+    let view_point: EdwardsPoint = &view_scalar * &ED25519_BASEPOINT_TABLE;
+    let address = MoneroAddress::new(
+        AddressMeta::new(network, AddressType::Standard),
+        spend_point,
+        view_point,
+    );
+    Ok(DerivedKeys {
+        secret_spend_key: String::new(),
+        secret_view_key: hex::encode(view_scalar.to_bytes()),
+        public_spend_key: hex::encode(spend_point.compress().to_bytes()),
+        public_view_key: hex::encode(view_point.compress().to_bytes()),
+        address: address.to_string(),
+    })
+}
+
+/// Derive address for a view-only wallet.
+pub fn derive_address_from_view_only(
+    secret_view_key_hex: &str,
+    public_spend_key_hex: &str,
+    network_str: &str,
+) -> Result<String, String> {
+    let network = parse_network(network_str)?;
+    let (view_scalar, spend_point) =
+        parse_view_only_keys(&format!("viewonly:{}:{}", secret_view_key_hex, public_spend_key_hex))
+            .ok_or_else(|| "Invalid view-only key hex".to_string())?;
+    let view_point: EdwardsPoint = &view_scalar * &ED25519_BASEPOINT_TABLE;
+    let address = MoneroAddress::new(
+        AddressMeta::new(network, AddressType::Standard),
+        spend_point,
+        view_point,
+    );
+    Ok(address.to_string())
+}
+
 pub fn generate_seed(seed_type: &str) -> Result<String, String> {
     // Use thread_rng which works in both native and WASM contexts
     let mut rng = rand::thread_rng();
@@ -542,6 +607,12 @@ fn address_from_seed(seed: &Seed, network: Network, passphrase: &str) -> String 
 
 pub fn derive_address(mnemonic: &str, network_str: &str, passphrase: &str) -> Result<String, String> {
     crate::error_codes::validate_network(network_str).map_err(|e| e.message.clone())?;
+    if let Some((view_hex, spend_hex)) = mnemonic.strip_prefix("viewonly:").and_then(|r| {
+        let mut parts = r.splitn(2, ':');
+        Some((parts.next()?, parts.next()?))
+    }) {
+        return derive_address_from_view_only(view_hex, spend_hex, network_str);
+    }
     let network = parse_network(network_str)?;
     let seed = resolve_seed(mnemonic)?;
     Ok(address_from_seed(&seed, network, passphrase))
@@ -559,14 +630,17 @@ pub fn derive_subaddress(
     crate::error_codes::validate_network(network_str).map_err(|e| e.message.clone())?;
     let network = parse_network(network_str)?;
 
-    let seed = resolve_seed(mnemonic)?;
-
-    let spend: [u8; 32] = *seed.key_bytes_with_passphrase(passphrase);
-    let spend_scalar = Scalar::from_bytes_mod_order(spend);
-    let spend_point: EdwardsPoint = &spend_scalar * &ED25519_BASEPOINT_TABLE;
-
-    let view: [u8; 32] = Keccak256::digest(spend_scalar.to_bytes()).into();
-    let view_scalar = Scalar::from_bytes_mod_order(view);
+    let (spend_point, view_scalar) = if let Some((vs, sp)) = parse_view_only_keys(mnemonic) {
+        (sp, vs)
+    } else {
+        let seed = resolve_seed(mnemonic)?;
+        let spend: [u8; 32] = *seed.key_bytes_with_passphrase(passphrase);
+        let spend_scalar = Scalar::from_bytes_mod_order(spend);
+        let sp: EdwardsPoint = &spend_scalar * &ED25519_BASEPOINT_TABLE;
+        let view: [u8; 32] = Keccak256::digest(spend_scalar.to_bytes()).into();
+        let vs = Scalar::from_bytes_mod_order(view);
+        (sp, vs)
+    };
 
     let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
 
@@ -589,6 +663,12 @@ pub fn derive_subaddress(
 
 pub fn derive_keys(mnemonic: &str, network_str: &str, passphrase: &str) -> Result<DerivedKeys, String> {
     crate::error_codes::validate_network(network_str).map_err(|e| e.message.clone())?;
+    if let Some((view_hex, spend_hex)) = mnemonic.strip_prefix("viewonly:").and_then(|r| {
+        let mut parts = r.splitn(2, ':');
+        Some((parts.next()?, parts.next()?))
+    }) {
+        return derive_keys_from_view_only(view_hex, spend_hex, network_str);
+    }
     let network = parse_network(network_str)?;
 
     let seed = resolve_seed(mnemonic)?;
@@ -760,12 +840,18 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
 ) -> Result<BlockScanResult, String> {
     let _network = parse_network(network_str)?;
 
-    let seed = resolve_seed(mnemonic)?;
-
-    let spend_point = spend_key_from_seed(&seed, passphrase);
-    let view_scalar = view_key_from_seed(&seed, passphrase);
+    let view_only = parse_view_only_keys(mnemonic);
+    let seed_opt = if view_only.is_none() { Some(resolve_seed(mnemonic)?) } else { None };
+    let spend_point = view_only.as_ref().map(|(_, sp)| *sp)
+        .unwrap_or_else(|| spend_key_from_seed(seed_opt.as_ref().unwrap(), passphrase));
+    let view_scalar = view_only.as_ref().map(|(vs, _)| *vs)
+        .unwrap_or_else(|| view_key_from_seed(seed_opt.as_ref().unwrap(), passphrase));
     #[cfg(target_arch = "wasm32")]
-    let spend_scalar = spend_key_scalar_from_seed(&seed, passphrase);
+    let spend_scalar = if view_only.is_some() {
+        Scalar::zero()
+    } else {
+        spend_key_scalar_from_seed(seed_opt.as_ref().unwrap(), passphrase)
+    };
 
     let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
     let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
@@ -838,9 +924,10 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
             };
             let received_output_bytes = hex::encode(output.serialize());
 
-            // Calculate key image (WASM only due to spend scalar requirement)
             #[cfg(target_arch = "wasm32")]
-            let key_image = {
+            let key_image = if spend_scalar == Scalar::zero() {
+                String::new()
+            } else {
                 let key_image_point = calculate_key_image(&spend_scalar, &output.data.key_offset);
                 hex::encode(key_image_point.compress().to_bytes())
             };
@@ -926,21 +1013,25 @@ pub async fn process_batch_response(
 ) -> Result<(Vec<BlockScanResult>, CachedScanner), String> {
     let _network = parse_network(network_str)?;
 
-    let seed = resolve_seed(mnemonic)?;
-    let spend_point = spend_key_from_seed(&seed, passphrase);
-    let fingerprint = spend_point.compress().to_bytes();
+    let view_only = parse_view_only_keys(mnemonic);
+    let seed_opt = if view_only.is_none() { Some(resolve_seed(mnemonic)?) } else { None };
+    let spend_point = view_only.as_ref().map(|(_, sp)| *sp)
+        .unwrap_or_else(|| spend_key_from_seed(seed_opt.as_ref().unwrap(), passphrase));
+    let view_scalar = view_only.as_ref().map(|(vs, _)| *vs)
+        .unwrap_or_else(|| view_key_from_seed(seed_opt.as_ref().unwrap(), passphrase));
     #[cfg(target_arch = "wasm32")]
-    let spend_scalar = spend_key_scalar_from_seed(&seed, passphrase);
+    let spend_scalar_val = if view_only.is_some() {
+        Scalar::zero()
+    } else {
+        spend_key_scalar_from_seed(seed_opt.as_ref().unwrap(), passphrase)
+    };
+    let fingerprint = spend_point.compress().to_bytes();
 
     let mut scanner = if let Some(c) = cached {
         if c.fingerprint == fingerprint && c.lookahead == lookahead {
-            #[cfg(target_arch = "wasm32")]
-            { let _ = spend_scalar; } // use the fresh one below
             c
         } else {
-            // Mismatch — rebuild
             drop(c);
-            let view_scalar = view_key_from_seed(&seed, passphrase);
             let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
             let mut s = Scanner::from_view(view_pair, Some(HashSet::new()));
             register_subaddresses_async(&mut s, lookahead).await;
@@ -950,11 +1041,10 @@ pub async fn process_batch_response(
                 fingerprint,
                 watermark: SubaddressWatermark::new(lookahead),
                 #[cfg(target_arch = "wasm32")]
-                spend_scalar: spend_key_scalar_from_seed(&seed, passphrase),
+                spend_scalar: spend_scalar_val,
             }
         }
     } else {
-        let view_scalar = view_key_from_seed(&seed, passphrase);
         let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
         let mut s = Scanner::from_view(view_pair, Some(HashSet::new()));
         register_subaddresses_async(&mut s, lookahead).await;
@@ -964,7 +1054,7 @@ pub async fn process_batch_response(
             fingerprint,
             watermark: SubaddressWatermark::new(lookahead),
             #[cfg(target_arch = "wasm32")]
-            spend_scalar: spend_key_scalar_from_seed(&seed, passphrase),
+            spend_scalar: spend_scalar_val,
         }
     };
 
@@ -1111,7 +1201,9 @@ pub async fn process_batch_response(
                     let received_output_bytes = hex::encode(output.serialize());
 
                     #[cfg(target_arch = "wasm32")]
-                    let key_image = {
+                    let key_image = if scanner.spend_scalar == Scalar::zero() {
+                        String::new() // view-only: no spend key available
+                    } else {
                         let key_image_point =
                             calculate_key_image(&scanner.spend_scalar, &output.data.key_offset);
                         hex::encode(key_image_point.compress().to_bytes())
@@ -1241,9 +1333,13 @@ pub async fn process_batch_multi_wallet_response(
     // Derive fingerprints for each wallet (cheap hash ops)
     let mut config_fingerprints = Vec::with_capacity(wallet_configs.len());
     for config in &wallet_configs {
-        let seed = resolve_seed(&config.mnemonic)?;
-        let spend_point = spend_key_from_seed(&seed, &config.passphrase);
-        config_fingerprints.push(spend_point.compress().to_bytes());
+        if let Some((_vs, sp)) = parse_view_only_keys(&config.mnemonic) {
+            config_fingerprints.push(sp.compress().to_bytes());
+        } else {
+            let seed = resolve_seed(&config.mnemonic)?;
+            let spend_point = spend_key_from_seed(&seed, &config.passphrase);
+            config_fingerprints.push(spend_point.compress().to_bytes());
+        }
     }
 
     // Check if cached scanners are valid
@@ -1265,10 +1361,31 @@ pub async fn process_batch_multi_wallet_response(
         let mut entries = Vec::with_capacity(wallet_configs.len());
         for (config, fp) in wallet_configs.iter().zip(config_fingerprints.iter()) {
             let network = parse_network(&config.network)?;
-            let seed = resolve_seed(&config.mnemonic)?;
-            let address = address_from_seed(&seed, network, &config.passphrase);
-            let spend_point = spend_key_from_seed(&seed, &config.passphrase);
-            let view_scalar = view_key_from_seed(&seed, &config.passphrase);
+
+            let view_only = parse_view_only_keys(&config.mnemonic);
+            let seed_opt = if view_only.is_none() { Some(resolve_seed(&config.mnemonic)?) } else { None };
+            let (spend_point, view_scalar, address) = if let Some((vs, sp)) = view_only.as_ref() {
+                let vp: EdwardsPoint = vs * &ED25519_BASEPOINT_TABLE;
+                let addr = MoneroAddress::new(
+                    AddressMeta::new(network, AddressType::Standard), *sp, vp,
+                ).to_string();
+                (*sp, *vs, addr)
+            } else {
+                let seed = seed_opt.as_ref().unwrap();
+                let addr = address_from_seed(seed, network, &config.passphrase);
+                (
+                    spend_key_from_seed(seed, &config.passphrase),
+                    view_key_from_seed(seed, &config.passphrase),
+                    addr,
+                )
+            };
+            #[cfg(target_arch = "wasm32")]
+            let spend_scalar_val = if view_only.is_some() {
+                Scalar::zero()
+            } else {
+                spend_key_scalar_from_seed(seed_opt.as_ref().unwrap(), &config.passphrase)
+            };
+
             let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
             let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
             register_subaddresses_async(&mut scanner, config.lookahead).await;
@@ -1280,7 +1397,7 @@ pub async fn process_batch_multi_wallet_response(
                 fingerprint: *fp,
                 watermark: SubaddressWatermark::new(config.lookahead),
                 #[cfg(target_arch = "wasm32")]
-                spend_scalar: spend_key_scalar_from_seed(&seed, &config.passphrase),
+                spend_scalar: spend_scalar_val,
             });
         }
         CachedScanners { entries }
@@ -1443,7 +1560,9 @@ pub async fn process_batch_multi_wallet_response(
                         let received_output_bytes = hex::encode(output.serialize());
 
                         #[cfg(target_arch = "wasm32")]
-                        let key_image = {
+                        let key_image = if entry.spend_scalar == Scalar::zero() {
+                            String::new() // view-only: no spend key available
+                        } else {
                             let key_image_point =
                                 calculate_key_image(&entry.spend_scalar, &output.data.key_offset);
                             hex::encode(key_image_point.compress().to_bytes())
@@ -1842,16 +1961,22 @@ pub async fn scan_block_multi_wallet<R: RpcConnection + Send + Sync + Clone + 's
         let txs = Arc::clone(&txs);
 
         join_set.spawn(async move {
-            // Parse seed once — used for both address derivation and scanner setup
             let network = parse_network(&wallet_config.network)?;
-            let seed = resolve_seed(&wallet_config.mnemonic)?;
             let passphrase = wallet_config.passphrase.as_str();
-            let address = address_from_seed(&seed, network, passphrase);
-
-            let spend_point = spend_key_from_seed(&seed, passphrase);
-            let view_scalar = view_key_from_seed(&seed, passphrase);
-            #[cfg(target_arch = "wasm32")]
-            let spend_scalar = spend_key_scalar_from_seed(&seed, passphrase);
+            let (spend_point, view_scalar, address) =
+                if let Some((vs, sp)) = parse_view_only_keys(&wallet_config.mnemonic) {
+                    let vp: EdwardsPoint = &vs * &ED25519_BASEPOINT_TABLE;
+                    let addr = MoneroAddress::new(
+                        AddressMeta::new(network, AddressType::Standard), sp, vp,
+                    ).to_string();
+                    (sp, vs, addr)
+                } else {
+                    let seed = resolve_seed(&wallet_config.mnemonic)?;
+                    let addr = address_from_seed(&seed, network, passphrase);
+                    let sp = spend_key_from_seed(&seed, passphrase);
+                    let vs = view_key_from_seed(&seed, passphrase);
+                    (sp, vs, addr)
+                };
 
             let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
             let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
@@ -1885,9 +2010,10 @@ pub async fn scan_block_multi_wallet<R: RpcConnection + Send + Sync + Clone + 's
                     };
                     let received_output_bytes = hex::encode(output.serialize());
 
-                    // Calculate key image (WASM only due to spend scalar requirement)
                     #[cfg(target_arch = "wasm32")]
-                    let key_image = {
+                    let key_image = if spend_scalar == Scalar::zero() {
+                        String::new()
+                    } else {
                         let key_image_point = calculate_key_image(&spend_scalar, &output.data.key_offset);
                         hex::encode(key_image_point.compress().to_bytes())
                     };
@@ -2016,16 +2142,30 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
     let mut wallet_results = HashMap::new();
 
     for wallet_config in wallet_configs {
-        // Parse seed once — used for both address derivation and scanner setup
         let network = parse_network(&wallet_config.network)?;
-        let seed = resolve_seed(&wallet_config.mnemonic)?;
         let passphrase = wallet_config.passphrase.as_str();
-        let address = address_from_seed(&seed, network, passphrase);
-
-        let spend_point = spend_key_from_seed(&seed, passphrase);
-        let view_scalar = view_key_from_seed(&seed, passphrase);
-        #[cfg(target_arch = "wasm32")]
-        let spend_scalar = spend_key_scalar_from_seed(&seed, passphrase);
+        let view_only = parse_view_only_keys(&wallet_config.mnemonic);
+        let seed_opt = if view_only.is_none() { Some(resolve_seed(&wallet_config.mnemonic)?) } else { None };
+        let (spend_point, view_scalar, address) = if let Some((vs, sp)) = view_only.as_ref() {
+            let vp: EdwardsPoint = vs * &ED25519_BASEPOINT_TABLE;
+            let addr = MoneroAddress::new(
+                AddressMeta::new(network, AddressType::Standard), *sp, vp,
+            ).to_string();
+            (*sp, *vs, addr)
+        } else {
+            let seed = seed_opt.as_ref().unwrap();
+            let addr = address_from_seed(seed, network, passphrase);
+            (
+                spend_key_from_seed(seed, passphrase),
+                view_key_from_seed(seed, passphrase),
+                addr,
+            )
+        };
+        let spend_scalar = if view_only.is_some() {
+            Scalar::zero()
+        } else {
+            spend_key_scalar_from_seed(seed_opt.as_ref().unwrap(), passphrase)
+        };
 
         let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
         let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
@@ -2059,9 +2199,10 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
                 };
                 let received_output_bytes = hex::encode(output.serialize());
 
-                // Calculate key image (WASM only due to spend scalar requirement)
                 #[cfg(target_arch = "wasm32")]
-                let key_image = {
+                let key_image = if spend_scalar == Scalar::zero() {
+                    String::new()
+                } else {
                     let key_image_point = calculate_key_image(&spend_scalar, &output.data.key_offset);
                     hex::encode(key_image_point.compress().to_bytes())
                 };
@@ -2159,12 +2300,18 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
     lookahead: Lookahead,
     passphrase: &str,
 ) -> Result<MempoolScanResult, String> {
-    let seed = resolve_seed(mnemonic)?;
-
-    let spend_point = spend_key_from_seed(&seed, passphrase);
-    let view_scalar = view_key_from_seed(&seed, passphrase);
+    let view_only = parse_view_only_keys(mnemonic);
+    let seed_opt = if view_only.is_none() { Some(resolve_seed(mnemonic)?) } else { None };
+    let spend_point = view_only.as_ref().map(|(_, sp)| *sp)
+        .unwrap_or_else(|| spend_key_from_seed(seed_opt.as_ref().unwrap(), passphrase));
+    let view_scalar = view_only.as_ref().map(|(vs, _)| *vs)
+        .unwrap_or_else(|| view_key_from_seed(seed_opt.as_ref().unwrap(), passphrase));
     #[cfg(target_arch = "wasm32")]
-    let spend_scalar = spend_key_scalar_from_seed(&seed, passphrase);
+    let spend_scalar = if view_only.is_some() {
+        Scalar::zero()
+    } else {
+        spend_key_scalar_from_seed(seed_opt.as_ref().unwrap(), passphrase)
+    };
 
     let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
     let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
@@ -2227,9 +2374,10 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
             };
             let received_output_bytes = hex::encode(output.serialize());
 
-            // Calculate key image (WASM only due to spend scalar requirement)
             #[cfg(target_arch = "wasm32")]
-            let key_image = {
+            let key_image = if spend_scalar == Scalar::zero() {
+                String::new()
+            } else {
                 let key_image_point = calculate_key_image(&spend_scalar, &output.data.key_offset);
                 hex::encode(key_image_point.compress().to_bytes())
             };

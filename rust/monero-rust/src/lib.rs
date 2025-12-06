@@ -63,6 +63,8 @@ pub use scanner::{
     DEFAULT_LOOKAHEAD,
     // Key derivation
     derive_address, derive_keys, derive_subaddress, generate_seed, resolve_seed, resolve_seed_bip39, seed_birthday, validate_seed,
+    // View-only wallet
+    parse_view_only_keys, derive_keys_from_view_only, derive_address_from_view_only,
     // Single-block scanning
     get_daemon_height, is_key_image_spent,
     scan_block_for_outputs_with_url, scan_block_for_outputs_with_url_and_lookahead,
