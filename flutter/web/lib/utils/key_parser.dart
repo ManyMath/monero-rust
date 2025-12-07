@@ -18,6 +18,11 @@ class KeyParser {
       return KeyParseResult.invalid('Input is empty');
     }
 
+    // View-only sentinel passes through as-is
+    if (input.trim().startsWith('viewonly:')) {
+      return KeyParseResult.valid(input.trim());
+    }
+
     final normalized = input.trim().replaceAll(RegExp(r'\s+'), ' ');
     final words = normalized.split(' ');
 

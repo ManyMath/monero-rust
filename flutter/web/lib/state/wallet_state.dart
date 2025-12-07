@@ -18,6 +18,8 @@ class WalletState extends ChangeNotifier {
 
   final seedController = TextEditingController();
   final passphraseController = TextEditingController();
+  final viewKeyController = TextEditingController();
+  final spendKeyController = TextEditingController();
   final nodeUrlController = TextEditingController(text: 'http://127.0.0.1:38081');
   final blockHeightController = TextEditingController();
   final blockHeightFocusNode = FocusNode();
@@ -58,6 +60,8 @@ class WalletState extends ChangeNotifier {
         _signalHub = signalHub {
     seedController.addListener(_onSeedChanged);
     passphraseController.addListener(_onPassphraseChanged);
+    viewKeyController.addListener(_onViewOnlyKeysChanged);
+    spendKeyController.addListener(_onViewOnlyKeysChanged);
     blockHeightController.addListener(_onBlockHeightChanged);
 
     _signalHub.onKeysDerived = _handleKeysDerived;
@@ -117,7 +121,7 @@ class WalletState extends ChangeNotifier {
         openWallet(walletId.isEmpty ? 'temp_wallet' : walletId, seed, network, derivedAddress!);
       }
 
-      if (seed.isNotEmpty) {
+      if (seed.isNotEmpty && !seed.startsWith('viewonly:')) {
         GetSeedBirthdayRequest(seed: seed, passphrase: passphrase, bip39AccountIndex: bip39AccountIndex).sendSignalToRust();
       }
     } else {
@@ -253,6 +257,47 @@ class WalletState extends ChangeNotifier {
   }
 
   void deriveAddress() {
+    // View-only mode: use raw key hex inputs
+    if (seedType == 'view-only') {
+      final viewKey = viewKeyController.text.trim();
+      final spendKey = spendKeyController.text.trim();
+      if (viewKey.isEmpty || spendKey.isEmpty) {
+        validationError = null;
+        responseError = null;
+        derivedAddress = null;
+        secretSpendKey = null;
+        secretViewKey = null;
+        publicSpendKey = null;
+        publicViewKey = null;
+        notifyListeners();
+        return;
+      }
+      if (viewKey.length != 64 || spendKey.length != 64) {
+        validationError = 'Keys must be 64 hex characters';
+        notifyListeners();
+        return;
+      }
+      validationError = null;
+      responseError = null;
+      derivedAddress = null;
+      notifyListeners();
+
+      final sentinel = 'viewonly:$viewKey:$spendKey';
+      seedController.removeListener(_onSeedChanged);
+      seedController.text = sentinel;
+      seedController.addListener(_onSeedChanged);
+
+      DeriveKeysRequest(
+        seed: sentinel,
+        network: network,
+        passphrase: '',
+        bip39AccountIndex: 0,
+      ).sendSignalToRust();
+
+      deriveSubaddresses();
+      return;
+    }
+
     if (seedController.text.trim().isEmpty) {
       validationError = null;
       responseError = null;
@@ -371,6 +416,7 @@ class WalletState extends ChangeNotifier {
 
   void _onSeedChanged() {
     if (isRestoringWallet) return;
+    if (seedType == 'view-only') return; // view-only keys drive derivation
     _debounceTimer?.cancel();
     derivedLegacySeed = null;
 
@@ -389,6 +435,22 @@ class WalletState extends ChangeNotifier {
   void _onPassphraseChanged() {
     passphrase = passphraseController.text;
     _debounceTimer?.cancel();
+    _debounceTimer = Timer(const Duration(milliseconds: 800), () {
+      deriveAddress();
+    });
+  }
+
+  void _onViewOnlyKeysChanged() {
+    if (seedType != 'view-only') return;
+    _debounceTimer?.cancel();
+
+    if (checkIsContinuousScanning?.call() == true) {
+      isChangingSeed = true;
+      StopScanRequest().sendSignalToRust();
+    } else {
+      clearWalletState();
+    }
+
     _debounceTimer = Timer(const Duration(milliseconds: 800), () {
       deriveAddress();
     });
@@ -416,6 +478,9 @@ class WalletState extends ChangeNotifier {
   void resetWalletState() {
     Log.info(_tag, 'Resetting wallet state');
     seedController.text = '';
+    viewKeyController.clear();
+    spendKeyController.clear();
+    seedType = '25 word (classic)';
     derivedAddress = null;
     secretSpendKey = null;
     secretViewKey = null;
@@ -430,6 +495,23 @@ class WalletState extends ChangeNotifier {
     pendingSpentKeyImages.clear();
     onWalletStateCleared?.call();
     notifyListeners();
+  }
+
+  /// Detect a `viewonly:<view_hex>:<spend_hex>` sentinel in the seed and
+  /// restore the view-only UI state (seedType, key controllers).
+  void restoreViewOnlyStateFromSeed(String seed) {
+    if (seed.startsWith('viewonly:')) {
+      final parts = seed.substring('viewonly:'.length).split(':');
+      if (parts.length == 2 && parts[0].length == 64 && parts[1].length == 64) {
+        seedType = 'view-only';
+        viewKeyController.removeListener(_onViewOnlyKeysChanged);
+        spendKeyController.removeListener(_onViewOnlyKeysChanged);
+        viewKeyController.text = parts[0];
+        spendKeyController.text = parts[1];
+        viewKeyController.addListener(_onViewOnlyKeysChanged);
+        spendKeyController.addListener(_onViewOnlyKeysChanged);
+      }
+    }
   }
 
   void ensureAccountsExistForOutputs(List<OwnedOutput> outputs) {
@@ -536,6 +618,7 @@ class WalletState extends ChangeNotifier {
     if (wallet == null) return;
 
     isRestoringWallet = true;
+    restoreViewOnlyStateFromSeed(wallet.seed);
     seedController.text = wallet.seed;
     network = wallet.network;
     derivedAddress = wallet.address;
@@ -555,6 +638,7 @@ class WalletState extends ChangeNotifier {
       case SwitchResult.switchedToOpen:
         final wallet = lifecycle.activeWallet!;
         isRestoringWallet = true;
+        restoreViewOnlyStateFromSeed(wallet.seed);
         seedController.text = wallet.seed;
         network = wallet.network;
         derivedAddress = wallet.address;
@@ -597,6 +681,7 @@ class WalletState extends ChangeNotifier {
 
     if (closeResult.switchedTo != null) {
       isRestoringWallet = true;
+      restoreViewOnlyStateFromSeed(closeResult.switchedTo!.seed);
       seedController.text = closeResult.switchedTo!.seed;
       network = closeResult.switchedTo!.network;
       derivedAddress = closeResult.switchedTo!.address;
@@ -622,6 +707,8 @@ class WalletState extends ChangeNotifier {
   void startNewWallet() {
     Log.info(_tag, 'Starting new wallet');
     lifecycle.startNewWallet();
+    viewKeyController.clear();
+    spendKeyController.clear();
     resetWalletState();
     notifyListeners();
 
@@ -679,9 +766,13 @@ class WalletState extends ChangeNotifier {
     _debounceTimer?.cancel();
     seedController.removeListener(_onSeedChanged);
     passphraseController.removeListener(_onPassphraseChanged);
+    viewKeyController.removeListener(_onViewOnlyKeysChanged);
+    spendKeyController.removeListener(_onViewOnlyKeysChanged);
     blockHeightController.removeListener(_onBlockHeightChanged);
     seedController.dispose();
     passphraseController.dispose();
+    viewKeyController.dispose();
+    spendKeyController.dispose();
     nodeUrlController.dispose();
     blockHeightController.dispose();
     blockHeightFocusNode.dispose();

@@ -266,6 +266,7 @@ class FileManagementState extends ChangeNotifier {
 
     _walletState.isRestoringWallet = true;
 
+    _walletState.restoreViewOnlyStateFromSeed(seed);
     _walletState.seedController.text = seed;
     _walletState.network = network;
     _walletState.derivedAddress = address;
