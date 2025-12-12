@@ -333,9 +333,47 @@ class ScanState extends ChangeNotifier {
   }
 
   // Methods
+  /// Resolve the effective seed for scanning.  Falls back to the active
+  /// wallet's seed, then to the view-only key controllers (constructing the
+  /// sentinel on the fly when both keys are present but the debounce hasn't
+  /// fired yet).  Returns null and sets [scanError] when view-only keys are
+  /// incomplete.
+  String? _resolveEffectiveSeed() {
+    final seed = _walletState.seedController.text;
+    if (seed.trim().isNotEmpty) return seed;
+
+    final aw = _walletState.activeWallet;
+    if (aw != null && !aw.isClosed) return aw.seed;
+
+    if (_walletState.seedType == 'view-only') {
+      final viewKey = _walletState.viewKeyController.text.trim();
+      final spendKey = _walletState.spendKeyController.text.trim();
+      if (viewKey.isEmpty) {
+        scanError = 'Please enter the Private View Key';
+        notifyListeners();
+        return null;
+      }
+      if (spendKey.isEmpty) {
+        scanError = 'Please also enter the Public Spend Key';
+        notifyListeners();
+        return null;
+      }
+      if (viewKey.length != 64 || spendKey.length != 64) {
+        scanError = 'Keys must be 64 hex characters';
+        notifyListeners();
+        return null;
+      }
+      return 'viewonly:$viewKey:$spendKey';
+    }
+
+    return seed;
+  }
+
   void scanBlock() {
+    final seed = _resolveEffectiveSeed();
+    if (seed == null) return;
     final validation = WalletScanService.validateScanBlock(
-      seed: _walletState.seedController.text,
+      seed: seed,
       blockHeight: _walletState.blockHeightController.text,
       nodeUrl: _walletState.nodeUrlController.text,
     );
@@ -360,10 +398,23 @@ class ScanState extends ChangeNotifier {
   }
 
   void startContinuousScan() {
-    final walletsToScan = _walletState.activeWallets;
+    var walletsToScan = _walletState.activeWallets;
+
+    // Include temp_wallet (e.g. from view-only key entry) when no saved
+    // wallets are active, so it goes through the wallet-based scan path.
+    if (walletsToScan.isEmpty) {
+      final aw = _walletState.activeWallet;
+      if (aw != null && !aw.isClosed) {
+        walletsToScan = [aw];
+      }
+    }
+
+    // Resolve seed from view-only controllers when needed.
+    final seed = _resolveEffectiveSeed();
+    if (seed == null) return;
 
     final validation = WalletScanService.validateContinuousScan(
-      seed: _walletState.seedController.text,
+      seed: seed,
       blockHeight: _walletState.blockHeightController.text,
       nodeUrl: _walletState.nodeUrlController.text,
       activeWallets: walletsToScan,
@@ -394,7 +445,7 @@ class ScanState extends ChangeNotifier {
       }
       notifyListeners();
 
-      final result = walletsToScan.isEmpty ? KeyParser.parse(_walletState.seedController.text) : null;
+      final result = walletsToScan.isEmpty ? KeyParser.parse(seed) : null;
       int highestAccount = 0;
       final accountSources = walletsToScan.isEmpty
           ? [_walletState.accounts]
@@ -432,8 +483,10 @@ class ScanState extends ChangeNotifier {
   }
 
   void scanMempool() {
+    final seed = _resolveEffectiveSeed();
+    if (seed == null) return;
     final validation = WalletScanService.validateMempoolScan(
-      seed: _walletState.seedController.text,
+      seed: seed,
       nodeUrl: _walletState.nodeUrlController.text,
     );
 
@@ -491,7 +544,13 @@ class ScanState extends ChangeNotifier {
     if (isContinuousPaused || isContinuousScanning) return;
 
     final nodeUrl = NetworkUtils.normalizeNodeUrl(_walletState.nodeUrlController.text);
-    final walletsToScan = _walletState.activeWallets;
+    var walletsToScan = _walletState.activeWallets;
+    if (walletsToScan.isEmpty) {
+      final aw = _walletState.activeWallet;
+      if (aw != null && !aw.isClosed) {
+        walletsToScan = [aw];
+      }
+    }
 
     if (walletsToScan.isEmpty) return;
 

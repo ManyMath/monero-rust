@@ -5,6 +5,8 @@ import 'error_message_container.dart';
 class SeedPhrasePanel extends StatelessWidget {
   final TextEditingController controller;
   final TextEditingController passphraseController;
+  final TextEditingController? viewKeyController;
+  final TextEditingController? spendKeyController;
   final String seedType;
   final String network;
   final String? validationError;
@@ -18,6 +20,8 @@ class SeedPhrasePanel extends StatelessWidget {
     super.key,
     required this.controller,
     required this.passphraseController,
+    this.viewKeyController,
+    this.spendKeyController,
     required this.seedType,
     required this.network,
     required this.validationError,
@@ -32,6 +36,8 @@ class SeedPhrasePanel extends StatelessWidget {
     await ClipboardUtils.copyToClipboard(context, text, label);
   }
 
+  bool get _isViewOnly => seedType == 'view-only';
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -41,12 +47,13 @@ class SeedPhrasePanel extends StatelessWidget {
         children: [
           Row(
             children: [
-              ElevatedButton.icon(
-                onPressed: onGenerateSeed,
-                icon: const Icon(Icons.auto_awesome),
-                label: const Text('Generate'),
-              ),
-              const SizedBox(width: 8),
+              if (!_isViewOnly)
+                ElevatedButton.icon(
+                  onPressed: onGenerateSeed,
+                  icon: const Icon(Icons.auto_awesome),
+                  label: const Text('Generate'),
+                ),
+              if (!_isViewOnly) const SizedBox(width: 8),
               Expanded(
                 child: DropdownButtonFormField<String>(
                   value: seedType,
@@ -59,6 +66,7 @@ class SeedPhrasePanel extends StatelessWidget {
                     DropdownMenuItem(value: '25 word (classic)', child: Text('25 word (classic)')),
                     DropdownMenuItem(value: '16-word (polyseed)', child: Text('16 word (polyseed)')),
                     DropdownMenuItem(value: '12-word (bip39)', child: Text('12 word (BIP39)')),
+                    DropdownMenuItem(value: 'view-only', child: Text('View only')),
                   ],
                   onChanged: (value) {
                     if (value != null) {
@@ -91,42 +99,65 @@ class SeedPhrasePanel extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: controller,
-                  decoration: InputDecoration(
-                    labelText: 'Seed Phrase',
-                    hintText: 'Enter or generate a 12, 16, or 25-word seed phrase',
-                    border: const OutlineInputBorder(),
-                    errorText: validationError,
-                  ),
-                  maxLines: 3,
-                ),
+          if (_isViewOnly) ...[
+            TextField(
+              controller: viewKeyController,
+              decoration: InputDecoration(
+                labelText: 'Private View Key (hex)',
+                hintText: '64-character hex string',
+                border: const OutlineInputBorder(),
+                errorText: validationError,
               ),
-              IconButton(
-                icon: const Icon(Icons.copy_outlined),
-                onPressed: () => _copyToClipboard(context, controller.text, 'Seed'),
-                tooltip: 'Copy seed',
-              ),
-            ],
-          ),
-          if (seedType.contains('polyseed') || seedType.contains('bip39')) ...[
+              maxLines: 1,
+            ),
             const SizedBox(height: 8),
             TextField(
-              controller: passphraseController,
-              decoration: InputDecoration(
-                labelText: 'Passphrase (optional)',
-                hintText: seedType.contains('polyseed')
-                    ? 'Polyseed passphrase for key derivation'
-                    : 'BIP39 passphrase',
-                border: const OutlineInputBorder(),
+              controller: spendKeyController,
+              decoration: const InputDecoration(
+                labelText: 'Public Spend Key (hex)',
+                hintText: '64-character hex string',
+                border: OutlineInputBorder(),
               ),
-              obscureText: true,
+              maxLines: 1,
             ),
+          ] else ...[
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: controller,
+                    decoration: InputDecoration(
+                      labelText: 'Seed Phrase',
+                      hintText: 'Enter or generate a 12, 16, or 25-word seed phrase',
+                      border: const OutlineInputBorder(),
+                      errorText: validationError,
+                    ),
+                    maxLines: 3,
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.copy_outlined),
+                  onPressed: () => _copyToClipboard(context, controller.text, 'Seed'),
+                  tooltip: 'Copy seed',
+                ),
+              ],
+            ),
+            if (seedType.contains('polyseed') || seedType.contains('bip39')) ...[
+              const SizedBox(height: 8),
+              TextField(
+                controller: passphraseController,
+                decoration: InputDecoration(
+                  labelText: 'Passphrase (optional)',
+                  hintText: seedType.contains('polyseed')
+                      ? 'Polyseed passphrase for key derivation'
+                      : 'BIP39 passphrase',
+                  border: const OutlineInputBorder(),
+                ),
+                obscureText: true,
+              ),
+            ],
           ],
-          if (derivedLegacySeed != null) ...[
+          if (derivedLegacySeed != null && !_isViewOnly) ...[
             const SizedBox(height: 8),
             Container(
               padding: const EdgeInsets.all(12),

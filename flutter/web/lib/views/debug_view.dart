@@ -262,6 +262,8 @@ class _DebugViewState extends State<DebugView> {
                         body: SeedPhrasePanel(
                           controller: ws.seedController,
                           passphraseController: ws.passphraseController,
+                          viewKeyController: ws.viewKeyController,
+                          spendKeyController: ws.spendKeyController,
                           seedType: ws.seedType,
                           network: ws.network,
                           validationError: ws.validationError,
@@ -328,7 +330,7 @@ class _DebugViewState extends State<DebugView> {
                           continuousScanTargetHeight: ss.continuousScanTargetHeight,
                           scanError: ss.scanError,
                           scanResult: ss.scanResult,
-                          hasSeedPhrase: ws.seedController.text.trim().isNotEmpty,
+                          hasSeedPhrase: ws.seedController.text.trim().isNotEmpty || ws.activeWallet != null,
                           pollingService: ss.pollingService,
                           restoreHeight: ws.polyseedRestoreHeight,
                           onScanBlock: ss.scanBlock,
