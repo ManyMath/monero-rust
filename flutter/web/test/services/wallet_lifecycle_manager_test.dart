@@ -1,5 +1,4 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tuple/tuple.dart';
 import 'package:monero_extension/src/bindings/bindings.dart';
 import 'package:monero_extension/models/wallet_transaction.dart';
 import 'package:monero_extension/services/wallet_lifecycle_manager.dart';
@@ -713,7 +712,7 @@ void main() {
       final outputs = [
         TestHelpers.createMockOutput(
           txHash: 'tx1', outputIndex: 0, amountXmr: '10.0', blockHeight: 100,
-          subaddressIndex: const Tuple2(0, 0), keyImage: 'ki1',
+          subaddressIndex: (0, 0), keyImage: 'ki1',
         ),
         TestHelpers.createMockOutput(
           txHash: 'tx2', outputIndex: 0, amountXmr: '5.0', blockHeight: 200,

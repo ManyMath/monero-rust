@@ -1,5 +1,4 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tuple/tuple.dart';
 import 'package:monero_extension/models/wallet_transaction.dart';
 import 'package:monero_extension/services/wallet_persistence_service.dart';
 import '../test_helpers.dart';
@@ -22,7 +21,7 @@ void main() {
       final outputs = [
         TestHelpers.createMockOutput(
           txHash: 'tx1', outputIndex: 0, amountXmr: '10.0',
-          blockHeight: 100, subaddressIndex: const Tuple2(0, 0),
+          blockHeight: 100, subaddressIndex: (0, 0),
         ),
         TestHelpers.createMockOutput(
           txHash: 'tx2', outputIndex: 0, amountXmr: '5.0',
@@ -119,7 +118,7 @@ void main() {
         TestHelpers.createMockOutput(
           txHash: 'tx1', outputIndex: 0, amountXmr: '7.5',
           blockHeight: 500, keyImage: 'ki1',
-          subaddressIndex: const Tuple2(0, 2), paymentId: 'pid1',
+          subaddressIndex: (0, 2), paymentId: 'pid1',
         ),
         TestHelpers.createMockOutput(
           txHash: 'tx2', outputIndex: 0, amountXmr: '2.5',
@@ -197,8 +196,8 @@ void main() {
       expect(loadedOutputs[0].txHash, 'tx1');
       expect(loadedOutputs[0].amountXmr, '7.5');
       expect(loadedOutputs[0].keyImage, 'ki1');
-      expect(loadedOutputs[0].subaddressIndex!.item1, 0);
-      expect(loadedOutputs[0].subaddressIndex!.item2, 2);
+      expect(loadedOutputs[0].subaddressIndex!.$1, 0);
+      expect(loadedOutputs[0].subaddressIndex!.$2, 2);
       expect(loadedOutputs[0].paymentId, 'pid1');
       expect(loadedOutputs[0].spent, false);
       expect(loadedOutputs[1].txHash, 'tx2');

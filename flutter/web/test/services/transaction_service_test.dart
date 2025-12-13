@@ -415,7 +415,7 @@ void main() {
       final txResult = TransactionCreatedResponse(
         success: true,
         txId: 'txid',
-        fee: Uint64(BigInt.from(20000000)),
+        fee: 20000000,
         txBlob: null,
         spentOutputHashes: [],
         txKeyAdditional: [],
@@ -433,7 +433,7 @@ void main() {
       final txResult = TransactionCreatedResponse(
         success: true,
         txId: 'txid',
-        fee: Uint64(BigInt.from(20000000)),
+        fee: 20000000,
         txBlob: 'blob_data',
         spentOutputHashes: ['hash1'],
         txKeyAdditional: [],
@@ -451,7 +451,7 @@ void main() {
       final txResult = TransactionCreatedResponse(
         success: true,
         txId: 'txid',
-        fee: Uint64(BigInt.from(20000000)),
+        fee: 20000000,
         txBlob: 'blob_data',
         spentOutputHashes: ['hash1', 'hash2'],
         txKeyAdditional: [],
@@ -472,7 +472,7 @@ void main() {
       final txResult = TransactionCreatedResponse(
         success: true,
         txId: 'txid',
-        fee: Uint64(BigInt.from(20000000)),
+        fee: 20000000,
         txBlob: 'blob_data',
         spentOutputHashes: [],
         txKeyAdditional: [],

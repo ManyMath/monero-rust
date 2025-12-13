@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tuple/tuple.dart';
 import 'package:monero_extension/models/wallet_transaction.dart';
 import 'package:monero_extension/src/bindings/bindings.dart';
 import 'package:monero_extension/services/wallet_serializer.dart';
@@ -15,7 +14,7 @@ void main() {
         amountXmr: '1.234567890123',
         blockHeight: 12345,
         keyImage: 'ki_abc123',
-        subaddressIndex: const Tuple2(0, 3),
+        subaddressIndex: (0, 3),
         paymentId: 'pay_123',
       );
 
@@ -41,8 +40,8 @@ void main() {
       expect(o.keyOffset, output.keyOffset);
       expect(o.commitmentMask, output.commitmentMask);
       expect(o.subaddressIndex, isNotNull);
-      expect(o.subaddressIndex!.item1, 0);
-      expect(o.subaddressIndex!.item2, 3);
+      expect(o.subaddressIndex!.$1, 0);
+      expect(o.subaddressIndex!.$2, 3);
       expect(o.paymentId, 'pay_123');
       expect(o.receivedOutputBytes, output.receivedOutputBytes);
       expect(o.blockHeight.toInt(), 12345);
@@ -94,12 +93,12 @@ void main() {
     test('handles large amounts (piconero precision)', () {
       final output = OwnedOutput(
         txHash: 'tx1', outputIndex: 0,
-        amount: Uint64(BigInt.parse('999999999999999')), // ~999.999 XMR
+        amount: 999999999999999, // ~999.999 XMR
         amountXmr: '999.999999999999',
         key: 'k', keyOffset: 'ko', commitmentMask: 'cm',
         subaddressIndex: null, paymentId: null,
         receivedOutputBytes: 'bytes',
-        blockHeight: Uint64(BigInt.from(100000)),
+        blockHeight: 100000,
         spent: false, keyImage: 'ki',
         isCoinbase: false, frozen: false,
       );
@@ -144,7 +143,7 @@ void main() {
     test('preserves transaction with received outputs', () {
       final output = TestHelpers.createMockOutput(
         txHash: 'tx1', outputIndex: 0, amountXmr: '1.5', blockHeight: 500,
-        subaddressIndex: const Tuple2(0, 1),
+        subaddressIndex: (0, 1),
       );
       final tx = WalletTransaction(
         txHash: 'tx1', blockHeight: 500, blockTimestamp: 1700000000,
@@ -168,8 +167,8 @@ void main() {
       expect(loadedTx.receivedOutputs.length, 1);
       expect(loadedTx.receivedOutputs[0].txHash, 'tx1');
       expect(loadedTx.receivedOutputs[0].amountXmr, '1.5');
-      expect(loadedTx.receivedOutputs[0].subaddressIndex!.item1, 0);
-      expect(loadedTx.receivedOutputs[0].subaddressIndex!.item2, 1);
+      expect(loadedTx.receivedOutputs[0].subaddressIndex!.$1, 0);
+      expect(loadedTx.receivedOutputs[0].subaddressIndex!.$2, 1);
       expect(loadedTx.spentKeyImages, isEmpty);
     });
 
@@ -243,11 +242,11 @@ void main() {
       final outputs = [
         TestHelpers.createMockOutput(
           txHash: 'tx1', outputIndex: 0, amountXmr: '10.0',
-          blockHeight: 100, subaddressIndex: const Tuple2(0, 0),
+          blockHeight: 100, subaddressIndex: (0, 0),
         ),
         TestHelpers.createMockOutput(
           txHash: 'tx1', outputIndex: 1, amountXmr: '0.5',
-          blockHeight: 100, subaddressIndex: const Tuple2(0, 1),
+          blockHeight: 100, subaddressIndex: (0, 1),
           paymentId: 'pay123',
         ),
         TestHelpers.createMockOutput(
@@ -332,7 +331,7 @@ void main() {
         blockHeight: 1000 + i,
         spent: i % 5 == 0,
         keyImage: 'ki_$i',
-        subaddressIndex: i % 3 == 0 ? Tuple2(0, i) : null,
+        subaddressIndex: i % 3 == 0 ? (0, i) : null,
       ));
 
       final saved = WalletSerializer.serialize(
@@ -358,12 +357,12 @@ void main() {
     test('output amounts survive as exact piconero values', () {
       final output = OwnedOutput(
         txHash: 'tx1', outputIndex: 0,
-        amount: Uint64(BigInt.parse('123456789012')),
+        amount: 123456789012,
         amountXmr: '0.123456789012',
         key: 'k', keyOffset: 'ko', commitmentMask: 'cm',
         subaddressIndex: null, paymentId: null,
         receivedOutputBytes: 'bytes',
-        blockHeight: Uint64(BigInt.from(500)),
+        blockHeight: 500,
         spent: false, keyImage: 'ki',
         isCoinbase: false, frozen: false,
       );
@@ -386,7 +385,7 @@ void main() {
     test('output serialized in transaction matches top-level output', () {
       final output = TestHelpers.createMockOutput(
         txHash: 'tx1', outputIndex: 0, amountXmr: '2.5', blockHeight: 500,
-        subaddressIndex: const Tuple2(1, 7), paymentId: 'pid',
+        subaddressIndex: (1, 7), paymentId: 'pid',
       );
       final tx = WalletTransaction(
         txHash: 'tx1', blockHeight: 500, blockTimestamp: 1700000000,
@@ -413,8 +412,8 @@ void main() {
       expect(topOutput.key, txOutput.key);
       expect(topOutput.keyOffset, txOutput.keyOffset);
       expect(topOutput.commitmentMask, txOutput.commitmentMask);
-      expect(topOutput.subaddressIndex?.item1, txOutput.subaddressIndex?.item1);
-      expect(topOutput.subaddressIndex?.item2, txOutput.subaddressIndex?.item2);
+      expect(topOutput.subaddressIndex?.$1, txOutput.subaddressIndex?.$1);
+      expect(topOutput.subaddressIndex?.$2, txOutput.subaddressIndex?.$2);
       expect(topOutput.paymentId, txOutput.paymentId);
       expect(topOutput.receivedOutputBytes, txOutput.receivedOutputBytes);
       expect(topOutput.blockHeight.toInt(), txOutput.blockHeight.toInt());

@@ -1,5 +1,4 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tuple/tuple.dart';
 import 'package:monero_extension/services/wallet_serializer.dart';
 import 'package:monero_extension/models/wallet_transaction.dart';
 import '../test_helpers.dart';
@@ -14,7 +13,7 @@ void main() {
           outputIndex: 0,
           amountXmr: '1.5',
           blockHeight: 100,
-          subaddressIndex: const Tuple2(0, 0),
+          subaddressIndex: (0, 0),
         ),
       ];
 
@@ -24,7 +23,7 @@ void main() {
           outputIndex: 0,
           amountXmr: '2.5',
           blockHeight: 200,
-          subaddressIndex: const Tuple2(1, 0),
+          subaddressIndex: (1, 0),
         ),
       ];
 
@@ -129,14 +128,14 @@ void main() {
         outputIndex: 0,
         amountXmr: '1.0',
         blockHeight: 100,
-        subaddressIndex: const Tuple2(0, 0),
+        subaddressIndex: (0, 0),
       );
       final outputAcct1 = TestHelpers.createMockOutput(
         txHash: 'tx_a1',
         outputIndex: 0,
         amountXmr: '2.0',
         blockHeight: 200,
-        subaddressIndex: const Tuple2(1, 0),
+        subaddressIndex: (1, 0),
       );
 
       final allOutputs = [outputAcct0, outputAcct1];
@@ -157,10 +156,10 @@ void main() {
 
       final deserialized = WalletSerializer.deserialize(serialized);
 
-      // Group the flat outputs list by account (item1 of subaddressIndex)
+      // Group the flat outputs list by account ($1 of subaddressIndex)
       final groupedFromFlat = <int, List<dynamic>>{};
       for (final o in deserialized.outputs) {
-        final account = o.subaddressIndex?.item1 ?? 0;
+        final account = o.subaddressIndex?.$1 ?? 0;
         groupedFromFlat.putIfAbsent(account, () => []);
         groupedFromFlat[account]!.add(o);
       }
@@ -216,42 +215,42 @@ void main() {
         outputIndex: 0,
         amountXmr: '1.0',
         blockHeight: 100,
-        subaddressIndex: const Tuple2(0, 0),
+        subaddressIndex: (0, 0),
       );
       final output0b = TestHelpers.createMockOutput(
         txHash: 'tx_0b',
         outputIndex: 0,
         amountXmr: '1.5',
         blockHeight: 101,
-        subaddressIndex: const Tuple2(0, 1),
+        subaddressIndex: (0, 1),
       );
       final output1 = TestHelpers.createMockOutput(
         txHash: 'tx_1a',
         outputIndex: 0,
         amountXmr: '2.0',
         blockHeight: 200,
-        subaddressIndex: const Tuple2(1, 0),
+        subaddressIndex: (1, 0),
       );
       final output2a = TestHelpers.createMockOutput(
         txHash: 'tx_2a',
         outputIndex: 0,
         amountXmr: '3.0',
         blockHeight: 300,
-        subaddressIndex: const Tuple2(2, 0),
+        subaddressIndex: (2, 0),
       );
       final output2b = TestHelpers.createMockOutput(
         txHash: 'tx_2b',
         outputIndex: 1,
         amountXmr: '3.5',
         blockHeight: 301,
-        subaddressIndex: const Tuple2(2, 1),
+        subaddressIndex: (2, 1),
       );
       final output2c = TestHelpers.createMockOutput(
         txHash: 'tx_2c',
         outputIndex: 0,
         amountXmr: '4.0',
         blockHeight: 302,
-        subaddressIndex: const Tuple2(2, 2),
+        subaddressIndex: (2, 2),
       );
 
       final allOutputs = [output0a, output0b, output1, output2a, output2b, output2c];
@@ -302,7 +301,7 @@ void main() {
         outputIndex: 2,
         amountXmr: '5.123',
         blockHeight: 500,
-        subaddressIndex: const Tuple2(0, 3),
+        subaddressIndex: (0, 3),
         paymentId: 'pay123',
         spent: true,
         keyImage: 'ki_recv_output',
@@ -334,7 +333,7 @@ void main() {
       expect(ro.key, output.key);
       expect(ro.keyOffset, output.keyOffset);
       expect(ro.commitmentMask, output.commitmentMask);
-      expect(ro.subaddressIndex, const Tuple2(0, 3));
+      expect(ro.subaddressIndex, (0, 3));
       expect(ro.paymentId, 'pay123');
       expect(ro.receivedOutputBytes, output.receivedOutputBytes);
       expect(ro.blockHeight.toInt(), 500);
@@ -351,14 +350,14 @@ void main() {
         outputIndex: 0,
         amountXmr: '1.0',
         blockHeight: 600,
-        subaddressIndex: const Tuple2(0, 0),
+        subaddressIndex: (0, 0),
       );
       final output2 = TestHelpers.createMockOutput(
         txHash: 'tx_multi',
         outputIndex: 1,
         amountXmr: '2.0',
         blockHeight: 600,
-        subaddressIndex: const Tuple2(0, 1),
+        subaddressIndex: (0, 1),
       );
 
       final tx = WalletTransaction(
@@ -391,7 +390,7 @@ void main() {
         outputIndex: 0,
         amountXmr: '10.0',
         blockHeight: 700,
-        subaddressIndex: const Tuple2(0, 0),
+        subaddressIndex: (0, 0),
       );
 
       final tx = WalletTransaction(
@@ -512,7 +511,7 @@ void main() {
         outputIndex: 0,
         amountXmr: '1.0',
         blockHeight: 100,
-        subaddressIndex: const Tuple2(0, 0),
+        subaddressIndex: (0, 0),
       );
 
       final tx = WalletTransaction(
@@ -548,7 +547,7 @@ void main() {
         outputIndex: 0,
         amountXmr: '5.0',
         blockHeight: 100,
-        subaddressIndex: const Tuple2(0, 0),
+        subaddressIndex: (0, 0),
       );
 
       final tx = WalletTransaction(
@@ -584,7 +583,7 @@ void main() {
         outputIndex: 0,
         amountXmr: '1.0',
         blockHeight: 100,
-        subaddressIndex: const Tuple2(0, 0),
+        subaddressIndex: (0, 0),
       );
 
       final tx = WalletTransaction(

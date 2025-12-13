@@ -1,5 +1,4 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tuple/tuple.dart';
 import 'package:monero_extension/models/wallet_transaction.dart';
 import 'package:monero_extension/src/bindings/bindings.dart';
 import 'package:monero_extension/utils/transaction_utils.dart';
@@ -128,27 +127,27 @@ void main() {
       });
 
       test('Balance calculation preserves precision for 12-decimal amounts', () {
-        // 0.123456789012 XMR — all 12 piconero digits
+        // 0.123456789012 XMR, all 12 piconero digits
         final output1 = OwnedOutput(
           txHash: 'tx1', outputIndex: 0,
-          amount: Uint64(BigInt.from(123456789012)),
+          amount: 123456789012,
           amountXmr: '0.123456789012',
           key: 'k', keyOffset: 'ko', commitmentMask: 'cm',
           subaddressIndex: null, paymentId: null,
           receivedOutputBytes: 'b',
-          blockHeight: Uint64(BigInt.from(1000)),
+          blockHeight: 1000,
           spent: false, keyImage: 'ki1',
           isCoinbase: false, frozen: false,
         );
-        // 0.000000000001 XMR — 1 piconero
+        // 0.000000000001 XMR, 1 piconero
         final output2 = OwnedOutput(
           txHash: 'tx1', outputIndex: 1,
-          amount: Uint64(BigInt.from(1)),
+          amount: 1,
           amountXmr: '0.000000000001',
           key: 'k2', keyOffset: 'ko2', commitmentMask: 'cm2',
           subaddressIndex: null, paymentId: null,
           receivedOutputBytes: 'b2',
-          blockHeight: Uint64(BigInt.from(1000)),
+          blockHeight: 1000,
           spent: false, keyImage: 'ki2',
           isCoinbase: false, frozen: false,
         );
@@ -171,7 +170,7 @@ void main() {
         final output = OwnedOutput(
           txHash: 'tx123',
           outputIndex: 0,
-          amount: Uint64(BigInt.from(1000000000000)),
+          amount: 1000000000000,
           amountXmr: 'invalid_amount',
           key: 'mock_key',
           keyOffset: 'mock_offset',
@@ -180,7 +179,7 @@ void main() {
           subaddressIndex: null,
           paymentId: null,
           receivedOutputBytes: 'mock_bytes',
-          blockHeight: Uint64(BigInt.from(1000)),
+          blockHeight: 1000,
           spent: false,
           keyImage: 'keyimage_123',
           frozen: false,
@@ -206,7 +205,7 @@ void main() {
           outputIndex: 0,
           amountXmr: '1.5',
           blockHeight: 1000,
-          subaddressIndex: const Tuple2(0, 1),
+          subaddressIndex: (0, 1),
           paymentId: 'payment123',
         );
 
@@ -268,7 +267,7 @@ void main() {
           outputIndex: 0,
           amountXmr: '1.5',
           blockHeight: 1000,
-          subaddressIndex: const Tuple2(0, 1),
+          subaddressIndex: (0, 1),
           paymentId: 'payment123',
         );
 

@@ -1,4 +1,3 @@
-import 'package:tuple/tuple.dart';
 import 'package:monero_extension/src/bindings/bindings.dart';
 
 class TestHelpers {
@@ -9,7 +8,7 @@ class TestHelpers {
     required int blockHeight,
     bool spent = false,
     String? keyImage,
-    Tuple2<int, int>? subaddressIndex,
+    (int, int)? subaddressIndex,
     String? paymentId,
     bool isCoinbase = false,
   }) {
@@ -18,7 +17,7 @@ class TestHelpers {
     return OwnedOutput(
       txHash: txHash,
       outputIndex: outputIndex,
-      amount: Uint64(BigInt.from(amount)),
+      amount: amount,
       amountXmr: amountXmr,
       key: 'mock_key_$txHash$outputIndex',
       keyOffset: 'mock_offset_$txHash$outputIndex',
@@ -26,7 +25,7 @@ class TestHelpers {
       subaddressIndex: subaddressIndex,
       paymentId: paymentId,
       receivedOutputBytes: 'mock_bytes_$txHash$outputIndex',
-      blockHeight: Uint64(BigInt.from(blockHeight)),
+      blockHeight: blockHeight,
       spent: spent,
       keyImage: keyImage ?? 'keyimage_$txHash$outputIndex',
       isCoinbase: isCoinbase,
@@ -49,12 +48,12 @@ class TestHelpers {
     return BlockScanResponse(
       success: success,
       error: error,
-      blockHeight: Uint64(BigInt.from(blockHeight)),
+      blockHeight: blockHeight,
       blockHash: blockHash,
-      blockTimestamp: Uint64(BigInt.from(blockTimestamp)),
+      blockTimestamp: blockTimestamp,
       txCount: txCount,
       outputs: outputs ?? [],
-      daemonHeight: Uint64(BigInt.from(daemonHeight > 0 ? daemonHeight : blockHeight)),
+      daemonHeight: daemonHeight > 0 ? daemonHeight : blockHeight,
       spentKeyImages: spentKeyImages ?? [],
       spentKeyImageTxHashes: spentKeyImageTxHashes ?? [],
     );

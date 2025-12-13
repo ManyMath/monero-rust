@@ -1,5 +1,4 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tuple/tuple.dart';
 import 'package:monero_extension/src/bindings/bindings.dart';
 import 'package:monero_extension/models/wallet_transaction.dart';
 import '../test_helpers.dart';
@@ -11,14 +10,14 @@ List<OwnedOutput> filterOutputsByAccount(List<OwnedOutput> allOutputs, int activ
   if (activeAccount == -1) return allOutputs;
   return allOutputs.where((output) {
     if (output.subaddressIndex == null) return activeAccount == 0;
-    return output.subaddressIndex!.item1 == activeAccount;
+    return output.subaddressIndex!.$1 == activeAccount;
   }).toList();
 }
 
 /// Filters transactions by account index, replicating the logic in DebugView._allTransactions.
 /// A transaction belongs to an account if:
-///   - ANY receivedOutput has subaddressIndex.item1 == activeAccount (null -> account 0), OR
-///   - ANY spentKeyImage maps to an output in allOutputs with subaddressIndex.item1 == activeAccount
+///   - ANY receivedOutput has subaddressIndex.$1 == activeAccount (null -> account 0), OR
+///   - ANY spentKeyImage maps to an output in allOutputs with subaddressIndex.$1 == activeAccount
 List<WalletTransaction> filterTransactionsByAccount(
   List<WalletTransaction> allTransactions,
   List<OwnedOutput> allOutputs,
@@ -28,13 +27,13 @@ List<WalletTransaction> filterTransactionsByAccount(
   return allTransactions.where((tx) {
     final hasReceivedOutputs = tx.receivedOutputs.any((output) {
       if (output.subaddressIndex == null) return activeAccount == 0;
-      return output.subaddressIndex!.item1 == activeAccount;
+      return output.subaddressIndex!.$1 == activeAccount;
     });
     final hasSpentOutputs = tx.spentKeyImages.any((keyImage) {
       final spentOutput = allOutputs.where((o) => o.keyImage == keyImage).firstOrNull;
       if (spentOutput == null) return false;
       if (spentOutput.subaddressIndex == null) return activeAccount == 0;
-      return spentOutput.subaddressIndex!.item1 == activeAccount;
+      return spentOutput.subaddressIndex!.$1 == activeAccount;
     });
     return hasReceivedOutputs || hasSpentOutputs;
   }).toList();
@@ -46,15 +45,15 @@ void main() {
       final outputs = [
         TestHelpers.createMockOutput(
           txHash: 'tx1', outputIndex: 0, amountXmr: '1.0', blockHeight: 100,
-          subaddressIndex: const Tuple2(0, 0),
+          subaddressIndex: (0, 0),
         ),
         TestHelpers.createMockOutput(
           txHash: 'tx2', outputIndex: 0, amountXmr: '2.0', blockHeight: 200,
-          subaddressIndex: const Tuple2(1, 0),
+          subaddressIndex: (1, 0),
         ),
         TestHelpers.createMockOutput(
           txHash: 'tx3', outputIndex: 0, amountXmr: '3.0', blockHeight: 300,
-          subaddressIndex: const Tuple2(2, 5),
+          subaddressIndex: (2, 5),
         ),
       ];
 
@@ -72,7 +71,7 @@ void main() {
         ),
         TestHelpers.createMockOutput(
           txHash: 'tx_acct1', outputIndex: 0, amountXmr: '2.0', blockHeight: 200,
-          subaddressIndex: const Tuple2(1, 0),
+          subaddressIndex: (1, 0),
         ),
       ];
 
@@ -86,15 +85,15 @@ void main() {
       final outputs = [
         TestHelpers.createMockOutput(
           txHash: 'tx_0_0', outputIndex: 0, amountXmr: '1.0', blockHeight: 100,
-          subaddressIndex: const Tuple2(0, 0),
+          subaddressIndex: (0, 0),
         ),
         TestHelpers.createMockOutput(
           txHash: 'tx_0_3', outputIndex: 0, amountXmr: '2.0', blockHeight: 200,
-          subaddressIndex: const Tuple2(0, 3),
+          subaddressIndex: (0, 3),
         ),
         TestHelpers.createMockOutput(
           txHash: 'tx_1_0', outputIndex: 0, amountXmr: '3.0', blockHeight: 300,
-          subaddressIndex: const Tuple2(1, 0),
+          subaddressIndex: (1, 0),
         ),
       ];
 
@@ -112,11 +111,11 @@ void main() {
         ),
         TestHelpers.createMockOutput(
           txHash: 'tx_0_0', outputIndex: 0, amountXmr: '2.0', blockHeight: 200,
-          subaddressIndex: const Tuple2(0, 0),
+          subaddressIndex: (0, 0),
         ),
         TestHelpers.createMockOutput(
           txHash: 'tx_1_0', outputIndex: 0, amountXmr: '3.0', blockHeight: 300,
-          subaddressIndex: const Tuple2(1, 0),
+          subaddressIndex: (1, 0),
         ),
       ];
 
@@ -130,19 +129,19 @@ void main() {
       final outputs = [
         TestHelpers.createMockOutput(
           txHash: 'tx_0_0', outputIndex: 0, amountXmr: '1.0', blockHeight: 100,
-          subaddressIndex: const Tuple2(0, 0),
+          subaddressIndex: (0, 0),
         ),
         TestHelpers.createMockOutput(
           txHash: 'tx_1_0', outputIndex: 0, amountXmr: '2.0', blockHeight: 200,
-          subaddressIndex: const Tuple2(1, 0),
+          subaddressIndex: (1, 0),
         ),
         TestHelpers.createMockOutput(
           txHash: 'tx_1_5', outputIndex: 0, amountXmr: '3.0', blockHeight: 300,
-          subaddressIndex: const Tuple2(1, 5),
+          subaddressIndex: (1, 5),
         ),
         TestHelpers.createMockOutput(
           txHash: 'tx_2_0', outputIndex: 0, amountXmr: '4.0', blockHeight: 400,
-          subaddressIndex: const Tuple2(2, 0),
+          subaddressIndex: (2, 0),
         ),
       ];
 
@@ -166,11 +165,11 @@ void main() {
       final outputs = [
         TestHelpers.createMockOutput(
           txHash: 'tx1', outputIndex: 0, amountXmr: '1.0', blockHeight: 100,
-          subaddressIndex: const Tuple2(0, 0),
+          subaddressIndex: (0, 0),
         ),
         TestHelpers.createMockOutput(
           txHash: 'tx2', outputIndex: 0, amountXmr: '2.0', blockHeight: 200,
-          subaddressIndex: const Tuple2(1, 0),
+          subaddressIndex: (1, 0),
         ),
       ];
       final transactions = [
@@ -193,11 +192,11 @@ void main() {
     test('filters by received output account', () {
       final acct0Output = TestHelpers.createMockOutput(
         txHash: 'tx_acct0', outputIndex: 0, amountXmr: '1.0', blockHeight: 100,
-        subaddressIndex: const Tuple2(0, 0),
+        subaddressIndex: (0, 0),
       );
       final acct1Output = TestHelpers.createMockOutput(
         txHash: 'tx_acct1', outputIndex: 0, amountXmr: '2.0', blockHeight: 200,
-        subaddressIndex: const Tuple2(1, 0),
+        subaddressIndex: (1, 0),
       );
       final allOutputs = [acct0Output, acct1Output];
       final transactions = [
@@ -223,7 +222,7 @@ void main() {
     test('filters by spent key image account', () {
       final acct1Output = TestHelpers.createMockOutput(
         txHash: 'old_tx', outputIndex: 0, amountXmr: '5.0', blockHeight: 100,
-        keyImage: 'ki_acct1', subaddressIndex: const Tuple2(1, 0),
+        keyImage: 'ki_acct1', subaddressIndex: (1, 0),
       );
       final allOutputs = [acct1Output];
 
@@ -279,11 +278,11 @@ void main() {
     test('tx appears for account if EITHER received or spent matches', () {
       final acct0Output = TestHelpers.createMockOutput(
         txHash: 'mixed_tx', outputIndex: 0, amountXmr: '1.0', blockHeight: 100,
-        subaddressIndex: const Tuple2(0, 0),
+        subaddressIndex: (0, 0),
       );
       final acct1SpentOutput = TestHelpers.createMockOutput(
         txHash: 'old_tx', outputIndex: 0, amountXmr: '5.0', blockHeight: 50,
-        keyImage: 'ki_acct1', subaddressIndex: const Tuple2(1, 0),
+        keyImage: 'ki_acct1', subaddressIndex: (1, 0),
       );
       final allOutputs = [acct0Output, acct1SpentOutput];
 
@@ -305,7 +304,7 @@ void main() {
     test('tx with no matching account excluded', () {
       final acct0Output = TestHelpers.createMockOutput(
         txHash: 'tx_acct0', outputIndex: 0, amountXmr: '1.0', blockHeight: 100,
-        subaddressIndex: const Tuple2(0, 0),
+        subaddressIndex: (0, 0),
       );
       final allOutputs = [acct0Output];
       final transactions = [

@@ -1,5 +1,4 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tuple/tuple.dart';
 import 'package:monero_extension/src/bindings/bindings.dart';
 import 'package:monero_extension/utils/output_utils.dart';
 import '../test_helpers.dart';
@@ -9,13 +8,13 @@ ChangeOutput createMockChangeOutput({
   int outputIndex = 0,
   String amountXmr = '1.5',
   String? keyImage,
-  Tuple2<int, int>? subaddressIndex,
+  (int, int)? subaddressIndex,
 }) {
   final amount = (double.parse(amountXmr) * 1e12).toInt();
   return ChangeOutput(
     txHash: txHash,
     outputIndex: outputIndex,
-    amount: Uint64(BigInt.from(amount)),
+    amount: amount,
     amountXmr: amountXmr,
     key: 'key_$txHash',
     keyOffset: 'offset_$txHash',
@@ -189,11 +188,11 @@ void main() {
 
     test('preserves nullable subaddressIndex', () {
       final withIndex = createMockChangeOutput(
-        subaddressIndex: const Tuple2(0, 1),
+        subaddressIndex: (0, 1),
       );
       final withoutIndex = createMockChangeOutput(subaddressIndex: null);
 
-      expect(OutputUtils.changeOutputToOwned(withIndex).subaddressIndex, const Tuple2(0, 1));
+      expect(OutputUtils.changeOutputToOwned(withIndex).subaddressIndex, (0, 1));
       expect(OutputUtils.changeOutputToOwned(withoutIndex).subaddressIndex, isNull);
     });
   });

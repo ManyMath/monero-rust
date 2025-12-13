@@ -11,7 +11,7 @@ OwnedOutput _makeOutput({
   return OwnedOutput(
     txHash: 'tx1',
     outputIndex: 0,
-    amount: Uint64(BigInt.from(1000000000000)),
+    amount: 1000000000000,
     amountXmr: '1.000000000000',
     key: 'k',
     keyOffset: 'ko',
@@ -19,7 +19,7 @@ OwnedOutput _makeOutput({
     subaddressIndex: null,
     paymentId: null,
     receivedOutputBytes: '',
-    blockHeight: Uint64(BigInt.from(blockHeight)),
+    blockHeight: blockHeight,
     spent: spent,
     keyImage: 'ki1',
     isCoinbase: isCoinbase,
