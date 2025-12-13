@@ -254,10 +254,10 @@ impl WalletState {
 
     /// Extend outputs in blockchain scan order (transaction order within each
     /// block, then output order within each transaction). Preserve this order
-    /// when persisting outputs.
+    /// in persistence for positional Monero key-image imports.
     ///
     /// Merge by transaction hash and output position, including when no key
-    /// image is known. Preserve known key images and local spent/frozen state.
+    /// image is known. Preserve imported key images and local spent/frozen state.
     /// Confirmations replace pool entries in scan order. Distinct outputs with
     /// an already known key image are not counted twice.
     pub fn add_outputs(&mut self, new_outputs: Vec<WalletOutput>) {
@@ -791,6 +791,37 @@ impl WalletState {
             }
         });
         before - self.tracked_transactions.len()
+    }
+
+    /// Import externally-provided key images into outputs that lack them
+    /// (e.g. view-only wallets).  Key images are matched to outputs by
+    /// position: `key_images[0]` maps to `outputs[offset]`, etc.
+    ///
+    /// This matches monero-wallet-rpc's `export_key_images` format, where
+    /// `offset` and the ordered array of key image hex strings correspond to
+    /// the wallet's internal transfer list (chronological output order).
+    ///
+    /// Returns the number of outputs that were updated.
+    pub fn import_key_images(&mut self, offset: usize, key_images: &[String]) -> usize {
+        let mut count = 0;
+        for (i, ki) in key_images.iter().enumerate() {
+            let idx = offset + i;
+            if idx >= self.outputs.len() {
+                break;
+            }
+            if ki.is_empty() {
+                continue;
+            }
+            // Remove old (possibly empty) entry from the index.
+            let old = &self.outputs[idx].key_image;
+            if !old.is_empty() {
+                self.key_image_index.remove(old);
+            }
+            self.outputs[idx].key_image = ki.clone();
+            self.key_image_index.insert(ki.clone(), idx);
+            count += 1;
+        }
+        count
     }
 
     fn rebuild_key_image_index(&mut self) {

@@ -54,6 +54,12 @@ pub use bip39_conv::{bip39_to_legacy_mnemonic, validate_bip39, generate_bip39};
 // -- Encryption --
 pub use encryption::{decrypt, derive_key_fresh, encrypt, encrypt_with_key, EncryptionError};
 
+// -- Key image import --
+pub use key_image_import::{
+    parse_rpc_export, verify_key_image_signature, verify_and_extract,
+    extract_key_image_hex, SignedKeyImage, KeyImageImportResult,
+};
+
 // -- Scanning --
 pub use scanner::{
     // Types
