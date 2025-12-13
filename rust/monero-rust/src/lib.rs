@@ -23,6 +23,7 @@ pub mod tx_proof;
 pub mod tx_utils;
 pub mod epee_compat;
 pub mod key_image_signing;
+pub mod ur_codec;
 pub use tx_builder::native;
 pub use tx_prepare::{prepare_send_inputs, prepare_sweep_inputs, PreparedInputs};
 pub use tx_utils::{adjust_recipients_for_fee, classify_broadcast_error};

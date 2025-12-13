@@ -20,6 +20,8 @@ base64 = "0.21"
 zeroize = { version = "1.7", features = ["zeroize_derive"] }
 base58-monero = { version = "1", default-features = false, features = ["check"] }
 log = "0.4"
+ur = { version = "0.4", default-features = false }
+qrcode = { version = "0.14", default-features = false }
 
 # Encryption
 chacha20poly1305 = "0.10"
