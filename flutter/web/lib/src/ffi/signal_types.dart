@@ -260,7 +260,7 @@ void _send(String fnName, Map<String, dynamic> data) {
 }
 
 // ---------------------------------------------------------------------------
-// DartSignal types (Dart -> Rust, 37 total)
+// DartSignal types (Dart -> Rust, 41 total)
 // Each has sendSignalToRust().
 // ---------------------------------------------------------------------------
 
@@ -905,8 +905,45 @@ class ExportKeysFileRequest {
   });
 }
 
+class StartUrEncoderRequest {
+  final String dataHex;
+  final String urType;
+  final int maxFragmentLen;
+  const StartUrEncoderRequest({
+    required this.dataHex,
+    required this.urType,
+    required this.maxFragmentLen,
+  });
+
+  void sendSignalToRust() => _send('send_start_ur_encoder_request', {
+    'data_hex': dataHex,
+    'ur_type': urType,
+    'max_fragment_len': maxFragmentLen,
+  });
+}
+
+class StopUrEncoderRequest {
+  const StopUrEncoderRequest();
+
+  void sendSignalToRust() => _send('send_stop_ur_encoder_request', {});
+}
+
+class UrDecodeFrameRequest {
+  final String uri;
+  const UrDecodeFrameRequest({required this.uri});
+
+  void sendSignalToRust() =>
+      _send('send_ur_decode_frame_request', {'uri': uri});
+}
+
+class ResetUrDecoderRequest {
+  const ResetUrDecoderRequest();
+
+  void sendSignalToRust() => _send('send_reset_ur_decoder_request', {});
+}
+
 // ---------------------------------------------------------------------------
-// RustSignal types (Rust -> Dart, 34 total)
+// RustSignal types (Rust -> Dart, 37 total)
 // Each has fromJson() and a static stream getter.
 // ---------------------------------------------------------------------------
 
@@ -2045,4 +2082,69 @@ class ExportKeysFileResponse {
   static Stream<ExportKeysFileResponse> get stream => signalSender
       .onRawSignal('ExportKeysFileResponse')
       .map(ExportKeysFileResponse.fromJson);
+}
+
+class QrFrameResponse {
+  final List<bool> modules;
+  final int size;
+  final int seqNum;
+  final int seqLen;
+  final String uri;
+
+  const QrFrameResponse({
+    required this.modules,
+    required this.size,
+    required this.seqNum,
+    required this.seqLen,
+    required this.uri,
+  });
+
+  factory QrFrameResponse.fromJson(Map<String, dynamic> json) =>
+      QrFrameResponse(
+        modules: (json['modules'] as List).cast<bool>(),
+        size: json['size'] as int,
+        seqNum: json['seq_num'] as int,
+        seqLen: json['seq_len'] as int,
+        uri: json['uri'] as String,
+      );
+
+  static Stream<QrFrameResponse> get stream =>
+      signalSender.onRawSignal('QrFrameResponse').map(QrFrameResponse.fromJson);
+}
+
+class UrDecodeProgressResponse {
+  final double progress;
+  final bool isComplete;
+
+  const UrDecodeProgressResponse({
+    required this.progress,
+    required this.isComplete,
+  });
+
+  factory UrDecodeProgressResponse.fromJson(Map<String, dynamic> json) =>
+      UrDecodeProgressResponse(
+        progress: (json['progress'] as num).toDouble(),
+        isComplete: json['is_complete'] as bool,
+      );
+
+  static Stream<UrDecodeProgressResponse> get stream => signalSender
+      .onRawSignal('UrDecodeProgressResponse')
+      .map(UrDecodeProgressResponse.fromJson);
+}
+
+class UrDecodeCompleteResponse {
+  final String dataHex;
+  final String urType;
+
+  const UrDecodeCompleteResponse({required this.dataHex, required this.urType});
+
+  factory UrDecodeCompleteResponse.fromJson(Map<String, dynamic> json) =>
+      UrDecodeCompleteResponse(
+        dataHex: json['data_hex'] as String,
+        urType: json['ur_type'] as String,
+      );
+
+  static Stream<UrDecodeCompleteResponse> get stream => signalSender
+      .onRawSignal('UrDecodeCompleteResponse')
+      .map(UrDecodeCompleteResponse.fromJson);
 }

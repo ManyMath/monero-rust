@@ -77,7 +77,7 @@ macro_rules! dart_signal {
     };
 }
 
-// All 35 DartSignal types
+// All 41 DartSignal types
 dart_signal!(MoneroTestRequest, monero_test_request);
 dart_signal!(CreateWalletRequest, create_wallet_request);
 dart_signal!(StartSyncRequest, start_sync_request);
@@ -115,6 +115,10 @@ dart_signal!(ExportKeyImagesRequest, export_key_images_request);
 dart_signal!(ImportKeyImagesRequest, import_key_images_request);
 dart_signal!(ImportKeysFileRequest, import_keys_file_request);
 dart_signal!(ExportKeysFileRequest, export_keys_file_request);
+dart_signal!(StartUrEncoderRequest, start_ur_encoder_request);
+dart_signal!(StopUrEncoderRequest, stop_ur_encoder_request);
+dart_signal!(UrDecodeFrameRequest, ur_decode_frame_request);
+dart_signal!(ResetUrDecoderRequest, reset_ur_decoder_request);
 
 // ---------------------------------------------------------------------------
 // Rust -> Dart callback (wasm32: JS callback, native: C FFI callback)
@@ -221,6 +225,9 @@ impl_send_to_dart! {
     KeyImagesImportedResponse => "KeyImagesImportedResponse",
     ImportKeysFileResponse => "ImportKeysFileResponse",
     ExportKeysFileResponse => "ExportKeysFileResponse",
+    QrFrameResponse => "QrFrameResponse",
+    UrDecodeProgressResponse => "UrDecodeProgressResponse",
+    UrDecodeCompleteResponse => "UrDecodeCompleteResponse",
 }
 
 // ---------------------------------------------------------------------------

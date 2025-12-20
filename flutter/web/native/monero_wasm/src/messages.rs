@@ -235,3 +235,21 @@ pub struct ImportKeyImages {
 pub struct UpdateOutputKeyImages {
     pub key_images: Vec<String>,
 }
+
+#[derive(Debug, Clone)]
+pub struct StartUrEncoder {
+    pub data: Vec<u8>,
+    pub ur_type: String,
+    pub max_fragment_len: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct StopUrEncoder;
+
+#[derive(Debug, Clone)]
+pub struct UrDecodeFrame {
+    pub uri: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResetUrDecoder;

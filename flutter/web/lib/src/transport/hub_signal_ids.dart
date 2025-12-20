@@ -42,6 +42,10 @@ class HubSignalIds {
   static const int importKeyImagesRequest = 35;
   static const int importKeysFileRequest = 36;
   static const int exportKeysFileRequest = 37;
+  static const int startUrEncoderRequest = 38;
+  static const int stopUrEncoderRequest = 39;
+  static const int urDecodeFrameRequest = 40;
+  static const int resetUrDecoderRequest = 41;
 
   // -- RustSignal IDs (Rust -> Dart) --
   static const int moneroTestResponse = 101;
@@ -78,4 +82,7 @@ class HubSignalIds {
   static const int keyImagesImportedResponse = 132;
   static const int importKeysFileResponse = 133;
   static const int exportKeysFileResponse = 134;
+  static const int qrFrameResponse = 135;
+  static const int urDecodeProgressResponse = 136;
+  static const int urDecodeCompleteResponse = 137;
 }

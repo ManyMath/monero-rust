@@ -813,6 +813,45 @@ pub struct ExportKeysFileResponse {
     pub file_bytes_hex: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub struct StartUrEncoderRequest {
+    pub data_hex: String,
+    pub ur_type: String,
+    pub max_fragment_len: u32,
+}
+
+#[derive(Deserialize)]
+pub struct StopUrEncoderRequest {}
+
+#[derive(Serialize)]
+pub struct QrFrameResponse {
+    pub modules: Vec<bool>,
+    pub size: u32,
+    pub seq_num: u32,
+    pub seq_len: u32,
+    pub uri: String,
+}
+
+#[derive(Deserialize)]
+pub struct UrDecodeFrameRequest {
+    pub uri: String,
+}
+
+#[derive(Deserialize)]
+pub struct ResetUrDecoderRequest {}
+
+#[derive(Serialize)]
+pub struct UrDecodeProgressResponse {
+    pub progress: f64,
+    pub is_complete: bool,
+}
+
+#[derive(Serialize)]
+pub struct UrDecodeCompleteResponse {
+    pub data_hex: String,
+    pub ur_type: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
