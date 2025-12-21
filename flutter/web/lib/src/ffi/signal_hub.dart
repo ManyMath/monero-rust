@@ -25,6 +25,8 @@ class SignalHub {
   SignalCallback<Bip39LegacySeedResponse>? onBip39LegacySeed;
   SignalCallback<FreezeThawResponse>? onFreezeThaw;
   SignalCallback<TransactionStatusUpdate>? onTransactionStatusUpdate;
+  SignalCallback<UnsignedTransactionCreatedResponse>?
+  onUnsignedTransactionCreated;
 
   final List<StreamSubscription> _subscriptions = [];
 
@@ -32,7 +34,10 @@ class SignalHub {
     Log.info(_tag, 'Starting signal subscriptions');
     _subscriptions.addAll([
       KeysDerivedResponse.stream.listen((msg) {
-        Log.debug(_tag, 'Received KeysDerivedResponse (success=${msg.success})');
+        Log.debug(
+          _tag,
+          'Received KeysDerivedResponse (success=${msg.success})',
+        );
         onKeysDerived?.call(msg);
       }),
       SubaddressDerivedResponse.stream.listen((msg) {
@@ -40,7 +45,10 @@ class SignalHub {
         onSubaddressDerived?.call(msg);
       }),
       SeedGeneratedResponse.stream.listen((msg) {
-        Log.debug(_tag, 'Received SeedGeneratedResponse (success=${msg.success})');
+        Log.debug(
+          _tag,
+          'Received SeedGeneratedResponse (success=${msg.success})',
+        );
         onSeedGenerated?.call(msg);
       }),
       SeedBirthdayResponse.stream.listen((msg) {
@@ -52,7 +60,10 @@ class SignalHub {
         onBlockHeightFromTimestamp?.call(msg);
       }),
       BlockScanResponse.stream.listen((msg) {
-        Log.debug(_tag, 'Received BlockScanResponse (height=${msg.blockHeight})');
+        Log.debug(
+          _tag,
+          'Received BlockScanResponse (height=${msg.blockHeight})',
+        );
         onBlockScan?.call(msg);
       }),
       DaemonHeightResponse.stream.listen((msg) {
@@ -60,7 +71,10 @@ class SignalHub {
         onDaemonHeight?.call(msg);
       }),
       SyncProgressResponse.stream.listen((msg) {
-        Log.debug(_tag, 'Received SyncProgressResponse (height=${msg.currentHeight}/${msg.daemonHeight})');
+        Log.debug(
+          _tag,
+          'Received SyncProgressResponse (height=${msg.currentHeight}/${msg.daemonHeight})',
+        );
         onSyncProgress?.call(msg);
       }),
       SpentStatusUpdatedResponse.stream.listen((msg) {
@@ -76,7 +90,10 @@ class SignalHub {
         onMultiWalletScan?.call(msg);
       }),
       ReorgDetectedResponse.stream.listen((msg) {
-        Log.warn(_tag, 'Received ReorgDetectedResponse (split=${msg.splitHeight})');
+        Log.warn(
+          _tag,
+          'Received ReorgDetectedResponse (split=${msg.splitHeight})',
+        );
         onReorgDetected?.call(msg);
       }),
       DoubleSpendDetectedResponse.stream.listen((msg) {
@@ -84,11 +101,17 @@ class SignalHub {
         onDoubleSpendDetected?.call(msg);
       }),
       TransactionCreatedResponse.stream.listen((msg) {
-        Log.info(_tag, 'Received TransactionCreatedResponse (success=${msg.success})');
+        Log.info(
+          _tag,
+          'Received TransactionCreatedResponse (success=${msg.success})',
+        );
         onTransactionCreated?.call(msg);
       }),
       TransactionBroadcastResponse.stream.listen((msg) {
-        Log.info(_tag, 'Received TransactionBroadcastResponse (success=${msg.success})');
+        Log.info(
+          _tag,
+          'Received TransactionBroadcastResponse (success=${msg.success})',
+        );
         onTransactionBroadcast?.call(msg);
       }),
       Bip39LegacySeedResponse.stream.listen((msg) {
@@ -102,6 +125,13 @@ class SignalHub {
       TransactionStatusUpdate.stream.listen((msg) {
         Log.debug(_tag, 'Received TransactionStatusUpdate');
         onTransactionStatusUpdate?.call(msg);
+      }),
+      UnsignedTransactionCreatedResponse.stream.listen((msg) {
+        Log.info(
+          _tag,
+          'Received UnsignedTransactionCreatedResponse (success=${msg.success})',
+        );
+        onUnsignedTransactionCreated?.call(msg);
       }),
     ]);
   }

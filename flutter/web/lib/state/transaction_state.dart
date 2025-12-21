@@ -14,8 +14,12 @@ class TransactionState extends ChangeNotifier {
   final OutputState _outputState;
   final ScanState _scanState;
 
-  final List<TextEditingController> destinationControllers = [TextEditingController()];
-  final List<TextEditingController> amountControllers = [TextEditingController()];
+  final List<TextEditingController> destinationControllers = [
+    TextEditingController(),
+  ];
+  final List<TextEditingController> amountControllers = [
+    TextEditingController(),
+  ];
 
   bool isCreatingTx = false;
   TransactionCreatedResponse? txResult;
@@ -31,16 +35,22 @@ class TransactionState extends ChangeNotifier {
 
   VoidCallback? onBroadcastSuccess;
 
+  UnsignedTransactionCreatedResponse? unsignedTxResult;
+  Completer<UnsignedTransactionCreatedResponse>? _unsignedTxCompleter;
+
+  bool get isViewOnly => _walletState.seedType == 'view-only';
+
   TransactionState({
     required WalletState walletState,
     required OutputState outputState,
     required ScanState scanState,
     required SignalHub signalHub,
-  })  : _walletState = walletState,
-        _outputState = outputState,
-        _scanState = scanState {
+  }) : _walletState = walletState,
+       _outputState = outputState,
+       _scanState = scanState {
     signalHub.onTransactionCreated = _handleTransactionCreated;
     signalHub.onTransactionBroadcast = _handleTransactionBroadcast;
+    signalHub.onUnsignedTransactionCreated = _handleUnsignedTransactionCreated;
   }
 
   void _handleTransactionCreated(TransactionCreatedResponse msg) {
@@ -51,7 +61,9 @@ class TransactionState extends ChangeNotifier {
       broadcastResult = null;
       broadcastError = null;
 
-      final changeOwned = msg.changeOutputs.map(OutputUtils.changeOutputToOwned).toList();
+      final changeOwned = msg.changeOutputs
+          .map(OutputUtils.changeOutputToOwned)
+          .toList();
       OutputUtils.addIfAbsent(_walletState.allOutputs, changeOwned);
       _walletState.notify();
     } else {
@@ -80,10 +92,13 @@ class TransactionState extends ChangeNotifier {
       }
       if (txResult != null) {
         final txId = txResult!.txId;
-        final alreadyExists = _walletState.allTransactions.any((tx) => tx.txHash == txId);
+        final alreadyExists = _walletState.allTransactions.any(
+          (tx) => tx.txHash == txId,
+        );
         if (!alreadyExists) {
-          final ownedOutputs = _walletState.allOutputs.where((o) =>
-            o.txHash == txId && o.blockHeight == 0).toList();
+          final ownedOutputs = _walletState.allOutputs
+              .where((o) => o.txHash == txId && o.blockHeight == 0)
+              .toList();
           _walletState.allTransactions = [
             ..._walletState.allTransactions,
             WalletTransaction(
@@ -111,6 +126,117 @@ class TransactionState extends ChangeNotifier {
       isBroadcastDoubleSpend = msg.isDoubleSpend;
     }
     notifyListeners();
+  }
+
+  void _handleUnsignedTransactionCreated(
+    UnsignedTransactionCreatedResponse msg,
+  ) {
+    isCreatingTx = false;
+    if (msg.success) {
+      unsignedTxResult = msg;
+      txError = null;
+    } else {
+      unsignedTxResult = null;
+      txError = msg.error ?? 'Failed to create unsigned transaction';
+    }
+    if (_unsignedTxCompleter != null && !_unsignedTxCompleter!.isCompleted) {
+      _unsignedTxCompleter!.complete(msg);
+    }
+    notifyListeners();
+  }
+
+  Future<UnsignedTransactionCreatedResponse?>
+  createUnsignedTransaction() async {
+    final recipientInputs = List.generate(
+      destinationControllers.length,
+      (i) => RecipientInput(
+        address: destinationControllers[i].text,
+        amount: amountControllers[i].text,
+      ),
+    );
+
+    final validation = TransactionService.validateTransactionCreation(
+      seed: _walletState.seedController.text,
+      availableOutputs: _outputState.filteredOutputs,
+      recipients: recipientInputs,
+      nodeUrl: _walletState.nodeUrlController.text,
+      selectedOutputs: _walletState.selectedOutputs.isNotEmpty
+          ? _walletState.selectedOutputs
+          : null,
+      currentHeight: _scanState.currentHeight,
+    );
+
+    if (!validation.isValid) {
+      txError = validation.error;
+      notifyListeners();
+      return null;
+    }
+
+    final seed = _walletState.seedController.text.trim();
+    var viewKeyHex = '';
+    var pubSpendKeyHex = '';
+    if (seed.startsWith('viewonly:')) {
+      final parts = seed.substring('viewonly:'.length).split(':');
+      if (parts.length == 2) {
+        viewKeyHex = parts[0];
+        pubSpendKeyHex = parts[1];
+      }
+    }
+    if (viewKeyHex.isEmpty || pubSpendKeyHex.isEmpty) {
+      txError = 'View-only keys are required to create an unsigned transaction';
+      notifyListeners();
+      return null;
+    }
+
+    isCreatingTx = true;
+    unsignedTxResult = null;
+    txError = null;
+    notifyListeners();
+
+    _hydrateRustWalletActor();
+    _unsignedTxCompleter = Completer<UnsignedTransactionCreatedResponse>();
+
+    CreateUnsignedTransactionRequest(
+      nodeUrl: validation.nodeUrl!,
+      viewKeyHex: viewKeyHex,
+      pubSpendKeyHex: pubSpendKeyHex,
+      network: _walletState.network,
+      recipients: validation.recipients!,
+      selectedOutputs: validation.selectedOutputs?.toList(),
+    ).sendSignalToRust();
+
+    try {
+      return await _unsignedTxCompleter!.future.timeout(
+        const Duration(seconds: 60),
+      );
+    } on TimeoutException {
+      isCreatingTx = false;
+      txError = 'Unsigned transaction creation timed out';
+      notifyListeners();
+      return null;
+    }
+  }
+
+  void broadcastSignedBlob(String txBlob) {
+    final nodeUrl = _walletState.nodeUrlController.text.trim();
+    if (nodeUrl.isEmpty) {
+      broadcastError = 'No node URL configured';
+      notifyListeners();
+      return;
+    }
+
+    isBroadcasting = true;
+    broadcastResult = null;
+    broadcastError = null;
+    notifyListeners();
+
+    BroadcastTransactionRequest(
+      nodeUrl: nodeUrl,
+      txBlob: txBlob,
+      spentOutputHashes: const [],
+      txId: '',
+      spentKeyImages: const [],
+    ).sendSignalToRust();
   }
 
   String? checkMultiAccountOutputs() {
@@ -176,7 +302,9 @@ class TransactionState extends ChangeNotifier {
       return;
     }
 
-    final selectedSet = _walletState.selectedOutputs.isNotEmpty ? _walletState.selectedOutputs : null;
+    final selectedSet = _walletState.selectedOutputs.isNotEmpty
+        ? _walletState.selectedOutputs
+        : null;
 
     final validation = TransactionService.validateTransactionCreation(
       seed: _walletState.seedController.text,
@@ -252,7 +380,9 @@ class TransactionState extends ChangeNotifier {
         builder: (context) {
           return AlertDialog(
             title: const Text('Send Max from all accounts?'),
-            content: const Text('You are sweeping multiple accounts.\n\nContinue?'),
+            content: const Text(
+              'You are sweeping multiple accounts.\n\nContinue?',
+            ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(context).pop(),
@@ -277,7 +407,9 @@ class TransactionState extends ChangeNotifier {
   void _setMaxAmount(int recipientIndex) {
     final outputKeys = _walletState.selectedOutputs.isNotEmpty
         ? _walletState.selectedOutputs
-        : _outputState.filteredOutputs.map((o) => '${o.txHash}:${o.outputIndex}').toSet();
+        : _outputState.filteredOutputs
+              .map((o) => '${o.txHash}:${o.outputIndex}')
+              .toSet();
 
     int totalAtomic = 0;
     for (final output in _outputState.filteredOutputs) {
