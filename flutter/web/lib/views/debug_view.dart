@@ -13,10 +13,13 @@ import '../widgets/outputs_panel.dart';
 import '../widgets/seed_phrase_panel.dart';
 import '../widgets/file_management_panel.dart';
 import '../widgets/create_transaction_panel.dart';
+import '../widgets/offline_signing_dialog.dart';
 import '../widgets/reorg_notification_display.dart';
 import '../widgets/double_spend_alert_display.dart';
 import '../state/app_state_scope.dart';
 import '../state/output_state.dart';
+import '../state/transaction_state.dart';
+import '../state/wallet_state.dart';
 
 enum DebugPanel {
   fileManagement('File Management'),
@@ -62,7 +65,11 @@ class _DebugViewState extends State<DebugView> {
         : _extensionService.openSidePanel();
   }
 
-  void _showSnackBar(String message, {Color? backgroundColor, int seconds = 2}) {
+  void _showSnackBar(
+    String message, {
+    Color? backgroundColor,
+    int seconds = 2,
+  }) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -90,6 +97,41 @@ class _DebugViewState extends State<DebugView> {
         duration: const Duration(milliseconds: 300),
       );
     });
+  }
+
+  Future<void> _handleCreateUnsignedTx(TransactionState ts) async {
+    final result = await ts.createUnsignedTransaction();
+    if (result == null || !result.success || result.unsignedTxHex == null)
+      return;
+    if (!mounted) return;
+
+    final signedResponse = await OfflineSigningDialog.show(
+      context,
+      unsignedTxHex: result.unsignedTxHex!,
+      fee: result.fee,
+      isViewOnly: true,
+    );
+
+    if (signedResponse != null &&
+        signedResponse.success &&
+        signedResponse.txBlob != null) {
+      ts.broadcastSignedBlob(signedResponse.txBlob!);
+    }
+  }
+
+  Future<void> _handleSignOffline(TransactionState ts, WalletState ws) async {
+    final signedResponse = await OfflineSigningDialog.show(
+      context,
+      isViewOnly: false,
+      seed: ws.seedController.text.trim(),
+      network: ws.network,
+    );
+
+    if (signedResponse != null &&
+        signedResponse.success &&
+        signedResponse.txBlob != null) {
+      ts.broadcastSignedBlob(signedResponse.txBlob!);
+    }
   }
 
   ExpansionPanel _buildPanel({
@@ -145,15 +187,22 @@ class _DebugViewState extends State<DebugView> {
         final filteredOutputs = os.filteredOutputs;
         final filteredTransactions = os.getFilteredTransactions(keyImageMap);
         final txCount = filteredTransactions.length;
-        final incomingCount = filteredTransactions.where((t) => t.isIncoming(keyImageMap)).length;
+        final incomingCount = filteredTransactions
+            .where((t) => t.isIncoming(keyImageMap))
+            .length;
         final outgoingCount = txCount - incomingCount;
         final transactionsSubtitle = txCount == 0
             ? 'No transactions'
             : '$txCount transaction${txCount == 1 ? '' : 's'} ($incomingCount in, $outgoingCount out)';
 
         final currentHeight = ss.currentHeight;
-        final balance = BalanceUtils.calculate(filteredOutputs, currentHeight, pendingSpentKeyImages: ws.pendingSpentKeyImages);
-        final coinsSubtitle = '${balance.balanceStr} - ${balance.outputCountStr}${balance.selectedStr}';
+        final balance = BalanceUtils.calculate(
+          filteredOutputs,
+          currentHeight,
+          pendingSpentKeyImages: ws.pendingSpentKeyImages,
+        );
+        final coinsSubtitle =
+            '${balance.balanceStr} - ${balance.outputCountStr}${balance.selectedStr}';
 
         return Scaffold(
           appBar: AppBar(
@@ -161,8 +210,12 @@ class _DebugViewState extends State<DebugView> {
             actions: [
               if (_extensionService.isExtension)
                 IconButton(
-                  icon: Icon(isSidePanel ? Icons.open_in_full : Icons.close_fullscreen),
-                  tooltip: isSidePanel ? 'Expand to Page' : 'Minimize to Side Panel',
+                  icon: Icon(
+                    isSidePanel ? Icons.open_in_full : Icons.close_fullscreen,
+                  ),
+                  tooltip: isSidePanel
+                      ? 'Expand to Page'
+                      : 'Minimize to Side Panel',
                   onPressed: _toggleViewMode,
                 ),
             ],
@@ -184,19 +237,23 @@ class _DebugViewState extends State<DebugView> {
                         onDismiss: () => setState(() => ss.reorgInfo = null),
                       ),
                     ),
-                  if (ss.doubleSpendConflicts != null && ss.doubleSpendConflicts!.isNotEmpty)
+                  if (ss.doubleSpendConflicts != null &&
+                      ss.doubleSpendConflicts!.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 12),
                       child: DoubleSpendAlertDisplay(
                         conflicts: ss.doubleSpendConflicts!,
-                        onDismiss: () => setState(() => ss.doubleSpendConflicts = null),
+                        onDismiss: () =>
+                            setState(() => ss.doubleSpendConflicts = null),
                       ),
                     ),
                   ExpansionPanelList(
                     expansionCallback: (int index, bool isExpanded) {
                       setState(() {
                         final panel = DebugPanel.fromIndex(index);
-                        _expandedPanel = (_expandedPanel == panel) ? null : panel;
+                        _expandedPanel = (_expandedPanel == panel)
+                            ? null
+                            : panel;
                       });
                     },
                     expandIconColor: Theme.of(context).colorScheme.primary,
@@ -223,7 +280,10 @@ class _DebugViewState extends State<DebugView> {
                           seed: ws.seedController.text.trim(),
                           transactionCount: ws.allTransactions.length,
                           outputCount: ws.allOutputs.length,
-                          onWalletChanged: (id) => ws.switchWallet(id, loadWalletData: () => fs.loadWalletData(context)),
+                          onWalletChanged: (id) => ws.switchWallet(
+                            id,
+                            loadWalletData: () => fs.loadWalletData(context),
+                          ),
                           onLoad: () => fs.loadWalletData(context),
                           onDelete: () => fs.clearStoredData(context),
                           onSave: () => fs.saveWalletData(context),
@@ -296,7 +356,9 @@ class _DebugViewState extends State<DebugView> {
                       _buildPanel(
                         panel: DebugPanel.receive,
                         body: ReceivePanel(
-                          seed: ws.seedController.text.trim().isEmpty ? null : ws.seedController.text,
+                          seed: ws.seedController.text.trim().isEmpty
+                              ? null
+                              : ws.seedController.text,
                           network: ws.network,
                           activeAccount: ws.activeAccount,
                           accounts: ws.accounts,
@@ -304,14 +366,16 @@ class _DebugViewState extends State<DebugView> {
                           onAccountSelected: ws.selectAccount,
                           onCreateAccount: () {
                             ws.createAccount();
-                            if (ss.isContinuousScanning && ws.seedController.text.trim().isNotEmpty) {
+                            if (ss.isContinuousScanning &&
+                                ws.seedController.text.trim().isNotEmpty) {
                               ss.startContinuousScan();
                             }
                           },
                           onCopyToClipboard: _copyToClipboard,
                           subaddresses: ws.subaddresses,
                           onNavigateToTransaction: _navigateToTransaction,
-                          scanningAccounts: ws.activeWallet?.scanningAccounts ?? {0},
+                          scanningAccounts:
+                              ws.activeWallet?.scanningAccounts ?? {0},
                           onScanToggle: ws.toggleAccountScanning,
                         ),
                       ),
@@ -326,19 +390,25 @@ class _DebugViewState extends State<DebugView> {
                           isContinuousPaused: ss.isContinuousPaused,
                           isSynced: ss.isSynced,
                           isScanningMempool: ss.isScanningMempool,
-                          continuousScanCurrentHeight: ws.continuousScanCurrentHeight,
-                          continuousScanTargetHeight: ss.continuousScanTargetHeight,
+                          continuousScanCurrentHeight:
+                              ws.continuousScanCurrentHeight,
+                          continuousScanTargetHeight:
+                              ss.continuousScanTargetHeight,
                           scanError: ss.scanError,
                           scanResult: ss.scanResult,
-                          hasSeedPhrase: ws.seedController.text.trim().isNotEmpty || ws.activeWallet != null,
+                          hasSeedPhrase:
+                              ws.seedController.text.trim().isNotEmpty ||
+                              ws.activeWallet != null,
                           pollingService: ss.pollingService,
                           restoreHeight: ws.polyseedRestoreHeight,
                           onScanBlock: ss.scanBlock,
                           onStartContinuousScan: ss.startContinuousScan,
                           onPauseContinuousScan: ss.pauseContinuousScan,
                           onScanMempool: ss.scanMempool,
-                          getContinuousScanButtonLabel: ss.continuousScanButtonLabel,
-                          getContinuousScanButtonColor: ss.continuousScanButtonColor,
+                          getContinuousScanButtonLabel:
+                              ss.continuousScanButtonLabel,
+                          getContinuousScanButtonColor:
+                              ss.continuousScanButtonColor,
                           connectionState: ss.connectionState,
                           lookaheadMode: ss.lookaheadMode,
                           onLookaheadModeChanged: ss.setLookaheadMode,
@@ -348,7 +418,11 @@ class _DebugViewState extends State<DebugView> {
                         panel: DebugPanel.transactions,
                         subtitle: transactionsSubtitle,
                         body: TransactionsPanel(
-                          allTransactions: os.sortedTransactions(filteredTransactions, keyImageMap, currentHeight),
+                          allTransactions: os.sortedTransactions(
+                            filteredTransactions,
+                            keyImageMap,
+                            currentHeight,
+                          ),
                           keyImageMap: keyImageMap,
                           currentHeight: currentHeight,
                           txSortBy: os.txSortBy,
@@ -373,9 +447,13 @@ class _DebugViewState extends State<DebugView> {
                             os.notify();
                           },
                           onDescriptionChanged: (txHash, description) {
-                            final tx = ws.allTransactions.where((t) => t.txHash == txHash).firstOrNull;
+                            final tx = ws.allTransactions
+                                .where((t) => t.txHash == txHash)
+                                .firstOrNull;
                             if (tx != null) {
-                              tx.description = description.isEmpty ? null : description;
+                              tx.description = description.isEmpty
+                                  ? null
+                                  : description;
                             }
                           },
                         ),
@@ -399,7 +477,9 @@ class _DebugViewState extends State<DebugView> {
                             for (int i = 0; i < outputs.length; i++) {
                               if (!outputs[i].spent && outputs[i].frozen) {
                                 outputs[i] = outputs[i].copyWith(frozen: false);
-                                ThawOutputRequest(keyImage: outputs[i].keyImage).sendSignalToRust();
+                                ThawOutputRequest(
+                                  keyImage: outputs[i].keyImage,
+                                ).sendSignalToRust();
                               }
                             }
                             os.invalidateCaches();
@@ -410,7 +490,9 @@ class _DebugViewState extends State<DebugView> {
                             for (int i = 0; i < outputs.length; i++) {
                               if (!outputs[i].spent && !outputs[i].frozen) {
                                 outputs[i] = outputs[i].copyWith(frozen: true);
-                                FreezeOutputRequest(keyImage: outputs[i].keyImage).sendSignalToRust();
+                                FreezeOutputRequest(
+                                  keyImage: outputs[i].keyImage,
+                                ).sendSignalToRust();
                               }
                             }
                             os.invalidateCaches();
@@ -429,16 +511,22 @@ class _DebugViewState extends State<DebugView> {
                             final outputs = ws.allOutputs;
                             for (int i = 0; i < outputs.length; i++) {
                               if (outputs[i].keyImage == keyImage) {
-                                outputs[i] = outputs[i].copyWith(frozen: freeze);
+                                outputs[i] = outputs[i].copyWith(
+                                  frozen: freeze,
+                                );
                                 break;
                               }
                             }
                             os.invalidateCaches();
                             ws.notify();
                             if (freeze) {
-                              FreezeOutputRequest(keyImage: keyImage).sendSignalToRust();
+                              FreezeOutputRequest(
+                                keyImage: keyImage,
+                              ).sendSignalToRust();
                             } else {
-                              ThawOutputRequest(keyImage: keyImage).sendSignalToRust();
+                              ThawOutputRequest(
+                                keyImage: keyImage,
+                              ).sendSignalToRust();
                             }
                           },
                           pendingSpentKeyImages: ws.pendingSpentKeyImages,
@@ -457,11 +545,14 @@ class _DebugViewState extends State<DebugView> {
                           broadcastError: ts.broadcastError,
                           isBroadcastRetryable: ts.isBroadcastRetryable,
                           isBroadcastDoubleSpend: ts.isBroadcastDoubleSpend,
+                          isViewOnly: ts.isViewOnly,
                           multiAccountWarning: ts.getMultiAccountWarning(),
                           onAddRecipient: ts.addRecipient,
                           onRemoveRecipient: ts.removeRecipient,
                           onCreateTransaction: ts.createTransaction,
                           onBroadcastTransaction: ts.broadcastTransaction,
+                          onCreateUnsignedTx: () => _handleCreateUnsignedTx(ts),
+                          onSignOffline: () => _handleSignOffline(ts, ws),
                           onProvePayment: () => PaymentProofDialog.show(
                             context,
                             txResult: ts.txResult,

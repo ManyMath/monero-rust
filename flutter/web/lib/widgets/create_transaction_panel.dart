@@ -27,6 +27,9 @@ class CreateTransactionPanel extends StatelessWidget {
   final ValueChanged<bool?>? onSubtractFeeChanged;
   final bool isBroadcastRetryable;
   final bool isBroadcastDoubleSpend;
+  final bool isViewOnly;
+  final VoidCallback? onCreateUnsignedTx;
+  final VoidCallback? onSignOffline;
 
   const CreateTransactionPanel({
     super.key,
@@ -40,6 +43,9 @@ class CreateTransactionPanel extends StatelessWidget {
     required this.broadcastError,
     this.isBroadcastRetryable = false,
     this.isBroadcastDoubleSpend = false,
+    this.isViewOnly = false,
+    this.onCreateUnsignedTx,
+    this.onSignOffline,
     this.multiAccountWarning,
     required this.onAddRecipient,
     required this.onRemoveRecipient,
@@ -69,7 +75,10 @@ class CreateTransactionPanel extends StatelessWidget {
                 ),
                 Text(
                   'Total: ${OutputUtils.getRecipientsTotal(amountControllers).toStringAsFixed(12)} XMR',
-                  style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue),
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.blue,
+                  ),
                 ),
               ],
             ),
@@ -97,7 +106,9 @@ class CreateTransactionPanel extends StatelessWidget {
               value: subtractFee,
               onChanged: onSubtractFeeChanged,
               title: const Text('Subtract fee from amount'),
-              subtitle: const Text('Fee is deducted from send amount instead of added on top'),
+              subtitle: const Text(
+                'Fee is deducted from send amount instead of added on top',
+              ),
               dense: true,
               contentPadding: EdgeInsets.zero,
               controlAffinity: ListTileControlAffinity.leading,
@@ -113,7 +124,11 @@ class CreateTransactionPanel extends StatelessWidget {
               ),
               child: Row(
                 children: [
-                  Icon(Icons.warning_amber, color: Colors.orange.shade700, size: 20),
+                  Icon(
+                    Icons.warning_amber,
+                    color: Colors.orange.shade700,
+                    size: 20,
+                  ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
@@ -130,17 +145,39 @@ class CreateTransactionPanel extends StatelessWidget {
             ),
             const SizedBox(height: 12),
           ],
-          ElevatedButton.icon(
-            onPressed: isCreatingTx ? null : onCreateTransaction,
-            icon: isCreatingTx
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.send),
-            label: Text(isCreatingTx ? 'Sending...' : 'Send'),
-          ),
+          if (isViewOnly) ...[
+            ElevatedButton.icon(
+              onPressed: isCreatingTx ? null : onCreateUnsignedTx,
+              icon: isCreatingTx
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.qr_code),
+              label: Text(isCreatingTx ? 'Creating...' : 'Create Unsigned TX'),
+            ),
+          ] else ...[
+            ElevatedButton.icon(
+              onPressed: isCreatingTx ? null : onCreateTransaction,
+              icon: isCreatingTx
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.send),
+              label: Text(isCreatingTx ? 'Sending...' : 'Send'),
+            ),
+            if (onSignOffline != null) ...[
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: onSignOffline,
+                icon: const Icon(Icons.offline_bolt, size: 18),
+                label: const Text('Sign Offline TX'),
+              ),
+            ],
+          ],
           if (txError != null) ...[
             const SizedBox(height: 16),
             ErrorMessageContainer(message: 'Transaction Error: $txError'),
@@ -168,7 +205,11 @@ class CreateTransactionPanel extends StatelessWidget {
                   ),
                   child: Row(
                     children: [
-                      Icon(Icons.warning_amber, color: Colors.orange.shade700, size: 20),
+                      Icon(
+                        Icons.warning_amber,
+                        color: Colors.orange.shade700,
+                        size: 20,
+                      ),
                       const SizedBox(width: 8),
                       const Expanded(
                         child: Text(
