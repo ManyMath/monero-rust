@@ -2567,6 +2567,7 @@ impl WalletActor {
                         spend_secret_key: None, view_secret_key: None,
                         spend_public_key: None, view_public_key: None,
                         creation_timestamp: 0, watch_only: false,
+                        network: None,
                         seed_language: None, mnemonic: None,
                     }.send_signal_to_dart();
                     continue;
@@ -2578,6 +2579,13 @@ impl WalletActor {
 
             match result {
                 Ok(imported) => {
+                    let network = match imported.nettype {
+                        0 => "mainnet",
+                        1 => "stagenet",
+                        2 => "testnet",
+                        _ => "mainnet",
+                    };
+
                     ImportKeysFileResponse {
                         success: true,
                         error: None, error_code: None, error_hint: None, error_transient: None,
@@ -2587,6 +2595,7 @@ impl WalletActor {
                         view_public_key: Some(hex::encode(imported.view_public_key)),
                         creation_timestamp: imported.creation_timestamp,
                         watch_only: imported.watch_only,
+                        network: Some(network.to_string()),
                         seed_language: imported.seed_language,
                         mnemonic: imported.mnemonic,
                     }.send_signal_to_dart();
@@ -2599,6 +2608,7 @@ impl WalletActor {
                         spend_secret_key: None, view_secret_key: None,
                         spend_public_key: None, view_public_key: None,
                         creation_timestamp: 0, watch_only: false,
+                        network: None,
                         seed_language: None, mnemonic: None,
                     }.send_signal_to_dart();
                 }

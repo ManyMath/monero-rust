@@ -795,6 +795,7 @@ pub struct ImportKeysFileResponse {
     pub view_public_key: Option<String>,
     pub creation_timestamp: u64,
     pub watch_only: bool,
+    pub network: Option<String>,
     pub seed_language: Option<String>,
     pub mnemonic: Option<String>,
 }

@@ -50,6 +50,8 @@ class _AppStateHostState extends State<AppStateHost> {
     _walletState = WalletState(
       lifecycle: lifecycle,
       signalHub: _signalHub,
+      hasStoredWallet: WalletPersistenceBrowser.hasWalletData,
+      clearStoredWallet: WalletPersistenceBrowser.clearWalletData,
     );
 
     _outputState = OutputState(walletState: _walletState);

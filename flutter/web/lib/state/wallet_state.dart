@@ -7,14 +7,18 @@ import '../utils/key_parser.dart';
 import '../models/wallet_instance.dart';
 import '../models/wallet_transaction.dart';
 import '../services/wallet_lifecycle_manager.dart';
-import '../services/wallet_persistence_browser.dart';
 import '../widgets/close_wallet_dialog.dart';
 import '../src/ffi/signal_hub.dart';
+
+typedef HasStoredWallet = bool Function(String walletId);
+typedef ClearStoredWallet = void Function(String walletId);
 
 class WalletState extends ChangeNotifier {
   static const _tag = 'WalletState';
   final WalletLifecycleManager lifecycle;
   final SignalHub _signalHub;
+  final HasStoredWallet? _hasStoredWallet;
+  final ClearStoredWallet? _clearStoredWallet;
 
   final seedController = TextEditingController();
   final passphraseController = TextEditingController();
@@ -39,6 +43,8 @@ class WalletState extends ChangeNotifier {
   int? polyseedRestoreHeight;
   String? derivedLegacySeed;
   Timer? _debounceTimer;
+  String? _pendingImportedWalletId;
+  String? _pendingImportedWalletSeed;
 
   bool isChangingSeed = false;
   bool isRestoringWallet = false;
@@ -56,8 +62,12 @@ class WalletState extends ChangeNotifier {
   WalletState({
     required WalletLifecycleManager lifecycle,
     required SignalHub signalHub,
+    HasStoredWallet? hasStoredWallet,
+    ClearStoredWallet? clearStoredWallet,
   })  : lifecycle = lifecycle,
-        _signalHub = signalHub {
+        _signalHub = signalHub,
+        _hasStoredWallet = hasStoredWallet,
+        _clearStoredWallet = clearStoredWallet {
     seedController.addListener(_onSeedChanged);
     passphraseController.addListener(_onPassphraseChanged);
     viewKeyController.addListener(_onViewOnlyKeysChanged);
@@ -117,8 +127,19 @@ class WalletState extends ChangeNotifier {
       responseError = null;
 
       final seed = seedController.text.trim();
-      if (seed.isNotEmpty && derivedAddress != null && lifecycle.activeWallet == null) {
-        openWallet(walletId.isEmpty ? 'temp_wallet' : walletId, seed, network, derivedAddress!);
+      final shouldOpenImportedWallet =
+          _pendingImportedWalletId != null && _pendingImportedWalletSeed == seed;
+      if (seed.isNotEmpty &&
+          derivedAddress != null &&
+          (lifecycle.activeWallet == null || shouldOpenImportedWallet)) {
+        final id = shouldOpenImportedWallet
+            ? _pendingImportedWalletId!
+            : walletId.isEmpty ? 'temp_wallet' : walletId;
+        openWallet(id, seed, network, derivedAddress!);
+        if (shouldOpenImportedWallet) {
+          _pendingImportedWalletId = null;
+          _pendingImportedWalletSeed = null;
+        }
       }
 
       if (seed.isNotEmpty && !seed.startsWith('viewonly:')) {
@@ -132,6 +153,8 @@ class WalletState extends ChangeNotifier {
       publicViewKey = null;
       responseError = msg.error ?? 'Unknown error';
       polyseedRestoreHeight = null;
+      _pendingImportedWalletId = null;
+      _pendingImportedWalletSeed = null;
     }
     notifyListeners();
   }
@@ -514,6 +537,30 @@ class WalletState extends ChangeNotifier {
     }
   }
 
+  /// Prepare an imported mnemonic or view-only sentinel as the next active wallet.
+  ///
+  /// The address is derived asynchronously by Rust. [_handleKeysDerived] opens
+  /// this wallet when the matching response arrives.
+  void beginImportedWallet({
+    required String id,
+    required String seed,
+    required String walletNetwork,
+  }) {
+    _pendingImportedWalletId = id;
+    _pendingImportedWalletSeed = seed;
+    walletId = id;
+    network = walletNetwork;
+    if (seed.startsWith('viewonly:')) {
+      restoreViewOnlyStateFromSeed(seed);
+    } else if (seedType == 'view-only') {
+      seedType = '25 word (classic)';
+      viewKeyController.clear();
+      spendKeyController.clear();
+    }
+    seedController.text = seed;
+    deriveAddress();
+  }
+
   void ensureAccountsExistForOutputs(List<OwnedOutput> outputs) {
     if (lifecycle.activeWallet == null) return;
 
@@ -712,8 +759,8 @@ class WalletState extends ChangeNotifier {
     resetWalletState();
     notifyListeners();
 
-    if (WalletPersistenceBrowser.hasWalletData('temp_wallet')) {
-      WalletPersistenceBrowser.clearWalletData('temp_wallet');
+    if (_hasStoredWallet?.call('temp_wallet') == true) {
+      _clearStoredWallet?.call('temp_wallet');
     }
 
     showSnackBar?.call('Ready for new wallet - generate or enter a seed phrase');

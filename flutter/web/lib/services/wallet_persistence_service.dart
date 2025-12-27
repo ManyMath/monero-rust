@@ -2,7 +2,6 @@ import 'dart:convert';
 import '../src/ffi/signal_types.dart';
 import '../models/wallet_instance.dart';
 import '../models/wallet_transaction.dart';
-import 'local_storage_backend.dart';
 import 'wallet_storage_service.dart';
 import 'crypto_backend.dart';
 import 'wallet_serializer.dart';
@@ -62,11 +61,7 @@ class WalletPersistenceService {
         return SaveWalletResult.error('Encryption failed');
       }
 
-      if (_storage is LocalStorageBackend) {
-        _storage.atomicSet(storageKey, encryptedData);
-      } else {
-        _storage.set(storageKey, encryptedData);
-      }
+      _storage.atomicSet(storageKey, encryptedData);
       return SaveWalletResult.success();
     } catch (e) {
       return SaveWalletResult.error('Save failed: $e');
@@ -118,11 +113,7 @@ class WalletPersistenceService {
         return SaveWalletResult.error('Encryption with derived key failed');
       }
 
-      if (_storage is LocalStorageBackend) {
-        _storage.atomicSet(storageKey, encryptedData);
-      } else {
-        _storage.set(storageKey, encryptedData);
-      }
+      _storage.atomicSet(storageKey, encryptedData);
       return SaveWalletResult.success();
     } catch (e) {
       return SaveWalletResult.error('Save failed: $e');
@@ -136,9 +127,7 @@ class WalletPersistenceService {
     try {
       final storageKey = getStorageKey(walletId);
 
-      if (_storage is LocalStorageBackend) {
-        _storage.maybeRecover(storageKey);
-      }
+      _storage.maybeRecover(storageKey);
       final encryptedData = _storage.get(storageKey);
       if (encryptedData == null) {
         return LoadWalletResult.error(

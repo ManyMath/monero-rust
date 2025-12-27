@@ -525,12 +525,30 @@ class FileManagementState extends ChangeNotifier {
         return;
       }
 
-      final mnemonic = response.mnemonic;
-      if (mnemonic == null || mnemonic.isEmpty) {
+      final String importedSeed;
+      if (response.watchOnly) {
+        final viewKey = response.viewSecretKey;
+        final spendPublicKey = response.spendPublicKey;
+        if (viewKey == null ||
+            viewKey.length != 64 ||
+            spendPublicKey == null ||
+            spendPublicKey.length != 64) {
+          isImporting = false;
+          importError = 'View-only .keys file is missing required keys';
+          notifyListeners();
+          _walletState.showSnackBar?.call(
+            importError!,
+            backgroundColor: Colors.orange,
+            seconds: 4,
+          );
+          return;
+        }
+        importedSeed = 'viewonly:$viewKey:$spendPublicKey';
+      } else if (response.mnemonic != null && response.mnemonic!.isNotEmpty) {
+        importedSeed = response.mnemonic!;
+      } else {
         isImporting = false;
-        importError = response.watchOnly
-            ? 'View-only wallet import not yet supported'
-            : 'No mnemonic recovered from .keys file';
+        importError = 'No mnemonic recovered from .keys file';
         notifyListeners();
         _walletState.showSnackBar?.call(importError!, backgroundColor: Colors.orange, seconds: 4);
         return;
@@ -543,12 +561,14 @@ class FileManagementState extends ChangeNotifier {
       }
 
       final walletName = file.name.replaceAll('.keys', '');
-      final network = _walletState.network.isNotEmpty ? _walletState.network : 'stagenet';
+      final network = response.network ??
+          (_walletState.network.isNotEmpty ? _walletState.network : 'stagenet');
 
-      _walletState.seedController.text = mnemonic;
-      _walletState.network = network;
-      _walletState.walletId = walletName.isNotEmpty ? walletName : 'imported';
-      _walletState.deriveAddress();
+      _walletState.beginImportedWallet(
+        id: walletName.isNotEmpty ? walletName : 'imported',
+        seed: importedSeed,
+        walletNetwork: network,
+      );
 
       isImporting = false;
       importError = null;

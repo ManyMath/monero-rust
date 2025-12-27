@@ -2020,6 +2020,7 @@ class ImportKeysFileResponse {
   final String? viewPublicKey;
   final int creationTimestamp;
   final bool watchOnly;
+  final String? network;
   final String? seedLanguage;
   final String? mnemonic;
 
@@ -2035,6 +2036,7 @@ class ImportKeysFileResponse {
     this.viewPublicKey,
     required this.creationTimestamp,
     required this.watchOnly,
+    this.network,
     this.seedLanguage,
     this.mnemonic,
   });
@@ -2052,6 +2054,7 @@ class ImportKeysFileResponse {
         viewPublicKey: json['view_public_key'] as String?,
         creationTimestamp: json['creation_timestamp'] as int,
         watchOnly: json['watch_only'] as bool,
+        network: json['network'] as String?,
         seedLanguage: json['seed_language'] as String?,
         mnemonic: json['mnemonic'] as String?,
       );

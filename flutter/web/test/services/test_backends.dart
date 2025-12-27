@@ -18,14 +18,19 @@ class InMemoryStorageBackend implements StorageBackend {
 
   @override
   List<String> get keys => _data.keys.toList();
+
+  @override
+  void atomicSet(String key, String value) => set(key, value);
+
+  @override
+  void maybeRecover(String key) {}
 }
 
 /// No-op crypto backend: returns plaintext unchanged.
 /// Simulates encryption/decryption without needing Rust signals.
 class IdentityCryptoBackend implements CryptoBackend {
   @override
-  Future<String?> encrypt(String password, String plaintext) async =>
-      plaintext;
+  Future<String?> encrypt(String password, String plaintext) async => plaintext;
 
   @override
   Future<String?> decrypt(String password, String ciphertext) async =>
@@ -37,8 +42,10 @@ class IdentityCryptoBackend implements CryptoBackend {
 
   @override
   Future<String?> encryptWithKey(
-          String keyHex, String saltHex, String plaintext) async =>
-      plaintext;
+    String keyHex,
+    String saltHex,
+    String plaintext,
+  ) async => plaintext;
 }
 
 /// Crypto backend that fails all operations.
@@ -55,6 +62,8 @@ class FailingCryptoBackend implements CryptoBackend {
 
   @override
   Future<String?> encryptWithKey(
-          String keyHex, String saltHex, String plaintext) async =>
-      null;
+    String keyHex,
+    String saltHex,
+    String plaintext,
+  ) async => null;
 }

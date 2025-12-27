@@ -16,16 +16,16 @@ class LocalStorageBackend implements StorageBackend {
   }
 
   @override
-  bool containsKey(String key) =>
-      html.window.localStorage.containsKey(key);
+  bool containsKey(String key) => html.window.localStorage.containsKey(key);
 
   @override
   List<String> get keys => html.window.localStorage.keys.toList();
 
-  /// Write-ahead atomic set: tombstone → staging → live → clear.
+  /// Write-ahead atomic set: tombstone -> staging -> live -> clear.
   ///
   /// Staging key: `{key}_staging`, tombstone key: `{key}_wip`.
   /// Recoverable at any step via [maybeRecover].
+  @override
   void atomicSet(String key, String value) {
     final stagingKey = '${key}_staging';
     final tombstoneKey = '${key}_wip';
@@ -40,6 +40,7 @@ class LocalStorageBackend implements StorageBackend {
   /// Completes any interrupted [atomicSet] detected via tombstone.
   ///
   /// No-op if no tombstone is present.
+  @override
   void maybeRecover(String key) {
     final tombstoneKey = '${key}_wip';
     final stagingKey = '${key}_staging';
