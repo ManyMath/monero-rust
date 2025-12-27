@@ -157,7 +157,7 @@ class OwnedOutput {
     );
   }
 
-  OwnedOutput copyWith({bool? spent, bool? frozen}) => OwnedOutput(
+  OwnedOutput copyWith({bool? spent, bool? frozen, String? keyImage}) => OwnedOutput(
     txHash: txHash,
     outputIndex: outputIndex,
     amount: amount,
@@ -170,7 +170,7 @@ class OwnedOutput {
     receivedOutputBytes: receivedOutputBytes,
     blockHeight: blockHeight,
     spent: spent ?? this.spent,
-    keyImage: keyImage,
+    keyImage: keyImage ?? this.keyImage,
     isCoinbase: isCoinbase,
     frozen: frozen ?? this.frozen,
   );
@@ -1981,6 +1981,8 @@ class KeyImagesImportedResponse {
   final bool? errorTransient;
   final int importedCount;
   final int spentCount;
+  final List<String> keyImages;
+  final List<String> spentKeyImages;
 
   const KeyImagesImportedResponse({
     required this.success,
@@ -1990,6 +1992,8 @@ class KeyImagesImportedResponse {
     this.errorTransient,
     required this.importedCount,
     required this.spentCount,
+    this.keyImages = const [],
+    this.spentKeyImages = const [],
   });
 
   factory KeyImagesImportedResponse.fromJson(Map<String, dynamic> json) =>
@@ -2001,6 +2005,9 @@ class KeyImagesImportedResponse {
         errorTransient: json['error_transient'] as bool?,
         importedCount: json['imported_count'] as int,
         spentCount: json['spent_count'] as int,
+        keyImages: ((json['key_images'] as List?) ?? const []).cast<String>(),
+        spentKeyImages:
+            ((json['spent_key_images'] as List?) ?? const []).cast<String>(),
       );
 
   static Stream<KeyImagesImportedResponse> get stream => signalSender

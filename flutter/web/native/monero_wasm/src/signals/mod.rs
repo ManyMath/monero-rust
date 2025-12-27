@@ -772,6 +772,8 @@ pub struct KeyImagesImportedResponse {
     pub error_transient: Option<bool>,
     pub imported_count: u64,
     pub spent_count: u64,
+    pub key_images: Vec<String>,
+    pub spent_key_images: Vec<String>,
 }
 
 // --- .keys file import signals ---

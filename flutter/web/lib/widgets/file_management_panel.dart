@@ -14,10 +14,15 @@ class FileManagementPanel extends StatelessWidget {
   final bool isLoadingWallet;
   final bool isExporting;
   final bool isImporting;
+  final bool isViewOnly;
+  final bool isExportingKeyImages;
+  final bool isImportingKeyImages;
   final String? saveError;
   final String? loadError;
   final String? exportError;
   final String? importError;
+  final String? keyImageExportError;
+  final String? keyImageImportError;
   final String? seed;
   final int transactionCount;
   final int outputCount;
@@ -28,6 +33,8 @@ class FileManagementPanel extends StatelessWidget {
   final VoidCallback onNew;
   final VoidCallback onExport;
   final VoidCallback onImport;
+  final VoidCallback onExportKeyImages;
+  final VoidCallback onImportKeyImages;
   final Function(String) onCloseWallet;
   final bool autoSaveEnabled;
   final ValueChanged<bool> onAutoSaveChanged;
@@ -43,10 +50,15 @@ class FileManagementPanel extends StatelessWidget {
     required this.isLoadingWallet,
     required this.isExporting,
     required this.isImporting,
+    required this.isViewOnly,
+    required this.isExportingKeyImages,
+    required this.isImportingKeyImages,
     required this.saveError,
     required this.loadError,
     required this.exportError,
     required this.importError,
+    required this.keyImageExportError,
+    required this.keyImageImportError,
     required this.seed,
     required this.transactionCount,
     required this.outputCount,
@@ -57,6 +69,8 @@ class FileManagementPanel extends StatelessWidget {
     required this.onNew,
     required this.onExport,
     required this.onImport,
+    required this.onExportKeyImages,
+    required this.onImportKeyImages,
     required this.onCloseWallet,
     required this.autoSaveEnabled,
     required this.onAutoSaveChanged,
@@ -146,6 +160,54 @@ class FileManagementPanel extends StatelessWidget {
             const SizedBox(height: 12),
             Row(
               children: [
+                if (!isViewOnly) ...[
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: isExportingKeyImages ? null : onExportKeyImages,
+                      icon: isExportingKeyImages
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.key),
+                      label: Text(
+                        isExportingKeyImages
+                            ? 'Exporting...'
+                            : 'Export Key Images',
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.teal,
+                      ),
+                    ),
+                  ),
+                ] else ...[
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: isImportingKeyImages ? null : onImportKeyImages,
+                      icon: isImportingKeyImages
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.key),
+                      label: Text(
+                        isImportingKeyImages
+                            ? 'Importing...'
+                            : 'Import Key Images',
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.teal,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
                 SizedBox(
                   height: 24,
                   width: 24,
@@ -185,6 +247,14 @@ class FileManagementPanel extends StatelessWidget {
           if (importError != null) ...[
             const SizedBox(height: 12),
             ErrorMessageContainer(message: importError!),
+          ],
+          if (keyImageExportError != null) ...[
+            const SizedBox(height: 12),
+            ErrorMessageContainer(message: keyImageExportError!),
+          ],
+          if (keyImageImportError != null) ...[
+            const SizedBox(height: 12),
+            ErrorMessageContainer(message: keyImageImportError!),
           ],
         ],
       ),

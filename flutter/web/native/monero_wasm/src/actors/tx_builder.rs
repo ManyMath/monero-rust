@@ -269,6 +269,8 @@ impl TxBuilderActor {
                         error_code: None, error_hint: None, error_transient: None,
                         imported_count: 0,
                         spent_count: 0,
+                        key_images: vec![],
+                        spent_key_images: vec![],
                     }.send_signal_to_dart();
                     continue;
                 }
@@ -1024,6 +1026,8 @@ impl Notifiable<ImportKeyImages> for TxBuilderActor {
                         error_code: None, error_hint: None, error_transient: None,
                         imported_count: 0,
                         spent_count: 0,
+                        key_images: vec![],
+                        spent_key_images: vec![],
                     }.send_signal_to_dart();
                     return;
                 }
@@ -1040,6 +1044,8 @@ impl Notifiable<ImportKeyImages> for TxBuilderActor {
                         error_code: None, error_hint: None, error_transient: None,
                         imported_count: 0,
                         spent_count: 0,
+                        key_images: vec![],
+                        spent_key_images: vec![],
                     }.send_signal_to_dart();
                     return;
                 }
@@ -1056,6 +1062,7 @@ impl Notifiable<ImportKeyImages> for TxBuilderActor {
             }).await;
 
             let node_url = msg.node_url;
+            let response_key_images = key_images.clone();
             let non_empty_kis: Vec<String> = key_images.into_iter()
                 .filter(|ki| !ki.is_empty())
                 .collect();
@@ -1067,15 +1074,23 @@ impl Notifiable<ImportKeyImages> for TxBuilderActor {
                     error_code: None, error_hint: None, error_transient: None,
                     imported_count,
                     spent_count: 0,
+                    key_images: response_key_images,
+                    spent_key_images: vec![],
                 }.send_signal_to_dart();
                 return;
             }
 
             spawn_local(async move {
-                let spent_count = match monero_rust::is_key_image_spent(&node_url, &non_empty_kis).await {
-                    Ok(statuses) => statuses.iter().filter(|&&s| s > 0).count() as u64,
-                    Err(_) => 0,
+                let spent_key_images = match monero_rust::is_key_image_spent(&node_url, &non_empty_kis).await {
+                    Ok(statuses) => non_empty_kis.iter()
+                        .zip(statuses.iter())
+                        .filter_map(|(ki, &status)| {
+                            if status > 0 { Some(ki.clone()) } else { None }
+                        })
+                        .collect::<Vec<_>>(),
+                    Err(_) => vec![],
                 };
+                let spent_count = spent_key_images.len() as u64;
 
                 KeyImagesImportedResponse {
                     success: true,
@@ -1083,6 +1098,8 @@ impl Notifiable<ImportKeyImages> for TxBuilderActor {
                     error_code: None, error_hint: None, error_transient: None,
                     imported_count,
                     spent_count,
+                    key_images: response_key_images,
+                    spent_key_images,
                 }.send_signal_to_dart();
             });
         } else {
@@ -1092,6 +1109,8 @@ impl Notifiable<ImportKeyImages> for TxBuilderActor {
                 error_code: None, error_hint: None, error_transient: None,
                 imported_count: 0,
                 spent_count: 0,
+                key_images: vec![],
+                spent_key_images: vec![],
             }.send_signal_to_dart();
         }
     }

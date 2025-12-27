@@ -927,13 +927,38 @@ void main() {
         frozen: false,
       );
 
-      final modified = original.copyWith(spent: true, frozen: true);
+      final modified = original.copyWith(
+        spent: true,
+        frozen: true,
+        keyImage: 'new_ki',
+      );
       expect(modified.spent, true);
       expect(modified.frozen, true);
+      expect(modified.keyImage, 'new_ki');
       expect(modified.txHash, 'copy_tx');
       expect(modified.subaddressIndex, (1, 7));
       expect(modified.paymentId, 'pid');
       expect(modified.amount, 12345);
+    });
+
+    test('KeyImagesImportedResponse parses returned key images', () {
+      final response = KeyImagesImportedResponse.fromJson({
+        'success': true,
+        'error': null,
+        'error_code': null,
+        'error_hint': null,
+        'error_transient': null,
+        'imported_count': 2,
+        'spent_count': 1,
+        'key_images': ['ki_a', 'ki_b'],
+        'spent_key_images': ['ki_b'],
+      });
+
+      expect(response.success, true);
+      expect(response.importedCount, 2);
+      expect(response.spentCount, 1);
+      expect(response.keyImages, ['ki_a', 'ki_b']);
+      expect(response.spentKeyImages, ['ki_b']);
     });
   });
 }

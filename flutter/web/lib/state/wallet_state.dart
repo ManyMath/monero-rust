@@ -498,6 +498,39 @@ class WalletState extends ChangeNotifier {
     notifyListeners();
   }
 
+  int applyImportedKeyImages(List<String> keyImages) {
+    if (keyImages.isEmpty || allOutputs.isEmpty) return 0;
+
+    final updatedOutputs = List<OwnedOutput>.from(allOutputs);
+    final indexed = <({int index, OwnedOutput output})>[];
+    for (var i = 0; i < updatedOutputs.length; i++) {
+      indexed.add((index: i, output: updatedOutputs[i]));
+    }
+    indexed.sort((a, b) {
+      final byHeight = a.output.blockHeight.compareTo(b.output.blockHeight);
+      if (byHeight != 0) return byHeight;
+      return a.output.outputIndex.compareTo(b.output.outputIndex);
+    });
+
+    final count = keyImages.length < indexed.length ? keyImages.length : indexed.length;
+    for (var i = 0; i < count; i++) {
+      updatedOutputs[indexed[i].index] =
+          updatedOutputs[indexed[i].index].copyWith(keyImage: keyImages[i]);
+    }
+
+    allOutputs = updatedOutputs;
+    pendingSpentKeyImages.removeAll(keyImages);
+
+    final wallet = lifecycle.activeWallet;
+    if (wallet != null) {
+      wallet.outputs = updatedOutputs;
+      wallet.outputsByAccount = reconstructOutputsByAccount(updatedOutputs);
+    }
+
+    notifyListeners();
+    return count;
+  }
+
   void resetWalletState() {
     Log.info(_tag, 'Resetting wallet state');
     seedController.text = '';

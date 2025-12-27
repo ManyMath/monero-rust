@@ -7,6 +7,7 @@ import '../src/ffi/signal_types.dart';
 import '../models/wallet_instance.dart';
 import '../services/wallet_persistence_browser.dart';
 import '../services/wallet_scan_service.dart';
+import '../utils/output_utils.dart';
 import '../widgets/password_dialog.dart';
 import '../widgets/save_wallet_dialog.dart';
 import '../widgets/delete_confirmation_dialog.dart';
@@ -27,8 +28,12 @@ class FileManagementState extends ChangeNotifier {
   String? lastSaveTime;
   bool isExporting = false;
   bool isImporting = false;
+  bool isExportingKeyImages = false;
+  bool isImportingKeyImages = false;
   String? exportError;
   String? importError;
+  String? keyImageExportError;
+  String? keyImageImportError;
   String? _cachedKeyHex;
   String? _cachedSaltHex;
   Timer? _autoSaveTimer;
@@ -437,6 +442,219 @@ class FileManagementState extends ChangeNotifier {
       result.add(int.parse(hex.substring(i, i + 2), radix: 16));
     }
     return result;
+  }
+
+  static String _hexEncode(List<int> bytes) =>
+      bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+  Future<void> exportKeyImages() async {
+    final seed = _walletState.seedController.text.trim();
+    if (seed.isEmpty) {
+      keyImageExportError = 'No wallet seed available for key image export';
+      notifyListeners();
+      _walletState.showSnackBar?.call('No wallet loaded', backgroundColor: Colors.orange);
+      return;
+    }
+    if (seed.startsWith('viewonly:')) {
+      keyImageExportError = 'A full wallet is required to export key images';
+      notifyListeners();
+      _walletState.showSnackBar?.call(
+        'Open the full wallet to export key images',
+        backgroundColor: Colors.orange,
+        seconds: 4,
+      );
+      return;
+    }
+
+    isExportingKeyImages = true;
+    keyImageExportError = null;
+    notifyListeners();
+
+    try {
+      final completer = Completer<KeyImagesExportedResponse>();
+      final sub = KeyImagesExportedResponse.stream.listen((response) {
+        if (!completer.isCompleted) completer.complete(response);
+      });
+
+      ExportKeyImagesRequest(
+        seed: seed,
+        network: _walletState.network,
+        passphrase: _walletState.passphrase,
+        bip39AccountIndex: _walletState.bip39AccountIndex,
+      ).sendSignalToRust();
+
+      final response = await completer.future.timeout(
+        const Duration(seconds: 30),
+        onTimeout: () => const KeyImagesExportedResponse(
+          success: false,
+          error: 'Timeout waiting for key image export',
+          count: 0,
+        ),
+      );
+      await sub.cancel();
+
+      if (!response.success || response.keyImagesHex == null) {
+        isExportingKeyImages = false;
+        keyImageExportError = response.error ?? 'Key image export failed';
+        notifyListeners();
+        _walletState.showSnackBar?.call(
+          'Key image export failed: $keyImageExportError',
+          backgroundColor: Colors.red,
+          seconds: 4,
+        );
+        return;
+      }
+
+      final fileBytes = _hexDecode(response.keyImagesHex!);
+      final blob = html.Blob([fileBytes], 'application/octet-stream');
+      final url = html.Url.createObjectUrlFromBlob(blob);
+      final walletName = _walletState.walletId.isNotEmpty ? _walletState.walletId : 'wallet';
+      final anchor = html.AnchorElement(href: url)
+        ..setAttribute('download', '$walletName.key-images')
+        ..click();
+      html.Url.revokeObjectUrl(url);
+
+      isExportingKeyImages = false;
+      keyImageExportError = null;
+      notifyListeners();
+
+      _walletState.showSnackBar?.call(
+        'Exported ${response.count} key images',
+        seconds: 3,
+      );
+    } catch (e) {
+      isExportingKeyImages = false;
+      keyImageExportError = 'Key image export failed: $e';
+      notifyListeners();
+      _walletState.showSnackBar?.call(
+        keyImageExportError!,
+        backgroundColor: Colors.red,
+        seconds: 4,
+      );
+    }
+  }
+
+  Future<void> importKeyImages() async {
+    final seed = _walletState.seedController.text.trim();
+    if (seed.isEmpty) {
+      keyImageImportError = 'No wallet loaded for key image import';
+      notifyListeners();
+      _walletState.showSnackBar?.call('No wallet loaded', backgroundColor: Colors.orange);
+      return;
+    }
+    if (!seed.startsWith('viewonly:')) {
+      keyImageImportError = 'Key image import is intended for view-only wallets';
+      notifyListeners();
+      _walletState.showSnackBar?.call(
+        'Open the view-only wallet to import key images',
+        backgroundColor: Colors.orange,
+        seconds: 4,
+      );
+      return;
+    }
+
+    keyImageImportError = null;
+    notifyListeners();
+
+    try {
+      final uploadInput = html.FileUploadInputElement();
+      uploadInput.accept = '.key-images,.bin,*';
+      uploadInput.click();
+
+      try {
+        await uploadInput.onChange.first.timeout(const Duration(seconds: 120));
+      } on TimeoutException {
+        return;
+      }
+
+      final files = uploadInput.files;
+      if (files == null || files.isEmpty) return;
+
+      isImportingKeyImages = true;
+      notifyListeners();
+
+      final reader = html.FileReader();
+      reader.readAsArrayBuffer(files[0]);
+      await reader.onLoadEnd.first;
+      final result = reader.result;
+      if (result == null) {
+        isImportingKeyImages = false;
+        keyImageImportError = 'Failed to read key image file';
+        notifyListeners();
+        return;
+      }
+
+      final bytes = Uint8List.view(result as ByteBuffer);
+      final completer = Completer<KeyImagesImportedResponse>();
+      final sub = KeyImagesImportedResponse.stream.listen((response) {
+        if (!completer.isCompleted) completer.complete(response);
+      });
+
+      ImportKeyImagesRequest(
+        dataHex: _hexEncode(bytes),
+        nodeUrl: _walletState.nodeUrlController.text.trim(),
+        seed: seed,
+        passphrase: _walletState.passphrase,
+        bip39AccountIndex: _walletState.bip39AccountIndex,
+      ).sendSignalToRust();
+
+      final response = await completer.future.timeout(
+        const Duration(seconds: 45),
+        onTimeout: () => const KeyImagesImportedResponse(
+          success: false,
+          error: 'Timeout waiting for key image import',
+          importedCount: 0,
+          spentCount: 0,
+        ),
+      );
+      await sub.cancel();
+
+      if (!response.success) {
+        isImportingKeyImages = false;
+        keyImageImportError = response.error ?? 'Key image import failed';
+        notifyListeners();
+        _walletState.showSnackBar?.call(
+          'Key image import failed: $keyImageImportError',
+          backgroundColor: Colors.red,
+          seconds: 4,
+        );
+        return;
+      }
+
+      final assigned = _walletState.applyImportedKeyImages(response.keyImages);
+      if (response.spentKeyImages.isNotEmpty) {
+        OutputUtils.markSpentByKeyImages(
+          _walletState.allOutputs,
+          response.spentKeyImages,
+          _walletState.selectedOutputs,
+        );
+        _walletState.notify();
+      }
+      _outputState.invalidateCaches();
+      _outputState.invalidateStorageBytesCache();
+      _outputState.notify();
+
+      isImportingKeyImages = false;
+      keyImageImportError = null;
+      notifyListeners();
+
+      final spentSuffix = response.spentCount > 0
+          ? ', ${response.spentCount} already spent'
+          : '';
+      _walletState.showSnackBar?.call(
+        'Imported $assigned/${response.importedCount} key images$spentSuffix',
+        seconds: 4,
+      );
+    } catch (e) {
+      isImportingKeyImages = false;
+      keyImageImportError = 'Key image import failed: $e';
+      notifyListeners();
+      _walletState.showSnackBar?.call(
+        keyImageImportError!,
+        backgroundColor: Colors.red,
+        seconds: 4,
+      );
+    }
   }
 
   Future<void> importWallet(BuildContext context) async {

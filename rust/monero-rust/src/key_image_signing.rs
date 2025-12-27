@@ -402,6 +402,11 @@ pub fn import_key_images_from_seed(
     passphrase: &str,
     data: &[u8],
 ) -> Result<Vec<String>, String> {
+    if let Some((view_scalar, _)) = crate::scanner::parse_view_only_keys(seed_phrase) {
+        let view_secret_key = view_scalar.to_bytes();
+        return crate::epee_compat::import_key_images(data, Some(&view_secret_key));
+    }
+
     let seed = crate::scanner::resolve_seed(seed_phrase)?;
     let key_bytes = seed.key_bytes_with_passphrase(passphrase);
     let spend_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(*key_bytes));

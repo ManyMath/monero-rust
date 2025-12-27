@@ -39,6 +39,27 @@ WalletState createWalletState(SignalHub hub) {
   );
 }
 
+OwnedOutput testOutput({
+  required String txHash,
+  required int outputIndex,
+  required int blockHeight,
+  String keyImage = '',
+}) => OwnedOutput(
+  txHash: txHash,
+  outputIndex: outputIndex,
+  amount: 1000,
+  amountXmr: '0.000000001000',
+  key: 'key_$txHash',
+  keyOffset: 'offset_$txHash',
+  commitmentMask: 'mask_$txHash',
+  receivedOutputBytes: 'bytes_$txHash',
+  blockHeight: blockHeight,
+  spent: false,
+  keyImage: keyImage,
+  isCoinbase: false,
+  frozen: false,
+);
+
 void main() {
   late RecordingSignalSender sender;
 
@@ -119,5 +140,29 @@ void main() {
     expect(state.spendKeyController.text, isEmpty);
     expect(state.walletId, 'full_wallet');
     expect(state.network, 'stagenet');
+  });
+
+  test('applyImportedKeyImages assigns by wallet export ordering', () {
+    final hub = SignalHub();
+    final state = createWalletState(hub);
+    addTearDown(state.dispose);
+
+    state.openWallet('watch_wallet', 'viewonly:${'a' * 64}:${'b' * 64}', 'stagenet', 'address');
+    state.allOutputs = [
+      testOutput(txHash: 'later', outputIndex: 0, blockHeight: 20),
+      testOutput(txHash: 'earlier_second', outputIndex: 1, blockHeight: 10),
+      testOutput(txHash: 'earlier_first', outputIndex: 0, blockHeight: 10),
+    ];
+    state.lifecycle.activeWallet!.outputs = state.allOutputs;
+    state.pendingSpentKeyImages.add('ki_b');
+
+    final count = state.applyImportedKeyImages(['ki_a', 'ki_b', 'ki_c']);
+
+    expect(count, 3);
+    expect(state.allOutputs[0].keyImage, 'ki_c');
+    expect(state.allOutputs[1].keyImage, 'ki_b');
+    expect(state.allOutputs[2].keyImage, 'ki_a');
+    expect(state.lifecycle.activeWallet!.outputs[1].keyImage, 'ki_b');
+    expect(state.pendingSpentKeyImages, isNot(contains('ki_b')));
   });
 }
