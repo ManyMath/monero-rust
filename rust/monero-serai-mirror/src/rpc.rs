@@ -17,7 +17,7 @@ use sha3::{Digest, Keccak256};
 
 use crate::{
   Protocol,
-  transaction::{Input, Timelock, Transaction},
+  transaction::{Input, Timelock, Transaction, TransactionPrefix},
   block::Block,
   wallet::Fee,
 };
@@ -436,6 +436,44 @@ impl<R: RpcConnection> Rpc<R> {
     self.get_transactions(&[tx]).await.map(|mut txs| txs.swap_remove(0))
   }
 
+  /// Get timelocks for the given transaction hashes.
+  /// Only parses the transaction prefix, so this works with pruned node data.
+  async fn get_transaction_timelocks(
+    &self,
+    hashes: &[[u8; 32]],
+  ) -> Result<Vec<Timelock>, RpcError> {
+    if hashes.is_empty() {
+      return Ok(vec![]);
+    }
+
+    let txs: TransactionsResponse = self
+      .rpc_call(
+        "get_transactions",
+        Some(json!({
+          "txs_hashes": hashes.iter().map(hex::encode).collect::<Vec<_>>()
+        })),
+      )
+      .await?;
+
+    if !txs.missed_tx.is_empty() {
+      Err(RpcError::TransactionsNotFound(
+        txs.missed_tx.iter().map(|hash| hash_hex(hash)).collect::<Result<_, _>>()?,
+      ))?;
+    }
+
+    txs
+      .txs
+      .iter()
+      .map(|res| {
+        let hex_data = if !res.as_hex.is_empty() { &res.as_hex } else { &res.pruned_as_hex };
+        let data = rpc_hex(hex_data)?;
+        let prefix = TransactionPrefix::read::<&[u8]>(&mut data.as_ref())
+          .map_err(|_| RpcError::InvalidNode)?;
+        Ok(prefix.timelock)
+      })
+      .collect()
+  }
+
   /// Get the hash of a block from the node by the block's numbers.
   /// This function does not verify the returned block hash is actually for the number in question.
   pub async fn get_block_hash(&self, number: usize) -> Result<[u8; 32], RpcError> {
@@ -604,8 +642,8 @@ impl<R: RpcConnection> Rpc<R> {
       )
       .await?;
 
-    let txs = self
-      .get_transactions(
+    let timelocks = self
+      .get_transaction_timelocks(
         &outs
           .outs
           .iter()
@@ -621,7 +659,7 @@ impl<R: RpcConnection> Rpc<R> {
       .enumerate()
       .map(|(i, out)| {
         Ok(Some([rpc_point(&out.key)?, rpc_point(&out.mask)?]).filter(|_| {
-          match txs[i].prefix.timelock {
+          match timelocks[i] {
             Timelock::None => true,
             Timelock::Block(t_height) => t_height <= height,
             _ => false,
