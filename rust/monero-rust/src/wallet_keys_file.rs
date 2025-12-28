@@ -106,7 +106,9 @@ fn write_leb128(mut value: u64) -> Vec<u8> {
 fn find_json_string_value(data: &[u8], field_name: &str) -> Option<(usize, usize)> {
     let needle = format!("\"{}\":\"", field_name);
     let needle_bytes = needle.as_bytes();
-    let pos = data.windows(needle_bytes.len()).position(|w| w == needle_bytes)?;
+    let pos = data
+        .windows(needle_bytes.len())
+        .position(|w| w == needle_bytes)?;
     let start = pos + needle_bytes.len();
     let mut i = start;
     while i < data.len() {
@@ -124,13 +126,17 @@ fn find_json_string_value(data: &[u8], field_name: &str) -> Option<(usize, usize
 fn find_json_int_value(data: &[u8], field_name: &str) -> Option<u64> {
     let needle = format!("\"{}\":", field_name);
     let needle_bytes = needle.as_bytes();
-    let pos = data.windows(needle_bytes.len()).position(|w| w == needle_bytes)?;
+    let pos = data
+        .windows(needle_bytes.len())
+        .position(|w| w == needle_bytes)?;
     let start = pos + needle_bytes.len();
     let mut end = start;
     while end < data.len() && data[end].is_ascii_digit() {
         end += 1;
     }
-    if end == start { return None; }
+    if end == start {
+        return None;
+    }
     std::str::from_utf8(&data[start..end]).ok()?.parse().ok()
 }
 
@@ -140,21 +146,49 @@ fn unescape_json_bytes(data: &[u8]) -> Result<Vec<u8>, String> {
     while i < data.len() {
         if data[i] == b'\\' {
             i += 1;
-            if i >= data.len() { return Err("trailing backslash".into()); }
+            if i >= data.len() {
+                return Err("trailing backslash".into());
+            }
             match data[i] {
-                b'"' => { out.push(b'"'); i += 1; }
-                b'\\' => { out.push(b'\\'); i += 1; }
-                b'/' => { out.push(b'/'); i += 1; }
-                b'b' => { out.push(0x08); i += 1; }
-                b'f' => { out.push(0x0C); i += 1; }
-                b'n' => { out.push(b'\n'); i += 1; }
-                b'r' => { out.push(b'\r'); i += 1; }
-                b't' => { out.push(b'\t'); i += 1; }
+                b'"' => {
+                    out.push(b'"');
+                    i += 1;
+                }
+                b'\\' => {
+                    out.push(b'\\');
+                    i += 1;
+                }
+                b'/' => {
+                    out.push(b'/');
+                    i += 1;
+                }
+                b'b' => {
+                    out.push(0x08);
+                    i += 1;
+                }
+                b'f' => {
+                    out.push(0x0C);
+                    i += 1;
+                }
+                b'n' => {
+                    out.push(b'\n');
+                    i += 1;
+                }
+                b'r' => {
+                    out.push(b'\r');
+                    i += 1;
+                }
+                b't' => {
+                    out.push(b'\t');
+                    i += 1;
+                }
                 b'u' => {
                     i += 1;
-                    if i + 4 > data.len() { return Err("truncated \\uXXXX".into()); }
-                    let hex_str = std::str::from_utf8(&data[i..i + 4])
-                        .map_err(|_| "invalid \\uXXXX")?;
+                    if i + 4 > data.len() {
+                        return Err("truncated \\uXXXX".into());
+                    }
+                    let hex_str =
+                        std::str::from_utf8(&data[i..i + 4]).map_err(|_| "invalid \\uXXXX")?;
                     let cp = u16::from_str_radix(hex_str, 16)
                         .map_err(|_| format!("bad \\u: {hex_str}"))?;
                     if cp <= 0xFF {
@@ -216,7 +250,10 @@ fn parse_language(lang: &str) -> Option<Language> {
     }
 }
 
-pub fn decrypt_keys_data(file_bytes: &[u8], password: &str) -> Result<(Vec<u8>, [u8; 32], [u8; 8]), String> {
+pub fn decrypt_keys_data(
+    file_bytes: &[u8],
+    password: &str,
+) -> Result<(Vec<u8>, [u8; 32], [u8; 8]), String> {
     if file_bytes.len() < 9 {
         return Err("file too small to be a valid .keys file".into());
     }
@@ -278,8 +315,8 @@ pub fn encrypt_keys_data(password: &str, wallet: &ImportedKeysFile) -> Result<Ve
             m_view_secret_key: encrypted_view.to_vec(),
         },
     };
-    let epee_bytes = monero_epee_bin_serde::to_bytes(&acct)
-        .map_err(|e| format!("epee serialize: {e}"))?;
+    let epee_bytes =
+        monero_epee_bin_serde::to_bytes(&acct).map_err(|e| format!("epee serialize: {e}"))?;
 
     let plaintext = build_plaintext_json(&epee_bytes, wallet);
 
@@ -297,10 +334,13 @@ pub fn encrypt_keys_data(password: &str, wallet: &ImportedKeysFile) -> Result<Ve
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn write_keys_file(path: &std::path::Path, password: &str, wallet: &ImportedKeysFile) -> Result<(), String> {
+pub fn write_keys_file(
+    path: &std::path::Path,
+    password: &str,
+    wallet: &ImportedKeysFile,
+) -> Result<(), String> {
     let file_data = encrypt_keys_data(password, wallet)?;
-    std::fs::write(path, &file_data)
-        .map_err(|e| format!("failed to write {}: {e}", path.display()))
+    std::fs::write(path, &file_data).map_err(|e| format!("failed to write {}: {e}", path.display()))
 }
 
 fn inner_encrypt_keys(
@@ -417,32 +457,44 @@ pub fn parse_decrypted_keys(
     chacha_key: &[u8; 32],
     outer_iv: [u8; 8],
 ) -> Result<ImportedKeysFile, String> {
-    let (kd_start, kd_end) = find_json_string_value(plaintext, "key_data")
-        .ok_or("key_data field not found")?;
+    let (kd_start, kd_end) =
+        find_json_string_value(plaintext, "key_data").ok_or("key_data field not found")?;
 
     let key_data_raw = &plaintext[kd_start..kd_end];
-    let key_data_bytes = if !key_data_raw.is_empty() && key_data_raw.iter().all(|b| b.is_ascii_hexdigit()) {
-        hex::decode(std::str::from_utf8(key_data_raw).unwrap())
-            .map_err(|e| format!("hex decode: {e}"))?
-    } else {
-        unescape_json_bytes(key_data_raw)?
-    };
+    let key_data_bytes =
+        if !key_data_raw.is_empty() && key_data_raw.iter().all(|b| b.is_ascii_hexdigit()) {
+            hex::decode(std::str::from_utf8(key_data_raw).unwrap())
+                .map_err(|e| format!("hex decode: {e}"))?
+        } else {
+            unescape_json_bytes(key_data_raw)?
+        };
 
     let acct: EpeeAccountBase = monero_epee_bin_serde::from_bytes(&key_data_bytes)
         .map_err(|e| format!("epee deserialize: {e}"))?;
 
-    let spend_public_key = to_key(&acct.m_keys.m_account_address.m_spend_public_key, "m_spend_public_key")?;
-    let view_public_key = to_key(&acct.m_keys.m_account_address.m_view_public_key, "m_view_public_key")?;
+    let spend_public_key = to_key(
+        &acct.m_keys.m_account_address.m_spend_public_key,
+        "m_spend_public_key",
+    )?;
+    let view_public_key = to_key(
+        &acct.m_keys.m_account_address.m_view_public_key,
+        "m_view_public_key",
+    )?;
     let mut spend_secret_key = to_key(&acct.m_keys.m_spend_secret_key, "m_spend_secret_key")?;
     let mut view_secret_key = to_key(&acct.m_keys.m_view_secret_key, "m_view_secret_key")?;
     let creation_timestamp = acct.m_creation_timestamp;
 
-    let encryption_iv: [u8; 8] = acct.m_keys.m_encryption_iv.as_slice()
-        .try_into()
-        .map_err(|_| format!(
-            "m_encryption_iv: expected 8 bytes, got {}",
-            acct.m_keys.m_encryption_iv.len()
-        ))?;
+    let encryption_iv: [u8; 8] =
+        acct.m_keys
+            .m_encryption_iv
+            .as_slice()
+            .try_into()
+            .map_err(|_| {
+                format!(
+                    "m_encryption_iv: expected 8 bytes, got {}",
+                    acct.m_keys.m_encryption_iv.len()
+                )
+            })?;
 
     // Decrypt secret keys via xor_with_key_stream if they're encrypted
     let encrypted_secret_keys =
@@ -469,14 +521,19 @@ pub fn parse_decrypted_keys(
     let watch_only = find_json_int_value(plaintext, "watch_only").unwrap_or(0) != 0;
     let nettype = find_json_int_value(plaintext, "nettype").unwrap_or(0) as u8;
     let seed_language = find_json_string_value(plaintext, "seed_language").and_then(|(s, e)| {
-        std::str::from_utf8(&plaintext[s..e]).ok().map(|s| s.to_string())
+        std::str::from_utf8(&plaintext[s..e])
+            .ok()
+            .map(|s| s.to_string())
     });
 
     let derived_view = Zeroizing::new(Scalar::from_bytes_mod_order(
         Keccak256::digest(spend_secret_key).into(),
     ));
     let mnemonic = if !watch_only && derived_view.to_bytes() == view_secret_key {
-        let lang = seed_language.as_deref().and_then(parse_language).unwrap_or(Language::English);
+        let lang = seed_language
+            .as_deref()
+            .and_then(parse_language)
+            .unwrap_or(Language::English);
         Seed::from_entropy(lang, Zeroizing::new(spend_secret_key))
             .map(|seed| seed.to_string().to_string())
     } else {

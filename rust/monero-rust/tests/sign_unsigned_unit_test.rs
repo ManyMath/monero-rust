@@ -1,14 +1,12 @@
-/// Unit tests for the offline signing pipeline without RPC or mock-rpc.
-
-use monero_serai::wallet::{
-    address::{Network, AddressSpec},
-    seed::Seed,
-    Change, Decoys, SpendableOutput, ViewPair,
-    UnsignedTransaction, UnsignedInput, InternalPayment,
-};
-use monero_serai::transaction::Transaction;
-use monero_serai::{Commitment, Protocol};
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
+use monero_serai::transaction::Transaction;
+/// Unit tests for the offline signing pipeline without RPC or mock-rpc.
+use monero_serai::wallet::{
+    address::{AddressSpec, Network},
+    seed::Seed,
+    Change, Decoys, InternalPayment, SpendableOutput, UnsignedInput, UnsignedTransaction, ViewPair,
+};
+use monero_serai::{Commitment, Protocol};
 use sha3::{Digest, Keccak256};
 use std::io::Cursor;
 use zeroize::Zeroizing;
@@ -82,7 +80,7 @@ fn test_sign_unsigned_transaction_synthetic() {
         mask_scalar,
         input_amount,
         [0xAA; 32], // tx hash
-        0,           // output index
+        0,          // output index
         global_index,
     );
 
@@ -98,10 +96,10 @@ fn test_sign_unsigned_transaction_synthetic() {
 
     // Positions 1..16 = deterministic decoys
     for i in 1..ring_len {
-        let decoy_key = &Scalar::from_bytes_mod_order([i as u8 + 0x10; 32])
-            * &ED25519_BASEPOINT_TABLE;
-        let decoy_commitment = &Scalar::from_bytes_mod_order([i as u8 + 0x80; 32])
-            * &ED25519_BASEPOINT_TABLE;
+        let decoy_key =
+            &Scalar::from_bytes_mod_order([i as u8 + 0x10; 32]) * &ED25519_BASEPOINT_TABLE;
+        let decoy_commitment =
+            &Scalar::from_bytes_mod_order([i as u8 + 0x80; 32]) * &ED25519_BASEPOINT_TABLE;
         ring.push([decoy_key, decoy_commitment]);
     }
 
@@ -159,12 +157,9 @@ fn test_sign_unsigned_transaction_synthetic() {
     );
 
     let unsigned_hex = hex::encode(&unsigned_bytes);
-    let result = monero_rust::native::sign_unsigned_transaction(
-        TEST_SEED,
-        &unsigned_hex,
-        NETWORK_STR,
-    )
-    .expect("sign_unsigned_transaction should succeed with synthetic input");
+    let result =
+        monero_rust::native::sign_unsigned_transaction(TEST_SEED, &unsigned_hex, NETWORK_STR)
+            .expect("sign_unsigned_transaction should succeed with synthetic input");
 
     // 9. Assert results on OfflineSignResult
     assert_eq!(result.tx_id.len(), 64, "tx_id must be 64 hex chars");
@@ -204,11 +199,7 @@ fn test_sign_unsigned_transaction_synthetic() {
         "TX version must be 2 (RingCT)"
     );
 
-    assert_eq!(
-        deserialized_tx.prefix.inputs.len(),
-        1,
-        "Must have 1 input"
-    );
+    assert_eq!(deserialized_tx.prefix.inputs.len(), 1, "Must have 1 input");
 
     assert_eq!(
         deserialized_tx.prefix.outputs.len(),
@@ -236,6 +227,7 @@ fn test_sign_unsigned_transaction_synthetic() {
     );
 
     // 13. Verify input is ToKey with ring size 16
+    let mut expected_spent_key_images = Vec::new();
     for input in &deserialized_tx.prefix.inputs {
         match input {
             monero_serai::transaction::Input::ToKey {
@@ -250,17 +242,19 @@ fn test_sign_unsigned_transaction_synthetic() {
                 );
                 let ki_bytes = key_image.compress().to_bytes();
                 assert_ne!(ki_bytes, [0u8; 32], "Key image must not be zero");
+                expected_spent_key_images.push(hex::encode(ki_bytes));
             }
             _ => panic!("Expected ToKey input"),
         }
     }
+    assert_eq!(
+        result.spent_key_images, expected_spent_key_images,
+        "Offline signing result must expose spent input key images"
+    );
 
     // 14. Verify outputs are confidential (amount == 0 in prefix for RingCT)
     for output in &deserialized_tx.prefix.outputs {
-        assert_eq!(
-            output.amount, 0,
-            "RingCT outputs must have 0 prefix amount"
-        );
+        assert_eq!(output.amount, 0, "RingCT outputs must have 0 prefix amount");
         assert_ne!(
             output.key.to_bytes(),
             [0u8; 32],

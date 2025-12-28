@@ -79,9 +79,7 @@ fn make_sample_block_scan_result(num_outputs: usize, num_key_images: usize) -> B
             .map(|i| make_sample_wallet_output(i as u64))
             .collect(),
         daemon_height: 600_000,
-        spent_key_images: (0..num_key_images)
-            .map(|i| format!("{:064x}", i))
-            .collect(),
+        spent_key_images: (0..num_key_images).map(|i| format!("{:064x}", i)).collect(),
         spent_key_image_tx_hashes: (0..num_key_images)
             .map(|i| format!("{:064x}", i + 10000))
             .collect(),
@@ -127,17 +125,17 @@ fn bench_block_scan_result_json(c: &mut Criterion) {
     let json_large = serde_json::to_string(&result_large).unwrap();
 
     c.bench_function("block_scan_result_json/deserialize_3_outputs", |b| {
-        b.iter(|| {
-            serde_json::from_str::<BlockScanResult>(black_box(&json_small)).unwrap()
-        })
+        b.iter(|| serde_json::from_str::<BlockScanResult>(black_box(&json_small)).unwrap())
     });
 
     c.bench_function("block_scan_result_json/deserialize_20_outputs", |b| {
-        b.iter(|| {
-            serde_json::from_str::<BlockScanResult>(black_box(&json_large)).unwrap()
-        })
+        b.iter(|| serde_json::from_str::<BlockScanResult>(black_box(&json_large)).unwrap())
     });
 }
 
-criterion_group!(benches, bench_extract_key_images, bench_block_scan_result_json);
+criterion_group!(
+    benches,
+    bench_extract_key_images,
+    bench_block_scan_result_json
+);
 criterion_main!(benches);

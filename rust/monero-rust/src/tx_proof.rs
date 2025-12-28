@@ -1,10 +1,10 @@
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, edwards::EdwardsPoint, scalar::Scalar};
-use monero_serai::wallet::address::{MoneroAddress, Network};
-use sha3::{Digest, Keccak256};
-use zeroize::Zeroizing;
 use getrandom::getrandom;
-use serde::{Serialize, Deserialize};
+use monero_serai::wallet::address::{MoneroAddress, Network};
+use serde::{Deserialize, Serialize};
+use sha3::{Digest, Keccak256};
 use std::ops::Deref;
+use zeroize::Zeroizing;
 
 /// Domain separator for OutProofV2 (from Monero's config.cpp)
 const HASH_KEY_TXPROOF_V2: &[u8] = b"TXPROOF_V2";
@@ -44,8 +44,7 @@ pub fn generate_out_proof_v2(
         _ => return Err(format!("Invalid network: {}", network_str)),
     };
     // Parse tx_key (r scalar)
-    let tx_key_bytes = hex::decode(tx_key_hex)
-        .map_err(|e| format!("Invalid tx_key hex: {}", e))?;
+    let tx_key_bytes = hex::decode(tx_key_hex).map_err(|e| format!("Invalid tx_key hex: {}", e))?;
     if tx_key_bytes.len() != 32 {
         return Err("tx_key must be 32 bytes".to_string());
     }
@@ -70,16 +69,14 @@ pub fn generate_out_proof_v2(
     let d_point: EdwardsPoint = r.deref() * a_point;
 
     // Parse tx_id as the message prefix
-    let tx_id_bytes = hex::decode(tx_id)
-        .map_err(|e| format!("Invalid tx_id hex: {}", e))?;
+    let tx_id_bytes = hex::decode(tx_id).map_err(|e| format!("Invalid tx_id hex: {}", e))?;
     if tx_id_bytes.len() != 32 {
         return Err("tx_id must be 32 bytes".to_string());
     }
 
     // Generate random k for Schnorr signature
     let mut k_bytes = [0u8; 32];
-    getrandom(&mut k_bytes)
-        .map_err(|e| format!("RNG failed: {}", e))?;
+    getrandom(&mut k_bytes).map_err(|e| format!("RNG failed: {}", e))?;
     let k = Zeroizing::new(Scalar::from_bytes_mod_order(k_bytes));
 
     // X = k*G
@@ -122,8 +119,10 @@ pub fn generate_out_proof_v2(
     sig_data.extend_from_slice(&c.to_bytes());
     sig_data.extend_from_slice(&s.to_bytes());
 
-    let signature = format!("OutProofV2{}", base58_monero::encode(&sig_data)
-        .map_err(|e| format!("Base58 encode failed: {:?}", e))?);
+    let signature = format!(
+        "OutProofV2{}",
+        base58_monero::encode(&sig_data).map_err(|e| format!("Base58 encode failed: {:?}", e))?
+    );
 
     // Build formatted proof (Feather Wallet style)
     let network_name = match network {
@@ -183,8 +182,8 @@ pub fn verify_out_proof_v2(
     };
 
     // Parse tx public key R
-    let r_bytes = hex::decode(tx_public_key_hex)
-        .map_err(|e| format!("Invalid tx_public_key hex: {}", e))?;
+    let r_bytes =
+        hex::decode(tx_public_key_hex).map_err(|e| format!("Invalid tx_public_key hex: {}", e))?;
     if r_bytes.len() != 32 {
         return Err("tx_public_key must be 32 bytes".to_string());
     }
@@ -195,15 +194,19 @@ pub fn verify_out_proof_v2(
         .ok_or("Invalid tx public key point")?;
 
     // Strip "OutProofV2" prefix
-    let sig_str = signature.strip_prefix("OutProofV2")
+    let sig_str = signature
+        .strip_prefix("OutProofV2")
         .ok_or("Signature must start with OutProofV2")?;
 
     // Decode base58
-    let sig_data = base58_monero::decode(sig_str)
-        .map_err(|e| format!("Invalid base58: {:?}", e))?;
+    let sig_data =
+        base58_monero::decode(sig_str).map_err(|e| format!("Invalid base58: {:?}", e))?;
 
     if sig_data.len() != 96 {
-        return Err(format!("Invalid signature length: expected 96, got {}", sig_data.len()));
+        return Err(format!(
+            "Invalid signature length: expected 96, got {}",
+            sig_data.len()
+        ));
     }
 
     // Parse D, c, s from signature
@@ -225,8 +228,7 @@ pub fn verify_out_proof_v2(
     let b_point = address.spend;
 
     // Parse tx_id
-    let tx_id_bytes = hex::decode(tx_id)
-        .map_err(|e| format!("Invalid tx_id hex: {}", e))?;
+    let tx_id_bytes = hex::decode(tx_id).map_err(|e| format!("Invalid tx_id hex: {}", e))?;
     if tx_id_bytes.len() != 32 {
         return Err("tx_id must be 32 bytes".to_string());
     }
@@ -390,7 +392,14 @@ mod tests {
         let signature = "InvalidPrefix123";
         let tx_key = "0000000000000000000000000000000000000000000000000000000000000001";
 
-        let result = verify_out_proof_v2(tx_id, address, "", signature, "stagenet", &tx_public_key(tx_key));
+        let result = verify_out_proof_v2(
+            tx_id,
+            address,
+            "",
+            signature,
+            "stagenet",
+            &tx_public_key(tx_key),
+        );
         assert!(result.is_err());
     }
 
@@ -401,7 +410,14 @@ mod tests {
         let signature = "OutProofV2!@#$%^&*()";
         let tx_key = "0000000000000000000000000000000000000000000000000000000000000001";
 
-        let result = verify_out_proof_v2(tx_id, address, "", signature, "stagenet", &tx_public_key(tx_key));
+        let result = verify_out_proof_v2(
+            tx_id,
+            address,
+            "",
+            signature,
+            "stagenet",
+            &tx_public_key(tx_key),
+        );
         assert!(result.is_err());
     }
 
@@ -431,9 +447,19 @@ mod tests {
         let proof = generate_out_proof_v2(tx_id, tx_key, address, "", "stagenet").unwrap();
 
         // Verify with wrong R should fail
-        let result = verify_out_proof_v2(tx_id, address, "", &proof.signature, "stagenet", &tx_public_key(wrong_key));
+        let result = verify_out_proof_v2(
+            tx_id,
+            address,
+            "",
+            &proof.signature,
+            "stagenet",
+            &tx_public_key(wrong_key),
+        );
         assert!(result.is_ok());
-        assert!(!result.unwrap(), "proof with wrong tx key must verify as false");
+        assert!(
+            !result.unwrap(),
+            "proof with wrong tx key must verify as false"
+        );
     }
 
     #[test]

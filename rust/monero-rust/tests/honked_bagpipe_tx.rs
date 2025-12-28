@@ -1,20 +1,19 @@
 //! Transaction building tests using stagenet data.
 
+use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, edwards::EdwardsPoint, scalar::Scalar};
+use monero_serai::{
+    ringct::{RctBase, RctPrunable, RctSignatures},
+    transaction::{Transaction, TransactionPrefix},
+    wallet::{
+        address::{AddressSpec, Network},
+        seed::Seed,
+        Change, Fee, Scanner, SignableTransactionBuilder, SpendableOutput, ViewPair,
+    },
+    Protocol,
+};
 use std::collections::HashSet;
 use std::io::Cursor;
 use zeroize::Zeroizing;
-use monero_serai::{
-    Protocol,
-    transaction::{Transaction, TransactionPrefix},
-    ringct::{RctBase, RctSignatures, RctPrunable},
-    wallet::{
-        seed::Seed,
-        address::{Network, AddressSpec},
-        ViewPair, Scanner, SpendableOutput,
-        Fee, Change, SignableTransactionBuilder,
-    },
-};
-use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar, edwards::EdwardsPoint};
 
 const HONKED_BAGPIPE_MNEMONIC: &str = "honked bagpipe alpine juicy faked afoot jostle claim cowl tunnel orphans negative pheasants feast jetting quote frown teeming cycling tribal womanly hills cottage daytime daytime";
 const EXPECTED_ADDRESS: &str = "58aWiYGUeqZc5idYcx31rYR58K1EVsCYkN6thrZppU1MGqMowPh1BYy4frVWH5RjGLPWthZy9sRGm5ZC4fgX44HUCmqtGUf";
@@ -44,16 +43,25 @@ fn spend_key_scalar_from_seed(seed: &Seed) -> Scalar {
     Scalar::from_bytes_mod_order(spend_bytes)
 }
 
-fn parse_pruned_transaction<R: std::io::Read>(r: &mut R, _prunable_hash: [u8; 32]) -> std::io::Result<Transaction> {
+fn parse_pruned_transaction<R: std::io::Read>(
+    r: &mut R,
+    _prunable_hash: [u8; 32],
+) -> std::io::Result<Transaction> {
     let prefix = TransactionPrefix::read(r)?;
     if prefix.version != 2 {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid version"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "invalid version",
+        ));
     }
     let (rct_base, _rct_type) = RctBase::read(prefix.outputs.len(), r)?;
     Ok(Transaction {
         prefix,
         signatures: vec![],
-        rct_signatures: RctSignatures { base: rct_base, prunable: RctPrunable::Null },
+        rct_signatures: RctSignatures {
+            base: rct_base,
+            prunable: RctPrunable::Null,
+        },
     })
 }
 
@@ -79,8 +87,8 @@ async fn test_transaction_building() {
     prunable_hash_array.copy_from_slice(&prunable_hash);
 
     let mut cursor = Cursor::new(&tx_bytes);
-    let transaction = parse_pruned_transaction(&mut cursor, prunable_hash_array)
-        .expect("parse failed");
+    let transaction =
+        parse_pruned_transaction(&mut cursor, prunable_hash_array).expect("parse failed");
 
     let mut scanner = Scanner::from_view(pair.clone(), Some(HashSet::new()));
     let scan_result = scanner.scan_transaction(&transaction);
@@ -93,7 +101,10 @@ async fn test_transaction_building() {
     let spendable = SpendableOutput::test_new(received_output.clone(), TEST_OUTPUT_GLOBAL_INDEX);
 
     let protocol = Protocol::v16;
-    let fee = Fee { per_weight: 6000, mask: 10000 };
+    let fee = Fee {
+        per_weight: 6000,
+        mask: 10000,
+    };
     let change = Change::new(&pair, false);
     let send_amount = 1_000_000_000_000u64;
 
@@ -103,7 +114,8 @@ async fn test_transaction_building() {
 
     let signable_tx = builder.build().expect("build failed");
 
-    let total_output = send_amount + (EXPECTED_AMOUNT - send_amount - signable_tx.fee()) + signable_tx.fee();
+    let total_output =
+        send_amount + (EXPECTED_AMOUNT - send_amount - signable_tx.fee()) + signable_tx.fee();
     assert_eq!(total_output, EXPECTED_AMOUNT);
 }
 

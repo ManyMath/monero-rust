@@ -7,13 +7,13 @@ use crate::abstractions::{
     TxSubmitResponse, WalletStorage,
 };
 use async_trait::async_trait;
-use base64::{Engine as _, engine::general_purpose};
+use base64::{engine::general_purpose, Engine as _};
 use js_sys::Date;
 use serde::Deserialize;
 use serde_json::Value;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{Request, RequestInit, RequestMode, RequestCredentials, Response, Storage};
+use web_sys::{Request, RequestCredentials, RequestInit, RequestMode, Response, Storage};
 
 /// Browser-based storage using localStorage
 pub struct BrowserStorage {
@@ -28,7 +28,8 @@ impl BrowserStorage {
     }
 
     fn get_storage(&self) -> AbResult<Storage> {
-        let window = web_sys::window().ok_or_else(|| AbError::Storage("No window object".into()))?;
+        let window =
+            web_sys::window().ok_or_else(|| AbError::Storage("No window object".into()))?;
         window
             .local_storage()
             .map_err(|e| AbError::Storage(format!("Failed to access localStorage: {:?}", e)))?
@@ -49,19 +50,27 @@ impl BrowserStorage {
 
         // Reject excessively long keys (max 256 chars)
         if key.len() > 256 {
-            return Err(AbError::InvalidData("Key exceeds maximum length of 256 characters".into()));
+            return Err(AbError::InvalidData(
+                "Key exceeds maximum length of 256 characters".into(),
+            ));
         }
 
         // Whitelist approach: only allow alphanumeric, hyphen, underscore, and dot
-        if !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.') {
+        if !key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+        {
             return Err(AbError::InvalidData(
-                "Key must contain only alphanumeric characters, hyphens, underscores, or dots".into()
+                "Key must contain only alphanumeric characters, hyphens, underscores, or dots"
+                    .into(),
             ));
         }
 
         // Prevent path traversal attacks
         if key.contains("..") {
-            return Err(AbError::InvalidData("Key cannot contain '..' (path traversal)".into()));
+            return Err(AbError::InvalidData(
+                "Key cannot contain '..' (path traversal)".into(),
+            ));
         }
 
         Ok(())
@@ -243,8 +252,9 @@ impl WasmRpcClient {
             )));
         }
 
-        let response: serde_json::Value = serde_json::from_str(&text)
-            .map_err(|e| AbError::Serialization(format!("Failed to parse JSON: {} - Response: {}", e, text)))?;
+        let response: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+            AbError::Serialization(format!("Failed to parse JSON: {} - Response: {}", e, text))
+        })?;
 
         if let Some(error) = response.get("error") {
             return Err(AbError::Rpc(format!(
@@ -253,13 +263,9 @@ impl WasmRpcClient {
             )));
         }
 
-        response
-            .get("result")
-            .cloned()
-            .ok_or_else(|| AbError::Rpc(format!(
-                "No result in response (HTTP {}): {}",
-                status, text
-            )))
+        response.get("result").cloned().ok_or_else(|| {
+            AbError::Rpc(format!("No result in response (HTTP {}): {}", status, text))
+        })
     }
 }
 
@@ -287,7 +293,9 @@ impl RpcClient for WasmRpcClient {
         // Validate input parameters to prevent DoS attacks
         const MAX_BLOCK_COUNT: u64 = 100;
         if count == 0 {
-            return Err(AbError::InvalidData("Block count must be greater than 0".into()));
+            return Err(AbError::InvalidData(
+                "Block count must be greater than 0".into(),
+            ));
         }
         if count > MAX_BLOCK_COUNT {
             return Err(AbError::InvalidData(format!(
@@ -392,7 +400,9 @@ impl RpcClient for CallbackRpcClient {
         // Validate input parameters to prevent DoS attacks
         const MAX_BLOCK_COUNT: u64 = 100;
         if count == 0 {
-            return Err(AbError::InvalidData("Block count must be greater than 0".into()));
+            return Err(AbError::InvalidData(
+                "Block count must be greater than 0".into(),
+            ));
         }
         if count > MAX_BLOCK_COUNT {
             return Err(AbError::InvalidData(format!(

@@ -14,7 +14,7 @@ pub const BASE_FEE_ESTIMATE: u64 = 19_000_000;
 /// bytes of proof weight = ~12,800,000 piconero. We use 13M for margin.
 const BP_DOUBLING_FEE_ESTIMATE: u64 = 13_000_000;
 
-/// Per-output field overhead (commitment + encrypted amount ≈ 40 bytes = 800,000 piconero).
+/// Per-output field overhead (commitment + encrypted amount ~40 bytes = 800,000 piconero).
 const PER_OUTPUT_FIELD_FEE_ESTIMATE: u64 = 1_000_000;
 
 /// Minimum useful output amount (piconero). Outputs below this cost more
@@ -384,8 +384,14 @@ mod tests {
     #[test]
     fn test_estimate_fee_2_outputs() {
         // 2 outputs = base case, no extra BP+ cost
-        assert_eq!(estimate_fee(1, 2), BASE_FEE_ESTIMATE + FEE_PER_INPUT_ESTIMATE);
-        assert_eq!(estimate_fee(2, 2), BASE_FEE_ESTIMATE + 2 * FEE_PER_INPUT_ESTIMATE);
+        assert_eq!(
+            estimate_fee(1, 2),
+            BASE_FEE_ESTIMATE + FEE_PER_INPUT_ESTIMATE
+        );
+        assert_eq!(
+            estimate_fee(2, 2),
+            BASE_FEE_ESTIMATE + 2 * FEE_PER_INPUT_ESTIMATE
+        );
     }
 
     #[test]

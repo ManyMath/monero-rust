@@ -124,8 +124,7 @@ pub fn process_single_wallet_batch(
         .map(|r| r.block_height + 1)
         .unwrap_or(batch_start_height);
 
-    let accounts_set: Option<HashSet<u32>> =
-        accounts_to_scan.map(|a| a.iter().copied().collect());
+    let accounts_set: Option<HashSet<u32>> = accounts_to_scan.map(|a| a.iter().copied().collect());
 
     let mut all_outputs = Vec::new();
     let mut all_spent_key_images = Vec::new();
@@ -141,10 +140,7 @@ pub fn process_single_wallet_batch(
         all_spent_key_images.extend(result.spent_key_images.iter().cloned());
         all_spent_key_image_tx_hashes.extend(result.spent_key_image_tx_hashes.iter().cloned());
 
-        let filtered = filter_outputs_by_accounts(
-            result.outputs.iter(),
-            accounts_set.as_ref(),
-        );
+        let filtered = filter_outputs_by_accounts(result.outputs.iter(), accounts_set.as_ref());
 
         if !filtered.is_empty() {
             all_outputs.extend(filtered.iter().cloned());
@@ -421,17 +417,15 @@ mod tests {
 
     #[test]
     fn batch_filters_outputs_by_account() {
-        let results = vec![
-            make_block_result(
-                100,
-                vec![
-                    make_output(1000, 100, "tx1", 0),
-                    make_output(2000, 100, "tx2", 1),
-                    make_output(3000, 100, "tx3", 2),
-                ],
-                vec![],
-            ),
-        ];
+        let results = vec![make_block_result(
+            100,
+            vec![
+                make_output(1000, 100, "tx1", 0),
+                make_output(2000, 100, "tx2", 1),
+                make_output(3000, 100, "tx3", 2),
+            ],
+            vec![],
+        )];
         let batch = process_single_wallet_batch(&results, Some(&[0, 2]), 1000, 100);
         assert_eq!(batch.outputs_to_store.len(), 2);
         assert_eq!(batch.outputs_to_store[0].tx_hash, "tx1");
@@ -454,9 +448,7 @@ mod tests {
 
     #[test]
     fn batch_should_continue_when_below_target() {
-        let results = vec![
-            make_block_result(100, vec![], vec![]),
-        ];
+        let results = vec![make_block_result(100, vec![], vec![])];
         let batch = process_single_wallet_batch(&results, None, 1000, 100);
         assert!(batch.should_continue);
         assert_eq!(batch.batch_end_height, 101);
@@ -464,9 +456,7 @@ mod tests {
 
     #[test]
     fn batch_should_not_continue_at_target() {
-        let results = vec![
-            make_block_result(999, vec![], vec![]),
-        ];
+        let results = vec![make_block_result(999, vec![], vec![])];
         let batch = process_single_wallet_batch(&results, None, 1000, 999);
         assert!(!batch.should_continue);
         assert_eq!(batch.batch_end_height, 1000);
@@ -474,9 +464,7 @@ mod tests {
 
     #[test]
     fn batch_preserves_daemon_height() {
-        let results = vec![
-            make_block_result(100, vec![], vec![]),
-        ];
+        let results = vec![make_block_result(100, vec![], vec![])];
         let batch = process_single_wallet_batch(&results, None, 1000, 100);
         assert_eq!(batch.daemon_height, 1000);
     }
@@ -484,13 +472,11 @@ mod tests {
     #[test]
     fn batch_key_images_not_filtered_by_account() {
         // Key images from all transactions should be collected regardless of account filter
-        let results = vec![
-            make_block_result(
-                100,
-                vec![make_output(1000, 100, "tx1", 1)], // account 1 output
-                vec!["ki_from_any_tx".into()],
-            ),
-        ];
+        let results = vec![make_block_result(
+            100,
+            vec![make_output(1000, 100, "tx1", 1)], // account 1 output
+            vec!["ki_from_any_tx".into()],
+        )];
         // Filter to account 0 only
         let batch = process_single_wallet_batch(&results, Some(&[0]), 1000, 100);
         // Outputs filtered out, but key images preserved
@@ -525,9 +511,8 @@ mod tests {
             make_block_result(100, vec![], vec![]),
             make_block_result(101, vec![], vec![]),
         ];
-        let outcome = process_batch_with_reorg_detection(
-            &results, &mut state, None, 1000, 100,
-        ).unwrap();
+        let outcome =
+            process_batch_with_reorg_detection(&results, &mut state, None, 1000, 100).unwrap();
         assert!(matches!(outcome, ScanBatchOutcome::Normal(_)));
     }
 
@@ -542,9 +527,8 @@ mod tests {
             make_block_result(101, vec![], vec![]),
             make_block_result(102, vec![], vec![]),
         ];
-        let outcome = process_batch_with_reorg_detection(
-            &results, &mut state, None, 1000, 100,
-        ).unwrap();
+        let outcome =
+            process_batch_with_reorg_detection(&results, &mut state, None, 1000, 100).unwrap();
         assert!(matches!(outcome, ScanBatchOutcome::Normal(_)));
     }
 
@@ -560,9 +544,8 @@ mod tests {
             make_block_result(101, vec![], vec![]),
             make_block_result(102, vec![], vec![]),
         ];
-        let outcome = process_batch_with_reorg_detection(
-            &results, &mut state, None, 1000, 100,
-        ).unwrap();
+        let outcome =
+            process_batch_with_reorg_detection(&results, &mut state, None, 1000, 100).unwrap();
         let info = match outcome {
             ScanBatchOutcome::Reorg(info) => info,
             other => panic!("Expected ScanBatchOutcome::Reorg, got {:?}", other),
@@ -575,12 +558,8 @@ mod tests {
         let mut state = WalletState::new();
         state.current_height = 2000;
         state.record_block_hash(100, "old_hash".to_string());
-        let results = vec![
-            make_block_result(100, vec![], vec![]),
-        ];
-        let result = process_batch_with_reorg_detection(
-            &results, &mut state, None, 3000, 100,
-        );
+        let results = vec![make_block_result(100, vec![], vec![])];
+        let result = process_batch_with_reorg_detection(&results, &mut state, None, 3000, 100);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("exceeds maximum"));
     }
@@ -589,14 +568,13 @@ mod tests {
     fn reorg_detection_no_known_hash_for_height() {
         let mut state = WalletState::new();
         state.current_height = 102;
-        // No hashes recorded — no reorg can be detected
+        // No hashes recorded; no reorg can be detected
         let results = vec![
             make_block_result(100, vec![], vec![]),
             make_block_result(101, vec![], vec![]),
         ];
-        let outcome = process_batch_with_reorg_detection(
-            &results, &mut state, None, 1000, 100,
-        ).unwrap();
+        let outcome =
+            process_batch_with_reorg_detection(&results, &mut state, None, 1000, 100).unwrap();
         assert!(matches!(outcome, ScanBatchOutcome::Normal(_)));
     }
 
@@ -608,9 +586,7 @@ mod tests {
             make_output(1000, 50, "tx_keep", 0),
             make_output(2000, 101, "tx_remove", 0),
         ]);
-        state.mark_spent_by_key_images_at_height(
-            &["ki_tx_keep".to_string()], 105,
-        );
+        state.mark_spent_by_key_images_at_height(&["ki_tx_keep".to_string()], 105);
         state.current_height = 105;
         state.record_block_hash(100, "hash_100".to_string());
         state.record_block_hash(101, "old_hash_101".to_string());
@@ -619,9 +595,8 @@ mod tests {
             make_block_result(100, vec![], vec![]),
             make_block_result(101, vec![], vec![]),
         ];
-        let outcome = process_batch_with_reorg_detection(
-            &results, &mut state, None, 1000, 100,
-        ).unwrap();
+        let outcome =
+            process_batch_with_reorg_detection(&results, &mut state, None, 1000, 100).unwrap();
 
         let info = match outcome {
             ScanBatchOutcome::Reorg(info) => info,
@@ -645,19 +620,17 @@ mod tests {
         let mut state = WalletState::new();
         state.current_height = 99;
         // No known hashes = normal path, but test account filtering is preserved
-        let results = vec![
-            make_block_result(
-                100,
-                vec![
-                    make_output(1000, 100, "tx1", 0),
-                    make_output(2000, 100, "tx2", 1),
-                ],
-                vec![],
-            ),
-        ];
-        let outcome = process_batch_with_reorg_detection(
-            &results, &mut state, Some(&[0]), 1000, 100,
-        ).unwrap();
+        let results = vec![make_block_result(
+            100,
+            vec![
+                make_output(1000, 100, "tx1", 0),
+                make_output(2000, 100, "tx2", 1),
+            ],
+            vec![],
+        )];
+        let outcome =
+            process_batch_with_reorg_detection(&results, &mut state, Some(&[0]), 1000, 100)
+                .unwrap();
         let batch = match outcome {
             ScanBatchOutcome::Normal(batch) => batch,
             other => panic!("Expected ScanBatchOutcome::Normal, got {:?}", other),
@@ -674,17 +647,13 @@ mod tests {
         // Depth = MAX_REORG_DEPTH + 1: should fail
         state.current_height = 100 + MAX_REORG_DEPTH + 1;
         state.record_block_hash(100, "old_hash".to_string());
-        let result = process_batch_with_reorg_detection(
-            &results, &mut state, None, 3000, 100,
-        );
+        let result = process_batch_with_reorg_detection(&results, &mut state, None, 3000, 100);
         assert!(result.is_err());
 
         // Depth = MAX_REORG_DEPTH exactly: should succeed (> not >=)
         state.current_height = 100 + MAX_REORG_DEPTH;
         state.record_block_hash(100, "old_hash".to_string());
-        let result = process_batch_with_reorg_detection(
-            &results, &mut state, None, 3000, 100,
-        );
+        let result = process_batch_with_reorg_detection(&results, &mut state, None, 3000, 100);
         assert!(result.is_ok());
         assert!(matches!(result.unwrap(), ScanBatchOutcome::Reorg(_)));
     }
@@ -697,9 +666,8 @@ mod tests {
             make_block_result(100, vec![], vec![]),
             make_block_result(101, vec![], vec![]),
         ];
-        let outcome = process_batch_with_reorg_detection(
-            &results, &mut state, None, 1000, 100,
-        ).unwrap();
+        let outcome =
+            process_batch_with_reorg_detection(&results, &mut state, None, 1000, 100).unwrap();
         let batch = match outcome {
             ScanBatchOutcome::Normal(batch) => batch,
             other => panic!("Expected ScanBatchOutcome::Normal, got {:?}", other),
@@ -724,9 +692,8 @@ mod tests {
             make_block_result(100, vec![], vec![]),
             make_block_result(101, vec![], vec![]),
         ];
-        let outcome = process_batch_with_reorg_detection(
-            &results, &mut state, None, 1000, 100,
-        ).unwrap();
+        let outcome =
+            process_batch_with_reorg_detection(&results, &mut state, None, 1000, 100).unwrap();
         let info = match outcome {
             ScanBatchOutcome::Reorg(info) => info,
             other => panic!("Expected ScanBatchOutcome::Reorg, got {:?}", other),

@@ -1,0 +1,45 @@
+{
+  "schema": "monero-rust ledger app speculos vector v1",
+  "source": "LedgerHQ/app-monero built locally from cloned HEAD with DEBUG=1, run under Speculos nanosp",
+  "app": {
+    "name": "Monero",
+    "version": "2.2.0",
+    "model": "nanosp"
+  },
+  "seed": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+  "vectors": [
+    {
+      "name": "INS_GET_KEY public keys/address",
+      "apdu": "032001000100",
+      "status": "9000",
+      "data": "865cbfab852a1d1ccdfc7328e4dac90f78fc2154257d07522e9b79e637326dfadae41d6b13568fdd71ec3d20c2f614c65fe819f36ca5da8d24df3bd89b2bad9d3541384667624d6b6d473265334a34317342646a766a614255797a3871486f68735163477452663633714555544d42766d41343566707035705361634d64536737413362373152656a4c7a4238456b4762666a703550454c56484352556145",
+      "response_apdu": "865cbfab852a1d1ccdfc7328e4dac90f78fc2154257d07522e9b79e637326dfadae41d6b13568fdd71ec3d20c2f614c65fe819f36ca5da8d24df3bd89b2bad9d3541384667624d6b6d473265334a34317342646a766a614255797a3871486f68735163477452663633714555544d42766d41343566707035705361634d64536737413362373152656a4c7a4238456b4762666a703550454c564843525561459000"
+    },
+    {
+      "name": "INS_GEN_KEY_IMAGE",
+      "apdu": "033a00006100d8acd4d3bd9e556544284279817dfd4b95c03f17b3c53df6dddf646abf8b4d196d2f327238555bf7d0eb25b2ef6f85e022fb59bf43f05dfeb4d3947ca9acbc5304cd21c5f16024e76b26f47509d6656da990e2f8d4429e1042a5b946abe60898",
+      "status": "9000",
+      "data": "b8af9b11b9391f0cd921863b5f77467729a188d31f8c7df37bd7f2dfd99defee",
+      "response_apdu": "b8af9b11b9391f0cd921863b5f77467729a188d31f8c7df37bd7f2dfd99defee9000"
+    },
+    {
+      "name": "INS_DERIVE_VIEW_TAG index 0",
+      "apdu": "033b000025005a912501a6009b818328b26eaf47b192daa4c5dc01daaaf2852f321214d35ac200000000",
+      "status": "9000",
+      "data": "76",
+      "response_apdu": "769000"
+    }
+  ],
+  "decoded": {
+    "public_view_key": "865cbfab852a1d1ccdfc7328e4dac90f78fc2154257d07522e9b79e637326dfa",
+    "public_spend_key": "dae41d6b13568fdd71ec3d20c2f614c65fe819f36ca5da8d24df3bd89b2bad9d",
+    "address": "5A8FgbMkmG2e3J41sBdjvjaBUyz8qHohsQcGtRf63qEUTMBvmA45fpp5pSacMdSg7A3b71RejLzB8EkGbfjp5PELVHCRUaE",
+    "key_image": "b8af9b11b9391f0cd921863b5f77467729a188d31f8c7df37bd7f2dfd99defee",
+    "view_tag": "76",
+    "key_image_private_key": "6d2f327238555bf7d0eb25b2ef6f85e022fb59bf43f05dfeb4d3947ca9acbc53",
+    "key_image_public_key": "d8acd4d3bd9e556544284279817dfd4b95c03f17b3c53df6dddf646abf8b4d19",
+    "derive_view_tag_derivation": "0fc47054f355ced4d67de73bfa12e4c78ff19089548fffa7d07a674741860f97",
+    "derive_view_tag_encrypted_derivation": "5a912501a6009b818328b26eaf47b192daa4c5dc01daaaf2852f321214d35ac2",
+    "derive_view_tag_output_index_be": "00000000"
+  }
+}

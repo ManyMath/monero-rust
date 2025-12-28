@@ -137,11 +137,14 @@ fn distribution_length_matches_block_range() {
 #[test]
 fn output_keys_are_valid_curve_points() {
     let json = include_str!("vectors/get_outs_sample_0_15.json");
-    let result: GetOutsResult =
-        serde_json::from_str(json).expect("should parse get_outs JSON");
+    let result: GetOutsResult = serde_json::from_str(json).expect("should parse get_outs JSON");
 
     assert_eq!(result.status, "OK");
-    assert_eq!(result.outs.len(), 16, "sample should have 16 output entries");
+    assert_eq!(
+        result.outs.len(),
+        16,
+        "sample should have 16 output entries"
+    );
 
     for (i, out) in result.outs.iter().enumerate() {
         // Each key should be 64 hex chars = 32 bytes
@@ -172,8 +175,7 @@ fn output_keys_are_valid_curve_points() {
 #[test]
 fn output_masks_are_valid_32_byte_keys() {
     let json = include_str!("vectors/get_outs_sample_0_15.json");
-    let result: GetOutsResult =
-        serde_json::from_str(json).expect("should parse get_outs JSON");
+    let result: GetOutsResult = serde_json::from_str(json).expect("should parse get_outs JSON");
 
     for (i, out) in result.outs.iter().enumerate() {
         assert_eq!(
@@ -191,8 +193,7 @@ fn output_masks_are_valid_32_byte_keys() {
 #[test]
 fn output_txids_are_valid_32_byte_hashes() {
     let json = include_str!("vectors/get_outs_sample_0_15.json");
-    let result: GetOutsResult =
-        serde_json::from_str(json).expect("should parse get_outs JSON");
+    let result: GetOutsResult = serde_json::from_str(json).expect("should parse get_outs JSON");
 
     for (i, out) in result.outs.iter().enumerate() {
         assert_eq!(
@@ -210,8 +211,7 @@ fn output_txids_are_valid_32_byte_hashes() {
 #[test]
 fn output_heights_are_sequential_in_sample() {
     let json = include_str!("vectors/get_outs_sample_0_15.json");
-    let result: GetOutsResult =
-        serde_json::from_str(json).expect("should parse get_outs JSON");
+    let result: GetOutsResult = serde_json::from_str(json).expect("should parse get_outs JSON");
 
     // The sample was captured for global output indexes 0..15, which correspond
     // to consecutive blocks in the early chain. Heights should be increasing.

@@ -1,5 +1,5 @@
-use std::path::{Path, PathBuf};
 use monero_rust::wallet_keys_file::{read_keys_file, write_keys_file};
+use std::path::{Path, PathBuf};
 
 const HONKED_MNEMONIC: &str = "honked bagpipe alpine juicy faked afoot jostle claim cowl tunnel orphans negative pheasants feast jetting quote frown teeming cycling tribal womanly hills cottage daytime daytime";
 const HONKED_STAGENET_ADDRESS: &str = "58aWiYGUeqZc5idYcx31rYR58K1EVsCYkN6thrZppU1MGqMowPh1BYy4frVWH5RjGLPWthZy9sRGm5ZC4fgX44HUCmqtGUf";
@@ -27,12 +27,15 @@ fn import_honked_keys() {
     let mnemonic = imported.mnemonic.as_deref().expect("missing mnemonic");
     assert_eq!(mnemonic, HONKED_MNEMONIC);
 
-    let address = monero_rust::derive_address(mnemonic, "stagenet", "")
-        .expect("address derivation failed");
+    let address =
+        monero_rust::derive_address(mnemonic, "stagenet", "").expect("address derivation failed");
     assert_eq!(address, HONKED_STAGENET_ADDRESS);
 
     let keys = monero_rust::derive_keys(mnemonic, "stagenet", "").unwrap();
-    assert_eq!(hex::encode(imported.spend_public_key), keys.public_spend_key);
+    assert_eq!(
+        hex::encode(imported.spend_public_key),
+        keys.public_spend_key
+    );
     assert_eq!(hex::encode(imported.view_public_key), keys.public_view_key);
 }
 
@@ -51,8 +54,8 @@ fn import_vocal_keys() {
     let mnemonic = imported.mnemonic.as_deref().expect("missing mnemonic");
     assert_eq!(mnemonic, VOCAL_MNEMONIC);
 
-    let address = monero_rust::derive_address(mnemonic, "stagenet", "")
-        .expect("address derivation failed");
+    let address =
+        monero_rust::derive_address(mnemonic, "stagenet", "").expect("address derivation failed");
     assert_eq!(address, VOCAL_STAGENET_ADDRESS);
 }
 
@@ -89,13 +92,19 @@ fn assert_roundtrip(name: &str) {
 }
 
 #[test]
-fn roundtrip_honked() { assert_roundtrip("honked.keys"); }
+fn roundtrip_honked() {
+    assert_roundtrip("honked.keys");
+}
 
 #[test]
-fn roundtrip_vocal() { assert_roundtrip("vocal.keys"); }
+fn roundtrip_vocal() {
+    assert_roundtrip("vocal.keys");
+}
 
 #[test]
-fn roundtrip_view_only() { assert_roundtrip("hemlock_view_only.keys"); }
+fn roundtrip_view_only() {
+    assert_roundtrip("hemlock_view_only.keys");
+}
 
 fn assert_bit_exact(name: &str) {
     let original_path = vector_path(name);
@@ -107,17 +116,26 @@ fn assert_bit_exact(name: &str) {
     write_keys_file(tmp.path(), "", &imported).unwrap();
 
     let written_bytes = std::fs::read(tmp.path()).unwrap();
-    assert_eq!(original_bytes, written_bytes, "{name}: written file differs from original");
+    assert_eq!(
+        original_bytes, written_bytes,
+        "{name}: written file differs from original"
+    );
 }
 
 #[test]
-fn bit_exact_honked() { assert_bit_exact("honked.keys"); }
+fn bit_exact_honked() {
+    assert_bit_exact("honked.keys");
+}
 
 #[test]
-fn bit_exact_vocal() { assert_bit_exact("vocal.keys"); }
+fn bit_exact_vocal() {
+    assert_bit_exact("vocal.keys");
+}
 
 #[test]
-fn bit_exact_hemlock_view_only() { assert_bit_exact("hemlock_view_only.keys"); }
+fn bit_exact_hemlock_view_only() {
+    assert_bit_exact("hemlock_view_only.keys");
+}
 
 #[test]
 fn independent_view_key_does_not_offer_incomplete_mnemonic_backup() {

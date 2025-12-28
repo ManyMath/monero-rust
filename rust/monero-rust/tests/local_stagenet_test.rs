@@ -1,8 +1,8 @@
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod local_stagenet_tests {
-    use monero_serai::rpc::HttpRpc;
     use monero_rust::scanner::{derive_address, scan_block_for_outputs};
+    use monero_serai::rpc::HttpRpc;
 
     const LOCAL_NODE: &str = "http://127.0.0.1:38081";
     const TEST_BLOCK: u64 = 1384526;
@@ -25,7 +25,9 @@ mod local_stagenet_tests {
     #[tokio::test]
     async fn test_local_node_connectivity() {
         let rpc = HttpRpc::new(LOCAL_NODE.to_string()).unwrap();
-        let Some(height) = node_height(&rpc).await else { return };
+        let Some(height) = node_height(&rpc).await else {
+            return;
+        };
         assert!(height > TEST_BLOCK as usize);
     }
 

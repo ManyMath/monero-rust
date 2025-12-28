@@ -1,6 +1,6 @@
 use wasm_bindgen::prelude::*;
-use web_sys::{Request, Response};
 use wasm_bindgen_futures::JsFuture;
+use web_sys::{Request, Response};
 
 #[wasm_bindgen]
 extern "C" {

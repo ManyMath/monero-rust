@@ -1,16 +1,16 @@
 //! Output scanning test using the honked bagpipe stagenet wallet.
 
-use std::collections::HashSet;
-use std::io::Cursor;
-use zeroize::Zeroizing;
 use monero_serai::{
     transaction::Transaction,
     wallet::{
+        address::{AddressSpec, Network},
         seed::Seed,
-        address::{Network, AddressSpec},
-        ViewPair, Scanner,
+        Scanner, ViewPair,
     },
 };
+use std::collections::HashSet;
+use std::io::Cursor;
+use zeroize::Zeroizing;
 
 const HONKED_BAGPIPE_MNEMONIC: &str = "honked bagpipe alpine juicy faked afoot jostle claim cowl tunnel orphans negative pheasants feast jetting quote frown teeming cycling tribal womanly hills cottage daytime daytime";
 const EXPECTED_ADDRESS: &str = "58aWiYGUeqZc5idYcx31rYR58K1EVsCYkN6thrZppU1MGqMowPh1BYy4frVWH5RjGLPWthZy9sRGm5ZC4fgX44HUCmqtGUf";
@@ -44,11 +44,10 @@ fn load_test_vectors() -> Vec<RpcCall> {
     let vectors_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/vectors/honked_bagpipe_rpc.json");
 
-    let json_data = std::fs::read_to_string(&vectors_path)
-        .expect("failed to read test vectors file");
+    let json_data =
+        std::fs::read_to_string(&vectors_path).expect("failed to read test vectors file");
 
-    serde_json::from_str(&json_data)
-        .expect("failed to parse test vectors JSON")
+    serde_json::from_str(&json_data).expect("failed to parse test vectors JSON")
 }
 
 fn get_transaction_info(tx_id: &str) -> TxInfo {
@@ -151,10 +150,13 @@ fn view_key_from_seed(seed: &Seed) -> curve25519_dalek::scalar::Scalar {
     hash_to_scalar(&spend_bytes)
 }
 
-fn parse_pruned_transaction<R: std::io::Read>(r: &mut R, _prunable_hash: [u8; 32]) -> std::io::Result<Transaction> {
+fn parse_pruned_transaction<R: std::io::Read>(
+    r: &mut R,
+    _prunable_hash: [u8; 32],
+) -> std::io::Result<Transaction> {
     use monero_serai::{
+        ringct::{RctBase, RctPrunable, RctSignatures},
         transaction::TransactionPrefix,
-        ringct::{RctBase, RctSignatures, RctPrunable},
     };
 
     let prefix = TransactionPrefix::read(r)?;
@@ -162,7 +164,7 @@ fn parse_pruned_transaction<R: std::io::Read>(r: &mut R, _prunable_hash: [u8; 32
     if prefix.version != 2 {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "invalid version"
+            "invalid version",
         ));
     }
 

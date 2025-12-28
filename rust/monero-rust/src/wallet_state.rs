@@ -452,7 +452,11 @@ impl WalletState {
 
     /// Mark outputs as spent, recording the height at which the spend occurred.
     /// Returns the number of outputs newly marked as spent.
-    pub fn mark_spent_by_key_images_at_height(&mut self, key_images: &[String], height: u64) -> usize {
+    pub fn mark_spent_by_key_images_at_height(
+        &mut self,
+        key_images: &[String],
+        height: u64,
+    ) -> usize {
         let mut count = 0;
         for ki in key_images {
             if let Some(&idx) = self.key_image_index.get(ki) {
@@ -469,7 +473,7 @@ impl WalletState {
     /// Like `mark_spent_by_key_images_at_height` but also detects conflicts:
     /// an output spent by a *different transaction*.
     ///
-    /// `tx_hashes` is parallel to `key_images` — the tx that contains each key
+    /// `tx_hashes` is parallel to `key_images`; the tx that contains each key
     /// image.  When a tx hash is known and matches the previously recorded
     /// spending tx, the spend is treated as identical (rescan) regardless of
     /// height.  A conflict is only raised when the spending tx differs.
@@ -500,12 +504,15 @@ impl WalletState {
                 } else if let Some(prev_h) = output.spent_height {
                     // Check if same spending transaction (rescan)
                     let same_tx = !tx_hash.is_empty()
-                        && self.spent_by_tx.get(ki).map_or(false, |prev| prev == tx_hash);
+                        && self
+                            .spent_by_tx
+                            .get(ki)
+                            .map_or(false, |prev| prev == tx_hash);
                     if same_tx {
-                        // Idempotent rescan — update height to latest observation
+                        // Idempotent rescan; update height to latest observation
                         output.spent_height = Some(height);
                     } else if prev_h != height {
-                        // Different tx or unknown tx at different height → conflict
+                        // Different tx or unknown tx at different height -> conflict
                         conflicts.push(SpentConflict {
                             key_image: ki.clone(),
                             previous_spent_height: Some(prev_h),
@@ -983,8 +990,8 @@ mod tests {
     fn test_mixed_confirmed_and_unconfirmed() {
         let mut state = WalletState::new();
         state.add_outputs(vec![
-            make_output(1_000_000_000_000, 80, "ki1"),  // 20 confs -> confirmed
-            make_output(2_000_000_000_000, 95, "ki2"),  // 5 confs -> unconfirmed
+            make_output(1_000_000_000_000, 80, "ki1"), // 20 confs -> confirmed
+            make_output(2_000_000_000_000, 95, "ki2"), // 5 confs -> unconfirmed
         ]);
         state.current_height = 100;
 
@@ -1096,8 +1103,8 @@ mod tests {
     fn test_spendable_outputs() {
         let mut state = WalletState::new();
         state.add_outputs(vec![
-            make_output(1_000_000_000_000, 80, "ki1"),  // spendable at height 100
-            make_output(2_000_000_000_000, 95, "ki2"),  // not spendable (5 confs)
+            make_output(1_000_000_000_000, 80, "ki1"), // spendable at height 100
+            make_output(2_000_000_000_000, 95, "ki2"), // not spendable (5 confs)
         ]);
         state.daemon_height = 100;
 
@@ -1528,7 +1535,9 @@ mod tests {
         assert_eq!(state.outputs().len(), 2);
 
         // Remaining: account 0 and account 1 outputs below split
-        let accounts: Vec<u32> = state.outputs().iter()
+        let accounts: Vec<u32> = state
+            .outputs()
+            .iter()
             .map(|o| o.subaddress_index.unwrap().0)
             .collect();
         assert!(accounts.contains(&0));
@@ -1583,9 +1592,7 @@ mod tests {
         assert_eq!(state.outputs().len(), 1);
 
         // Add new outputs from the new chain fork
-        state.add_outputs(vec![
-            make_output(5_000_000_000_000, 100, "ki_new"),
-        ]);
+        state.add_outputs(vec![make_output(5_000_000_000_000, 100, "ki_new")]);
         assert_eq!(state.outputs().len(), 2);
         assert_eq!(state.current_height, 100);
 
@@ -1734,7 +1741,14 @@ mod tests {
         // Rollback to 95: output at height 80 survives, output at 90 survives
         state.rollback_to_height(95);
         // ki1 should still be frozen after rollback
-        assert!(state.outputs().iter().find(|o| o.key_image == "ki1").unwrap().frozen);
+        assert!(
+            state
+                .outputs()
+                .iter()
+                .find(|o| o.key_image == "ki1")
+                .unwrap()
+                .frozen
+        );
         assert_eq!(state.spendable_outputs().len(), 1);
         assert_eq!(state.spendable_outputs()[0].key_image, "ki2");
     }
@@ -1778,23 +1792,24 @@ mod tests {
         let mut state = WalletState::new();
         state.add_outputs(vec![make_output(1_000_000_000_000, 50, "ki1")]);
 
-        let (count, conflicts) = state.mark_spent_detecting_conflicts(
-            &["ki1".to_string()], &["tx_a".to_string()], 100,
-        );
+        let (count, conflicts) =
+            state.mark_spent_detecting_conflicts(&["ki1".to_string()], &["tx_a".to_string()], 100);
         assert_eq!(count, 1);
         assert!(conflicts.is_empty());
 
         // Same key image, different spending tx -> conflict
-        let (count2, conflicts2) = state.mark_spent_detecting_conflicts(
-            &["ki1".to_string()], &["tx_b".to_string()], 200,
-        );
+        let (count2, conflicts2) =
+            state.mark_spent_detecting_conflicts(&["ki1".to_string()], &["tx_b".to_string()], 200);
         assert_eq!(count2, 0);
         assert_eq!(conflicts2.len(), 1);
-        assert_eq!(conflicts2[0], SpentConflict {
-            key_image: "ki1".to_string(),
-            previous_spent_height: Some(100),
-            new_height: 200,
-        });
+        assert_eq!(
+            conflicts2[0],
+            SpentConflict {
+                key_image: "ki1".to_string(),
+                previous_spent_height: Some(100),
+                new_height: 200,
+            }
+        );
     }
 
     #[test]
@@ -1802,16 +1817,14 @@ mod tests {
         let mut state = WalletState::new();
         state.add_outputs(vec![make_output(1_000_000_000_000, 50, "ki1")]);
 
-        let (count, conflicts) = state.mark_spent_detecting_conflicts(
-            &["ki1".to_string()], &["tx_a".to_string()], 100,
-        );
+        let (count, conflicts) =
+            state.mark_spent_detecting_conflicts(&["ki1".to_string()], &["tx_a".to_string()], 100);
         assert_eq!(count, 1);
         assert!(conflicts.is_empty());
 
         // Same spending tx at different height (rescan with different batch boundary) -> no conflict
-        let (count2, conflicts2) = state.mark_spent_detecting_conflicts(
-            &["ki1".to_string()], &["tx_a".to_string()], 200,
-        );
+        let (count2, conflicts2) =
+            state.mark_spent_detecting_conflicts(&["ki1".to_string()], &["tx_a".to_string()], 200);
         assert_eq!(count2, 0);
         assert!(conflicts2.is_empty());
     }
@@ -1821,16 +1834,14 @@ mod tests {
         let mut state = WalletState::new();
         state.add_outputs(vec![make_output(1_000_000_000_000, 50, "ki1")]);
 
-        let (count, conflicts) = state.mark_spent_detecting_conflicts(
-            &["ki1".to_string()], &["tx_a".to_string()], 100,
-        );
+        let (count, conflicts) =
+            state.mark_spent_detecting_conflicts(&["ki1".to_string()], &["tx_a".to_string()], 100);
         assert_eq!(count, 1);
         assert!(conflicts.is_empty());
 
         // Same height = idempotent, no conflict (even with empty tx hash)
-        let (count2, conflicts2) = state.mark_spent_detecting_conflicts(
-            &["ki1".to_string()], &[], 100,
-        );
+        let (count2, conflicts2) =
+            state.mark_spent_detecting_conflicts(&["ki1".to_string()], &[], 100);
         assert_eq!(count2, 0);
         assert!(conflicts2.is_empty());
     }
@@ -1846,17 +1857,15 @@ mod tests {
         assert_eq!(state.outputs()[0].spent_height, None);
 
         // Now confirmed at some height -> NOT a conflict, and updates spent_height
-        let (count, conflicts) = state.mark_spent_detecting_conflicts(
-            &["ki1".to_string()], &["tx_a".to_string()], 150,
-        );
+        let (count, conflicts) =
+            state.mark_spent_detecting_conflicts(&["ki1".to_string()], &["tx_a".to_string()], 150);
         assert_eq!(count, 0);
         assert!(conflicts.is_empty());
         assert_eq!(state.outputs()[0].spent_height, Some(150));
 
         // Subsequent rescan with same tx at different height -> still no conflict
-        let (count2, conflicts2) = state.mark_spent_detecting_conflicts(
-            &["ki1".to_string()], &["tx_a".to_string()], 200,
-        );
+        let (count2, conflicts2) =
+            state.mark_spent_detecting_conflicts(&["ki1".to_string()], &["tx_a".to_string()], 200);
         assert_eq!(count2, 0);
         assert!(conflicts2.is_empty());
     }
@@ -1875,16 +1884,24 @@ mod tests {
         // Check mempool key images against confirmed spends
         let conflicts = state.check_spent_conflicts(&["ki1".to_string(), "ki2".to_string()]);
         assert_eq!(conflicts.len(), 1);
-        assert_eq!(conflicts[0], SpentConflict {
-            key_image: "ki1".to_string(),
-            previous_spent_height: Some(100),
-            new_height: 0,
-        });
+        assert_eq!(
+            conflicts[0],
+            SpentConflict {
+                key_image: "ki1".to_string(),
+                previous_spent_height: Some(100),
+                new_height: 0,
+            }
+        );
     }
 
     // ---- Pending spend tests ----
 
-    fn make_pending_spend(tx_id: &str, key_image: &str, amount: u64, created_at: u64) -> PendingSpend {
+    fn make_pending_spend(
+        tx_id: &str,
+        key_image: &str,
+        amount: u64,
+        created_at: u64,
+    ) -> PendingSpend {
         PendingSpend {
             tx_id: tx_id.to_string(),
             key_image: key_image.to_string(),
@@ -1903,9 +1920,10 @@ mod tests {
         ]);
         state.current_height = 200;
 
-        state.add_pending_spends("tx_abc", vec![
-            make_pending_spend("tx_abc", "ki1", 1_000_000_000_000, 1000),
-        ]);
+        state.add_pending_spends(
+            "tx_abc",
+            vec![make_pending_spend("tx_abc", "ki1", 1_000_000_000_000, 1000)],
+        );
 
         let bal = state.balance();
         assert_eq!(bal.confirmed, 2_000_000_000_000);
@@ -1921,9 +1939,10 @@ mod tests {
         ]);
         state.daemon_height = 200;
 
-        state.add_pending_spends("tx_abc", vec![
-            make_pending_spend("tx_abc", "ki1", 1_000_000_000_000, 1000),
-        ]);
+        state.add_pending_spends(
+            "tx_abc",
+            vec![make_pending_spend("tx_abc", "ki1", 1_000_000_000_000, 1000)],
+        );
 
         let spendable = state.spendable_outputs();
         assert_eq!(spendable.len(), 1);
@@ -1933,14 +1952,13 @@ mod tests {
     #[test]
     fn test_confirm_pending_spend() {
         let mut state = WalletState::new();
-        state.add_outputs(vec![
-            make_output(1_000_000_000_000, 80, "ki1"),
-        ]);
+        state.add_outputs(vec![make_output(1_000_000_000_000, 80, "ki1")]);
         state.current_height = 200;
 
-        state.add_pending_spends("tx_abc", vec![
-            make_pending_spend("tx_abc", "ki1", 1_000_000_000_000, 1000),
-        ]);
+        state.add_pending_spends(
+            "tx_abc",
+            vec![make_pending_spend("tx_abc", "ki1", 1_000_000_000_000, 1000)],
+        );
         assert!(state.is_pending_spent("ki1"));
 
         let confirmed = state.confirm_pending_spend("ki1", 150);
@@ -1964,12 +1982,14 @@ mod tests {
             make_output(2_000_000_000_000, 80, "ki2"),
         ]);
 
-        state.add_pending_spends("tx_old", vec![
-            make_pending_spend("tx_old", "ki1", 1_000_000_000_000, 1000),
-        ]);
-        state.add_pending_spends("tx_new", vec![
-            make_pending_spend("tx_new", "ki2", 2_000_000_000_000, 5000),
-        ]);
+        state.add_pending_spends(
+            "tx_old",
+            vec![make_pending_spend("tx_old", "ki1", 1_000_000_000_000, 1000)],
+        );
+        state.add_pending_spends(
+            "tx_new",
+            vec![make_pending_spend("tx_new", "ki2", 2_000_000_000_000, 5000)],
+        );
 
         // now=8200: tx_old expired (1000 + 7200 = 8200), tx_new not (5000 + 7200 = 12200)
         let cleaned = state.cleanup_expired_pending_spends(8200);
@@ -1982,13 +2002,14 @@ mod tests {
     #[test]
     fn test_pending_spends_for_tx() {
         let mut state = WalletState::new();
-        state.add_pending_spends("tx1", vec![
-            make_pending_spend("tx1", "ki_a", 100, 1000),
-            make_pending_spend("tx1", "ki_b", 200, 1000),
-        ]);
-        state.add_pending_spends("tx2", vec![
-            make_pending_spend("tx2", "ki_c", 300, 1000),
-        ]);
+        state.add_pending_spends(
+            "tx1",
+            vec![
+                make_pending_spend("tx1", "ki_a", 100, 1000),
+                make_pending_spend("tx1", "ki_b", 200, 1000),
+            ],
+        );
+        state.add_pending_spends("tx2", vec![make_pending_spend("tx2", "ki_c", 300, 1000)]);
 
         let tx1_spends = state.pending_spends_for_tx("tx1");
         assert_eq!(tx1_spends.len(), 2);
@@ -1999,10 +2020,13 @@ mod tests {
     #[test]
     fn test_pending_key_images() {
         let mut state = WalletState::new();
-        state.add_pending_spends("tx1", vec![
-            make_pending_spend("tx1", "ki_a", 100, 1000),
-            make_pending_spend("tx1", "ki_b", 200, 1000),
-        ]);
+        state.add_pending_spends(
+            "tx1",
+            vec![
+                make_pending_spend("tx1", "ki_a", 100, 1000),
+                make_pending_spend("tx1", "ki_b", 200, 1000),
+            ],
+        );
 
         let ki = state.pending_key_images();
         assert_eq!(ki.len(), 2);
@@ -2017,9 +2041,10 @@ mod tests {
             make_output(1_000_000_000_000, 50, "ki1"),
             make_output(2_000_000_000_000, 100, "ki2"),
         ]);
-        state.add_pending_spends("tx_abc", vec![
-            make_pending_spend("tx_abc", "ki2", 2_000_000_000_000, 1000),
-        ]);
+        state.add_pending_spends(
+            "tx_abc",
+            vec![make_pending_spend("tx_abc", "ki2", 2_000_000_000_000, 1000)],
+        );
 
         state.rollback_to_height(80);
         // ki2 was removed (block_height 100 >= 80), so its pending spend should be cleared
@@ -2041,10 +2066,16 @@ mod tests {
             created_at_secs: 1000,
         });
 
-        assert_eq!(state.get_tracked_tx("tx1").unwrap().status, TxStatus::Created);
+        assert_eq!(
+            state.get_tracked_tx("tx1").unwrap().status,
+            TxStatus::Created
+        );
 
         state.advance_tx_status("tx1", TxStatus::Broadcast);
-        assert_eq!(state.get_tracked_tx("tx1").unwrap().status, TxStatus::Broadcast);
+        assert_eq!(
+            state.get_tracked_tx("tx1").unwrap().status,
+            TxStatus::Broadcast
+        );
 
         state.advance_tx_status("tx1", TxStatus::Confirmed { height: 500 });
         assert_eq!(
@@ -2114,20 +2145,26 @@ mod tests {
     fn test_restore_pending_spends_filters_expired() {
         let mut state = WalletState::new();
         let mut spends = HashMap::new();
-        spends.insert("ki_fresh".to_string(), PendingSpend {
-            tx_id: "tx1".into(),
-            key_image: "ki_fresh".into(),
-            output_key: "ok1".into(),
-            amount: 100,
-            created_at_secs: 5000,
-        });
-        spends.insert("ki_expired".to_string(), PendingSpend {
-            tx_id: "tx2".into(),
-            key_image: "ki_expired".into(),
-            output_key: "ok2".into(),
-            amount: 200,
-            created_at_secs: 1000,
-        });
+        spends.insert(
+            "ki_fresh".to_string(),
+            PendingSpend {
+                tx_id: "tx1".into(),
+                key_image: "ki_fresh".into(),
+                output_key: "ok1".into(),
+                amount: 100,
+                created_at_secs: 5000,
+            },
+        );
+        spends.insert(
+            "ki_expired".to_string(),
+            PendingSpend {
+                tx_id: "tx2".into(),
+                key_image: "ki_expired".into(),
+                output_key: "ok2".into(),
+                amount: 200,
+                created_at_secs: 1000,
+            },
+        );
 
         // now=8000: ki_fresh age=3000 < 7200 (kept), ki_expired age=7000 < 7200 (kept)
         state.restore_pending_spends(spends.clone(), 8000);
@@ -2145,28 +2182,40 @@ mod tests {
     fn test_restore_tracked_transactions() {
         let mut state = WalletState::new();
         let mut txs = HashMap::new();
-        txs.insert("tx1".to_string(), TrackedTransaction {
-            tx_id: "tx1".into(),
-            status: TxStatus::Broadcast,
-            spent_key_images: vec!["ki1".into()],
-            spent_output_keys: vec![],
-            change_outputs: vec![],
-            fee: 50_000_000,
-            created_at_secs: 1000,
-        });
-        txs.insert("tx2".to_string(), TrackedTransaction {
-            tx_id: "tx2".into(),
-            status: TxStatus::Confirmed { height: 500 },
-            spent_key_images: vec![],
-            spent_output_keys: vec![],
-            change_outputs: vec![],
-            fee: 0,
-            created_at_secs: 2000,
-        });
+        txs.insert(
+            "tx1".to_string(),
+            TrackedTransaction {
+                tx_id: "tx1".into(),
+                status: TxStatus::Broadcast,
+                spent_key_images: vec!["ki1".into()],
+                spent_output_keys: vec![],
+                change_outputs: vec![],
+                fee: 50_000_000,
+                created_at_secs: 1000,
+            },
+        );
+        txs.insert(
+            "tx2".to_string(),
+            TrackedTransaction {
+                tx_id: "tx2".into(),
+                status: TxStatus::Confirmed { height: 500 },
+                spent_key_images: vec![],
+                spent_output_keys: vec![],
+                change_outputs: vec![],
+                fee: 0,
+                created_at_secs: 2000,
+            },
+        );
 
         state.restore_tracked_transactions(txs);
-        assert_eq!(state.get_tracked_tx("tx1").unwrap().status, TxStatus::Broadcast);
-        assert_eq!(state.get_tracked_tx("tx2").unwrap().status, TxStatus::Confirmed { height: 500 });
+        assert_eq!(
+            state.get_tracked_tx("tx1").unwrap().status,
+            TxStatus::Broadcast
+        );
+        assert_eq!(
+            state.get_tracked_tx("tx2").unwrap().status,
+            TxStatus::Confirmed { height: 500 }
+        );
         assert!(state.get_tracked_tx("tx3").is_none());
     }
 
@@ -2183,11 +2232,15 @@ mod tests {
             created_at_secs: 1000,
         });
 
-        state.add_pending_spends("tx1", vec![
-            make_pending_spend("tx1", "ki1", 1_000_000_000_000, 1000),
-        ]);
+        state.add_pending_spends(
+            "tx1",
+            vec![make_pending_spend("tx1", "ki1", 1_000_000_000_000, 1000)],
+        );
 
-        assert_eq!(state.get_tracked_tx("tx1").unwrap().status, TxStatus::Broadcast);
+        assert_eq!(
+            state.get_tracked_tx("tx1").unwrap().status,
+            TxStatus::Broadcast
+        );
     }
 
     #[test]
@@ -2207,24 +2260,30 @@ mod tests {
 
         // Simulate save/restore: replace outputs (clears spent_by_tx), then restore tracked txs
         let mut txs = HashMap::new();
-        txs.insert("tx_a".to_string(), TrackedTransaction {
-            tx_id: "tx_a".into(),
-            status: TxStatus::Confirmed { height: 100 },
-            spent_key_images: vec!["ki1".into()],
-            spent_output_keys: vec![],
-            change_outputs: vec![],
-            fee: 0,
-            created_at_secs: 1000,
-        });
-        txs.insert("tx_b".to_string(), TrackedTransaction {
-            tx_id: "tx_b".into(),
-            status: TxStatus::Broadcast,
-            spent_key_images: vec!["ki2".into()],
-            spent_output_keys: vec![],
-            change_outputs: vec![],
-            fee: 0,
-            created_at_secs: 1000,
-        });
+        txs.insert(
+            "tx_a".to_string(),
+            TrackedTransaction {
+                tx_id: "tx_a".into(),
+                status: TxStatus::Confirmed { height: 100 },
+                spent_key_images: vec!["ki1".into()],
+                spent_output_keys: vec![],
+                change_outputs: vec![],
+                fee: 0,
+                created_at_secs: 1000,
+            },
+        );
+        txs.insert(
+            "tx_b".to_string(),
+            TrackedTransaction {
+                tx_id: "tx_b".into(),
+                status: TxStatus::Broadcast,
+                spent_key_images: vec!["ki2".into()],
+                spent_output_keys: vec![],
+                change_outputs: vec![],
+                fee: 0,
+                created_at_secs: 1000,
+            },
+        );
 
         // Clear and rebuild
         state.replace_outputs(vec![
@@ -2243,28 +2302,28 @@ mod tests {
         state.restore_tracked_transactions(txs);
 
         // Rescan at different height should NOT produce conflict (spent_by_tx rebuilt)
-        let (_, conflicts) = state.mark_spent_detecting_conflicts(
-            &["ki1".to_string()], &["tx_a".to_string()], 200,
+        let (_, conflicts) =
+            state.mark_spent_detecting_conflicts(&["ki1".to_string()], &["tx_a".to_string()], 200);
+        assert!(
+            conflicts.is_empty(),
+            "expected no conflict after restore, got {:?}",
+            conflicts
         );
-        assert!(conflicts.is_empty(), "expected no conflict after restore, got {:?}", conflicts);
     }
 
     #[test]
     fn test_rollback_clears_spent_by_tx() {
         let mut state = WalletState::new();
         state.add_outputs(vec![make_output(1_000_000_000_000, 50, "ki1")]);
-        state.mark_spent_detecting_conflicts(
-            &["ki1".to_string()], &["tx_a".to_string()], 100,
-        );
+        state.mark_spent_detecting_conflicts(&["ki1".to_string()], &["tx_a".to_string()], 100);
 
         // Rollback unspends ki1 and clears its spent_by_tx entry
         state.rollback_to_height(90);
         assert!(!state.outputs()[0].spent);
 
         // Re-spend with a DIFFERENT tx should not conflict (clean slate)
-        let (count, conflicts) = state.mark_spent_detecting_conflicts(
-            &["ki1".to_string()], &["tx_b".to_string()], 95,
-        );
+        let (count, conflicts) =
+            state.mark_spent_detecting_conflicts(&["ki1".to_string()], &["tx_b".to_string()], 95);
         assert_eq!(count, 1);
         assert!(conflicts.is_empty());
     }
@@ -2273,17 +2332,14 @@ mod tests {
     fn test_replace_outputs_clears_spent_by_tx() {
         let mut state = WalletState::new();
         state.add_outputs(vec![make_output(1_000_000_000_000, 50, "ki1")]);
-        state.mark_spent_detecting_conflicts(
-            &["ki1".to_string()], &["tx_a".to_string()], 100,
-        );
+        state.mark_spent_detecting_conflicts(&["ki1".to_string()], &["tx_a".to_string()], 100);
 
         // Replace outputs clears spent_by_tx
         state.replace_outputs(vec![make_output(1_000_000_000_000, 50, "ki1")]);
 
         // First spend after replace works cleanly
-        let (count, conflicts) = state.mark_spent_detecting_conflicts(
-            &["ki1".to_string()], &["tx_a".to_string()], 100,
-        );
+        let (count, conflicts) =
+            state.mark_spent_detecting_conflicts(&["ki1".to_string()], &["tx_a".to_string()], 100);
         assert_eq!(count, 1);
         assert!(conflicts.is_empty());
     }
@@ -2293,20 +2349,16 @@ mod tests {
         let mut state = WalletState::new();
         state.add_outputs(vec![make_output(1_000_000_000_000, 50, "ki1")]);
 
-        state.mark_spent_detecting_conflicts(
-            &["ki1".to_string()], &["tx_a".to_string()], 100,
-        );
+        state.mark_spent_detecting_conflicts(&["ki1".to_string()], &["tx_a".to_string()], 100);
 
         // Different tx -> conflict, spent_by_tx updated to tx_b
-        let (_, conflicts) = state.mark_spent_detecting_conflicts(
-            &["ki1".to_string()], &["tx_b".to_string()], 200,
-        );
+        let (_, conflicts) =
+            state.mark_spent_detecting_conflicts(&["ki1".to_string()], &["tx_b".to_string()], 200);
         assert_eq!(conflicts.len(), 1);
 
         // Same tx_b again at different height -> no conflict (idempotent)
-        let (_, conflicts2) = state.mark_spent_detecting_conflicts(
-            &["ki1".to_string()], &["tx_b".to_string()], 300,
-        );
+        let (_, conflicts2) =
+            state.mark_spent_detecting_conflicts(&["ki1".to_string()], &["tx_b".to_string()], 300);
         assert!(conflicts2.is_empty());
     }
 }

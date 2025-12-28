@@ -1,9 +1,9 @@
+use base64::Engine;
+use monero_serai::rpc::{RpcConnection, RpcError};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use monero_serai::rpc::{RpcConnection, RpcError};
-use serde::Deserialize;
-use base64::Engine;
 
 #[derive(Deserialize, Clone, Debug)]
 struct RpcCall {
@@ -76,7 +76,7 @@ impl MockRpc {
                 let body_str = String::from_utf8_lossy(body).to_string();
                 if let (Ok(req), Ok(stored)) = (
                     serde_json::from_str::<serde_json::Value>(&body_str),
-                    serde_json::from_str::<serde_json::Value>(&call.body)
+                    serde_json::from_str::<serde_json::Value>(&call.body),
                 ) {
                     if req.get("method") == stored.get("method") {
                         match (req.get("params"), stored.get("params")) {
@@ -101,7 +101,7 @@ impl MockRpc {
                 let body_str = String::from_utf8_lossy(body).to_string();
                 if let (Ok(req), Ok(stored)) = (
                     serde_json::from_str::<serde_json::Value>(&body_str),
-                    serde_json::from_str::<serde_json::Value>(&call.body)
+                    serde_json::from_str::<serde_json::Value>(&call.body),
                 ) {
                     let req_hashes = req.get("txs_hashes").and_then(|v| v.as_array());
                     let stored_hashes = stored.get("txs_hashes").and_then(|v| v.as_array());
@@ -116,8 +116,12 @@ impl MockRpc {
                             let stored_hash = &stored_arr[0];
                             if req_arr.iter().all(|h| h == stored_hash) {
                                 // Duplicate the single transaction to match the request
-                                if let Ok(mut resp) = serde_json::from_str::<serde_json::Value>(&call.response) {
-                                    if let Some(resp_txs) = resp.get_mut("txs").and_then(|v| v.as_array_mut()) {
+                                if let Ok(mut resp) =
+                                    serde_json::from_str::<serde_json::Value>(&call.response)
+                                {
+                                    if let Some(resp_txs) =
+                                        resp.get_mut("txs").and_then(|v| v.as_array_mut())
+                                    {
                                         if resp_txs.len() == 1 {
                                             let original_tx = resp_txs[0].clone();
                                             while resp_txs.len() < req_arr.len() {
@@ -125,7 +129,10 @@ impl MockRpc {
                                             }
 
                                             // Also update txs_as_hex
-                                            if let Some(resp_hex) = resp.get_mut("txs_as_hex").and_then(|v| v.as_array_mut()) {
+                                            if let Some(resp_hex) = resp
+                                                .get_mut("txs_as_hex")
+                                                .and_then(|v| v.as_array_mut())
+                                            {
                                                 if resp_hex.len() == 1 {
                                                     let original_hex = resp_hex[0].clone();
                                                     while resp_hex.len() < req_arr.len() {
@@ -135,7 +142,8 @@ impl MockRpc {
                                             }
 
                                             let mut matched_call = call.clone();
-                                            matched_call.response = serde_json::to_string(&resp).unwrap();
+                                            matched_call.response =
+                                                serde_json::to_string(&resp).unwrap();
                                             return Some(matched_call);
                                         }
                                     }
@@ -154,9 +162,12 @@ impl MockRpc {
 
                     if let (Ok(stored), Some(req_arr)) = (
                         serde_json::from_str::<serde_json::Value>(&call.body),
-                        req_outputs
+                        req_outputs,
                     ) {
-                        let stored_len = stored.get("outputs").and_then(|v| v.as_array()).map(|a| a.len());
+                        let stored_len = stored
+                            .get("outputs")
+                            .and_then(|v| v.as_array())
+                            .map(|a| a.len());
 
                         if stored_len == Some(req_arr.len()) {
                             return Some(call.clone());
@@ -166,7 +177,9 @@ impl MockRpc {
             }
 
             if call.is_binary {
-                if let Ok(stored_body) = base64::engine::general_purpose::STANDARD.decode(&call.body) {
+                if let Ok(stored_body) =
+                    base64::engine::general_purpose::STANDARD.decode(&call.body)
+                {
                     if body == stored_body.as_slice() {
                         self.call_sequence.lock().unwrap().push(idx);
                         return Some(call.clone());
@@ -197,7 +210,9 @@ impl MockRpc {
                         }
 
                         if let Ok(stored) = serde_json::from_str::<serde_json::Value>(&call.body) {
-                            if let Some(stored_outputs) = stored.get("outputs").and_then(|v| v.as_array()) {
+                            if let Some(stored_outputs) =
+                                stored.get("outputs").and_then(|v| v.as_array())
+                            {
                                 let stored_count = stored_outputs.len();
                                 let score = if stored_count == req_count {
                                     1000
@@ -216,8 +231,12 @@ impl MockRpc {
                     }
 
                     if let Some(mut matched_call) = best_call {
-                        if let Ok(mut resp) = serde_json::from_str::<serde_json::Value>(&matched_call.response) {
-                            if let Some(resp_outs) = resp.get_mut("outs").and_then(|v| v.as_array_mut()) {
+                        if let Ok(mut resp) =
+                            serde_json::from_str::<serde_json::Value>(&matched_call.response)
+                        {
+                            if let Some(resp_outs) =
+                                resp.get_mut("outs").and_then(|v| v.as_array_mut())
+                            {
                                 let original_len = resp_outs.len();
 
                                 if original_len != req_count {
@@ -255,13 +274,21 @@ impl MockRpc {
                         }
 
                         if let Ok(stored) = serde_json::from_str::<serde_json::Value>(&call.body) {
-                            if let Some(stored_hashes) = stored.get("txs_hashes").and_then(|v| v.as_array()) {
+                            if let Some(stored_hashes) =
+                                stored.get("txs_hashes").and_then(|v| v.as_array())
+                            {
                                 if stored_hashes.len() == 1 && req_arr.len() > 0 {
                                     let stored_hash = &stored_hashes[0];
                                     if req_arr.iter().all(|h| h == stored_hash) {
                                         // Duplicate the single transaction to match the request
-                                        if let Ok(mut resp) = serde_json::from_str::<serde_json::Value>(&call.response) {
-                                            if let Some(resp_txs) = resp.get_mut("txs").and_then(|v| v.as_array_mut()) {
+                                        if let Ok(mut resp) =
+                                            serde_json::from_str::<serde_json::Value>(
+                                                &call.response,
+                                            )
+                                        {
+                                            if let Some(resp_txs) =
+                                                resp.get_mut("txs").and_then(|v| v.as_array_mut())
+                                            {
                                                 if resp_txs.len() == 1 {
                                                     let original_tx = resp_txs[0].clone();
                                                     while resp_txs.len() < req_arr.len() {
@@ -269,7 +296,10 @@ impl MockRpc {
                                                     }
 
                                                     // Also update txs_as_hex
-                                                    if let Some(resp_hex) = resp.get_mut("txs_as_hex").and_then(|v| v.as_array_mut()) {
+                                                    if let Some(resp_hex) = resp
+                                                        .get_mut("txs_as_hex")
+                                                        .and_then(|v| v.as_array_mut())
+                                                    {
                                                         if resp_hex.len() == 1 {
                                                             let original_hex = resp_hex[0].clone();
                                                             while resp_hex.len() < req_arr.len() {
@@ -279,7 +309,8 @@ impl MockRpc {
                                                     }
 
                                                     let mut matched_call = call.clone();
-                                                    matched_call.response = serde_json::to_string(&resp).unwrap();
+                                                    matched_call.response =
+                                                        serde_json::to_string(&resp).unwrap();
                                                     return Some(matched_call);
                                                 }
                                             }
@@ -300,7 +331,9 @@ impl MockRpc {
 #[async_trait::async_trait]
 impl RpcConnection for MockRpc {
     async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
-        let call = self.find_matching_call(route, &body).ok_or(RpcError::InvalidNode)?;
+        let call = self
+            .find_matching_call(route, &body)
+            .ok_or(RpcError::InvalidNode)?;
 
         if call.is_binary {
             base64::engine::general_purpose::STANDARD

@@ -11,9 +11,7 @@ use chacha20::ChaCha20Legacy;
 use cipher::{KeyIvInit, StreamCipher};
 use cuprate_cryptonight::cryptonight_hash_v0;
 use curve25519_dalek::{
-    constants::ED25519_BASEPOINT_TABLE,
-    edwards::EdwardsPoint,
-    scalar::Scalar,
+    constants::ED25519_BASEPOINT_TABLE, edwards::EdwardsPoint, scalar::Scalar,
     traits::VartimeMultiscalarMul,
 };
 use getrandom::getrandom;
@@ -147,7 +145,8 @@ fn verify_schnorr_signature(
     let r_scalar = Scalar::from_bytes_mod_order(*r);
 
     // tmp' = r * G + c * pub_key
-    let tmp_prime = EdwardsPoint::vartime_double_scalar_mul_basepoint(&c_scalar, pub_key, &r_scalar);
+    let tmp_prime =
+        EdwardsPoint::vartime_double_scalar_mul_basepoint(&c_scalar, pub_key, &r_scalar);
 
     let mut buf = [0u8; 96];
     buf[..32].copy_from_slice(msg_hash);
@@ -188,7 +187,9 @@ pub fn encrypt_with_view_key(plaintext: &[u8], view_secret_key: &[u8; 32]) -> Ve
 
     // Ed25519 Schnorr signature over hash using view key
     let view_scalar = Scalar::from_bytes_mod_order(*view_secret_key);
-    let view_pub = (&view_scalar * &ED25519_BASEPOINT_TABLE).compress().to_bytes();
+    let view_pub = (&view_scalar * &ED25519_BASEPOINT_TABLE)
+        .compress()
+        .to_bytes();
     let (sig_c, sig_r) = generate_schnorr_signature(&hash, &view_pub, &view_scalar);
 
     // Final result: [iv: 8][ciphertext][sig_c: 32][sig_r: 32]
@@ -201,7 +202,10 @@ pub fn encrypt_with_view_key(plaintext: &[u8], view_secret_key: &[u8; 32]) -> Ve
 }
 
 /// Decrypts data produced by `encrypt_with_view_key`, verifying the auth signature.
-pub fn decrypt_with_view_key(encrypted: &[u8], view_secret_key: &[u8; 32]) -> Result<Vec<u8>, String> {
+pub fn decrypt_with_view_key(
+    encrypted: &[u8],
+    view_secret_key: &[u8; 32],
+) -> Result<Vec<u8>, String> {
     // Minimum length: 8-byte IV + 64-byte auth signature
     if encrypted.len() < 72 {
         return Err("Encrypted data too short (need at least IV + auth signature)".to_string());
@@ -265,7 +269,8 @@ pub fn export_key_images_v3(
     // Per-key-image: key_image + ring_signature
     for entry in key_images {
         let ephemeral_sec = Zeroizing::new(spend_scalar + &entry.key_offset);
-        let (c, r) = generate_key_image_ring_signature(&entry.key_image, &entry.pub_key, &ephemeral_sec);
+        let (c, r) =
+            generate_key_image_ring_signature(&entry.key_image, &entry.pub_key, &ephemeral_sec);
 
         payload.extend_from_slice(&entry.key_image);
         payload.extend_from_slice(&c);
@@ -352,10 +357,14 @@ pub fn export_key_images_from_outputs(
     let spend_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(*key_bytes));
 
     // Derive view key from spend scalar
-    let pub_spend_key = (&*spend_scalar * &ED25519_BASEPOINT_TABLE).compress().to_bytes();
+    let pub_spend_key = (&*spend_scalar * &ED25519_BASEPOINT_TABLE)
+        .compress()
+        .to_bytes();
     let view_bytes: [u8; 32] = Keccak256::digest(spend_scalar.to_bytes()).into();
     let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(view_bytes));
-    let pub_view_key = (&*view_scalar * &ED25519_BASEPOINT_TABLE).compress().to_bytes();
+    let pub_view_key = (&*view_scalar * &ED25519_BASEPOINT_TABLE)
+        .compress()
+        .to_bytes();
     let view_secret_key = view_scalar.to_bytes();
 
     // Build KeyImageExportEntry list from sorted outputs
@@ -422,7 +431,14 @@ mod tests {
     use monero_serai::ringct::generate_key_image;
 
     /// Create deterministic test keys for reproducible tests.
-    fn test_keys() -> (Scalar, Scalar, EdwardsPoint, EdwardsPoint, [u8; 32], [u8; 32]) {
+    fn test_keys() -> (
+        Scalar,
+        Scalar,
+        EdwardsPoint,
+        EdwardsPoint,
+        [u8; 32],
+        [u8; 32],
+    ) {
         // Deterministic spend scalar
         let spend_bytes: [u8; 32] = {
             let hash: [u8; 32] = Keccak256::digest(b"test spend key seed").into();
@@ -441,7 +457,14 @@ mod tests {
         let pub_spend_bytes = pub_spend.compress().to_bytes();
         let pub_view_bytes = pub_view.compress().to_bytes();
 
-        (spend_scalar, view_scalar, pub_spend, pub_view, pub_spend_bytes, pub_view_bytes)
+        (
+            spend_scalar,
+            view_scalar,
+            pub_spend,
+            pub_view,
+            pub_spend_bytes,
+            pub_view_bytes,
+        )
     }
 
     /// Create a deterministic key offset and compute the one-time output public key.
@@ -552,8 +575,8 @@ mod tests {
         let plaintext = b"roundtrip test data with some longer content for good measure";
 
         let encrypted = encrypt_with_view_key(plaintext, &view_bytes);
-        let decrypted = decrypt_with_view_key(&encrypted, &view_bytes)
-            .expect("Decryption should succeed");
+        let decrypted =
+            decrypt_with_view_key(&encrypted, &view_bytes).expect("Decryption should succeed");
 
         assert_eq!(decrypted, plaintext);
     }
@@ -680,8 +703,7 @@ mod tests {
         .expect("Export should succeed");
 
         let (imported_kis, imported_spend, imported_view) =
-            import_key_images_v3(&exported, &view_secret_bytes)
-                .expect("Import should succeed");
+            import_key_images_v3(&exported, &view_secret_bytes).expect("Import should succeed");
 
         assert_eq!(imported_kis.len(), 3);
         assert_eq!(imported_spend, pub_spend_bytes);
@@ -708,11 +730,21 @@ mod tests {
             let pub_key = &*ephemeral_sec * &ED25519_BASEPOINT_TABLE;
             let key_image_point = generate_key_image(&ephemeral_sec);
             let key_image = key_image_point.compress().to_bytes();
-            entries.push(KeyImageExportEntry { key_image, pub_key, key_offset });
+            entries.push(KeyImageExportEntry {
+                key_image,
+                pub_key,
+                key_offset,
+            });
         }
         let exported = export_key_images_v3(
-            &entries, &spend_scalar, &pub_spend_bytes, &pub_view_bytes, &view_secret_bytes, 0,
-        ).expect("Export should succeed");
+            &entries,
+            &spend_scalar,
+            &pub_spend_bytes,
+            &pub_view_bytes,
+            &view_secret_bytes,
+            0,
+        )
+        .expect("Export should succeed");
 
         let imported = crate::epee_compat::import_key_images(&exported, Some(&view_secret_bytes))
             .expect("v3 import with view key should succeed");

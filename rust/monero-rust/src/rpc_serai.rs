@@ -9,7 +9,7 @@ use wasm_bindgen::JsValue;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::JsFuture;
 #[cfg(target_arch = "wasm32")]
-use web_sys::{Request, RequestInit, RequestMode, RequestCredentials, Response};
+use web_sys::{Request, RequestCredentials, RequestInit, RequestMode, Response};
 
 #[derive(Clone, Debug)]
 pub struct WasmRpcConnection {
@@ -33,12 +33,10 @@ impl RpcConnection for WasmRpcConnection {
         opts.set_method("POST");
         opts.set_mode(RequestMode::Cors);
         opts.set_credentials(RequestCredentials::SameOrigin);
-        opts.set_body(&JsValue::from(
-            js_sys::Uint8Array::from(&body[..]).buffer()
-        ));
+        opts.set_body(&JsValue::from(js_sys::Uint8Array::from(&body[..]).buffer()));
 
-        let request = Request::new_with_str_and_init(&url, &opts)
-            .map_err(|_| RpcError::ConnectionError)?;
+        let request =
+            Request::new_with_str_and_init(&url, &opts).map_err(|_| RpcError::ConnectionError)?;
 
         let content_type = if route.ends_with(".bin") {
             "application/octet-stream"
@@ -59,12 +57,10 @@ impl RpcConnection for WasmRpcConnection {
             return Err(RpcError::ConnectionError);
         }
 
-        let array_buffer = JsFuture::from(
-            resp.array_buffer()
-                .map_err(|_| RpcError::ConnectionError)?
-        )
-        .await
-        .map_err(|_| RpcError::ConnectionError)?;
+        let array_buffer =
+            JsFuture::from(resp.array_buffer().map_err(|_| RpcError::ConnectionError)?)
+                .await
+                .map_err(|_| RpcError::ConnectionError)?;
 
         let uint8_array = js_sys::Uint8Array::new(&array_buffer);
         let mut result = vec![0u8; uint8_array.length() as usize];
@@ -78,7 +74,9 @@ impl RpcConnection for WasmRpcConnection {
 #[async_trait]
 impl RpcConnection for WasmRpcConnection {
     async fn post(&self, _route: &str, _body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
-        Err(RpcError::InternalError("WasmRpcConnection only works in WASM context"))
+        Err(RpcError::InternalError(
+            "WasmRpcConnection only works in WASM context",
+        ))
     }
 }
 

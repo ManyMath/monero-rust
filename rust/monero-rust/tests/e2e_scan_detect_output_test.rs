@@ -1,8 +1,8 @@
+use async_trait::async_trait;
 use monero_rust::scanner::{derive_address, scan_block_for_outputs, BlockScanResult};
 use monero_serai::rpc::{Rpc, RpcConnection, RpcError};
 use monero_serai::wallet::seed::Seed;
 use serde_json::Value;
-use async_trait::async_trait;
 
 const TEST_SEED: &str = "honked bagpipe alpine juicy faked afoot jostle claim cowl tunnel orphans negative pheasants feast jetting quote frown teeming cycling tribal womanly hills cottage daytime daytime";
 const EXPECTED_ADDRESS: &str = "58aWiYGUeqZc5idYcx31rYR58K1EVsCYkN6thrZppU1MGqMowPh1BYy4frVWH5RjGLPWthZy9sRGm5ZC4fgX44HUCmqtGUf";
@@ -28,11 +28,11 @@ impl MockRpcConnection {
         let vectors_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/vectors/honked_bagpipe_rpc.json");
 
-        let json_data = std::fs::read_to_string(&vectors_path)
-            .expect("failed to read test vectors file");
+        let json_data =
+            std::fs::read_to_string(&vectors_path).expect("failed to read test vectors file");
 
-        let test_vectors: Vec<RpcCall> = serde_json::from_str(&json_data)
-            .expect("failed to parse test vectors JSON");
+        let test_vectors: Vec<RpcCall> =
+            serde_json::from_str(&json_data).expect("failed to parse test vectors JSON");
 
         Self { test_vectors }
     }
@@ -47,8 +47,7 @@ impl MockRpcConnection {
                     if body_json.get("height") == call_body_json.get("height") {
                         return Some(call.response.clone());
                     }
-                }
-                else {
+                } else {
                     return Some(call.response.clone());
                 }
             }
@@ -60,8 +59,7 @@ impl MockRpcConnection {
 #[async_trait]
 impl RpcConnection for MockRpcConnection {
     async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
-        let body_str = String::from_utf8(body)
-            .map_err(|_| RpcError::InvalidNode)?;
+        let body_str = String::from_utf8(body).map_err(|_| RpcError::InvalidNode)?;
 
         self.find_response(route, &body_str)
             .map(|s| s.into_bytes())
@@ -80,22 +78,22 @@ fn test_step1_address_derivation() {
 
 #[tokio::test]
 async fn test_step2_scan_and_detect_output() {
-    let address = derive_address(TEST_SEED, "stagenet", "")
-        .expect("Address derivation should succeed");
+    let address =
+        derive_address(TEST_SEED, "stagenet", "").expect("Address derivation should succeed");
     assert_eq!(address, EXPECTED_ADDRESS);
 
     let mock_rpc = MockRpcConnection::new();
     let rpc = Rpc::new_with_connection(mock_rpc);
 
-    let scan_result: BlockScanResult = scan_block_for_outputs(
-        &rpc,
-        TEST_BLOCK_HEIGHT,
-        TEST_SEED,
-        "stagenet",
-        "",
-    ).await.expect("Block scan should succeed");
+    let scan_result: BlockScanResult =
+        scan_block_for_outputs(&rpc, TEST_BLOCK_HEIGHT, TEST_SEED, "stagenet", "")
+            .await
+            .expect("Block scan should succeed");
 
-    assert!(!scan_result.outputs.is_empty(), "Should detect at least one output");
+    assert!(
+        !scan_result.outputs.is_empty(),
+        "Should detect at least one output"
+    );
 
     let output = &scan_result.outputs[0];
 
@@ -134,8 +132,7 @@ async fn test_step3_key_image_determinism() {
     assert!(!scan2.outputs.is_empty());
 
     assert_eq!(
-        scan1.outputs[0].key_image,
-        scan2.outputs[0].key_image,
+        scan1.outputs[0].key_image, scan2.outputs[0].key_image,
         "Key image should be deterministic"
     );
 }
@@ -162,14 +159,16 @@ async fn test_step5_invalid_seed_handling() {
         "invalid short seed",
         "stagenet",
         "",
-    ).await;
+    )
+    .await;
 
     assert!(result.is_err());
 
     let error = result.unwrap_err();
     assert!(
         error.contains("mnemonic") || error.contains("seed"),
-        "Error should mention mnemonic/seed: {}", error
+        "Error should mention mnemonic/seed: {}",
+        error
     );
 }
 
@@ -178,37 +177,30 @@ async fn test_step6_network_validation() {
     let mock_rpc = MockRpcConnection::new();
     let rpc = Rpc::new_with_connection(mock_rpc);
 
-    let result = scan_block_for_outputs(
-        &rpc,
-        TEST_BLOCK_HEIGHT,
-        TEST_SEED,
-        "invalid_network",
-        "",
-    ).await;
+    let result =
+        scan_block_for_outputs(&rpc, TEST_BLOCK_HEIGHT, TEST_SEED, "invalid_network", "").await;
 
     assert!(result.is_err());
 
     let error = result.unwrap_err();
     assert!(
         error.contains("network") || error.contains("Network"),
-        "Error should mention network: {}", error
+        "Error should mention network: {}",
+        error
     );
 }
 
 #[test]
 fn test_step7_direct_scanner_e2e() {
+    use monero_serai::wallet::{
+        address::{AddressSpec, Network},
+        seed::Seed,
+        Scanner, ViewPair,
+    };
     use std::collections::HashSet;
     use zeroize::Zeroizing;
-    use monero_serai::{
-        wallet::{
-            seed::Seed,
-            address::{Network, AddressSpec},
-            ViewPair, Scanner,
-        },
-    };
 
-    let seed = Seed::from_string(Zeroizing::new(TEST_SEED.to_string()))
-        .expect("valid mnemonic");
+    let seed = Seed::from_string(Zeroizing::new(TEST_SEED.to_string())).expect("valid mnemonic");
 
     let spend = spend_key_from_seed(&seed);
     let view = view_key_from_seed(&seed);
@@ -261,8 +253,8 @@ fn get_transaction_hex(tx_id: &str) -> String {
     let vectors_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/vectors/honked_bagpipe_rpc.json");
 
-    let json_data = std::fs::read_to_string(&vectors_path)
-        .expect("failed to read test vectors file");
+    let json_data =
+        std::fs::read_to_string(&vectors_path).expect("failed to read test vectors file");
 
     #[derive(serde::Deserialize)]
     struct VectorCall {
@@ -281,8 +273,8 @@ fn get_transaction_hex(tx_id: &str) -> String {
         tx_hash: String,
     }
 
-    let vectors: Vec<VectorCall> = serde_json::from_str(&json_data)
-        .expect("failed to parse test vectors JSON");
+    let vectors: Vec<VectorCall> =
+        serde_json::from_str(&json_data).expect("failed to parse test vectors JSON");
 
     for call in vectors {
         if call.route == "get_transactions" {

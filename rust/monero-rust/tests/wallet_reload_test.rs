@@ -1,4 +1,4 @@
-use monero_rust::{WalletState, WalletOutput, BlockHashChain};
+use monero_rust::{BlockHashChain, WalletOutput, WalletState};
 
 /// Helper: create a WalletOutput with deterministic fields.
 fn make_test_output(amount: u64, height: u64, tx_hash: &str, account: u32) -> WalletOutput {

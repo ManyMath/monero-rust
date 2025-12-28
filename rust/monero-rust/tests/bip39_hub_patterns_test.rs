@@ -7,8 +7,8 @@
 //! tests exercise the exact API surface the hub depends on.
 
 use monero_rust::{
-    bip39_to_legacy_mnemonic, derive_address, derive_keys, derive_subaddress,
-    generate_seed, resolve_seed, resolve_seed_bip39, seed_birthday, validate_seed,
+    bip39_to_legacy_mnemonic, derive_address, derive_keys, derive_subaddress, generate_seed,
+    resolve_seed, resolve_seed_bip39, seed_birthday, validate_seed,
 };
 
 const BIP39_SEED: &str =
@@ -148,9 +148,12 @@ fn hub_all_seed_types_through_restore_pipeline() {
     for (seed_type, seed) in &seeds {
         validate_seed(seed).unwrap_or_else(|e| panic!("{} validate failed: {}", seed_type, e));
         let _ = seed_birthday(seed); // should not panic for any type
-        derive_keys(seed, "mainnet", "").unwrap_or_else(|e| panic!("{} derive_keys failed: {}", seed_type, e));
-        derive_address(seed, "mainnet", "").unwrap_or_else(|e| panic!("{} derive_address failed: {}", seed_type, e));
-        derive_subaddress(seed, "mainnet", 0, 0, "").unwrap_or_else(|e| panic!("{} derive_subaddress failed: {}", seed_type, e));
+        derive_keys(seed, "mainnet", "")
+            .unwrap_or_else(|e| panic!("{} derive_keys failed: {}", seed_type, e));
+        derive_address(seed, "mainnet", "")
+            .unwrap_or_else(|e| panic!("{} derive_address failed: {}", seed_type, e));
+        derive_subaddress(seed, "mainnet", 0, 0, "")
+            .unwrap_or_else(|e| panic!("{} derive_subaddress failed: {}", seed_type, e));
         resolve_seed(seed).unwrap_or_else(|e| panic!("{} resolve_seed failed: {}", seed_type, e));
     }
 }

@@ -81,7 +81,11 @@ fn test_derive_many_accounts() {
         addresses.push(addr);
     }
 
-    assert_eq!(addresses.len(), 11, "Should have derived 11 unique addresses");
+    assert_eq!(
+        addresses.len(),
+        11,
+        "Should have derived 11 unique addresses"
+    );
 }
 
 #[test]
@@ -103,7 +107,11 @@ fn test_derive_many_subaddresses() {
         addresses.push(addr);
     }
 
-    assert_eq!(addresses.len(), 21, "Should have derived 21 unique subaddresses");
+    assert_eq!(
+        addresses.len(),
+        21,
+        "Should have derived 21 unique subaddresses"
+    );
 }
 
 #[test]
@@ -132,16 +140,32 @@ fn test_network_specific_addresses() {
     let stagenet = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 1, 0, "")
         .expect("stagenet derivation should succeed");
 
-    assert_ne!(mainnet, testnet, "Mainnet and testnet addresses should differ");
-    assert_ne!(testnet, stagenet, "Testnet and stagenet addresses should differ");
-    assert_ne!(mainnet, stagenet, "Mainnet and stagenet addresses should differ");
+    assert_ne!(
+        mainnet, testnet,
+        "Mainnet and testnet addresses should differ"
+    );
+    assert_ne!(
+        testnet, stagenet,
+        "Testnet and stagenet addresses should differ"
+    );
+    assert_ne!(
+        mainnet, stagenet,
+        "Mainnet and stagenet addresses should differ"
+    );
 
     // Verify network prefixes
-    assert!(mainnet.starts_with('4') || mainnet.starts_with('8'), "Mainnet should start with 4 or 8");
-    assert!(testnet.starts_with('9') || testnet.starts_with('B') || testnet.starts_with('C'),
-            "Testnet should start with 9, B, or C");
-    assert!(stagenet.starts_with('5') || stagenet.starts_with('7') || stagenet.starts_with('8'),
-            "Stagenet should start with 5, 7, or 8");
+    assert!(
+        mainnet.starts_with('4') || mainnet.starts_with('8'),
+        "Mainnet should start with 4 or 8"
+    );
+    assert!(
+        testnet.starts_with('9') || testnet.starts_with('B') || testnet.starts_with('C'),
+        "Testnet should start with 9, B, or C"
+    );
+    assert!(
+        stagenet.starts_with('5') || stagenet.starts_with('7') || stagenet.starts_with('8'),
+        "Stagenet should start with 5, 7, or 8"
+    );
 }
 
 #[test]
@@ -161,24 +185,24 @@ fn test_invalid_seed() {
 #[test]
 fn test_known_test_vectors() {
     // Test against known addresses
-    let account_0_0 = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 0, 0, "")
-        .expect("should derive");
+    let account_0_0 =
+        derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 0, 0, "").expect("should derive");
     assert_eq!(
         account_0_0,
         "58aWiYGUeqZc5idYcx31rYR58K1EVsCYkN6thrZppU1MGqMowPh1BYy4frVWH5RjGLPWthZy9sRGm5ZC4fgX44HUCmqtGUf",
         "Account 0, subaddress 0 should match known value"
     );
 
-    let account_1_0 = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 1, 0, "")
-        .expect("should derive");
+    let account_1_0 =
+        derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 1, 0, "").expect("should derive");
     assert_eq!(
         account_1_0,
         "73jsr6CDS38G24SiXVNFZ5YLivkNAMogYGyFVhwSZkue4vM9ntzaHFYX5Nf6HMnR9dLBn1xrHcY2nPoxtZP8Xso6K8qsih7",
         "Account 1, subaddress 0 should match known value"
     );
 
-    let account_1_1 = derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 1, 1, "")
-        .expect("should derive");
+    let account_1_1 =
+        derive_subaddress(HONKED_BAGPIPE_MNEMONIC, "stagenet", 1, 1, "").expect("should derive");
     assert_eq!(
         account_1_1,
         "78SkHoSxJbRGriwbroDCJhaEoNK5WD8bsScXEQ6aHnyFECfNuBm35v5BBYEGjVYy4bbhWVj2y8gF7SFCQHULgso5BnQPGsQ",

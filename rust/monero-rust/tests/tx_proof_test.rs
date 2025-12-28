@@ -1,5 +1,5 @@
-use serde::Deserialize;
 use monero_rust::tx_proof::{generate_out_proof_v2, verify_out_proof_v2};
+use serde::Deserialize;
 
 #[derive(Deserialize)]
 struct CheckResult {
@@ -187,9 +187,15 @@ fn test_out_proof_v2_generate_verify_roundtrip() {
     let r_pub_hex = hex::encode(r_point.compress().to_bytes());
 
     // Verify the generated proof
-    let verified =
-        verify_out_proof_v2(tx_id, address, message, &proof.signature, "stagenet", &r_pub_hex)
-            .expect("verify_out_proof_v2 must not error");
+    let verified = verify_out_proof_v2(
+        tx_id,
+        address,
+        message,
+        &proof.signature,
+        "stagenet",
+        &r_pub_hex,
+    )
+    .expect("verify_out_proof_v2 must not error");
     assert!(verified, "Generated proof must verify successfully");
 }
 

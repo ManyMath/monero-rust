@@ -3,6 +3,10 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 struct KeyImagePairs {
     count: usize,
+    network: String,
+    note: String,
+    view_key: String,
+    wallet_address: String,
     signed_key_images: Vec<SignedKeyImage>,
 }
 
@@ -28,6 +32,27 @@ fn test_count_matches_entries() {
         "count field should match actual number of entries"
     );
     assert!(fixture.count > 0, "Should have at least one key image pair");
+}
+
+#[test]
+fn test_fixture_metadata_pins_v3_key_image_export_context() {
+    let fixture = load_fixture();
+
+    assert_eq!(fixture.count, 125);
+    assert_eq!(fixture.network, "stagenet");
+    assert_eq!(
+        fixture.note,
+        "File format magic: 'Monero key image export\\x03'"
+    );
+    assert_eq!(fixture.view_key.len(), 64);
+    assert_eq!(
+        fixture.wallet_address,
+        "58aWiYGUeqZc5idYcx31rYR58K1EVsCYkN6thrZppU1MGqMowPh1BYy4frVWH5RjGLPWthZy9sRGm5ZC4fgX44HUCmqtGUf"
+    );
+    assert!(
+        hex::decode(&fixture.view_key).is_ok(),
+        "view key should be hex"
+    );
 }
 
 #[test]
@@ -79,8 +104,8 @@ fn test_hex_round_trip() {
     let fixture = load_fixture();
     for (i, pair) in fixture.signed_key_images.iter().enumerate() {
         // Decode then re-encode key image
-        let ki_bytes = hex::decode(&pair.key_image)
-            .unwrap_or_else(|_| panic!("Key image #{i} decode failed"));
+        let ki_bytes =
+            hex::decode(&pair.key_image).unwrap_or_else(|_| panic!("Key image #{i} decode failed"));
         let ki_reencoded = hex::encode(&ki_bytes);
         assert_eq!(
             ki_reencoded, pair.key_image,
@@ -88,8 +113,8 @@ fn test_hex_round_trip() {
         );
 
         // Decode then re-encode signature
-        let sig_bytes = hex::decode(&pair.signature)
-            .unwrap_or_else(|_| panic!("Signature #{i} decode failed"));
+        let sig_bytes =
+            hex::decode(&pair.signature).unwrap_or_else(|_| panic!("Signature #{i} decode failed"));
         let sig_reencoded = hex::encode(&sig_bytes);
         assert_eq!(
             sig_reencoded, pair.signature,

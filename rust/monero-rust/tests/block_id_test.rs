@@ -8,10 +8,8 @@ use monero_serai::block::Block;
 
 #[test]
 fn compute_block_id_matches_daemon_hash() {
-    let vectors: serde_json::Value = serde_json::from_str(include_str!(
-        "vectors/honked_bagpipe_rpc.json"
-    ))
-    .unwrap();
+    let vectors: serde_json::Value =
+        serde_json::from_str(include_str!("vectors/honked_bagpipe_rpc.json")).unwrap();
 
     let recorded = vectors
         .as_array()

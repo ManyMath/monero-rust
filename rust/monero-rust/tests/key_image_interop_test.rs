@@ -4,11 +4,11 @@ use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 use sha3::{Digest, Keccak256};
 use zeroize::Zeroizing;
 
+use monero_rust::epee_compat;
 use monero_rust::key_image_signing::{
-    export_key_images_v3, import_key_images_v3, decrypt_with_view_key,
+    decrypt_with_view_key, export_key_images_v3, import_key_images_v3,
     verify_key_image_ring_signature, KeyImageExportEntry,
 };
-use monero_rust::epee_compat;
 use monero_serai::ringct::generate_key_image;
 
 /// Magic bytes for Monero key image export v3 format.
@@ -147,11 +147,7 @@ fn test_v3_payload_structure() {
 
     // Public keys
     assert_eq!(&plaintext[4..36], &pub_spend, "Public spend key in payload");
-    assert_eq!(
-        &plaintext[36..68],
-        &pub_view,
-        "Public view key in payload"
-    );
+    assert_eq!(&plaintext[36..68], &pub_view, "Public view key in payload");
 
     // Records: 3 entries * 96 bytes each (32 ki + 64 sig)
     let records = &plaintext[68..];
@@ -210,13 +206,7 @@ fn test_v3_ring_signatures_verify() {
         let ki_bytes: [u8; 32] = ki.try_into().unwrap();
 
         assert!(
-            verify_key_image_ring_signature(
-                &ki_bytes,
-                &entry.pub_key,
-                &ki_point,
-                &sig_c,
-                &sig_r
-            ),
+            verify_key_image_ring_signature(&ki_bytes, &entry.pub_key, &ki_point, &sig_c, &sig_r),
             "Ring signature for key image {} should verify",
             i
         );
@@ -266,8 +256,7 @@ fn test_old_epee_import_with_view_key() {
     let (_, _, _, view_secret) = test_keys();
 
     let key_images = vec![epee_compat::ExportedKeyImage {
-        key_image: "0197168670bb9a4f183be4eb8f0f0d57354dfe7094f0c55e5552b7b3a105a77a"
-            .to_string(),
+        key_image: "0197168670bb9a4f183be4eb8f0f0d57354dfe7094f0c55e5552b7b3a105a77a".to_string(),
         tx_hash: "cccc".to_string(),
         output_index: 0,
     }];
@@ -336,10 +325,7 @@ fn test_v3_import_without_view_key_fails() {
 
     // Import without view key should fail (EPEE parse fails, no view key for v3)
     let result = epee_compat::import_key_images(&exported, None);
-    assert!(
-        result.is_err(),
-        "v3 import without view key should fail"
-    );
+    assert!(result.is_err(), "v3 import without view key should fail");
 }
 
 // Test 9: key_image_pairs fixture signature format validation
@@ -361,8 +347,7 @@ fn test_key_image_pairs_fixture_signatures() {
         signature: String,
     }
 
-    let fixture: KeyImagePairs =
-        serde_json::from_str(&data).expect("failed to parse fixture JSON");
+    let fixture: KeyImagePairs = serde_json::from_str(&data).expect("failed to parse fixture JSON");
 
     assert_eq!(fixture.count, fixture.signed_key_images.len());
 
@@ -373,8 +358,8 @@ fn test_key_image_pairs_fixture_signatures() {
             64,
             "Key image #{i} should be 64 hex chars"
         );
-        let ki_bytes = hex::decode(&pair.key_image)
-            .unwrap_or_else(|_| panic!("Key image #{i} invalid hex"));
+        let ki_bytes =
+            hex::decode(&pair.key_image).unwrap_or_else(|_| panic!("Key image #{i} invalid hex"));
         assert_eq!(ki_bytes.len(), 32);
 
         // Signature: 64 bytes = 128 hex chars (c: 32 + r: 32)
@@ -383,8 +368,8 @@ fn test_key_image_pairs_fixture_signatures() {
             128,
             "Signature #{i} should be 128 hex chars"
         );
-        let sig_bytes = hex::decode(&pair.signature)
-            .unwrap_or_else(|_| panic!("Signature #{i} invalid hex"));
+        let sig_bytes =
+            hex::decode(&pair.signature).unwrap_or_else(|_| panic!("Signature #{i} invalid hex"));
         assert_eq!(sig_bytes.len(), 64);
 
         // Verify c and r are valid scalars (< group order)

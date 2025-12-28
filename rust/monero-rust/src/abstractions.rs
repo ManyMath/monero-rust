@@ -159,14 +159,18 @@ impl Default for MemoryStorage {
 #[async_trait]
 impl WalletStorage for MemoryStorage {
     async fn save(&self, key: &str, data: &[u8]) -> AbResult<()> {
-        let mut storage = self.data.lock()
+        let mut storage = self
+            .data
+            .lock()
             .map_err(|e| AbError::Storage(format!("Mutex lock poisoned: {}", e)))?;
         storage.insert(key.to_string(), data.to_vec());
         Ok(())
     }
 
     async fn load(&self, key: &str) -> AbResult<Vec<u8>> {
-        let storage = self.data.lock()
+        let storage = self
+            .data
+            .lock()
             .map_err(|e| AbError::Storage(format!("Mutex lock poisoned: {}", e)))?;
         storage
             .get(key)
@@ -175,20 +179,26 @@ impl WalletStorage for MemoryStorage {
     }
 
     async fn delete(&self, key: &str) -> AbResult<()> {
-        let mut storage = self.data.lock()
+        let mut storage = self
+            .data
+            .lock()
             .map_err(|e| AbError::Storage(format!("Mutex lock poisoned: {}", e)))?;
         storage.remove(key);
         Ok(())
     }
 
     async fn list_keys(&self) -> AbResult<Vec<String>> {
-        let storage = self.data.lock()
+        let storage = self
+            .data
+            .lock()
             .map_err(|e| AbError::Storage(format!("Mutex lock poisoned: {}", e)))?;
         Ok(storage.keys().cloned().collect())
     }
 
     async fn exists(&self, key: &str) -> AbResult<bool> {
-        let storage = self.data.lock()
+        let storage = self
+            .data
+            .lock()
             .map_err(|e| AbError::Storage(format!("Mutex lock poisoned: {}", e)))?;
         Ok(storage.contains_key(key))
     }
@@ -320,7 +330,12 @@ mod tests {
         let storage = MemoryStorage::new();
 
         // Test with special characters in keys
-        let keys = vec!["key/with/slashes", "key.with.dots", "key-with-dashes", "key_with_underscores"];
+        let keys = vec![
+            "key/with/slashes",
+            "key.with.dots",
+            "key-with-dashes",
+            "key_with_underscores",
+        ];
 
         for key in keys {
             storage.save(key, b"data").await.unwrap();

@@ -41,12 +41,20 @@ pub struct KeyImageImportResult {
 
 /// Parse a monero-wallet-rpc `export_key_images` JSON response.
 ///
-/// Expects the full RPC response: `{"result": {"offset": N, "signed_key_images": [...]}}`.
+/// Accepts either the full RPC response
+/// `{"result": {"offset": N, "signed_key_images": [...]}}` or the bare result
+/// body `{"offset": N, "signed_key_images": [...]}`.
 /// Returns `(offset, signed_key_images)`.
 pub fn parse_rpc_export(json: &str) -> Result<(usize, Vec<SignedKeyImage>), String> {
     #[derive(serde::Deserialize)]
     struct Resp {
         result: RpcResult,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum RpcExport {
+        Wrapped(Resp),
+        Bare(RpcResult),
     }
     #[derive(serde::Deserialize)]
     struct RpcResult {
@@ -59,11 +67,15 @@ pub fn parse_rpc_export(json: &str) -> Result<(usize, Vec<SignedKeyImage>), Stri
         signature: String,
     }
 
-    let resp: Resp = serde_json::from_str(json)
+    let export: RpcExport = serde_json::from_str(json)
         .map_err(|e| format!("failed to parse key image export JSON: {e}"))?;
+    let result = match export {
+        RpcExport::Wrapped(resp) => resp.result,
+        RpcExport::Bare(result) => result,
+    };
 
-    let mut out = Vec::with_capacity(resp.result.signed_key_images.len());
-    for (i, entry) in resp.result.signed_key_images.iter().enumerate() {
+    let mut out = Vec::with_capacity(result.signed_key_images.len());
+    for (i, entry) in result.signed_key_images.iter().enumerate() {
         let ki_bytes: [u8; 32] = hex::decode(&entry.key_image)
             .map_err(|e| format!("key image {i}: bad hex: {e}"))?
             .try_into()
@@ -77,7 +89,7 @@ pub fn parse_rpc_export(json: &str) -> Result<(usize, Vec<SignedKeyImage>), Stri
             signature: sig_bytes,
         });
     }
-    Ok((resp.result.offset, out))
+    Ok((result.offset, out))
 }
 
 /// Verify a key image export signature.
@@ -237,7 +249,10 @@ mod wasm_tests {
 
     #[wasm_bindgen_test]
     fn extract_key_image_hex_wasm() {
-        let ski = SignedKeyImage { key_image: [0xab; 32], signature: [0u8; 64] };
+        let ski = SignedKeyImage {
+            key_image: [0xab; 32],
+            signature: [0u8; 64],
+        };
         let hexes = extract_key_image_hex(&[ski]);
         assert_eq!(hexes.len(), 1);
         assert!(hexes[0].starts_with("abab"));
@@ -268,13 +283,31 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_rpc_export_bare_result() {
+        let json = r#"{
+            "offset": 2,
+            "signed_key_images": [
+                {
+                    "key_image": "0000000000000000000000000000000000000000000000000000000000000001",
+                    "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                }
+            ]
+        }"#;
+        let (offset, skis) = parse_rpc_export(json).unwrap();
+        assert_eq!(offset, 2);
+        assert_eq!(skis.len(), 1);
+        assert_eq!(skis[0].key_image[31], 0x01);
+    }
+
+    #[test]
     fn test_parse_rpc_export_bad_json() {
         assert!(parse_rpc_export("not json").is_err());
     }
 
     #[test]
     fn test_parse_rpc_export_bad_hex() {
-        let json = r#"{"result":{"offset":0,"signed_key_images":[{"key_image":"zz","signature":"00"}]}}"#;
+        let json =
+            r#"{"result":{"offset":0,"signed_key_images":[{"key_image":"zz","signature":"00"}]}}"#;
         assert!(parse_rpc_export(json).is_err());
     }
 

@@ -1,15 +1,18 @@
 mod common;
 
-use monero_rust::scanner::{derive_address, derive_keys, scan_block_for_outputs_with_lookahead, Lookahead};
-use monero_serai::wallet::{
-    seed::Seed, ViewPair, Change, SignableTransactionBuilder, SpendableOutput, ReceivedOutput,
-    address::{Network, MoneroAddress, AddressSpec},
+use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
+use monero_rust::scanner::{
+    derive_address, derive_keys, scan_block_for_outputs_with_lookahead, Lookahead,
 };
 use monero_serai::transaction::Transaction;
-use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
-use zeroize::Zeroizing;
-use std::io::Cursor;
+use monero_serai::wallet::{
+    address::{AddressSpec, MoneroAddress, Network},
+    seed::Seed,
+    Change, ReceivedOutput, SignableTransactionBuilder, SpendableOutput, ViewPair,
+};
 use rand::SeedableRng;
+use std::io::Cursor;
+use zeroize::Zeroizing;
 
 #[cfg(not(feature = "mock-rpc"))]
 use monero_serai::rpc::HttpRpc;
@@ -69,10 +72,19 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut all_outputs = Vec::new();
     for height in START_BLOCK..=END_BLOCK {
-        let lookahead = Lookahead { account: 0, subaddress: 10 };
+        let lookahead = Lookahead {
+            account: 0,
+            subaddress: 10,
+        };
         let scan_result = scan_block_for_outputs_with_lookahead(
-            &rpc, height, TEST_SEED, NETWORK_STR, lookahead, "",
-        ).await?;
+            &rpc,
+            height,
+            TEST_SEED,
+            NETWORK_STR,
+            lookahead,
+            "",
+        )
+        .await?;
 
         for output in scan_result.outputs {
             assert!(!output.tx_hash.is_empty());
@@ -149,7 +161,9 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(not(feature = "mock-rpc"))]
     let mut rng = rand::rngs::OsRng;
 
-    let tx = signable.sign(&mut rng, &rpc, &Zeroizing::new(spend_scalar)).await?;
+    let tx = signable
+        .sign(&mut rng, &rpc, &Zeroizing::new(spend_scalar))
+        .await?;
 
     let tx_hash = tx.hash();
     let mut tx_bytes = Vec::new();
@@ -165,7 +179,11 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
 
     for input in &deserialized_tx.prefix.inputs {
         match input {
-            monero_serai::transaction::Input::ToKey { key_offsets, key_image, .. } => {
+            monero_serai::transaction::Input::ToKey {
+                key_offsets,
+                key_image,
+                ..
+            } => {
                 assert!(key_offsets.len() >= 11);
                 let mut key_image_bytes = [0u8; 32];
                 key_image_bytes.copy_from_slice(&key_image.compress().to_bytes());
@@ -193,7 +211,9 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
     assert!(!found_outputs.is_empty());
 
     let expected_change = total_input - send_amount - fee;
-    let has_change = found_outputs.iter().any(|o| o.commitment().amount == expected_change);
+    let has_change = found_outputs
+        .iter()
+        .any(|o| o.commitment().amount == expected_change);
     assert!(has_change);
 
     Ok(())
@@ -222,7 +242,9 @@ async fn test_address_derivation_consistency() -> Result<(), Box<dyn std::error:
     let view_scalar = Scalar::from_bytes_mod_order(view_bytes[..32].try_into()?);
 
     let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
-    let address3 = view_pair.address(NETWORK, AddressSpec::Standard).to_string();
+    let address3 = view_pair
+        .address(NETWORK, AddressSpec::Standard)
+        .to_string();
 
     assert_eq!(address1, address3);
 
@@ -243,10 +265,29 @@ async fn test_key_image_determinism() -> Result<(), Box<dyn std::error::Error>> 
             return Ok(());
         }
         let rpc = HttpRpc::new(NODE_URL.to_string())?;
-        let lookahead = Lookahead { account: 0, subaddress: 10 };
+        let lookahead = Lookahead {
+            account: 0,
+            subaddress: 10,
+        };
 
-        let scan1 = scan_block_for_outputs_with_lookahead(&rpc, START_BLOCK, TEST_SEED, NETWORK_STR, lookahead, "").await?;
-        let scan2 = scan_block_for_outputs_with_lookahead(&rpc, START_BLOCK, TEST_SEED, NETWORK_STR, lookahead, "").await?;
+        let scan1 = scan_block_for_outputs_with_lookahead(
+            &rpc,
+            START_BLOCK,
+            TEST_SEED,
+            NETWORK_STR,
+            lookahead,
+            "",
+        )
+        .await?;
+        let scan2 = scan_block_for_outputs_with_lookahead(
+            &rpc,
+            START_BLOCK,
+            TEST_SEED,
+            NETWORK_STR,
+            lookahead,
+            "",
+        )
+        .await?;
 
         if !scan1.outputs.is_empty() && !scan2.outputs.is_empty() {
             assert_eq!(scan1.outputs.len(), scan2.outputs.len());
@@ -280,70 +321,81 @@ async fn test_transaction_with_multiple_inputs() -> Result<(), Box<dyn std::erro
         }
         let rpc = HttpRpc::new(NODE_URL.to_string())?;
         let mut all_outputs = Vec::new();
-    let lookahead = Lookahead { account: 0, subaddress: 10 };
+        let lookahead = Lookahead {
+            account: 0,
+            subaddress: 10,
+        };
 
-    for height in START_BLOCK..=END_BLOCK {
-        let scan_result = scan_block_for_outputs_with_lookahead(
-            &rpc, height, TEST_SEED, NETWORK_STR, lookahead, "",
-        ).await?;
+        for height in START_BLOCK..=END_BLOCK {
+            let scan_result = scan_block_for_outputs_with_lookahead(
+                &rpc,
+                height,
+                TEST_SEED,
+                NETWORK_STR,
+                lookahead,
+                "",
+            )
+            .await?;
 
-        for output in scan_result.outputs {
-            all_outputs.push(output);
-        }
-    }
-
-    if all_outputs.len() >= 2 {
-        let seed = Seed::from_string(Zeroizing::new(TEST_SEED.to_string()))?;
-        let entropy = seed.entropy();
-        let mut spend_bytes = [0u8; 32];
-        spend_bytes.copy_from_slice(&entropy[..32]);
-        let spend_scalar = Scalar::from_bytes_mod_order(spend_bytes);
-        let spend_point = &spend_scalar * &ED25519_BASEPOINT_TABLE;
-
-        let keys = derive_keys(TEST_SEED, NETWORK_STR, "")?;
-        let view_bytes = hex::decode(&keys.secret_view_key)?;
-        let view_scalar = Scalar::from_bytes_mod_order(view_bytes[..32].try_into()?);
-        let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
-
-        let protocol = rpc.get_protocol().await?;
-        let fee_rate = rpc.get_fee().await?;
-
-        let change = Change::new(&view_pair, false);
-        let mut builder = SignableTransactionBuilder::new(protocol, fee_rate, Some(change));
-
-        let mut total_input = 0u64;
-        for output in all_outputs.iter().take(2) {
-            let output_bytes = hex::decode(&output.received_output_bytes)?;
-            let mut cursor = Cursor::new(output_bytes);
-            let received = ReceivedOutput::read(&mut cursor)?;
-
-            let spendable = SpendableOutput::from(&rpc, received).await?;
-            builder.add_input(spendable);
-            total_input += output.amount;
+            for output in scan_result.outputs {
+                all_outputs.push(output);
+            }
         }
 
-        let address = derive_address(TEST_SEED, NETWORK_STR, "")?;
-        let dest_addr = MoneroAddress::from_str(NETWORK, &address)?;
-        let send_amount = 1_000_000_000u64;
-        builder.add_payment(dest_addr, send_amount);
+        if all_outputs.len() >= 2 {
+            let seed = Seed::from_string(Zeroizing::new(TEST_SEED.to_string()))?;
+            let entropy = seed.entropy();
+            let mut spend_bytes = [0u8; 32];
+            spend_bytes.copy_from_slice(&entropy[..32]);
+            let spend_scalar = Scalar::from_bytes_mod_order(spend_bytes);
+            let spend_point = &spend_scalar * &ED25519_BASEPOINT_TABLE;
 
-        let signable = builder.build()?;
+            let keys = derive_keys(TEST_SEED, NETWORK_STR, "")?;
+            let view_bytes = hex::decode(&keys.secret_view_key)?;
+            let view_scalar = Scalar::from_bytes_mod_order(view_bytes[..32].try_into()?);
+            let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
 
-        assert_eq!(
-            total_input,
-            send_amount + (total_input - send_amount - signable.fee()) + signable.fee()
-        );
+            let protocol = rpc.get_protocol().await?;
+            let fee_rate = rpc.get_fee().await?;
 
-        #[cfg(feature = "mock-rpc")]
-        let mut rng = rand::rngs::StdRng::seed_from_u64(12345);
+            let change = Change::new(&view_pair, false);
+            let mut builder = SignableTransactionBuilder::new(protocol, fee_rate, Some(change));
 
-        #[cfg(not(feature = "mock-rpc"))]
-        let mut rng = rand::rngs::OsRng;
+            let mut total_input = 0u64;
+            for output in all_outputs.iter().take(2) {
+                let output_bytes = hex::decode(&output.received_output_bytes)?;
+                let mut cursor = Cursor::new(output_bytes);
+                let received = ReceivedOutput::read(&mut cursor)?;
 
-        let tx = signable.sign(&mut rng, &rpc, &Zeroizing::new(spend_scalar)).await?;
+                let spendable = SpendableOutput::from(&rpc, received).await?;
+                builder.add_input(spendable);
+                total_input += output.amount;
+            }
 
-        assert_eq!(tx.prefix.inputs.len(), 2);
-        assert_eq!(tx.prefix.outputs.len(), 2);
+            let address = derive_address(TEST_SEED, NETWORK_STR, "")?;
+            let dest_addr = MoneroAddress::from_str(NETWORK, &address)?;
+            let send_amount = 1_000_000_000u64;
+            builder.add_payment(dest_addr, send_amount);
+
+            let signable = builder.build()?;
+
+            assert_eq!(
+                total_input,
+                send_amount + (total_input - send_amount - signable.fee()) + signable.fee()
+            );
+
+            #[cfg(feature = "mock-rpc")]
+            let mut rng = rand::rngs::StdRng::seed_from_u64(12345);
+
+            #[cfg(not(feature = "mock-rpc"))]
+            let mut rng = rand::rngs::OsRng;
+
+            let tx = signable
+                .sign(&mut rng, &rpc, &Zeroizing::new(spend_scalar))
+                .await?;
+
+            assert_eq!(tx.prefix.inputs.len(), 2);
+            assert_eq!(tx.prefix.outputs.len(), 2);
         }
 
         Ok(())
@@ -364,13 +416,22 @@ async fn test_transaction_parsing_and_validation() -> Result<(), Box<dyn std::er
             return Ok(());
         }
         let rpc = HttpRpc::new(NODE_URL.to_string())?;
-        let lookahead = Lookahead { account: 0, subaddress: 10 };
+        let lookahead = Lookahead {
+            account: 0,
+            subaddress: 10,
+        };
 
         let mut test_output = None;
         for height in START_BLOCK..=END_BLOCK {
             let scan_result = scan_block_for_outputs_with_lookahead(
-                &rpc, height, TEST_SEED, NETWORK_STR, lookahead, "",
-            ).await?;
+                &rpc,
+                height,
+                TEST_SEED,
+                NETWORK_STR,
+                lookahead,
+                "",
+            )
+            .await?;
 
             if !scan_result.outputs.is_empty() {
                 test_output = Some(scan_result.outputs[0].clone());

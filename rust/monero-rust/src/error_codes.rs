@@ -25,7 +25,10 @@ impl Network {
             "stagenet" => Ok(Network::Stagenet),
             _ => Err(ErrorResponse::new(
                 ERR_INVALID_NETWORK,
-                format!("Invalid network: '{}'. Expected mainnet, testnet, or stagenet", s),
+                format!(
+                    "Invalid network: '{}'. Expected mainnet, testnet, or stagenet",
+                    s
+                ),
             )),
         }
     }
@@ -61,16 +64,15 @@ pub fn validate_network(network_str: &str) -> Result<(), ErrorResponse> {
 pub fn validate_node_url(url: &str) -> Result<(), ErrorResponse> {
     let trimmed = url.trim();
     if trimmed.is_empty() {
-        return Err(ErrorResponse::new(
-            ERR_INVALID_URL,
-            "Node URL is empty",
-        ).with_hint("Provide a URL like http://127.0.0.1:18081"));
+        return Err(ErrorResponse::new(ERR_INVALID_URL, "Node URL is empty")
+            .with_hint("Provide a URL like http://127.0.0.1:18081"));
     }
     if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
         return Err(ErrorResponse::new(
             ERR_INVALID_URL,
             format!("Node URL has invalid scheme: '{}'", trimmed),
-        ).with_hint("URL must start with http:// or https://"));
+        )
+        .with_hint("URL must start with http:// or https://"));
     }
     Ok(())
 }
@@ -136,8 +138,10 @@ impl ErrorResponse {
         let lower = msg.to_lowercase();
 
         // Seed / mnemonic errors
-        if lower.contains("invalid seed") || lower.contains("failed to parse seed")
-            || lower.contains("invalid bip39") || lower.contains("failed to parse derived legacy seed")
+        if lower.contains("invalid seed")
+            || lower.contains("failed to parse seed")
+            || lower.contains("invalid bip39")
+            || lower.contains("failed to parse derived legacy seed")
         {
             return ErrorResponse::new(ERR_SEED_INVALID, msg)
                 .with_hint("Double-check the seed phrase for typos");
@@ -173,8 +177,10 @@ impl ErrorResponse {
         }
 
         // RPC / connection errors
-        if lower.contains("connection") || lower.contains("fetch failed")
-            || lower.contains("failed to get height") || lower.contains("failed to create rpc")
+        if lower.contains("connection")
+            || lower.contains("fetch failed")
+            || lower.contains("failed to get height")
+            || lower.contains("failed to create rpc")
         {
             return ErrorResponse::new(ERR_RPC_CONNECTION, msg)
                 .with_hint("Check your network connection and node URL")
@@ -182,7 +188,8 @@ impl ErrorResponse {
         }
 
         // No outputs
-        if lower.contains("no spendable outputs") || lower.contains("no selected outputs")
+        if lower.contains("no spendable outputs")
+            || lower.contains("no selected outputs")
             || lower.contains("no confirmed outputs")
         {
             return ErrorResponse::new(ERR_NO_OUTPUTS, msg);
@@ -257,33 +264,22 @@ pub const ERR_SERIALIZATION: u32 = 9001;
 impl From<RpcError> for ErrorResponse {
     fn from(e: RpcError) -> Self {
         match &e {
-            RpcError::ConnectionError => {
-                ErrorResponse::new(ERR_RPC_CONNECTION, e.to_string())
-                    .with_hint("Check your network connection and node URL")
-                    .transient()
-            }
-            RpcError::InvalidNode => {
-                ErrorResponse::new(ERR_RPC_INVALID_NODE, e.to_string())
-                    .with_hint("The node returned an invalid response; try a different node")
-            }
-            RpcError::InternalError(_) => {
-                ErrorResponse::new(ERR_RPC_INTERNAL, e.to_string())
-            }
+            RpcError::ConnectionError => ErrorResponse::new(ERR_RPC_CONNECTION, e.to_string())
+                .with_hint("Check your network connection and node URL")
+                .transient(),
+            RpcError::InvalidNode => ErrorResponse::new(ERR_RPC_INVALID_NODE, e.to_string())
+                .with_hint("The node returned an invalid response; try a different node"),
+            RpcError::InternalError(_) => ErrorResponse::new(ERR_RPC_INTERNAL, e.to_string()),
             RpcError::UnsupportedProtocol(_) => {
                 ErrorResponse::new(ERR_RPC_UNSUPPORTED_PROTOCOL, e.to_string())
                     .with_hint("The node may be running an outdated version of Monero")
             }
             RpcError::TransactionsNotFound(_) => {
-                ErrorResponse::new(ERR_RPC_TX_NOT_FOUND, e.to_string())
-                    .transient()
+                ErrorResponse::new(ERR_RPC_TX_NOT_FOUND, e.to_string()).transient()
             }
-            RpcError::InvalidPoint(_) => {
-                ErrorResponse::new(ERR_RPC_INVALID_POINT, e.to_string())
-            }
-            RpcError::PrunedTransaction => {
-                ErrorResponse::new(ERR_RPC_PRUNED_TX, e.to_string())
-                    .with_hint("Try using a full (non-pruned) node")
-            }
+            RpcError::InvalidPoint(_) => ErrorResponse::new(ERR_RPC_INVALID_POINT, e.to_string()),
+            RpcError::PrunedTransaction => ErrorResponse::new(ERR_RPC_PRUNED_TX, e.to_string())
+                .with_hint("Try using a full (non-pruned) node"),
             RpcError::InvalidTransaction(_) => {
                 ErrorResponse::new(ERR_RPC_INVALID_TX, e.to_string())
             }
@@ -291,14 +287,10 @@ impl From<RpcError> for ErrorResponse {
                 ErrorResponse::new(ERR_RPC_INVALID_NODE, e.to_string())
                     .with_hint("The node returned an unreasonable fee; try a different node")
             }
-            RpcError::ZeroFee => {
-                ErrorResponse::new(ERR_RPC_INVALID_NODE, e.to_string())
-                    .with_hint("The node returned a zero fee; try a different node")
-            }
-            RpcError::ZeroMask => {
-                ErrorResponse::new(ERR_RPC_INVALID_NODE, e.to_string())
-                    .with_hint("The node returned a zero fee mask; try a different node")
-            }
+            RpcError::ZeroFee => ErrorResponse::new(ERR_RPC_INVALID_NODE, e.to_string())
+                .with_hint("The node returned a zero fee; try a different node"),
+            RpcError::ZeroMask => ErrorResponse::new(ERR_RPC_INVALID_NODE, e.to_string())
+                .with_hint("The node returned a zero fee mask; try a different node"),
         }
     }
 }
@@ -320,10 +312,8 @@ impl From<SeedError> for ErrorResponse {
             SeedError::EnglishOldWithChecksum => {
                 ErrorResponse::new(ERR_SEED_ENGLISH_OLD_CHECKSUM, e.to_string())
             }
-            SeedError::InvalidSeed => {
-                ErrorResponse::new(ERR_SEED_INVALID, e.to_string())
-                    .with_hint("The seed phrase could not be decoded")
-            }
+            SeedError::InvalidSeed => ErrorResponse::new(ERR_SEED_INVALID, e.to_string())
+                .with_hint("The seed phrase could not be decoded"),
         }
     }
 }
@@ -331,25 +321,15 @@ impl From<SeedError> for ErrorResponse {
 impl From<AddressError> for ErrorResponse {
     fn from(e: AddressError) -> Self {
         match e {
-            AddressError::InvalidByte => {
-                ErrorResponse::new(ERR_INVALID_ADDRESS, e.to_string())
-                    .with_hint("The address prefix byte is not recognized")
-            }
-            AddressError::InvalidEncoding => {
-                ErrorResponse::new(ERR_INVALID_ADDRESS, e.to_string())
-                    .with_hint("The address is not valid base58")
-            }
-            AddressError::InvalidLength => {
-                ErrorResponse::new(ERR_INVALID_ADDRESS, e.to_string())
-                    .with_hint("The address has an unexpected length")
-            }
-            AddressError::InvalidKey => {
-                ErrorResponse::new(ERR_INVALID_KEY, e.to_string())
-                    .with_hint("The address contains an invalid cryptographic key")
-            }
-            AddressError::UnknownFeatures => {
-                ErrorResponse::new(ERR_INVALID_ADDRESS, e.to_string())
-            }
+            AddressError::InvalidByte => ErrorResponse::new(ERR_INVALID_ADDRESS, e.to_string())
+                .with_hint("The address prefix byte is not recognized"),
+            AddressError::InvalidEncoding => ErrorResponse::new(ERR_INVALID_ADDRESS, e.to_string())
+                .with_hint("The address is not valid base58"),
+            AddressError::InvalidLength => ErrorResponse::new(ERR_INVALID_ADDRESS, e.to_string())
+                .with_hint("The address has an unexpected length"),
+            AddressError::InvalidKey => ErrorResponse::new(ERR_INVALID_KEY, e.to_string())
+                .with_hint("The address contains an invalid cryptographic key"),
+            AddressError::UnknownFeatures => ErrorResponse::new(ERR_INVALID_ADDRESS, e.to_string()),
             AddressError::DifferentNetwork => {
                 ErrorResponse::new(ERR_ADDRESS_WRONG_NETWORK, e.to_string())
                     .with_hint("The address belongs to a different Monero network")
@@ -372,22 +352,37 @@ mod tests_https_enforcement {
 
     #[test]
     fn test_validate_node_url_for_network_mainnet_https_allowed() {
-        assert!(validate_node_url_for_network("https://node.example.com", Network::Mainnet, false).is_ok());
+        assert!(
+            validate_node_url_for_network("https://node.example.com", Network::Mainnet, false)
+                .is_ok()
+        );
     }
 
     #[test]
     fn test_validate_node_url_for_network_stagenet_http_allowed() {
-        assert!(validate_node_url_for_network("http://stagenet.example.com", Network::Stagenet, false).is_ok());
+        assert!(validate_node_url_for_network(
+            "http://stagenet.example.com",
+            Network::Stagenet,
+            false
+        )
+        .is_ok());
     }
 
     #[test]
     fn test_validate_node_url_for_network_testnet_http_allowed() {
-        assert!(validate_node_url_for_network("http://testnet.example.com", Network::Testnet, false).is_ok());
+        assert!(validate_node_url_for_network(
+            "http://testnet.example.com",
+            Network::Testnet,
+            false
+        )
+        .is_ok());
     }
 
     #[test]
     fn test_validate_node_url_for_network_mainnet_allow_http_override() {
-        assert!(validate_node_url_for_network("http://127.0.0.1:18081", Network::Mainnet, true).is_ok());
+        assert!(
+            validate_node_url_for_network("http://127.0.0.1:18081", Network::Mainnet, true).is_ok()
+        );
     }
 
     #[test]

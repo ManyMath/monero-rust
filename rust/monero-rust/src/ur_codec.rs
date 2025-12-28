@@ -49,14 +49,18 @@ impl UrEncoder {
     pub fn next_frame(&mut self) -> Result<QrFrame, String> {
         let raw_index = self.inner.current_index();
         let seq_num = (raw_index % self.fragment_count) + 1;
-        let uri = self.inner.next_part()
+        let uri = self
+            .inner
+            .next_part()
             .map_err(|e| format!("UR next_part error: {:?}", e))?;
 
         let qr = qrcode::QrCode::with_error_correction_level(uri.as_bytes(), EcLevel::L)
             .map_err(|e| format!("QR encode error: {:?}", e))?;
 
         let size = qr.width() as usize;
-        let modules: Vec<bool> = qr.into_colors().into_iter()
+        let modules: Vec<bool> = qr
+            .into_colors()
+            .into_iter()
             .map(|c| c == qrcode::types::Color::Dark)
             .collect();
 
@@ -128,9 +132,7 @@ impl UrDecoder {
         }
 
         let progress = match self.expected_parts {
-            Some(total) if total > 0 => {
-                (self.parts_received as f64 / total as f64).min(1.0)
-            }
+            Some(total) if total > 0 => (self.parts_received as f64 / total as f64).min(1.0),
             _ => 0.0,
         };
 
@@ -144,7 +146,8 @@ impl UrDecoder {
 
     /// Get the decoded message bytes (only valid after `is_complete` is true).
     pub fn message(&self) -> Result<Option<Vec<u8>>, String> {
-        self.inner.message()
+        self.inner
+            .message()
             .map_err(|e| format!("UR message error: {:?}", e))
     }
 
@@ -167,8 +170,7 @@ impl Default for UrDecoder {
 
 /// Decode a single-part UR string directly (no fountain coding).
 pub fn decode_single(uri: &str) -> Result<Vec<u8>, String> {
-    let (_kind, data) = ur::decode(uri)
-        .map_err(|e| format!("UR decode error: {:?}", e))?;
+    let (_kind, data) = ur::decode(uri).map_err(|e| format!("UR decode error: {:?}", e))?;
     Ok(data)
 }
 
@@ -189,8 +191,8 @@ mod tests {
     fn test_encoder_decoder_roundtrip() {
         let data = b"Hello, this is test data for UR encoding roundtrip verification!";
 
-        let mut encoder = UrEncoder::new(data, UR_TYPE_UNSIGNED_TX, 20)
-            .expect("encoder creation failed");
+        let mut encoder =
+            UrEncoder::new(data, UR_TYPE_UNSIGNED_TX, 20).expect("encoder creation failed");
 
         assert!(encoder.fragment_count() > 0);
 
@@ -209,15 +211,18 @@ mod tests {
         }
 
         assert!(decoder.is_complete());
-        let decoded = decoder.message().expect("message failed").expect("no message");
+        let decoded = decoder
+            .message()
+            .expect("message failed")
+            .expect("no message");
         assert_eq!(decoded, data);
     }
 
     #[test]
     fn test_qr_frame_dimensions() {
         let data = b"test";
-        let mut encoder = UrEncoder::new(data, UR_TYPE_KEY_IMAGE, 100)
-            .expect("encoder creation failed");
+        let mut encoder =
+            UrEncoder::new(data, UR_TYPE_KEY_IMAGE, 100).expect("encoder creation failed");
         let frame = encoder.next_frame().expect("next_frame failed");
 
         assert_eq!(frame.modules.len(), frame.size * frame.size);
@@ -226,7 +231,10 @@ mod tests {
 
     #[test]
     fn test_parse_sequence_total() {
-        assert_eq!(parse_sequence_total("ur:xmr-txunsigned/1-5/lpadbbcs"), Some(5));
+        assert_eq!(
+            parse_sequence_total("ur:xmr-txunsigned/1-5/lpadbbcs"),
+            Some(5)
+        );
         assert_eq!(parse_sequence_total("ur:bytes/3-10/abcdef"), Some(10));
         assert_eq!(parse_sequence_total("ur:bytes/abcdef"), None);
         assert_eq!(parse_sequence_total("not-a-ur"), None);

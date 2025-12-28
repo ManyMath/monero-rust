@@ -5,7 +5,7 @@
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
-    use monero_rust::{WalletScanConfig, Lookahead, DEFAULT_LOOKAHEAD};
+    use monero_rust::{Lookahead, WalletScanConfig, DEFAULT_LOOKAHEAD};
 
     const TEST_WALLET_1_SEED: &str = "hemlock jubilee eden hacksaw boil superior inroads epoxy exhale orders cavernous second brunt saved richly lower upgrade hitched launching deepest mostly playful layout lower eden";
     const TEST_WALLET_1_ADDRESS: &str = "45wsWad9EwZgF3VpxQumrUCRaEtdyyh6NG8sVD3YRVVJbK1jkpJ3zq8WHLijVzodQ22LxwkdWx7fS2a6JzaRGzkNU8K2Dhi";
@@ -130,7 +130,10 @@ mod tests {
             .expect("first derive_address call failed");
         let second = derive_address(TEST_WALLET_1_SEED, "mainnet", "")
             .expect("second derive_address call failed");
-        assert_eq!(first, second, "Two calls to derive_address must return the same result");
+        assert_eq!(
+            first, second,
+            "Two calls to derive_address must return the same result"
+        );
     }
 
     #[test]
@@ -162,9 +165,18 @@ mod tests {
         let addr3 = derive_address(TEST_WALLET_3_SEED, "stagenet", "")
             .expect("derive_address failed for wallet 3");
 
-        assert_ne!(addr1, addr2, "Wallet 1 and 2 should have different addresses");
-        assert_ne!(addr1, addr3, "Wallet 1 and 3 should have different addresses");
-        assert_ne!(addr2, addr3, "Wallet 2 and 3 should have different addresses");
+        assert_ne!(
+            addr1, addr2,
+            "Wallet 1 and 2 should have different addresses"
+        );
+        assert_ne!(
+            addr1, addr3,
+            "Wallet 1 and 3 should have different addresses"
+        );
+        assert_ne!(
+            addr2, addr3,
+            "Wallet 2 and 3 should have different addresses"
+        );
     }
 
     #[test]

@@ -1,9 +1,7 @@
 use monero_rust::{
-    bip39_to_legacy_mnemonic, validate_bip39, generate_bip39,
-    derive_address, derive_keys, derive_subaddress,
-    generate_seed, resolve_seed, resolve_seed_bip39, seed_birthday, validate_seed,
+    bip39_to_legacy_mnemonic, derive_address, derive_keys, derive_subaddress, generate_bip39,
+    generate_seed, resolve_seed, resolve_seed_bip39, seed_birthday, validate_bip39, validate_seed,
 };
-
 
 #[test]
 fn test_wallet1_account0() {
@@ -58,12 +56,15 @@ fn test_wallet2_address() {
 
 #[test]
 fn test_validate_bip39_valid() {
-    validate_bip39("meadow tip best belt boss eyebrow control affair eternal piece very shiver").unwrap();
+    validate_bip39("meadow tip best belt boss eyebrow control affair eternal piece very shiver")
+        .unwrap();
 }
 
 #[test]
 fn test_validate_bip39_invalid_word() {
-    let err = validate_bip39("meadow tip best belt boss eyebrow control affair eternal piece very zzzzz").unwrap_err();
+    let err =
+        validate_bip39("meadow tip best belt boss eyebrow control affair eternal piece very zzzzz")
+            .unwrap_err();
     assert!(err.contains("Invalid BIP39"), "unexpected error: {}", err);
 }
 
@@ -159,8 +160,14 @@ fn test_derive_keys_bip39_matches_explicit_conversion() {
     // Transparent path: pass BIP39 directly to derive_keys
     let keys_transparent = derive_keys(bip39, "mainnet", "").unwrap();
     assert_eq!(keys_explicit.address, keys_transparent.address);
-    assert_eq!(keys_explicit.secret_spend_key, keys_transparent.secret_spend_key);
-    assert_eq!(keys_explicit.secret_view_key, keys_transparent.secret_view_key);
+    assert_eq!(
+        keys_explicit.secret_spend_key,
+        keys_transparent.secret_spend_key
+    );
+    assert_eq!(
+        keys_explicit.secret_view_key,
+        keys_transparent.secret_view_key
+    );
 }
 
 #[test]
@@ -178,7 +185,9 @@ fn test_validate_seed_with_bip39() {
 
 #[test]
 fn test_validate_seed_with_invalid_bip39() {
-    let err = validate_seed("meadow tip best belt boss eyebrow control affair eternal piece very zzzzz").unwrap_err();
+    let err =
+        validate_seed("meadow tip best belt boss eyebrow control affair eternal piece very zzzzz")
+            .unwrap_err();
     assert!(err.contains("Invalid BIP39"), "unexpected error: {}", err);
 }
 
@@ -235,8 +244,14 @@ fn test_resolve_seed_matches_explicit_bip39_conversion() {
     let legacy = bip39_to_legacy_mnemonic(bip39, "", 0).unwrap();
     let keys_via_legacy = derive_keys(&legacy, "mainnet", "").unwrap();
     assert_eq!(keys_via_resolve.address, keys_via_legacy.address);
-    assert_eq!(keys_via_resolve.secret_spend_key, keys_via_legacy.secret_spend_key);
-    assert_eq!(keys_via_resolve.secret_view_key, keys_via_legacy.secret_view_key);
+    assert_eq!(
+        keys_via_resolve.secret_spend_key,
+        keys_via_legacy.secret_spend_key
+    );
+    assert_eq!(
+        keys_via_resolve.secret_view_key,
+        keys_via_legacy.secret_view_key
+    );
 }
 
 #[test]
@@ -252,14 +267,18 @@ fn test_resolve_seed_with_polyseed() {
 #[test]
 fn test_validate_seed_accepts_all_types() {
     // 12-word BIP39
-    validate_seed("meadow tip best belt boss eyebrow control affair eternal piece very shiver").unwrap();
+    validate_seed("meadow tip best belt boss eyebrow control affair eternal piece very shiver")
+        .unwrap();
     // 16-word polyseed
     let polyseed = generate_seed("polyseed").unwrap();
     validate_seed(&polyseed).unwrap();
     // 25-word classic
-    validate_seed("tasked eight afraid laboratory tail feline rift reinvest vane cafe bailed \
+    validate_seed(
+        "tasked eight afraid laboratory tail feline rift reinvest vane cafe bailed \
         foggy dormant paper jigsaw king hazard suture king dapper dummy jolted \
-        dating dwindling king").unwrap();
+        dating dwindling king",
+    )
+    .unwrap();
 }
 
 #[test]
@@ -367,7 +386,10 @@ fn test_resolve_seed_bip39_passthrough_classic() {
     // Both should produce the same keys
     let keys_default = derive_keys(classic, "mainnet", "").unwrap();
     // Can't compare Seed directly, but keys should match
-    assert_eq!(keys_default.address, derive_address(classic, "mainnet", "").unwrap());
+    assert_eq!(
+        keys_default.address,
+        derive_address(classic, "mainnet", "").unwrap()
+    );
 }
 
 #[test]

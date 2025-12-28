@@ -1,0 +1,85 @@
+============================= test session starts ==============================
+platform linux -- Python 3.13.5, pytest-9.1.0, pluggy-1.6.0 -- /tmp/app-monero-venv/bin/python3
+cachedir: .pytest_cache
+rootdir: /app
+configfile: setup.cfg
+plugins: cov-7.1.0
+collecting ... collected 47 items
+
+tests/test_sig.py::TestSignature::test_set_sig[nanosp]
+PASSED            [  2%]
+tests/test_sig.py::TestSignature::test_open_tx[nanosp] PASSED            [  4%]
+tests/test_sig.py::TestSignature::test_gen_txout_keys[nanosp] PASSED     [  6%]
+tests/test_sig.py::TestSignature::test_prefix_hash[nanosp] PASSED        [  8%]
+tests/test_sig.py::TestSignature::test_gen_commitment_mask[nanosp] PASSED [ 10%]
+tests/test_sig.py::TestSignature::test_blind[nanosp] state["amount"][index] = 69360000000000
+state["amount"][index] = 370000000000
+state["amount"][index] = 550000000000
+PASSED              [ 12%]
+tests/test_sig.py::TestSignature::test_validate[nanosp] PASSED           [ 14%]
+tests/test_sig.py::TestSignature::test_close_tx[nanosp] PASSED           [ 17%]
+tests/test_sig_real_simple.py::TestSignatureRealSimple::test_reset_2[nanosp]
+PASSED [ 19%]
+tests/test_sig_real_simple.py::TestSignatureRealSimple::test_get_keys_2[nanosp] Device public view key: 865cbfab852a1d1ccdfc7328e4dac90f78fc2154257d07522e9b79e637326dfa
+Device public spend key: dae41d6b13568fdd71ec3d20c2f614c65fe819f36ca5da8d24df3bd89b2bad9d
+Device primary address: 5A8FgbMkmG2e3J41sBdjvjaBUyz8qHohsQcGtRf63qEUTMBvmA45fpp5pSacMdSg7A3b71RejLzB8EkGbfjp5PELVHCRUaE
+
+Churn: Primary → Primary (destination + change with amount=0)
+PASSED [ 21%]
+tests/test_sig_real_simple.py::TestSignatureRealSimple::test_decoy1_set_sig_2[nanosp] PASSED [ 23%]
+tests/test_sig_real_simple.py::TestSignatureRealSimple::test_decoy1_open_2[nanosp] PASSED [ 25%]
+tests/test_sig_real_simple.py::TestSignatureRealSimple::test_decoy1_gen_txout_keys_2[nanosp] PASSED [ 27%]
+tests/test_sig_real_simple.py::TestSignatureRealSimple::test_decoy1_prefix_hash_2[nanosp] PASSED [ 29%]
+tests/test_sig_real_simple.py::TestSignatureRealSimple::test_decoy1_close_2[nanosp] PASSED [ 31%]
+tests/test_sig_real_simple.py::TestSignatureRealSimple::test_decoy2_set_sig_2[nanosp] PASSED [ 34%]
+tests/test_sig_real_simple.py::TestSignatureRealSimple::test_decoy2_open_2[nanosp] PASSED [ 36%]
+tests/test_sig_real_simple.py::TestSignatureRealSimple::test_decoy2_gen_txout_keys_2[nanosp] PASSED [ 38%]
+tests/test_sig_real_simple.py::TestSignatureRealSimple::test_decoy2_prefix_hash_2[nanosp] PASSED [ 40%]
+tests/test_sig_real_simple.py::TestSignatureRealSimple::test_decoy2_close_2[nanosp] PASSED [ 42%]
+tests/test_sig_real_simple.py::TestSignatureRealSimple::test_set_sig_2[nanosp] PASSED [ 44%]
+tests/test_sig_real_simple.py::TestSignatureRealSimple::test_open_tx_2[nanosp] TX1: Transaction public key: 7a3489c34b03c267acc1d72d7146df77e47e7562b7bdeb3ab075750200ce9027
+PASSED [ 46%]
+tests/test_sig_real_simple.py::TestSignatureRealSimple::test_gen_txout_keys_2[nanosp] TX1 Output 0: ephemeral key = fd30b7b1abd3f701d61803e4e9cffb0a15cb90bdf781fcf16efd80af40294f29
+TX1 Output 1: ephemeral key = 02c421298c534edf1e179f5057b6ab7fba587bda44f276417b45834cdbed6fcc
+PASSED [ 48%]
+tests/test_sig_real_simple.py::TestSignatureRealSimple::test_prefix_hash_2[nanosp] TX1 Prefix hash: 54a8c0ab653c15bfb48b47fd011ba2b9617af01cb45cab344acd57c924d56798
+PASSED [ 51%]
+tests/test_sig_real_simple.py::TestSignatureRealSimple::test_gen_commitment_mask_2[nanosp] PASSED [ 53%]
+tests/test_sig_real_simple.py::TestSignatureRealSimple::test_blind_2[nanosp] TX1: Blinding output 0, amount = 907880000
+TX1: Blinding output 1, amount = 0
+PASSED [ 55%]
+tests/test_sig_real_simple.py::TestSignatureRealSimple::test_validate_2[nanosp] PASSED [ 57%]
+tests/test_sig_real_simple.py::TestSignatureRealSimple::test_close_tx_2[nanosp] PASSED [ 59%]
+tests/test_sig_real_amount_zero.py::TestSignatureRealAmountZero::test_reset_zero[nanosp]
+PASSED [ 61%]
+tests/test_sig_real_amount_zero.py::TestSignatureRealAmountZero::test_get_keys_zero[nanosp] Device public view key: 865cbfab852a1d1ccdfc7328e4dac90f78fc2154257d07522e9b79e637326dfa
+Device public spend key: dae41d6b13568fdd71ec3d20c2f614c65fe819f36ca5da8d24df3bd89b2bad9d
+Device primary address: 5A8FgbMkmG2e3J41sBdjvjaBUyz8qHohsQcGtRf63qEUTMBvmA45fpp5pSacMdSg7A3b71RejLzB8EkGbfjp5PELVHCRUaE
+
+Attempting to send amount=0 to non-change output - should fail with 0x6913
+PASSED [ 63%]
+tests/test_sig_real_amount_zero.py::TestSignatureRealAmountZero::test_decoy1_set_sig_zero[nanosp] PASSED [ 65%]
+tests/test_sig_real_amount_zero.py::TestSignatureRealAmountZero::test_decoy1_open_zero[nanosp] PASSED [ 68%]
+tests/test_sig_real_amount_zero.py::TestSignatureRealAmountZero::test_decoy1_gen_txout_keys_zero[nanosp] PASSED [ 70%]
+tests/test_sig_real_amount_zero.py::TestSignatureRealAmountZero::test_decoy1_prefix_hash_zero[nanosp] PASSED [ 72%]
+tests/test_sig_real_amount_zero.py::TestSignatureRealAmountZero::test_decoy1_close_zero[nanosp] PASSED [ 74%]
+tests/test_sig_real_amount_zero.py::TestSignatureRealAmountZero::test_decoy2_set_sig_zero[nanosp] PASSED [ 76%]
+tests/test_sig_real_amount_zero.py::TestSignatureRealAmountZero::test_decoy2_open_zero[nanosp] PASSED [ 78%]
+tests/test_sig_real_amount_zero.py::TestSignatureRealAmountZero::test_decoy2_gen_txout_keys_zero[nanosp] PASSED [ 80%]
+tests/test_sig_real_amount_zero.py::TestSignatureRealAmountZero::test_decoy2_prefix_hash_zero[nanosp] PASSED [ 82%]
+tests/test_sig_real_amount_zero.py::TestSignatureRealAmountZero::test_decoy2_close_zero[nanosp] PASSED [ 85%]
+tests/test_sig_real_amount_zero.py::TestSignatureRealAmountZero::test_set_sig_zero[nanosp] PASSED [ 87%]
+tests/test_sig_real_amount_zero.py::TestSignatureRealAmountZero::test_open_tx_zero[nanosp] TX1: Transaction public key: 0bdc08c4cdbf2f671f6219f1501ff086793a44d6e590582036f53796b9bf7547
+PASSED [ 89%]
+tests/test_sig_real_amount_zero.py::TestSignatureRealAmountZero::test_gen_txout_keys_zero[nanosp] TX1 Output 0: ephemeral key = a265365a470435c88d0428f7cddb2418d97f01eff94ec8108d15802c1cde501f
+PASSED [ 91%]
+tests/test_sig_real_amount_zero.py::TestSignatureRealAmountZero::test_prefix_hash_zero[nanosp] TX1 Prefix hash: 54a8c0ab653c15bfb48b47fd011ba2b9617af01cb45cab344acd57c924d56798
+PASSED [ 93%]
+tests/test_sig_real_amount_zero.py::TestSignatureRealAmountZero::test_gen_commitment_mask_zero[nanosp] PASSED [ 95%]
+tests/test_sig_real_amount_zero.py::TestSignatureRealAmountZero::test_blind_zero[nanosp] TX1: Blinding output 0, amount = 0
+PASSED [ 97%]
+tests/test_sig_real_amount_zero.py::TestSignatureRealAmountZero::test_validate_zero[nanosp]
+✓ Test passed: Firmware correctly rejected amount=0 with error 0x6913
+PASSED [100%]
+
+============================= 47 passed in 17.16s ==============================

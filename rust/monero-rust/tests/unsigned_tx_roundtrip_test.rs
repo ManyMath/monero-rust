@@ -3,16 +3,16 @@ mod common;
 #[cfg(feature = "mock-rpc")]
 mod mock_rpc;
 
+use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 use monero_rust::scanner::{
     derive_address, derive_keys, scan_block_for_outputs_with_lookahead, Lookahead,
 };
+use monero_serai::transaction::Transaction;
 use monero_serai::wallet::{
     address::{MoneroAddress, Network},
     seed::Seed,
     Change, ReceivedOutput, SignableTransactionBuilder, SpendableOutput, ViewPair,
 };
-use monero_serai::transaction::Transaction;
-use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 use rand::SeedableRng;
 use std::io::Cursor;
 use zeroize::Zeroizing;
@@ -59,7 +59,12 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
             subaddress: 10,
         };
         let scan_result = match scan_block_for_outputs_with_lookahead(
-            &rpc, height, TEST_SEED, NETWORK_STR, lookahead, "",
+            &rpc,
+            height,
+            TEST_SEED,
+            NETWORK_STR,
+            lookahead,
+            "",
         )
         .await
         {
@@ -149,11 +154,8 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
     );
 
     // --- Step 4: Sign the unsigned TX via the high-level offline signing function ---
-    let result = monero_rust::native::sign_unsigned_transaction(
-        TEST_SEED,
-        &unsigned_tx_hex,
-        NETWORK_STR,
-    )?;
+    let result =
+        monero_rust::native::sign_unsigned_transaction(TEST_SEED, &unsigned_tx_hex, NETWORK_STR)?;
 
     // --- Step 5: Verify the signed result ---
     assert!(!result.tx_id.is_empty(), "tx_id must not be empty");
@@ -193,11 +195,7 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
         deserialized_tx.prefix.version, 2,
         "TX version must be 2 (RingCT)"
     );
-    assert_eq!(
-        deserialized_tx.prefix.inputs.len(),
-        1,
-        "Must have 1 input"
-    );
+    assert_eq!(deserialized_tx.prefix.inputs.len(), 1, "Must have 1 input");
     assert_eq!(
         deserialized_tx.prefix.outputs.len(),
         2,

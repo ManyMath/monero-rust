@@ -31,8 +31,7 @@ fn test_full_tx_parses_successfully() {
 #[test]
 fn test_key_images_extractable_from_pruned() {
     let fixture = load_fixture();
-    let pruned_bytes =
-        hex::decode(&fixture.pruned_as_hex).expect("failed to decode pruned_as_hex");
+    let pruned_bytes = hex::decode(&fixture.pruned_as_hex).expect("failed to decode pruned_as_hex");
 
     // Parse just the prefix + RctBase from pruned data
     let mut cursor = std::io::Cursor::new(&pruned_bytes);
@@ -44,14 +43,15 @@ fn test_key_images_extractable_from_pruned() {
         .inputs
         .iter()
         .filter_map(|input| match input {
-            Input::ToKey { key_image, .. } => {
-                Some(hex::encode(key_image.compress().to_bytes()))
-            }
+            Input::ToKey { key_image, .. } => Some(hex::encode(key_image.compress().to_bytes())),
             _ => None,
         })
         .collect();
 
-    assert!(!key_images.is_empty(), "Should extract at least one key image");
+    assert!(
+        !key_images.is_empty(),
+        "Should extract at least one key image"
+    );
 
     // Verify they are 64 hex chars (32 bytes)
     for ki in &key_images {
@@ -67,9 +67,7 @@ fn test_key_images_extractable_from_pruned() {
         .inputs
         .iter()
         .filter_map(|input| match input {
-            Input::ToKey { key_image, .. } => {
-                Some(hex::encode(key_image.compress().to_bytes()))
-            }
+            Input::ToKey { key_image, .. } => Some(hex::encode(key_image.compress().to_bytes())),
             _ => None,
         })
         .collect();

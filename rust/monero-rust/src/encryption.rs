@@ -69,8 +69,8 @@ pub fn encrypt(plaintext: &[u8], password: &str) -> Result<Vec<u8>, EncryptionEr
 
     let mut key = derive_key(password, &salt)?;
 
-    let cipher = ChaCha20Poly1305::new_from_slice(&key)
-        .map_err(|_| EncryptionError::EncryptionFailed)?;
+    let cipher =
+        ChaCha20Poly1305::new_from_slice(&key).map_err(|_| EncryptionError::EncryptionFailed)?;
 
     let mut nonce_bytes = [0u8; NONCE_SIZE];
     OsRng.fill_bytes(&mut nonce_bytes);
@@ -138,8 +138,8 @@ pub fn decrypt(encrypted_data: &[u8], password: &str) -> Result<Vec<u8>, Encrypt
 
     let mut key = derive_key(password, salt)?;
 
-    let cipher = ChaCha20Poly1305::new_from_slice(&key)
-        .map_err(|_| EncryptionError::DecryptionFailed)?;
+    let cipher =
+        ChaCha20Poly1305::new_from_slice(&key).map_err(|_| EncryptionError::DecryptionFailed)?;
 
     let nonce = Nonce::from_slice(nonce_bytes);
 
@@ -209,8 +209,7 @@ mod tests {
         let plaintext = b"Auto-saved wallet data";
 
         let (key, salt) = derive_key_fresh(password).expect("Key derivation failed");
-        let encrypted =
-            encrypt_with_key(plaintext, &key, &salt).expect("Encrypt with key failed");
+        let encrypted = encrypt_with_key(plaintext, &key, &salt).expect("Encrypt with key failed");
         let decrypted = decrypt(&encrypted, password).expect("Decrypt with password failed");
 
         assert_eq!(plaintext, decrypted.as_slice());

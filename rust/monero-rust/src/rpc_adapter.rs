@@ -40,7 +40,9 @@ impl monero_serai::rpc::RpcConnection for WasmRpcAdapter {
         } else {
             "application/json"
         };
-        headers.set("Content-Type", content_type).map_err(|_| RpcError::ConnectionError)?;
+        headers
+            .set("Content-Type", content_type)
+            .map_err(|_| RpcError::ConnectionError)?;
 
         let resp: Response = crate::wasm_fetch::fetch_with_request(&request)
             .await
@@ -57,7 +59,8 @@ impl monero_serai::rpc::RpcConnection for WasmRpcAdapter {
         }
 
         if route.ends_with(".bin") {
-            let array_buffer_promise = resp.array_buffer().map_err(|_| RpcError::ConnectionError)?;
+            let array_buffer_promise =
+                resp.array_buffer().map_err(|_| RpcError::ConnectionError)?;
             let array_buffer_value = JsFuture::from(array_buffer_promise)
                 .await
                 .map_err(|_| RpcError::ConnectionError)?;

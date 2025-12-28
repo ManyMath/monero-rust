@@ -1,17 +1,20 @@
 //! Transaction building.
 
 pub mod native {
-    use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
+    use curve25519_dalek::{
+        constants::ED25519_BASEPOINT_TABLE, edwards::CompressedEdwardsY, scalar::Scalar,
+    };
     use monero_serai::{
         rpc::{Rpc, RpcConnection, DEFAULT_MAX_FEE_PER_BYTE},
         transaction::Transaction,
         wallet::{
-            address::{MoneroAddress, Network},
+            address::{AddressMeta, AddressType, MoneroAddress, Network},
             seed::Seed,
-            Change, Decoys, ReceivedOutput, Scanner, SignableTransactionBuilder, SpendableOutput,
-            ViewPair, Fee,
-            UnsignedTransaction, sign_offline,
+            sign_offline, Change, Decoys, Fee, InternalPayment, ReceivedOutput, Scanner,
+            SignableTransactionBuilder, SpendableOutput, UnsignedInput, UnsignedTransaction,
+            ViewPair,
         },
+        Protocol,
     };
     use rand_core::RngCore;
 
@@ -21,7 +24,7 @@ pub mod native {
     #[cfg(target_arch = "wasm32")]
     use crate::rpc_serai::WasmRpcConnection;
 
-    use crate::scanner::{resolve_seed, register_subaddresses, Lookahead, DEFAULT_LOOKAHEAD};
+    use crate::scanner::{register_subaddresses, resolve_seed, Lookahead, DEFAULT_LOOKAHEAD};
     use serde::{Deserialize, Serialize};
     use serde_json::Value;
     use sha3::{Digest, Keccak256};
@@ -119,12 +122,14 @@ pub mod native {
             DecoySelection {
                 real_index: d.i,
                 offsets: d.offsets.clone(),
-                ring: d.ring.iter().map(|[key, commitment]| {
-                    RingMember {
+                ring: d
+                    .ring
+                    .iter()
+                    .map(|[key, commitment]| RingMember {
                         key: hex::encode(key.compress().as_bytes()),
                         commitment: hex::encode(commitment.compress().as_bytes()),
-                    }
-                }).collect(),
+                    })
+                    .collect(),
             }
         }
     }
@@ -159,19 +164,28 @@ pub mod native {
         // payment id: nonce tag (1) + length (1) + encrypted tag (1) + id (8)
         let payment_id = if has_payment_id { 11 } else { 0 };
         // arbitrary data
-        let data: usize = data_sizes.iter().map(|len| {
-            // nonce tag (1) + varint length + marker (1) + data
-            1 + varint_len(1 + len) + 1 + len
-        }).sum();
+        let data: usize = data_sizes
+            .iter()
+            .map(|len| {
+                // nonce tag (1) + varint length + marker (1) + data
+                1 + varint_len(1 + len) + 1 + len
+            })
+            .sum();
         base + additional + payment_id + data
     }
 
     fn varint_len(val: usize) -> usize {
-        if val < 0x80 { 1 }
-        else if val < 0x4000 { 2 }
-        else if val < 0x200000 { 3 }
-        else if val < 0x10000000 { 4 }
-        else { 5 }
+        if val < 0x80 {
+            1
+        } else if val < 0x4000 {
+            2
+        } else if val < 0x200000 {
+            3
+        } else if val < 0x10000000 {
+            4
+        } else {
+            5
+        }
     }
 
     fn scan_transaction_outputs(
@@ -197,7 +211,10 @@ pub mod native {
                 let key_offset_scalar = output.data.key_offset;
                 let key_offset = hex::encode(key_offset_scalar.to_bytes());
                 let commitment_mask = hex::encode(output.data.commitment.mask.to_bytes());
-                let subaddress_index = output.metadata.subaddress.map(|idx| (idx.account(), idx.address()));
+                let subaddress_index = output
+                    .metadata
+                    .subaddress
+                    .map(|idx| (idx.account(), idx.address()));
                 let received_output_bytes = hex::encode(output.serialize());
 
                 let one_time_key_scalar = Zeroizing::new(*spend_key + key_offset_scalar);
@@ -273,16 +290,19 @@ pub mod native {
         }
 
         #[cfg(not(target_arch = "wasm32"))]
-        let rpc = HttpRpc::new(node_url.to_string())
-            .map_err(|e| format!("RPC error: {:?}", e))?;
+        let rpc = HttpRpc::new(node_url.to_string()).map_err(|e| format!("RPC error: {:?}", e))?;
 
         #[cfg(target_arch = "wasm32")]
         let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
 
-        let protocol = rpc.get_protocol().await
+        let protocol = rpc
+            .get_protocol()
+            .await
             .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
 
-        let height = rpc.get_height().await
+        let height = rpc
+            .get_height()
+            .await
             .map_err(|e| format!("Failed to get height: {:?}", e))?;
 
         let mut spendable_outputs = Vec::with_capacity(stored_outputs.len());
@@ -303,7 +323,9 @@ pub mod native {
             protocol.ring_len(),
             height.saturating_sub(1),
             &spendable_outputs,
-        ).await.map_err(|e| format!("Decoy selection failed: {:?}", e))?;
+        )
+        .await
+        .map_err(|e| format!("Decoy selection failed: {:?}", e))?;
 
         Ok(DecoyResult {
             height: height.saturating_sub(1),
@@ -331,16 +353,19 @@ pub mod native {
         }
 
         #[cfg(not(target_arch = "wasm32"))]
-        let rpc = HttpRpc::new(node_url.to_string())
-            .map_err(|e| format!("RPC error: {:?}", e))?;
+        let rpc = HttpRpc::new(node_url.to_string()).map_err(|e| format!("RPC error: {:?}", e))?;
 
         #[cfg(target_arch = "wasm32")]
         let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
 
-        let protocol = rpc.get_protocol().await
+        let protocol = rpc
+            .get_protocol()
+            .await
             .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
 
-        let fee_rate: Fee = rpc.get_fee_checked(DEFAULT_MAX_FEE_PER_BYTE).await
+        let fee_rate: Fee = rpc
+            .get_fee_checked(DEFAULT_MAX_FEE_PER_BYTE)
+            .await
             .map_err(|e| format!("Failed to get fee rate: {:?}", e))?;
 
         // Worst-case extra: assume payment ID and additional keys
@@ -423,7 +448,8 @@ pub mod native {
             &prepared.network,
             prepared.stored_outputs,
             &prepared.recipients,
-        ).await
+        )
+        .await
     }
 
     /// Decision on whether to include a change output.
@@ -447,8 +473,8 @@ pub mod native {
     /// - Multi-recipient (≥2 payments): if change is dust, absorb into miner fee
     ///   by omitting the change output. Otherwise include change.
     pub fn decide_change(expected_change: u64, num_recipients: usize) -> ChangeDecision {
-        let is_dust = expected_change > 0
-            && expected_change < crate::coin_selection::DUST_THRESHOLD;
+        let is_dust =
+            expected_change > 0 && expected_change < crate::coin_selection::DUST_THRESHOLD;
 
         if is_dust {
             if num_recipients < 2 {
@@ -532,20 +558,23 @@ pub mod native {
         }
 
         // Compute expected change to detect dust
-        let total_input: u64 = spendable_outputs.iter()
-            .map(|o| o.commitment().amount).sum();
+        let total_input: u64 = spendable_outputs
+            .iter()
+            .map(|o| o.commitment().amount)
+            .sum();
         let total_send: u64 = recipients.iter().map(|(_, amt)| *amt).sum();
         let num_out_with_change = recipients.len() + 1;
         let extra_wc = extra_weight(num_out_with_change, true, &[]);
         let weight_wc = Transaction::fee_weight(
-            protocol, spendable_outputs.len(), num_out_with_change, extra_wc,
+            protocol,
+            spendable_outputs.len(),
+            num_out_with_change,
+            extra_wc,
         );
         let fee_wc = fee.calculate(weight_wc);
         let expected_change = total_input.saturating_sub(total_send + fee_wc);
 
-        let change_decision = decide_change(
-            expected_change, recipients.len(),
-        );
+        let change_decision = decide_change(expected_change, recipients.len());
 
         #[cfg(not(target_arch = "wasm32"))]
         eprintln!(
@@ -598,10 +627,12 @@ pub mod native {
         let fee_amount = signable.fee();
 
         // Get the eventuality to extract the private tx_key before signing
-        let eventuality = signable.eventuality()
+        let eventuality = signable
+            .eventuality()
             .ok_or_else(|| "Failed to get eventuality (r_seed not set)".to_string())?;
         let tx_key = hex::encode(eventuality.tx_key().to_bytes());
-        let tx_key_additional: Vec<String> = eventuality.tx_key_additional()
+        let tx_key_additional: Vec<String> = eventuality
+            .tx_key_additional()
             .iter()
             .map(|k| hex::encode(k.to_bytes()))
             .collect();
@@ -614,7 +645,8 @@ pub mod native {
         let tx_id = hex::encode(tx.hash());
         let tx_blob = hex::encode(tx.serialize());
 
-        let max_account = stored_outputs.iter()
+        let max_account = stored_outputs
+            .iter()
             .filter_map(|o| o.subaddress.map(|(a, _)| a))
             .max()
             .unwrap_or(0);
@@ -672,8 +704,12 @@ pub mod native {
             .map_err(|e| format!("Failed to get fee: {:?}", e))?;
 
         // Parse destination address
-        let dest_addr = MoneroAddress::from_str(network, destination_address)
-            .map_err(|e| format!("Invalid destination address '{}': {:?}", destination_address, e))?;
+        let dest_addr = MoneroAddress::from_str(network, destination_address).map_err(|e| {
+            format!(
+                "Invalid destination address '{}': {:?}",
+                destination_address, e
+            )
+        })?;
 
         // Convert stored outputs to spendable outputs
         let mut spendable_outputs = Vec::new();
@@ -692,7 +728,8 @@ pub mod native {
         }
 
         // Calculate total input amount
-        let total_in: u64 = spendable_outputs.iter()
+        let total_in: u64 = spendable_outputs
+            .iter()
             .map(|o| o.commitment().amount)
             .sum();
 
@@ -701,21 +738,18 @@ pub mod native {
         let num_outputs = 2;
         // Worst-case extra: assume payment ID and additional keys
         let extra = extra_weight(num_outputs, true, &[]);
-        let estimated_tx_size = Transaction::fee_weight(
-            protocol,
-            spendable_outputs.len(),
-            num_outputs,
-            extra,
-        );
+        let estimated_tx_size =
+            Transaction::fee_weight(protocol, spendable_outputs.len(), num_outputs, extra);
 
         let fee_amount = fee.calculate(estimated_tx_size);
 
         // Calculate sweep amount (total - fee)
-        let sweep_amount = total_in.checked_sub(fee_amount)
-            .ok_or_else(|| format!(
+        let sweep_amount = total_in.checked_sub(fee_amount).ok_or_else(|| {
+            format!(
                 "Insufficient funds: have {} atomic units, need {} for fee",
                 total_in, fee_amount
-            ))?;
+            )
+        })?;
 
         // Monero requires ≥2 outputs for RingCT. Create the real output
         // with the full sweep amount and a 0-value dummy, matching wallet2.
@@ -745,10 +779,12 @@ pub mod native {
         let actual_fee = signable.fee();
 
         // Get the eventuality to extract the private tx_key before signing
-        let eventuality = signable.eventuality()
+        let eventuality = signable
+            .eventuality()
             .ok_or_else(|| "Failed to get eventuality (r_seed not set)".to_string())?;
         let tx_key = hex::encode(eventuality.tx_key().to_bytes());
-        let tx_key_additional: Vec<String> = eventuality.tx_key_additional()
+        let tx_key_additional: Vec<String> = eventuality
+            .tx_key_additional()
             .iter()
             .map(|k| hex::encode(k.to_bytes()))
             .collect();
@@ -761,7 +797,8 @@ pub mod native {
         let tx_id = hex::encode(tx.hash());
         let tx_blob = hex::encode(tx.serialize());
 
-        let max_account = stored_outputs.iter()
+        let max_account = stored_outputs
+            .iter()
             .filter_map(|o| o.subaddress.map(|(a, _)| a))
             .max()
             .unwrap_or(0);
@@ -787,8 +824,7 @@ pub mod native {
         tx_blob_hex: &str,
         do_not_relay: bool,
     ) -> Result<(), String> {
-        let tx_bytes = hex::decode(tx_blob_hex)
-            .map_err(|e| format!("Invalid hex: {:?}", e))?;
+        let tx_bytes = hex::decode(tx_blob_hex).map_err(|e| format!("Invalid hex: {:?}", e))?;
 
         let tx = Transaction::read::<&[u8]>(&mut tx_bytes.as_ref())
             .map_err(|e| format!("Invalid transaction: {:?}", e))?;
@@ -823,8 +859,7 @@ pub mod native {
         tx_blob_hex: &str,
         do_not_relay: bool,
     ) -> Result<(), String> {
-        let tx_bytes = hex::decode(tx_blob_hex)
-            .map_err(|e| format!("Invalid hex: {:?}", e))?;
+        let tx_bytes = hex::decode(tx_blob_hex).map_err(|e| format!("Invalid hex: {:?}", e))?;
 
         let tx = Transaction::read::<&[u8]>(&mut tx_bytes.as_ref())
             .map_err(|e| format!("Invalid transaction: {:?}", e))?;
@@ -938,7 +973,386 @@ pub mod native {
         pub tx_blob: String,
         pub tx_key: String,
         pub tx_key_additional: Vec<String>,
+        pub spent_key_images: Vec<String>,
         pub change_outputs: Vec<ChangeOutputInfo>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct Wallet2SourceKeyOffset {
+        pub construction_index: usize,
+        pub source_index: usize,
+        pub real_output: u64,
+        pub real_global_output_index: u64,
+        pub output_public_key: String,
+        pub tx_public_key: String,
+        pub key_offset: String,
+        pub key_image: String,
+        pub subaddress_index: Option<(u32, u32)>,
+        pub amount: u64,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct Wallet2SourceKeyOffsetsResult {
+        pub archive_version: u64,
+        pub transaction_count: usize,
+        pub source_key_offsets: Vec<Wallet2SourceKeyOffset>,
+    }
+
+    fn write_varint_u64(mut value: u64, out: &mut Vec<u8>) {
+        loop {
+            let byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value == 0 {
+                out.push(byte);
+                break;
+            }
+            out.push(byte | 0x80);
+        }
+    }
+
+    fn hash_to_scalar(data: &[u8]) -> Scalar {
+        let hash: [u8; 32] = Keccak256::digest(data).into();
+        Scalar::from_bytes_mod_order(hash)
+    }
+
+    fn output_key_offset(
+        view_secret: [u8; 32],
+        tx_public_key: [u8; 32],
+        output_index: u64,
+    ) -> Result<Scalar, String> {
+        let view_scalar = Scalar::from_bytes_mod_order(view_secret);
+        let tx_public_point = CompressedEdwardsY(tx_public_key)
+            .decompress()
+            .ok_or_else(|| "Invalid source tx public key point".to_string())?;
+        let derivation = (view_scalar * tx_public_point).mul_by_cofactor();
+        let mut bytes = derivation.compress().to_bytes().to_vec();
+        write_varint_u64(output_index, &mut bytes);
+        Ok(hash_to_scalar(&bytes))
+    }
+
+    fn subaddress_key_offset(view_secret: [u8; 32], account: u32, minor: u32) -> Scalar {
+        if account == 0 && minor == 0 {
+            return Scalar::zero();
+        }
+
+        let mut bytes = Vec::with_capacity(8 + 32 + 4 + 4);
+        bytes.extend_from_slice(b"SubAddr\0");
+        bytes.extend_from_slice(&view_secret);
+        bytes.extend_from_slice(&account.to_le_bytes());
+        bytes.extend_from_slice(&minor.to_le_bytes());
+        hash_to_scalar(&bytes)
+    }
+
+    fn derive_source_key_offset(
+        source: &crate::epee_compat::TxSourceEntrySummary,
+        spend_secret: Scalar,
+        view_secret: [u8; 32],
+        subaddr_account: u32,
+        subaddr_indices: &[u32],
+    ) -> Result<(Scalar, [u8; 32], Option<(u32, u32)>), String> {
+        let real_output_index: usize = source
+            .real_output
+            .try_into()
+            .map_err(|_| "Wallet2 source real output index exceeds usize".to_string())?;
+        let real = source
+            .ring
+            .get(real_output_index)
+            .ok_or_else(|| "Wallet2 source real output index is out of range".to_string())?;
+
+        let mut tx_public_keys = Vec::with_capacity(source.real_out_additional_tx_keys.len() + 1);
+        tx_public_keys.push(source.real_out_tx_key);
+        tx_public_keys.extend(source.real_out_additional_tx_keys.iter().copied());
+
+        let mut candidate_subaddresses = vec![0u32];
+        for index in subaddr_indices {
+            if !candidate_subaddresses.contains(index) {
+                candidate_subaddresses.push(*index);
+            }
+        }
+
+        for tx_public_key in tx_public_keys {
+            let base_offset =
+                output_key_offset(view_secret, tx_public_key, source.real_output_in_tx_index)?;
+            for minor in &candidate_subaddresses {
+                let subaddress_offset = subaddress_key_offset(view_secret, subaddr_account, *minor);
+                let key_offset = base_offset + subaddress_offset;
+                let output_secret = spend_secret + key_offset;
+                let output_public_key = (&output_secret * &ED25519_BASEPOINT_TABLE)
+                    .compress()
+                    .to_bytes();
+                if output_public_key == real.output_public_key {
+                    let subaddress_index = if subaddr_account == 0 && *minor == 0 {
+                        Some((0, 0))
+                    } else {
+                        Some((subaddr_account, *minor))
+                    };
+                    return Ok((key_offset, tx_public_key, subaddress_index));
+                }
+            }
+        }
+
+        Err("Wallet2 source does not belong to the supplied seed".to_string())
+    }
+
+    pub fn derive_wallet2_unsigned_source_key_offsets_from_keys(
+        spend_secret_key: [u8; 32],
+        view_secret_key: [u8; 32],
+        unsigned_txset: &[u8],
+    ) -> Result<Wallet2SourceKeyOffsetsResult, String> {
+        let spend_secret = Scalar::from_bytes_mod_order(spend_secret_key);
+        let summary = crate::epee_compat::parse_unsigned_monero_txset_summary(
+            unsigned_txset,
+            &view_secret_key,
+        )?;
+        let mut source_key_offsets = Vec::new();
+        for (construction_index, construction) in summary.txes.iter().enumerate() {
+            for (source_index, source) in construction.sources.iter().enumerate() {
+                let real_output_index: usize = source
+                    .real_output
+                    .try_into()
+                    .map_err(|_| "Wallet2 source real output index exceeds usize".to_string())?;
+                let real = source.ring.get(real_output_index).ok_or_else(|| {
+                    "Wallet2 source real output index is out of range".to_string()
+                })?;
+                let (key_offset, tx_public_key, subaddress_index) = derive_source_key_offset(
+                    source,
+                    spend_secret,
+                    view_secret_key,
+                    construction.subaddr_account,
+                    &construction.subaddr_indices,
+                )?;
+                let output_secret = Zeroizing::new(spend_secret + key_offset);
+                let key_image = monero_serai::ringct::generate_key_image(&output_secret)
+                    .compress()
+                    .to_bytes();
+                source_key_offsets.push(Wallet2SourceKeyOffset {
+                    construction_index,
+                    source_index,
+                    real_output: source.real_output,
+                    real_global_output_index: real.global_output_index,
+                    output_public_key: hex::encode(real.output_public_key),
+                    tx_public_key: hex::encode(tx_public_key),
+                    key_offset: hex::encode(key_offset.to_bytes()),
+                    key_image: hex::encode(key_image),
+                    subaddress_index,
+                    amount: source.amount,
+                });
+            }
+        }
+
+        Ok(Wallet2SourceKeyOffsetsResult {
+            archive_version: summary.archive_version,
+            transaction_count: summary.txes.len(),
+            source_key_offsets,
+        })
+    }
+
+    pub fn derive_wallet2_unsigned_source_key_offsets(
+        seed_phrase: &str,
+        unsigned_txset: &[u8],
+    ) -> Result<Wallet2SourceKeyOffsetsResult, String> {
+        let seed = resolve_seed(seed_phrase)?;
+        let entropy = seed.entropy();
+        let mut spend_secret_key = [0u8; 32];
+        spend_secret_key.copy_from_slice(&entropy[..]);
+        let view_secret_key: [u8; 32] = Keccak256::digest(spend_secret_key).into();
+        derive_wallet2_unsigned_source_key_offsets_from_keys(
+            spend_secret_key,
+            view_secret_key,
+            unsigned_txset,
+        )
+    }
+
+    fn parse_wallet2_destination_address(
+        destination: &crate::epee_compat::TxDestinationEntrySummary,
+        network: Network,
+    ) -> Result<MoneroAddress, String> {
+        if !destination.original.is_empty() {
+            let address = std::str::from_utf8(&destination.original)
+                .map_err(|e| format!("Wallet2 destination original address is not UTF-8: {e}"))?;
+            return MoneroAddress::from_str_raw(address)
+                .map_err(|e| format!("Invalid wallet2 destination address: {e:?}"));
+        }
+        if destination.is_integrated {
+            return Err(
+                "Wallet2 integrated destination without original address is unsupported"
+                    .to_string(),
+            );
+        }
+        let spend = CompressedEdwardsY(destination.spend_public_key)
+            .decompress()
+            .ok_or_else(|| "Invalid wallet2 destination spend public key".to_string())?;
+        let view = CompressedEdwardsY(destination.view_public_key)
+            .decompress()
+            .ok_or_else(|| "Invalid wallet2 destination view public key".to_string())?;
+        let address_type = if destination.is_subaddress {
+            AddressType::Subaddress
+        } else {
+            AddressType::Standard
+        };
+        Ok(MoneroAddress::new(
+            AddressMeta::new(network, address_type),
+            spend,
+            view,
+        ))
+    }
+
+    fn wallet2_source_decoys(
+        source: &crate::epee_compat::TxSourceEntrySummary,
+    ) -> Result<Decoys, String> {
+        let real_output: u8 = source
+            .real_output
+            .try_into()
+            .map_err(|_| "Wallet2 source real output index exceeds u8".to_string())?;
+        let mut previous = 0u64;
+        let mut offsets = Vec::with_capacity(source.ring.len());
+        let mut ring = Vec::with_capacity(source.ring.len());
+        for member in &source.ring {
+            let offset = member
+                .global_output_index
+                .checked_sub(previous)
+                .ok_or_else(|| "Wallet2 source ring global indices are not sorted".to_string())?;
+            previous = member.global_output_index;
+            offsets.push(offset);
+            let output_public_key = CompressedEdwardsY(member.output_public_key)
+                .decompress()
+                .ok_or_else(|| "Invalid wallet2 source ring output public key".to_string())?;
+            let commitment = CompressedEdwardsY(member.commitment)
+                .decompress()
+                .ok_or_else(|| "Invalid wallet2 source ring commitment".to_string())?;
+            ring.push([output_public_key, commitment]);
+        }
+        Ok(Decoys {
+            i: real_output,
+            offsets,
+            ring,
+        })
+    }
+
+    fn wallet2_spendable_output(
+        source: &crate::epee_compat::TxSourceEntrySummary,
+        key_offset: Scalar,
+        subaddress_index: Option<(u32, u32)>,
+    ) -> Result<SpendableOutput, String> {
+        let real_output_index: usize = source
+            .real_output
+            .try_into()
+            .map_err(|_| "Wallet2 source real output index exceeds usize".to_string())?;
+        let real = source
+            .ring
+            .get(real_output_index)
+            .ok_or_else(|| "Wallet2 source real output index is out of range".to_string())?;
+        let output_index: u8 = source
+            .real_output_in_tx_index
+            .try_into()
+            .map_err(|_| "Wallet2 source output index exceeds u8".to_string())?;
+
+        let mut bytes = Vec::with_capacity(32 + 1 + 32 + 32 + 32 + 8 + 1 + 8 + 4 + 8);
+        bytes.extend_from_slice(&[0u8; 32]);
+        bytes.push(output_index);
+        bytes.extend_from_slice(&real.output_public_key);
+        bytes.extend_from_slice(&key_offset.to_bytes());
+        bytes.extend_from_slice(&source.mask);
+        bytes.extend_from_slice(&source.amount.to_le_bytes());
+        match subaddress_index {
+            Some((account, address)) if !(account == 0 && address == 0) => {
+                bytes.push(1);
+                bytes.extend_from_slice(&account.to_le_bytes());
+                bytes.extend_from_slice(&address.to_le_bytes());
+            }
+            _ => bytes.push(0),
+        }
+        bytes.extend_from_slice(&[0u8; 8]);
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&real.global_output_index.to_le_bytes());
+
+        SpendableOutput::read(&mut std::io::Cursor::new(bytes))
+            .map_err(|e| format!("Failed to build wallet2 spendable output: {e:?}"))
+    }
+
+    fn wallet2_r_seed(unsigned_txset: &[u8]) -> Zeroizing<[u8; 32]> {
+        Zeroizing::new(Keccak256::digest(unsigned_txset).into())
+    }
+
+    pub fn create_unsigned_transaction_from_wallet2_txset_keys(
+        spend_secret_key: [u8; 32],
+        view_secret_key: [u8; 32],
+        unsigned_txset: &[u8],
+        network_str: &str,
+    ) -> Result<UnsignedTransactionResult, String> {
+        let network = parse_network(network_str)?;
+        let spend_secret = Scalar::from_bytes_mod_order(spend_secret_key);
+        let summary = crate::epee_compat::parse_unsigned_monero_txset_summary(
+            unsigned_txset,
+            &view_secret_key,
+        )?;
+        if summary.txes.len() != 1 {
+            return Err(format!(
+                "Only single-transaction wallet2 unsigned txsets are supported, got {}",
+                summary.txes.len()
+            ));
+        }
+        let construction = &summary.txes[0];
+
+        let mut inputs = Vec::with_capacity(construction.sources.len());
+        for source in &construction.sources {
+            let (key_offset, _, subaddress_index) = derive_source_key_offset(
+                source,
+                spend_secret,
+                view_secret_key,
+                construction.subaddr_account,
+                &construction.subaddr_indices,
+            )?;
+            inputs.push(UnsignedInput {
+                output: wallet2_spendable_output(source, key_offset, subaddress_index)?,
+                decoys: wallet2_source_decoys(source)?,
+            });
+        }
+
+        let mut payments = Vec::with_capacity(construction.destinations.len() + 1);
+        let mut recipients = Vec::with_capacity(construction.destinations.len());
+        for destination in &construction.destinations {
+            let address = parse_wallet2_destination_address(destination, network)?;
+            recipients.push((address.to_string(), destination.amount));
+            payments.push(InternalPayment::Payment((address, destination.amount)));
+        }
+        if construction.change_amount > 0 {
+            let change_address = parse_wallet2_destination_address(&construction.change, network)?;
+            let change = Change::from_raw(
+                change_address,
+                Some(Zeroizing::new(Scalar::from_bytes_mod_order(
+                    view_secret_key,
+                ))),
+            );
+            payments.push(InternalPayment::Change(change, construction.change_amount));
+        }
+
+        let total_input = construction
+            .sources
+            .iter()
+            .try_fold(0u64, |acc, source| acc.checked_add(source.amount))
+            .ok_or_else(|| "Wallet2 source amount overflow".to_string())?;
+        let total_output = construction
+            .destination_total_amount
+            .checked_add(construction.change_amount)
+            .ok_or_else(|| "Wallet2 output amount overflow".to_string())?;
+        let fee = total_input
+            .checked_sub(total_output)
+            .ok_or_else(|| "Wallet2 outputs exceed inputs".to_string())?;
+
+        let unsigned = UnsignedTransaction {
+            protocol: Protocol::v16,
+            r_seed: wallet2_r_seed(unsigned_txset),
+            fee,
+            payments,
+            data: vec![],
+            inputs,
+        };
+        Ok(UnsignedTransactionResult {
+            unsigned_tx_hex: hex::encode(unsigned.serialize()),
+            fee,
+            recipients,
+        })
     }
 
     pub async fn create_unsigned_transaction(
@@ -961,8 +1375,8 @@ pub mod native {
 
         let network = parse_network(network_str)?;
 
-        let view_bytes = hex::decode(view_key_hex)
-            .map_err(|e| format!("Invalid view key hex: {:?}", e))?;
+        let view_bytes =
+            hex::decode(view_key_hex).map_err(|e| format!("Invalid view key hex: {:?}", e))?;
         if view_bytes.len() != 32 {
             return Err("View key must be 32 bytes".to_string());
         }
@@ -984,15 +1398,18 @@ pub mod native {
         let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
 
         #[cfg(not(target_arch = "wasm32"))]
-        let rpc = HttpRpc::new(node_url.to_string())
-            .map_err(|e| format!("RPC error: {:?}", e))?;
+        let rpc = HttpRpc::new(node_url.to_string()).map_err(|e| format!("RPC error: {:?}", e))?;
 
         #[cfg(target_arch = "wasm32")]
         let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
 
-        let protocol = rpc.get_protocol().await
+        let protocol = rpc
+            .get_protocol()
+            .await
             .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
-        let fee_rate: Fee = rpc.get_fee_checked(DEFAULT_MAX_FEE_PER_BYTE).await
+        let fee_rate: Fee = rpc
+            .get_fee_checked(DEFAULT_MAX_FEE_PER_BYTE)
+            .await
             .map_err(|e| format!("Failed to get fee: {:?}", e))?;
 
         let mut dest_addrs = Vec::with_capacity(recipients.len());
@@ -1014,13 +1431,18 @@ pub mod native {
             spendable_outputs.push(spendable);
         }
 
-        let total_input: u64 = spendable_outputs.iter()
-            .map(|o| o.commitment().amount).sum();
+        let total_input: u64 = spendable_outputs
+            .iter()
+            .map(|o| o.commitment().amount)
+            .sum();
         let total_send: u64 = recipients.iter().map(|(_, amt)| *amt).sum();
         let num_out_with_change = recipients.len() + 1;
         let extra_wc = extra_weight(num_out_with_change, true, &[]);
         let weight_wc = Transaction::fee_weight(
-            protocol, spendable_outputs.len(), num_out_with_change, extra_wc,
+            protocol,
+            spendable_outputs.len(),
+            num_out_with_change,
+            extra_wc,
         );
         let fee_wc = fee_rate.calculate(weight_wc);
         let expected_change = total_input.saturating_sub(total_send + fee_wc);
@@ -1056,11 +1478,14 @@ pub mod native {
             builder.add_payment(dest_addr, *amount);
         }
 
-        let signable = builder.build()
+        let signable = builder
+            .build()
             .map_err(|e| format!("Failed to build transaction: {:?}", e))?;
         let fee = signable.fee();
 
-        let unsigned = signable.prepare_unsigned(&mut rng, &rpc).await
+        let unsigned = signable
+            .prepare_unsigned(&mut rng, &rpc)
+            .await
             .map_err(|e| format!("Failed to prepare unsigned tx: {:?}", e))?;
 
         let unsigned_bytes = unsigned.serialize();
@@ -1078,25 +1503,66 @@ pub mod native {
         network_str: &str,
     ) -> Result<OfflineSignResult, String> {
         let seed = resolve_seed(seed_phrase)?;
-        let spend_key = spend_key_from_seed(&seed);
-        let view_pair = view_pair_from_seed(&seed);
+        let entropy = seed.entropy();
+        let mut spend_secret_key = [0u8; 32];
+        spend_secret_key.copy_from_slice(&entropy[..]);
+        let view_secret_key: [u8; 32] = Keccak256::digest(spend_secret_key).into();
+        sign_unsigned_transaction_with_private_keys(
+            spend_secret_key,
+            view_secret_key,
+            unsigned_tx_hex,
+            network_str,
+        )
+    }
 
-        let unsigned_bytes = hex::decode(unsigned_tx_hex)
+    pub fn sign_unsigned_transaction_with_private_keys(
+        spend_secret_key: [u8; 32],
+        view_secret_key: [u8; 32],
+        unsigned_tx_hex: &str,
+        network_str: &str,
+    ) -> Result<OfflineSignResult, String> {
+        let spend_key = Zeroizing::new(Scalar::from_bytes_mod_order(spend_secret_key));
+        let spend_point = &*spend_key * &ED25519_BASEPOINT_TABLE;
+        let view_scalar = Scalar::from_bytes_mod_order(view_secret_key);
+        let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
+        let mut unsigned_bytes = hex::decode(unsigned_tx_hex)
             .map_err(|e| format!("Invalid unsigned tx hex: {:?}", e))?;
+        if let Some(kind) = crate::epee_compat::detect_monero_txset(&unsigned_bytes) {
+            match kind {
+                crate::epee_compat::MoneroTxSetKind::Unsigned => {
+                    let converted = create_unsigned_transaction_from_wallet2_txset_keys(
+                        spend_secret_key,
+                        view_secret_key,
+                        &unsigned_bytes,
+                        network_str,
+                    )
+                    .map_err(|e| format!("Failed to convert wallet2 unsigned txset: {e}"))?;
+                    unsigned_bytes = hex::decode(converted.unsigned_tx_hex)
+                        .map_err(|e| format!("Invalid converted unsigned tx hex: {:?}", e))?;
+                }
+                _ => {
+                    return Err(format!(
+                        "{} wallet2 containers are signed/import artifacts, not unsigned signer inputs",
+                        kind.label()
+                    ));
+                }
+            }
+        }
         let unsigned = UnsignedTransaction::read(&mut std::io::Cursor::new(unsigned_bytes))
             .map_err(|e| format!("Failed to parse unsigned tx: {:?}", e))?;
 
         let fee = unsigned.fee;
 
         let mut rng = rand::rngs::OsRng;
-        let (tx, tx_key, tx_key_additional) =
-            sign_offline(&mut rng, &spend_key, unsigned)
-                .map_err(|e| format!("Failed to sign offline: {:?}", e))?;
+        let (tx, tx_key, tx_key_additional) = sign_offline(&mut rng, &spend_key, unsigned)
+            .map_err(|e| format!("Failed to sign offline: {:?}", e))?;
 
         let tx_id = hex::encode(tx.hash());
-        let tx_blob = hex::encode(tx.serialize());
+        let tx_bytes = tx.serialize();
+        let spent_key_images = crate::scanner::extract_key_images_from_raw_tx(&tx_bytes);
+        let tx_blob = hex::encode(tx_bytes);
 
-        let max_account = 0u32;  // offline signer doesn't have stored output metadata
+        let max_account = 0u32; // offline signer doesn't have stored output metadata
         let lookahead = Lookahead {
             account: max_account,
             subaddress: DEFAULT_LOOKAHEAD.subaddress,
@@ -1114,6 +1580,7 @@ pub mod native {
                 .iter()
                 .map(|k| hex::encode(k.to_bytes()))
                 .collect(),
+            spent_key_images,
             change_outputs,
         })
     }
@@ -1213,7 +1680,10 @@ pub mod native {
 
             // View pair should be deterministic - test by generating the same spend point
             let view_pair2 = view_pair_from_seed(&seed);
-            assert_eq!(view_pair.spend().compress().to_bytes(), view_pair2.spend().compress().to_bytes());
+            assert_eq!(
+                view_pair.spend().compress().to_bytes(),
+                view_pair2.spend().compress().to_bytes()
+            );
 
             // The view pair should successfully be created for valid seed
             // (detailed field comparisons not possible due to privacy, but we verified determinism)
@@ -1228,10 +1698,7 @@ pub mod native {
             let one_bytes = [1u8; 32];
             let scalar_one = Scalar::from_bytes_mod_order(one_bytes);
             let g: EdwardsPoint = &scalar_one * &ED25519_BASEPOINT_TABLE;
-            let ring = vec![
-                [g, g],
-                [g, g],
-            ];
+            let ring = vec![[g, g], [g, g]];
 
             let decoys = Decoys {
                 i: 1,
@@ -1248,7 +1715,8 @@ pub mod native {
         #[test]
         fn test_stored_output_data_serialization() {
             let output = StoredOutputData {
-                tx_hash: "46d9f3eaf8d25b6a5d0847ad0beaece8b153d1b8c25ce317934ec17223025806".to_string(),
+                tx_hash: "46d9f3eaf8d25b6a5d0847ad0beaece8b153d1b8c25ce317934ec17223025806"
+                    .to_string(),
                 output_index: 0,
                 amount: 1000000000000,
                 key: "abc123".to_string(),
@@ -1269,7 +1737,8 @@ pub mod native {
         #[test]
         fn test_transaction_result_serialization() {
             let result = TransactionResult {
-                tx_id: "46d9f3eaf8d25b6a5d0847ad0beaece8b153d1b8c25ce317934ec17223025806".to_string(),
+                tx_id: "46d9f3eaf8d25b6a5d0847ad0beaece8b153d1b8c25ce317934ec17223025806"
+                    .to_string(),
                 fee: 10000000,
                 tx_blob: "deadbeef".to_string(),
                 tx_key: "abc123".to_string(),

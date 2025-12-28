@@ -8,6 +8,8 @@ use curve25519_dalek::{
     edwards::{CompressedEdwardsY, EdwardsPoint},
     scalar::Scalar,
 };
+#[cfg(target_arch = "wasm32")]
+use monero_serai::ringct::generate_key_image;
 use monero_serai::{
     block::Block,
     rpc::{GetBlocksFastResponse, Rpc, RpcConnection},
@@ -18,8 +20,6 @@ use monero_serai::{
         Scanner, ViewPair,
     },
 };
-#[cfg(target_arch = "wasm32")]
-use monero_serai::ringct::generate_key_image;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 
@@ -140,36 +140,58 @@ pub fn extract_key_images_from_raw_tx(tx_blob: &[u8]) -> Vec<String> {
             let b = b[0];
             res += u64::from(b & 0x7f) << bits;
             bits += 7;
-            if bits > 64 { return None; }
-            if b & 0x80 == 0 { return Some(res); }
+            if bits > 64 {
+                return None;
+            }
+            if b & 0x80 == 0 {
+                return Some(res);
+            }
         }
     }
 
     let mut key_images = Vec::new();
     let mut cursor = Cursor::new(tx_blob);
 
-    let Some(_version) = read_varint(&mut cursor) else { return key_images };
-    let Some(_timelock) = read_varint(&mut cursor) else { return key_images };
-    let Some(num_inputs) = read_varint(&mut cursor) else { return key_images };
+    let Some(_version) = read_varint(&mut cursor) else {
+        return key_images;
+    };
+    let Some(_timelock) = read_varint(&mut cursor) else {
+        return key_images;
+    };
+    let Some(num_inputs) = read_varint(&mut cursor) else {
+        return key_images;
+    };
 
     for _ in 0..num_inputs {
         let mut type_byte = [0u8; 1];
-        if cursor.read_exact(&mut type_byte).is_err() { break; }
+        if cursor.read_exact(&mut type_byte).is_err() {
+            break;
+        }
 
         match type_byte[0] {
             0xff => {
                 // Gen input: varint height
-                if read_varint(&mut cursor).is_none() { break; }
+                if read_varint(&mut cursor).is_none() {
+                    break;
+                }
             }
             0x02 => {
                 // ToKey input: amount, key_offsets, 32-byte key_image
-                let Some(_amount) = read_varint(&mut cursor) else { break };
-                let Some(num_offsets) = read_varint(&mut cursor) else { break };
+                let Some(_amount) = read_varint(&mut cursor) else {
+                    break;
+                };
+                let Some(num_offsets) = read_varint(&mut cursor) else {
+                    break;
+                };
                 for _ in 0..num_offsets {
-                    if read_varint(&mut cursor).is_none() { break; }
+                    if read_varint(&mut cursor).is_none() {
+                        break;
+                    }
                 }
                 let mut ki = [0u8; 32];
-                if cursor.read_exact(&mut ki).is_err() { break; }
+                if cursor.read_exact(&mut ki).is_err() {
+                    break;
+                }
                 key_images.push(hex::encode(ki));
             }
             _ => break,
@@ -190,7 +212,6 @@ pub struct BlockScanResult {
     pub spent_key_images: Vec<String>,
     pub spent_key_image_tx_hashes: Vec<String>,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MempoolScanResult {
@@ -352,7 +373,9 @@ struct SubaddressWatermark {
 impl SubaddressWatermark {
     fn new(lookahead: Lookahead) -> Self {
         if lookahead.account == 0 && lookahead.subaddress == 0 {
-            return Self { max_minor_per_account: Vec::new() };
+            return Self {
+                max_minor_per_account: Vec::new(),
+            };
         }
         Self {
             max_minor_per_account: vec![lookahead.subaddress; (lookahead.account + 1) as usize],
@@ -411,7 +434,8 @@ fn expand_subaddresses_if_needed(
 
     // 2. Subaddress expansion within found_account
     let needed_address = found_address.saturating_add(lookahead.subaddress);
-    let Some(&current_max_address) = watermark.max_minor_per_account.get(found_account as usize) else {
+    let Some(&current_max_address) = watermark.max_minor_per_account.get(found_account as usize)
+    else {
         return expanded;
     };
 
@@ -436,7 +460,10 @@ impl CachedScanner {
 
     fn expand_if_needed(&mut self, found: SubaddressIndex) -> bool {
         expand_subaddresses_if_needed(
-            &mut self.scanner, &mut self.watermark, self.lookahead, found,
+            &mut self.scanner,
+            &mut self.watermark,
+            self.lookahead,
+            found,
         )
     }
 }
@@ -444,7 +471,10 @@ impl CachedScanner {
 impl CachedScannerEntry {
     fn expand_if_needed(&mut self, found: SubaddressIndex) -> bool {
         expand_subaddresses_if_needed(
-            &mut self.scanner, &mut self.watermark, self.lookahead, found,
+            &mut self.scanner,
+            &mut self.watermark,
+            self.lookahead,
+            found,
         )
     }
 }
@@ -483,10 +513,15 @@ struct CachedScannerEntry {
 /// Resolve a mnemonic with explicit BIP39 passphrase and account index.
 /// If 12 words, convert from BIP39 first using the given passphrase and account index.
 /// Non-BIP39 seeds (16-word polyseed, 25-word classic) pass through unchanged.
-pub fn resolve_seed_bip39(mnemonic: &str, passphrase: &str, account_index: u32) -> Result<Seed, String> {
+pub fn resolve_seed_bip39(
+    mnemonic: &str,
+    passphrase: &str,
+    account_index: u32,
+) -> Result<Seed, String> {
     let word_count = mnemonic.split_whitespace().count();
     if word_count == 12 {
-        let legacy = crate::bip39_conv::bip39_to_legacy_mnemonic(mnemonic, passphrase, account_index)?;
+        let legacy =
+            crate::bip39_conv::bip39_to_legacy_mnemonic(mnemonic, passphrase, account_index)?;
         Seed::from_string(Zeroizing::new(legacy))
             .map_err(|e| format!("Failed to parse derived legacy seed: {:?}", e))
     } else {
@@ -522,9 +557,11 @@ pub fn derive_keys_from_view_only(
     network_str: &str,
 ) -> Result<DerivedKeys, String> {
     let network = parse_network(network_str)?;
-    let (view_scalar, spend_point) =
-        parse_view_only_keys(&format!("viewonly:{}:{}", secret_view_key_hex, public_spend_key_hex))
-            .ok_or_else(|| "Invalid view-only key hex".to_string())?;
+    let (view_scalar, spend_point) = parse_view_only_keys(&format!(
+        "viewonly:{}:{}",
+        secret_view_key_hex, public_spend_key_hex
+    ))
+    .ok_or_else(|| "Invalid view-only key hex".to_string())?;
     let view_point: EdwardsPoint = &view_scalar * &ED25519_BASEPOINT_TABLE;
     let address = MoneroAddress::new(
         AddressMeta::new(network, AddressType::Standard),
@@ -547,9 +584,11 @@ pub fn derive_address_from_view_only(
     network_str: &str,
 ) -> Result<String, String> {
     let network = parse_network(network_str)?;
-    let (view_scalar, spend_point) =
-        parse_view_only_keys(&format!("viewonly:{}:{}", secret_view_key_hex, public_spend_key_hex))
-            .ok_or_else(|| "Invalid view-only key hex".to_string())?;
+    let (view_scalar, spend_point) = parse_view_only_keys(&format!(
+        "viewonly:{}:{}",
+        secret_view_key_hex, public_spend_key_hex
+    ))
+    .ok_or_else(|| "Invalid view-only key hex".to_string())?;
     let view_point: EdwardsPoint = &view_scalar * &ED25519_BASEPOINT_TABLE;
     let address = MoneroAddress::new(
         AddressMeta::new(network, AddressType::Standard),
@@ -605,7 +644,11 @@ fn address_from_seed(seed: &Seed, network: Network, passphrase: &str) -> String 
     .to_string()
 }
 
-pub fn derive_address(mnemonic: &str, network_str: &str, passphrase: &str) -> Result<String, String> {
+pub fn derive_address(
+    mnemonic: &str,
+    network_str: &str,
+    passphrase: &str,
+) -> Result<String, String> {
     crate::error_codes::validate_network(network_str).map_err(|e| e.message.clone())?;
     if let Some((view_hex, spend_hex)) = mnemonic.strip_prefix("viewonly:").and_then(|r| {
         let mut parts = r.splitn(2, ':');
@@ -649,19 +692,22 @@ pub fn derive_subaddress(
         return Ok(address.to_string());
     }
 
-    let subaddress_index = SubaddressIndex::new(account, address_index)
-        .ok_or_else(|| {
-            format!(
-                "Invalid subaddress index: ({}, {}). Note: (0, 0) should use derive_address() instead.",
-                account, address_index
-            )
-        })?;
+    let subaddress_index = SubaddressIndex::new(account, address_index).ok_or_else(|| {
+        format!(
+            "Invalid subaddress index: ({}, {}). Note: (0, 0) should use derive_address() instead.",
+            account, address_index
+        )
+    })?;
 
     let address = view_pair.address(network, AddressSpec::Subaddress(subaddress_index));
     Ok(address.to_string())
 }
 
-pub fn derive_keys(mnemonic: &str, network_str: &str, passphrase: &str) -> Result<DerivedKeys, String> {
+pub fn derive_keys(
+    mnemonic: &str,
+    network_str: &str,
+    passphrase: &str,
+) -> Result<DerivedKeys, String> {
     crate::error_codes::validate_network(network_str).map_err(|e| e.message.clone())?;
     if let Some((view_hex, spend_hex)) = mnemonic.strip_prefix("viewonly:").and_then(|r| {
         let mut parts = r.splitn(2, ':');
@@ -700,18 +746,25 @@ pub async fn is_key_image_spent(node_url: &str, key_images: &[String]) -> Result
     crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
 
     #[derive(serde::Serialize, Debug)]
-    struct Req { key_images: Vec<String> }
+    struct Req {
+        key_images: Vec<String>,
+    }
     #[derive(serde::Deserialize, Debug)]
-    struct Resp { spent_status: Vec<u32> }
+    struct Resp {
+        spent_status: Vec<u32>,
+    }
 
-    let params = Req { key_images: key_images.to_vec() };
+    let params = Req {
+        key_images: key_images.to_vec(),
+    };
 
     #[cfg(not(target_arch = "wasm32"))]
     {
         use monero_serai::rpc::HttpRpc;
         let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
-        let resp: Resp = rpc.rpc_call("is_key_image_spent", Some(params))
+        let resp: Resp = rpc
+            .rpc_call("is_key_image_spent", Some(params))
             .await
             .map_err(|e| format!("RPC error: {:?}", e))?;
         Ok(resp.spent_status)
@@ -721,7 +774,8 @@ pub async fn is_key_image_spent(node_url: &str, key_images: &[String]) -> Result
     {
         use crate::rpc_serai::WasmRpcConnection;
         let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
-        let resp: Resp = rpc.rpc_call("is_key_image_spent", Some(params))
+        let resp: Resp = rpc
+            .rpc_call("is_key_image_spent", Some(params))
             .await
             .map_err(|e| format!("RPC error: {:?}", e))?;
         Ok(resp.spent_status)
@@ -735,7 +789,8 @@ pub async fn get_daemon_height(node_url: &str) -> Result<u64, String> {
         use monero_serai::rpc::HttpRpc;
         let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
-        let height = rpc.get_height()
+        let height = rpc
+            .get_height()
             .await
             .map_err(|e| format!("Failed to get height: {:?}", e))?;
         Ok(height as u64)
@@ -745,7 +800,8 @@ pub async fn get_daemon_height(node_url: &str) -> Result<u64, String> {
     {
         use crate::rpc_serai::WasmRpcConnection;
         let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
-        let height = rpc.get_height()
+        let height = rpc
+            .get_height()
             .await
             .map_err(|e| format!("Failed to get height: {:?}", e))?;
         Ok(height as u64)
@@ -765,7 +821,15 @@ pub async fn scan_block_for_outputs_with_url(
 ) -> Result<BlockScanResult, String> {
     crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
     crate::error_codes::validate_network(network_str).map_err(|e| e.message.clone())?;
-    scan_block_for_outputs_with_url_and_lookahead(node_url, block_height, mnemonic, network_str, DEFAULT_LOOKAHEAD, passphrase).await
+    scan_block_for_outputs_with_url_and_lookahead(
+        node_url,
+        block_height,
+        mnemonic,
+        network_str,
+        DEFAULT_LOOKAHEAD,
+        passphrase,
+    )
+    .await
 }
 
 pub async fn scan_block_for_outputs_with_url_and_lookahead(
@@ -841,10 +905,18 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
     let _network = parse_network(network_str)?;
 
     let view_only = parse_view_only_keys(mnemonic);
-    let seed_opt = if view_only.is_none() { Some(resolve_seed(mnemonic)?) } else { None };
-    let spend_point = view_only.as_ref().map(|(_, sp)| *sp)
+    let seed_opt = if view_only.is_none() {
+        Some(resolve_seed(mnemonic)?)
+    } else {
+        None
+    };
+    let spend_point = view_only
+        .as_ref()
+        .map(|(_, sp)| *sp)
         .unwrap_or_else(|| spend_key_from_seed(seed_opt.as_ref().unwrap(), passphrase));
-    let view_scalar = view_only.as_ref().map(|(vs, _)| *vs)
+    let view_scalar = view_only
+        .as_ref()
+        .map(|(vs, _)| *vs)
         .unwrap_or_else(|| view_key_from_seed(seed_opt.as_ref().unwrap(), passphrase));
     #[cfg(target_arch = "wasm32")]
     let spend_scalar = if view_only.is_some() {
@@ -863,10 +935,10 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
         .map_err(|e| format!("Failed to fetch block hash: {:?}", e))?;
     let block_hash = hex::encode(block_hash_bytes);
 
-    let daemon_height = rpc
-        .get_height()
-        .await
-        .map_err(|e| format!("Failed to fetch daemon height: {:?}", e))? as u64;
+    let daemon_height =
+        rpc.get_height()
+            .await
+            .map_err(|e| format!("Failed to fetch daemon height: {:?}", e))? as u64;
 
     let block = rpc
         .get_block_by_number(block_height as usize)
@@ -994,7 +1066,9 @@ pub async fn scan_blocks_batch<R: RpcConnection>(
         .await
         .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
 
-    let (results, _cached) = process_batch_response(response, mnemonic, network_str, lookahead, None, passphrase).await?;
+    let (results, _cached) =
+        process_batch_response(response, mnemonic, network_str, lookahead, None, passphrase)
+            .await?;
     Ok(results)
 }
 
@@ -1014,10 +1088,18 @@ pub async fn process_batch_response(
     let _network = parse_network(network_str)?;
 
     let view_only = parse_view_only_keys(mnemonic);
-    let seed_opt = if view_only.is_none() { Some(resolve_seed(mnemonic)?) } else { None };
-    let spend_point = view_only.as_ref().map(|(_, sp)| *sp)
+    let seed_opt = if view_only.is_none() {
+        Some(resolve_seed(mnemonic)?)
+    } else {
+        None
+    };
+    let spend_point = view_only
+        .as_ref()
+        .map(|(_, sp)| *sp)
         .unwrap_or_else(|| spend_key_from_seed(seed_opt.as_ref().unwrap(), passphrase));
-    let view_scalar = view_only.as_ref().map(|(vs, _)| *vs)
+    let view_scalar = view_only
+        .as_ref()
+        .map(|(vs, _)| *vs)
         .unwrap_or_else(|| view_key_from_seed(seed_opt.as_ref().unwrap(), passphrase));
     #[cfg(target_arch = "wasm32")]
     let spend_scalar_val = if view_only.is_some() {
@@ -1129,7 +1211,8 @@ pub async fn process_batch_response(
                 spent_key_images.extend(key_images);
                 // We don't have the tx hash for pruned blobs (can't compute
                 // hash without full data), so use empty strings as placeholders
-                spent_key_image_tx_hashes.extend(std::iter::repeat_with(String::new).take(ki_count));
+                spent_key_image_tx_hashes
+                    .extend(std::iter::repeat_with(String::new).take(ki_count));
             }
 
             results.push(BlockScanResult {
@@ -1272,14 +1355,32 @@ pub async fn scan_blocks_batch_with_url(
         use monero_serai::rpc::HttpRpc;
         let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
-        scan_blocks_batch(&rpc, start_height, mnemonic, network_str, lookahead, prune, passphrase).await
+        scan_blocks_batch(
+            &rpc,
+            start_height,
+            mnemonic,
+            network_str,
+            lookahead,
+            prune,
+            passphrase,
+        )
+        .await
     }
 
     #[cfg(target_arch = "wasm32")]
     {
         use crate::rpc_serai::WasmRpcConnection;
         let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
-        scan_blocks_batch(&rpc, start_height, mnemonic, network_str, lookahead, prune, passphrase).await
+        scan_blocks_batch(
+            &rpc,
+            start_height,
+            mnemonic,
+            network_str,
+            lookahead,
+            prune,
+            passphrase,
+        )
+        .await
     }
 }
 
@@ -1310,7 +1411,8 @@ pub async fn scan_blocks_batch_multi_wallet<R: RpcConnection>(
         .await
         .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
 
-    let (results, _cached) = process_batch_multi_wallet_response(response, wallet_configs, None).await?;
+    let (results, _cached) =
+        process_batch_multi_wallet_response(response, wallet_configs, None).await?;
     Ok(results)
 }
 
@@ -1347,11 +1449,13 @@ pub async fn process_batch_multi_wallet_response(
         if c.entries.len() != wallet_configs.len() {
             return false;
         }
-        c.entries.iter().zip(wallet_configs.iter()).zip(config_fingerprints.iter()).all(
-            |((entry, config), fp)| {
+        c.entries
+            .iter()
+            .zip(wallet_configs.iter())
+            .zip(config_fingerprints.iter())
+            .all(|((entry, config), fp)| {
                 entry.fingerprint == *fp && entry.lookahead == config.lookahead
-            },
-        )
+            })
     });
 
     let mut cached_scanners = if cache_valid {
@@ -1363,12 +1467,16 @@ pub async fn process_batch_multi_wallet_response(
             let network = parse_network(&config.network)?;
 
             let view_only = parse_view_only_keys(&config.mnemonic);
-            let seed_opt = if view_only.is_none() { Some(resolve_seed(&config.mnemonic)?) } else { None };
+            let seed_opt = if view_only.is_none() {
+                Some(resolve_seed(&config.mnemonic)?)
+            } else {
+                None
+            };
             let (spend_point, view_scalar, address) = if let Some((vs, sp)) = view_only.as_ref() {
                 let vp: EdwardsPoint = vs * &ED25519_BASEPOINT_TABLE;
-                let addr = MoneroAddress::new(
-                    AddressMeta::new(network, AddressType::Standard), *sp, vp,
-                ).to_string();
+                let addr =
+                    MoneroAddress::new(AddressMeta::new(network, AddressType::Standard), *sp, vp)
+                        .to_string();
                 (*sp, *vs, addr)
             } else {
                 let seed = seed_opt.as_ref().unwrap();
@@ -1474,7 +1582,8 @@ pub async fn process_batch_multi_wallet_response(
                 let key_images = extract_key_images_from_raw_tx(tx_blob);
                 let ki_count = key_images.len();
                 spent_key_images.extend(key_images);
-                spent_key_image_tx_hashes.extend(std::iter::repeat_with(String::new).take(ki_count));
+                spent_key_image_tx_hashes
+                    .extend(std::iter::repeat_with(String::new).take(ki_count));
             }
 
             let mut wallet_results = HashMap::new();
@@ -1714,7 +1823,15 @@ pub async fn process_fetched_batch(
     lookahead: Lookahead,
     passphrase: &str,
 ) -> Result<Vec<BlockScanResult>, String> {
-    let (results, _cached) = process_batch_response(fetched.response, mnemonic, network_str, lookahead, None, passphrase).await?;
+    let (results, _cached) = process_batch_response(
+        fetched.response,
+        mnemonic,
+        network_str,
+        lookahead,
+        None,
+        passphrase,
+    )
+    .await?;
     Ok(results)
 }
 
@@ -1727,12 +1844,20 @@ pub async fn process_fetched_batch_cached(
     cached: Option<CachedScanner>,
     passphrase: &str,
 ) -> Result<(Vec<BlockScanResult>, CachedScanner), String> {
-    process_batch_response(fetched.response, mnemonic, network_str, lookahead, cached, passphrase).await
+    process_batch_response(
+        fetched.response,
+        mnemonic,
+        network_str,
+        lookahead,
+        cached,
+        passphrase,
+    )
+    .await
 }
 
 fn hex_to_hash(hex_str: &str) -> Result<[u8; 32], String> {
-    let bytes = hex::decode(hex_str)
-        .map_err(|e| format!("Invalid hex hash '{}': {}", hex_str, e))?;
+    let bytes =
+        hex::decode(hex_str).map_err(|e| format!("Invalid hex hash '{}': {}", hex_str, e))?;
     if bytes.len() != 32 {
         return Err(format!("Hash hex must be 32 bytes, got {}", bytes.len()));
     }
@@ -1779,7 +1904,9 @@ pub async fn scan_blocks_batch_with_history<R: RpcConnection>(
         .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
 
     let actual_start = response.start_height;
-    let (results, _cached) = process_batch_response(response, mnemonic, network_str, lookahead, None, passphrase).await?;
+    let (results, _cached) =
+        process_batch_response(response, mnemonic, network_str, lookahead, None, passphrase)
+            .await?;
     Ok((results, actual_start))
 }
 
@@ -1799,14 +1926,34 @@ pub async fn scan_blocks_batch_with_history_url(
         use monero_serai::rpc::HttpRpc;
         let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
-        scan_blocks_batch_with_history(&rpc, start_height, known_hashes, mnemonic, network_str, lookahead, prune, passphrase).await
+        scan_blocks_batch_with_history(
+            &rpc,
+            start_height,
+            known_hashes,
+            mnemonic,
+            network_str,
+            lookahead,
+            prune,
+            passphrase,
+        )
+        .await
     }
 
     #[cfg(target_arch = "wasm32")]
     {
         use crate::rpc_serai::WasmRpcConnection;
         let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
-        scan_blocks_batch_with_history(&rpc, start_height, known_hashes, mnemonic, network_str, lookahead, prune, passphrase).await
+        scan_blocks_batch_with_history(
+            &rpc,
+            start_height,
+            known_hashes,
+            mnemonic,
+            network_str,
+            lookahead,
+            prune,
+            passphrase,
+        )
+        .await
     }
 }
 
@@ -1874,7 +2021,8 @@ pub async fn process_fetched_batch_multi_wallet(
     fetched: FetchedBlocks,
     wallet_configs: Vec<WalletScanConfig>,
 ) -> Result<Vec<MultiWalletScanResult>, String> {
-    let (results, _cached) = process_batch_multi_wallet_response(fetched.response, wallet_configs, None).await?;
+    let (results, _cached) =
+        process_batch_multi_wallet_response(fetched.response, wallet_configs, None).await?;
     Ok(results)
 }
 
@@ -1915,10 +2063,10 @@ pub async fn scan_block_multi_wallet<R: RpcConnection + Send + Sync + Clone + 's
         .map_err(|e| format!("Failed to fetch block hash: {:?}", e))?;
     let block_hash = hex::encode(block_hash_bytes);
 
-    let daemon_height = rpc
-        .get_height()
-        .await
-        .map_err(|e| format!("Failed to fetch daemon height: {:?}", e))? as u64;
+    let daemon_height =
+        rpc.get_height()
+            .await
+            .map_err(|e| format!("Failed to fetch daemon height: {:?}", e))? as u64;
 
     let block = rpc
         .get_block_by_number(block_height as usize)
@@ -1963,20 +2111,21 @@ pub async fn scan_block_multi_wallet<R: RpcConnection + Send + Sync + Clone + 's
         join_set.spawn(async move {
             let network = parse_network(&wallet_config.network)?;
             let passphrase = wallet_config.passphrase.as_str();
-            let (spend_point, view_scalar, address) =
-                if let Some((vs, sp)) = parse_view_only_keys(&wallet_config.mnemonic) {
-                    let vp: EdwardsPoint = &vs * &ED25519_BASEPOINT_TABLE;
-                    let addr = MoneroAddress::new(
-                        AddressMeta::new(network, AddressType::Standard), sp, vp,
-                    ).to_string();
-                    (sp, vs, addr)
-                } else {
-                    let seed = resolve_seed(&wallet_config.mnemonic)?;
-                    let addr = address_from_seed(&seed, network, passphrase);
-                    let sp = spend_key_from_seed(&seed, passphrase);
-                    let vs = view_key_from_seed(&seed, passphrase);
-                    (sp, vs, addr)
-                };
+            let (spend_point, view_scalar, address) = if let Some((vs, sp)) =
+                parse_view_only_keys(&wallet_config.mnemonic)
+            {
+                let vp: EdwardsPoint = &vs * &ED25519_BASEPOINT_TABLE;
+                let addr =
+                    MoneroAddress::new(AddressMeta::new(network, AddressType::Standard), sp, vp)
+                        .to_string();
+                (sp, vs, addr)
+            } else {
+                let seed = resolve_seed(&wallet_config.mnemonic)?;
+                let addr = address_from_seed(&seed, network, passphrase);
+                let sp = spend_key_from_seed(&seed, passphrase);
+                let vs = view_key_from_seed(&seed, passphrase);
+                (sp, vs, addr)
+            };
 
             let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
             let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
@@ -2014,7 +2163,8 @@ pub async fn scan_block_multi_wallet<R: RpcConnection + Send + Sync + Clone + 's
                     let key_image = if spend_scalar == Scalar::zero() {
                         String::new()
                     } else {
-                        let key_image_point = calculate_key_image(&spend_scalar, &output.data.key_offset);
+                        let key_image_point =
+                            calculate_key_image(&spend_scalar, &output.data.key_offset);
                         hex::encode(key_image_point.compress().to_bytes())
                     };
                     #[cfg(not(target_arch = "wasm32"))]
@@ -2043,7 +2193,7 @@ pub async fn scan_block_multi_wallet<R: RpcConnection + Send + Sync + Clone + 's
 
             Ok::<(String, WalletScanData), String>((
                 address.clone(),
-                WalletScanData { address, outputs }
+                WalletScanData { address, outputs },
             ))
         });
     }
@@ -2077,8 +2227,8 @@ pub async fn scan_block_multi_wallet_with_url(
     wallet_configs: Vec<WalletScanConfig>,
 ) -> Result<MultiWalletScanResult, String> {
     use monero_serai::rpc::HttpRpc;
-    let rpc = HttpRpc::new(node_url.to_string())
-        .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
+    let rpc =
+        HttpRpc::new(node_url.to_string()).map_err(|e| format!("Failed to create RPC: {:?}", e))?;
     scan_block_multi_wallet(&rpc, block_height, wallet_configs).await
 }
 
@@ -2100,10 +2250,10 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
         .map_err(|e| format!("Failed to fetch block hash: {:?}", e))?;
     let block_hash = hex::encode(block_hash_bytes);
 
-    let daemon_height = rpc
-        .get_height()
-        .await
-        .map_err(|e| format!("Failed to fetch daemon height: {:?}", e))? as u64;
+    let daemon_height =
+        rpc.get_height()
+            .await
+            .map_err(|e| format!("Failed to fetch daemon height: {:?}", e))? as u64;
 
     let block = rpc
         .get_block_by_number(block_height as usize)
@@ -2145,12 +2295,16 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
         let network = parse_network(&wallet_config.network)?;
         let passphrase = wallet_config.passphrase.as_str();
         let view_only = parse_view_only_keys(&wallet_config.mnemonic);
-        let seed_opt = if view_only.is_none() { Some(resolve_seed(&wallet_config.mnemonic)?) } else { None };
+        let seed_opt = if view_only.is_none() {
+            Some(resolve_seed(&wallet_config.mnemonic)?)
+        } else {
+            None
+        };
         let (spend_point, view_scalar, address) = if let Some((vs, sp)) = view_only.as_ref() {
             let vp: EdwardsPoint = vs * &ED25519_BASEPOINT_TABLE;
-            let addr = MoneroAddress::new(
-                AddressMeta::new(network, AddressType::Standard), *sp, vp,
-            ).to_string();
+            let addr =
+                MoneroAddress::new(AddressMeta::new(network, AddressType::Standard), *sp, vp)
+                    .to_string();
             (*sp, *vs, addr)
         } else {
             let seed = seed_opt.as_ref().unwrap();
@@ -2203,7 +2357,8 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
                 let key_image = if spend_scalar == Scalar::zero() {
                     String::new()
                 } else {
-                    let key_image_point = calculate_key_image(&spend_scalar, &output.data.key_offset);
+                    let key_image_point =
+                        calculate_key_image(&spend_scalar, &output.data.key_offset);
                     hex::encode(key_image_point.compress().to_bytes())
                 };
                 #[cfg(not(target_arch = "wasm32"))]
@@ -2230,10 +2385,7 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
             }
         }
 
-        wallet_results.insert(
-            address.clone(),
-            WalletScanData { address, outputs }
-        );
+        wallet_results.insert(address.clone(), WalletScanData { address, outputs });
     }
 
     Ok(MultiWalletScanResult {
@@ -2255,13 +2407,9 @@ pub async fn scan_block_multi_wallet_with_url(
     block_height: u64,
     wallet_configs: Vec<WalletScanConfig>,
 ) -> Result<MultiWalletScanResult, String> {
-    let results = scan_blocks_batch_multi_wallet_with_url(
-        node_url,
-        block_height,
-        wallet_configs,
-        false,
-    )
-    .await?;
+    let results =
+        scan_blocks_batch_multi_wallet_with_url(node_url, block_height, wallet_configs, false)
+            .await?;
 
     results
         .into_iter()
@@ -2275,7 +2423,14 @@ pub async fn scan_mempool_for_outputs(
     network_str: &str,
     passphrase: &str,
 ) -> Result<MempoolScanResult, String> {
-    scan_mempool_for_outputs_with_lookahead(node_url, mnemonic, network_str, DEFAULT_LOOKAHEAD, passphrase).await
+    scan_mempool_for_outputs_with_lookahead(
+        node_url,
+        mnemonic,
+        network_str,
+        DEFAULT_LOOKAHEAD,
+        passphrase,
+    )
+    .await
 }
 
 pub async fn scan_mempool_for_outputs_with_account_lookahead(
@@ -2288,9 +2443,14 @@ pub async fn scan_mempool_for_outputs_with_account_lookahead(
 ) -> Result<MempoolScanResult, String> {
     let lookahead = Lookahead {
         account: account_lookahead,
-        subaddress: if subaddress_lookahead > 0 { subaddress_lookahead } else { DEFAULT_LOOKAHEAD.subaddress },
+        subaddress: if subaddress_lookahead > 0 {
+            subaddress_lookahead
+        } else {
+            DEFAULT_LOOKAHEAD.subaddress
+        },
     };
-    scan_mempool_for_outputs_with_lookahead(node_url, mnemonic, network_str, lookahead, passphrase).await
+    scan_mempool_for_outputs_with_lookahead(node_url, mnemonic, network_str, lookahead, passphrase)
+        .await
 }
 
 pub async fn scan_mempool_for_outputs_with_lookahead(
@@ -2301,10 +2461,18 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
     passphrase: &str,
 ) -> Result<MempoolScanResult, String> {
     let view_only = parse_view_only_keys(mnemonic);
-    let seed_opt = if view_only.is_none() { Some(resolve_seed(mnemonic)?) } else { None };
-    let spend_point = view_only.as_ref().map(|(_, sp)| *sp)
+    let seed_opt = if view_only.is_none() {
+        Some(resolve_seed(mnemonic)?)
+    } else {
+        None
+    };
+    let spend_point = view_only
+        .as_ref()
+        .map(|(_, sp)| *sp)
         .unwrap_or_else(|| spend_key_from_seed(seed_opt.as_ref().unwrap(), passphrase));
-    let view_scalar = view_only.as_ref().map(|(vs, _)| *vs)
+    let view_scalar = view_only
+        .as_ref()
+        .map(|(vs, _)| *vs)
         .unwrap_or_else(|| view_key_from_seed(seed_opt.as_ref().unwrap(), passphrase));
     #[cfg(target_arch = "wasm32")]
     let spend_scalar = if view_only.is_some() {
@@ -2880,7 +3048,10 @@ mod tests {
 
     #[test]
     fn test_watermark_new_normal_lookahead() {
-        let la = Lookahead { account: 2, subaddress: 5 };
+        let la = Lookahead {
+            account: 2,
+            subaddress: 5,
+        };
         let wm = SubaddressWatermark::new(la);
         assert_eq!(wm.max_minor_per_account.len(), 3); // accounts 0,1,2
         assert!(wm.max_minor_per_account.iter().all(|&v| v == 5));
@@ -2888,7 +3059,10 @@ mod tests {
 
     #[test]
     fn test_watermark_new_zero_lookahead() {
-        let la = Lookahead { account: 0, subaddress: 0 };
+        let la = Lookahead {
+            account: 0,
+            subaddress: 0,
+        };
         let wm = SubaddressWatermark::new(la);
         assert!(wm.max_minor_per_account.is_empty());
     }
@@ -2896,7 +3070,10 @@ mod tests {
     #[test]
     fn test_expand_subaddress_within_account() {
         // Lookahead (2,5), discovery at (0,4) → should expand minor to 9
-        let la = Lookahead { account: 2, subaddress: 5 };
+        let la = Lookahead {
+            account: 2,
+            subaddress: 5,
+        };
         let spend = Scalar::from(42u64);
         let spend_point = &spend * &ED25519_BASEPOINT_TABLE;
         let view = Scalar::from(99u64);
@@ -2916,7 +3093,10 @@ mod tests {
     fn test_expand_account_and_subaddress() {
         // Lookahead (2,5), discovery at (1,3) → accounts should expand to 3,
         // and account 1's minor should expand to 8
-        let la = Lookahead { account: 2, subaddress: 5 };
+        let la = Lookahead {
+            account: 2,
+            subaddress: 5,
+        };
         let spend = Scalar::from(42u64);
         let spend_point = &spend * &ED25519_BASEPOINT_TABLE;
         let view = Scalar::from(99u64);
@@ -2935,7 +3115,10 @@ mod tests {
 
     #[test]
     fn test_expand_zero_lookahead_noop() {
-        let la = Lookahead { account: 0, subaddress: 0 };
+        let la = Lookahead {
+            account: 0,
+            subaddress: 0,
+        };
         let spend = Scalar::from(42u64);
         let spend_point = &spend * &ED25519_BASEPOINT_TABLE;
         let view = Scalar::from(99u64);
@@ -2950,7 +3133,10 @@ mod tests {
 
     #[test]
     fn test_expand_idempotent() {
-        let la = Lookahead { account: 2, subaddress: 5 };
+        let la = Lookahead {
+            account: 2,
+            subaddress: 5,
+        };
         let spend = Scalar::from(42u64);
         let spend_point = &spend * &ED25519_BASEPOINT_TABLE;
         let view = Scalar::from(99u64);
@@ -2960,9 +3146,19 @@ mod tests {
         let mut wm = SubaddressWatermark::new(la);
 
         let found = SubaddressIndex::new(0, 4).unwrap();
-        assert!(expand_subaddresses_if_needed(&mut scanner, &mut wm, la, found));
+        assert!(expand_subaddresses_if_needed(
+            &mut scanner,
+            &mut wm,
+            la,
+            found
+        ));
         // Second call with same index should not expand further
-        assert!(!expand_subaddresses_if_needed(&mut scanner, &mut wm, la, found));
+        assert!(!expand_subaddresses_if_needed(
+            &mut scanner,
+            &mut wm,
+            la,
+            found
+        ));
         assert_eq!(wm.max_minor_per_account[0], 9);
     }
 
@@ -2971,7 +3167,10 @@ mod tests {
         // Discovery at (0,2) with lookahead (2,5) → already covered (max=5, 2+5=7>5 → expands)
         // Actually 2+5=7 > 5, so it does expand.
         // Discovery at (0,0) with lookahead (2,5) → 0+5=5 == current max 5, no expansion
-        let la = Lookahead { account: 2, subaddress: 5 };
+        let la = Lookahead {
+            account: 2,
+            subaddress: 5,
+        };
         let spend = Scalar::from(42u64);
         let spend_point = &spend * &ED25519_BASEPOINT_TABLE;
         let view = Scalar::from(99u64);
@@ -3018,10 +3217,22 @@ mod tests {
 
         // Mainnet keys
         let keys = derive_keys(seed, "mainnet", "hunter2").unwrap();
-        assert_eq!(keys.secret_spend_key, "08813258e8b396b2629ae9ecccd95ae33ec269ab0813754f43edfae937304909");
-        assert_eq!(keys.secret_view_key, "1be97a06de0e8e32952e41fa80023e5e0d96af4e61d6d1c2f521f94d12c3170b");
-        assert_eq!(keys.public_spend_key, "b4e3d0ed0ab2a22cb567d2edb7d33e402d0bf1a38b75fb1adb7cca6116f2b18e");
-        assert_eq!(keys.public_view_key, "c9efbf531801051471e29c7c2cc36458e10f5a4f2041842c818ed1654c938fde");
+        assert_eq!(
+            keys.secret_spend_key,
+            "08813258e8b396b2629ae9ecccd95ae33ec269ab0813754f43edfae937304909"
+        );
+        assert_eq!(
+            keys.secret_view_key,
+            "1be97a06de0e8e32952e41fa80023e5e0d96af4e61d6d1c2f521f94d12c3170b"
+        );
+        assert_eq!(
+            keys.public_spend_key,
+            "b4e3d0ed0ab2a22cb567d2edb7d33e402d0bf1a38b75fb1adb7cca6116f2b18e"
+        );
+        assert_eq!(
+            keys.public_view_key,
+            "c9efbf531801051471e29c7c2cc36458e10f5a4f2041842c818ed1654c938fde"
+        );
         assert_eq!(keys.address, "48UhC3g9s9T8UjKHj1GQsPBjb4To7AS585VYujqCfgEcQtEMx2CKgHA4RLmRYqjsG7FsErzHZbeUb8SmMihoYme6S4MBnaZ");
 
         // Stagenet keys (the Feather wallet was on Stagenet)
