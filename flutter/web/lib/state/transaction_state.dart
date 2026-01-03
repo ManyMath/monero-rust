@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../src/ffi/signal_types.dart';
 import '../utils/output_utils.dart';
@@ -32,6 +34,8 @@ class TransactionState extends ChangeNotifier {
   bool isBroadcastDoubleSpend = false;
 
   bool subtractFee = false;
+  String? _pendingBroadcastTxId;
+  List<String> _pendingBroadcastSpentKeyImages = const [];
 
   VoidCallback? onBroadcastSuccess;
 
@@ -78,7 +82,7 @@ class TransactionState extends ChangeNotifier {
     if (msg.success) {
       broadcastResult = msg;
       broadcastError = null;
-      final thisTxSpentKeyImages = <String>[];
+      final thisTxSpentKeyImages = _pendingBroadcastSpentKeyImages.toSet();
       if (txResult != null) {
         final spentKeys = txResult!.spentOutputHashes.toSet();
         for (final output in _walletState.allOutputs) {
@@ -90,8 +94,22 @@ class TransactionState extends ChangeNotifier {
           }
         }
       }
-      if (txResult != null) {
-        final txId = txResult!.txId;
+      if (_pendingBroadcastSpentKeyImages.isNotEmpty) {
+        _walletState.pendingSpentKeyImages.addAll(
+          _pendingBroadcastSpentKeyImages,
+        );
+        final pendingSet = _pendingBroadcastSpentKeyImages.toSet();
+        for (final output in _walletState.allOutputs) {
+          if (pendingSet.contains(output.keyImage)) {
+            _walletState.selectedOutputs.remove(
+              '${output.txHash}:${output.outputIndex}',
+            );
+          }
+        }
+      }
+      final broadcastTxId = txResult?.txId ?? msg.txId ?? _pendingBroadcastTxId;
+      if (broadcastTxId != null && broadcastTxId.isNotEmpty) {
+        final txId = broadcastTxId;
         final alreadyExists = _walletState.allTransactions.any(
           (tx) => tx.txHash == txId,
         );
@@ -106,7 +124,7 @@ class TransactionState extends ChangeNotifier {
               blockHeight: 0,
               blockTimestamp: 0,
               receivedOutputs: ownedOutputs,
-              spentKeyImages: thisTxSpentKeyImages,
+              spentKeyImages: thisTxSpentKeyImages.toList(),
             ),
           ];
         }
@@ -125,6 +143,8 @@ class TransactionState extends ChangeNotifier {
       isBroadcastRetryable = msg.isRetryable;
       isBroadcastDoubleSpend = msg.isDoubleSpend;
     }
+    _pendingBroadcastTxId = null;
+    _pendingBroadcastSpentKeyImages = const [];
     notifyListeners();
   }
 
@@ -217,7 +237,11 @@ class TransactionState extends ChangeNotifier {
     }
   }
 
-  void broadcastSignedBlob(String txBlob) {
+  void broadcastSignedBlob(
+    String txBlob, {
+    String? txId,
+    List<String> spentKeyImages = const [],
+  }) {
     final nodeUrl = _walletState.nodeUrlController.text.trim();
     if (nodeUrl.isEmpty) {
       broadcastError = 'No node URL configured';
@@ -228,14 +252,24 @@ class TransactionState extends ChangeNotifier {
     isBroadcasting = true;
     broadcastResult = null;
     broadcastError = null;
+    _pendingBroadcastTxId = (txId != null && txId.isNotEmpty) ? txId : null;
+    _pendingBroadcastSpentKeyImages = spentKeyImages
+        .where((keyImage) => keyImage.isNotEmpty)
+        .toList();
     notifyListeners();
+
+    final pendingSet = _pendingBroadcastSpentKeyImages.toSet();
+    final spentOutputHashes = _walletState.allOutputs
+        .where((output) => pendingSet.contains(output.keyImage))
+        .map((output) => '${output.txHash}:${output.outputIndex}')
+        .toList();
 
     BroadcastTransactionRequest(
       nodeUrl: nodeUrl,
       txBlob: txBlob,
-      spentOutputHashes: const [],
-      txId: '',
-      spentKeyImages: const [],
+      spentOutputHashes: spentOutputHashes,
+      txId: txId ?? '',
+      spentKeyImages: _pendingBroadcastSpentKeyImages,
     ).sendSignalToRust();
   }
 
@@ -355,6 +389,7 @@ class TransactionState extends ChangeNotifier {
     isBroadcasting = true;
     broadcastResult = null;
     broadcastError = null;
+    _pendingBroadcastTxId = txResult!.txId;
     notifyListeners();
 
     final spentHashes = txResult!.spentOutputHashes.toSet();

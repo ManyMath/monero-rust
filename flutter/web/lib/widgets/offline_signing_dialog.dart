@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import '../src/ffi/signal_types.dart';
+import '../utils/offline_signing_import_utils.dart';
 import 'animated_qr_display.dart';
 import 'dart:html' as html;
 
@@ -11,6 +12,7 @@ enum OfflineSignStep {
   importSignedTx,
   importUnsignedTx,
   signing,
+  extractingSignedTxSet,
   showSignedQr,
   done,
 }
@@ -25,6 +27,7 @@ class OfflineSigningDialog extends StatefulWidget {
   final bool isViewOnly;
   final String? seed;
   final String? network;
+  final String? viewKeyHex;
 
   const OfflineSigningDialog({
     super.key,
@@ -33,6 +36,7 @@ class OfflineSigningDialog extends StatefulWidget {
     required this.isViewOnly,
     this.seed,
     this.network,
+    this.viewKeyHex,
   });
 
   static Future<TransactionSignedOfflineResponse?> show(
@@ -42,6 +46,7 @@ class OfflineSigningDialog extends StatefulWidget {
     required bool isViewOnly,
     String? seed,
     String? network,
+    String? viewKeyHex,
   }) {
     return showDialog<TransactionSignedOfflineResponse?>(
       context: context,
@@ -52,6 +57,7 @@ class OfflineSigningDialog extends StatefulWidget {
         isViewOnly: isViewOnly,
         seed: seed,
         network: network,
+        viewKeyHex: viewKeyHex,
       ),
     );
   }
@@ -65,11 +71,13 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
   String? _unsignedTxHex;
   String? _signedTxBlob;
   String? _signedTxId;
+  TransactionSignedOfflineResponse? _signedResponse;
   int _fee = 0;
   String? _error;
   final _importController = TextEditingController();
 
   StreamSubscription? _signSub;
+  StreamSubscription? _signedTxSetSub;
 
   @override
   void initState() {
@@ -88,6 +96,7 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
   @override
   void dispose() {
     _signSub?.cancel();
+    _signedTxSetSub?.cancel();
     _importController.dispose();
     super.dispose();
   }
@@ -129,6 +138,7 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
     setState(() {
       _step = OfflineSignStep.signing;
       _error = null;
+      _signedResponse = null;
     });
 
     _signSub = TransactionSignedOfflineResponse.stream.listen((msg) {
@@ -137,6 +147,7 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
       if (!mounted) return;
       if (msg.success) {
         setState(() {
+          _signedResponse = msg;
           _signedTxBlob = msg.txBlob;
           _signedTxId = msg.txId;
           _fee = msg.fee.toInt();
@@ -159,10 +170,20 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
     ).sendSignalToRust();
   }
 
-  void _importSignedTxFromText() {
-    final hex = _importController.text.trim();
+  String? _effectiveViewKeyHex() {
+    if (widget.viewKeyHex != null && widget.viewKeyHex!.isNotEmpty) {
+      return widget.viewKeyHex;
+    }
+    return viewKeyHexFromViewOnlySeed(widget.seed);
+  }
+
+  void _handleImportedSignedHex(String hex) {
     if (hex.isEmpty) {
       setState(() => _error = 'Paste signed transaction hex');
+      return;
+    }
+    if (isSignedMoneroTxSetHex(hex)) {
+      _extractSignedTxSet(hex);
       return;
     }
     Navigator.of(context).pop(
@@ -174,6 +195,68 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
         changeOutputs: const [],
       ),
     );
+  }
+
+  void _extractSignedTxSet(String txSetHex) {
+    final viewKeyHex = _effectiveViewKeyHex();
+    if (viewKeyHex == null) {
+      setState(() {
+        _error = 'View key is required to import Monero signed txset files';
+      });
+      return;
+    }
+
+    _signedTxSetSub?.cancel();
+    setState(() {
+      _step = OfflineSignStep.extractingSignedTxSet;
+      _error = null;
+    });
+
+    _signedTxSetSub = SignedTxSetExtractedResponse.stream.listen((msg) {
+      _signedTxSetSub?.cancel();
+      _signedTxSetSub = null;
+      if (!mounted) return;
+
+      if (!msg.success) {
+        setState(() {
+          _error = msg.error ?? 'Failed to import Monero signed txset';
+          _step = OfflineSignStep.importSignedTx;
+        });
+        return;
+      }
+
+      if (msg.transactions.length != 1) {
+        setState(() {
+          _error =
+              'Signed txset contains ${msg.transactions.length} transactions; import one transaction at a time';
+          _step = OfflineSignStep.importSignedTx;
+        });
+        return;
+      }
+
+      final tx = msg.transactions.single;
+      final spentKeyImages = msg.txKeyImages
+          .map((entry) => entry.keyImage)
+          .where((keyImage) => keyImage.isNotEmpty)
+          .toList();
+      Navigator.of(context).pop(
+        TransactionSignedOfflineResponse(
+          success: true,
+          txId: tx.txId,
+          txBlob: tx.txBlob,
+          fee: tx.fee,
+          txKey: tx.txKey,
+          txKeyAdditional: tx.txKeyAdditional,
+          changeOutputs: const [],
+          spentKeyImages: spentKeyImages,
+        ),
+      );
+    });
+
+    ExtractSignedTxSetRequest(
+      dataHex: txSetHex,
+      viewKeyHex: viewKeyHex,
+    ).sendSignalToRust();
   }
 
   @override
@@ -198,6 +281,8 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
         return 'Import Unsigned Transaction';
       case OfflineSignStep.signing:
         return 'Signing...';
+      case OfflineSignStep.extractingSignedTxSet:
+        return 'Importing Signed Transaction';
       case OfflineSignStep.showSignedQr:
         return 'Signed Transaction';
       case OfflineSignStep.done:
@@ -214,6 +299,7 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
       case OfflineSignStep.importUnsignedTx:
         return _buildImportTx(signed: false);
       case OfflineSignStep.signing:
+      case OfflineSignStep.extractingSignedTxSet:
         return const Center(
           child: Padding(
             padding: EdgeInsets.all(32),
@@ -222,7 +308,7 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
               children: [
                 CircularProgressIndicator(),
                 SizedBox(height: 16),
-                Text('Signing transaction offline...'),
+                Text('Processing transaction...'),
               ],
             ),
           ),
@@ -290,15 +376,7 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
                   final hex = await _pickFile();
                   if (hex != null && mounted) {
                     if (signed) {
-                      Navigator.of(context).pop(
-                        TransactionSignedOfflineResponse(
-                          success: true,
-                          txBlob: hex,
-                          fee: _fee,
-                          txKeyAdditional: const [],
-                          changeOutputs: const [],
-                        ),
-                      );
+                      _handleImportedSignedHex(hex);
                     } else {
                       _signOffline(hex);
                     }
@@ -318,7 +396,7 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
                     return;
                   }
                   if (signed) {
-                    _importSignedTxFromText();
+                    _handleImportedSignedHex(hex);
                   } else {
                     _signOffline(hex);
                   }
@@ -383,14 +461,15 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
         ElevatedButton(
           onPressed: () {
             Navigator.of(context).pop(
-              TransactionSignedOfflineResponse(
-                success: true,
-                txId: _signedTxId,
-                txBlob: _signedTxBlob,
-                fee: _fee,
-                txKeyAdditional: const [],
-                changeOutputs: const [],
-              ),
+              _signedResponse ??
+                  TransactionSignedOfflineResponse(
+                    success: true,
+                    txId: _signedTxId,
+                    txBlob: _signedTxBlob,
+                    fee: _fee,
+                    txKeyAdditional: const [],
+                    changeOutputs: const [],
+                  ),
             );
           },
           child: const Text('Done'),

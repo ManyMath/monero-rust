@@ -1,7 +1,7 @@
-import 'dart:html' as html;
 import 'package:flutter/foundation.dart';
 import '../src/ffi/signal_types.dart';
 import '../models/wallet_transaction.dart';
+import '../utils/local_storage_size.dart';
 import '../utils/transaction_utils.dart';
 import 'wallet_state.dart';
 
@@ -33,11 +33,14 @@ class OutputState extends ChangeNotifier {
   Set<String> get selectedOutputs => _walletState.selectedOutputs;
   set selectedOutputs(Set<String> v) => _walletState.selectedOutputs = v;
   List<OwnedOutput> get allOutputsAllAccounts => _walletState.allOutputs;
-  List<WalletTransaction> get allTransactionsAllAccounts => _walletState.allTransactions;
+  List<WalletTransaction> get allTransactionsAllAccounts =>
+      _walletState.allTransactions;
 
   // Computed getters
   Map<String, OwnedOutput> get keyImageMap {
-    _cachedKeyImageMap ??= TransactionUtils.buildKeyImageMap(allOutputsAllAccounts);
+    _cachedKeyImageMap ??= TransactionUtils.buildKeyImageMap(
+      allOutputsAllAccounts,
+    );
     return _cachedKeyImageMap!;
   }
 
@@ -58,8 +61,11 @@ class OutputState extends ChangeNotifier {
     return _cachedFilteredOutputs!;
   }
 
-  List<WalletTransaction> getFilteredTransactions(Map<String, OwnedOutput> kim) {
-    if (_cachedFilteredTransactions != null) return _cachedFilteredTransactions!;
+  List<WalletTransaction> getFilteredTransactions(
+    Map<String, OwnedOutput> kim,
+  ) {
+    if (_cachedFilteredTransactions != null)
+      return _cachedFilteredTransactions!;
 
     final account = _walletState.activeAccount;
     if (account == -1) {
@@ -108,18 +114,8 @@ class OutputState extends ChangeNotifier {
 
   int calculateTotalStorageBytes() {
     if (_cachedTotalStorageBytes != null) return _cachedTotalStorageBytes!;
-    int totalBytes = 0;
-    for (var i = 0; i < html.window.localStorage.length; i++) {
-      final key = html.window.localStorage.keys.elementAt(i);
-      if (key.startsWith('monero_wallet_')) {
-        final value = html.window.localStorage[key];
-        if (value != null) {
-          totalBytes += value.length;
-        }
-      }
-    }
-    _cachedTotalStorageBytes = totalBytes;
-    return totalBytes;
+    _cachedTotalStorageBytes = calculateMoneroWalletLocalStorageBytes();
+    return _cachedTotalStorageBytes!;
   }
 
   static String formatBytes(int bytes) {

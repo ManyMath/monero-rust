@@ -3,10 +3,15 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:monero_extension/services/wallet_lifecycle_manager.dart';
 import 'package:monero_extension/services/wallet_persistence_service.dart';
+import 'package:monero_extension/services/wallet_polling_service.dart';
 import 'package:monero_extension/src/ffi/signal_hub.dart';
 import 'package:monero_extension/src/ffi/signal_sender.dart';
 import 'package:monero_extension/src/ffi/signal_types.dart';
+import 'package:monero_extension/state/output_state.dart';
+import 'package:monero_extension/state/scan_state.dart';
+import 'package:monero_extension/state/transaction_state.dart';
 import 'package:monero_extension/state/wallet_state.dart';
+import 'package:monero_extension/utils/output_utils.dart';
 
 import '../services/test_backends.dart';
 
@@ -147,7 +152,12 @@ void main() {
     final state = createWalletState(hub);
     addTearDown(state.dispose);
 
-    state.openWallet('watch_wallet', 'viewonly:${'a' * 64}:${'b' * 64}', 'stagenet', 'address');
+    state.openWallet(
+      'watch_wallet',
+      'viewonly:${'a' * 64}:${'b' * 64}',
+      'stagenet',
+      'address',
+    );
     state.allOutputs = [
       testOutput(txHash: 'later', outputIndex: 0, blockHeight: 20),
       testOutput(txHash: 'earlier_second', outputIndex: 1, blockHeight: 10),
@@ -164,5 +174,106 @@ void main() {
     expect(state.allOutputs[2].keyImage, 'ki_a');
     expect(state.lifecycle.activeWallet!.outputs[1].keyImage, 'ki_b');
     expect(state.pendingSpentKeyImages, isNot(contains('ki_b')));
+  });
+
+  test('imported spent key images mark matching outputs spent', () {
+    final hub = SignalHub();
+    final state = createWalletState(hub);
+    addTearDown(state.dispose);
+
+    state.openWallet(
+      'watch_wallet',
+      'viewonly:${'a' * 64}:${'b' * 64}',
+      'stagenet',
+      'address',
+    );
+    state.allOutputs = [
+      testOutput(txHash: 'later', outputIndex: 0, blockHeight: 20),
+      testOutput(txHash: 'earlier', outputIndex: 0, blockHeight: 10),
+    ];
+    state.lifecycle.activeWallet!.outputs = state.allOutputs;
+    state.selectedOutputs.addAll({'later:0', 'earlier:0'});
+
+    final assigned = state.applyImportedKeyImages(['ki_earlier', 'ki_later']);
+    OutputUtils.markSpentByKeyImages(state.allOutputs, [
+      'ki_later',
+    ], state.selectedOutputs);
+
+    expect(assigned, 2);
+    expect(state.allOutputs[0].keyImage, 'ki_later');
+    expect(state.allOutputs[0].spent, true);
+    expect(state.allOutputs[1].keyImage, 'ki_earlier');
+    expect(state.allOutputs[1].spent, false);
+    expect(state.selectedOutputs, {'earlier:0'});
+    expect(state.lifecycle.activeWallet!.outputs[0].spent, true);
+  });
+
+  test('broadcastSignedBlob records signed txset broadcasts by txid', () {
+    final hub = SignalHub();
+    final walletState = createWalletState(hub);
+    final outputState = OutputState(walletState: walletState);
+    final scanState = ScanState(
+      walletState: walletState,
+      pollingService: WalletPollingService(),
+      signalHub: hub,
+    );
+    final transactionState = TransactionState(
+      walletState: walletState,
+      outputState: outputState,
+      scanState: scanState,
+      signalHub: hub,
+    );
+    addTearDown(transactionState.dispose);
+    addTearDown(scanState.dispose);
+    addTearDown(outputState.dispose);
+    addTearDown(walletState.dispose);
+
+    walletState.openWallet(
+      'watch_wallet',
+      'viewonly:${'a' * 64}:${'b' * 64}',
+      'stagenet',
+      'address',
+    );
+    walletState.nodeUrlController.text = 'http://node:38081';
+    walletState.allOutputs = [
+      testOutput(
+        txHash: 'spent_output_tx',
+        outputIndex: 1,
+        blockHeight: 42,
+        keyImage: 'ki_from_signed_txset',
+      ),
+    ];
+    walletState.selectedOutputs.add('spent_output_tx:1');
+
+    transactionState.broadcastSignedBlob(
+      'deadbeef',
+      txId: 'signed_txid',
+      spentKeyImages: ['ki_from_signed_txset'],
+    );
+
+    expect(sender.sent.last.name, 'send_broadcast_transaction_request');
+    expect(sender.sent.last.data, containsPair('tx_id', 'signed_txid'));
+    expect(
+      sender.sent.last.data,
+      containsPair('spent_key_images', ['ki_from_signed_txset']),
+    );
+    expect(
+      sender.sent.last.data,
+      containsPair('spent_output_hashes', ['spent_output_tx:1']),
+    );
+
+    hub.onTransactionBroadcast!(
+      const TransactionBroadcastResponse(success: true, txId: 'signed_txid'),
+    );
+
+    expect(walletState.allTransactions, hasLength(1));
+    expect(walletState.allTransactions.single.txHash, 'signed_txid');
+    expect(walletState.allTransactions.single.blockHeight, 0);
+    expect(walletState.allTransactions.single.receivedOutputs, isEmpty);
+    expect(walletState.allTransactions.single.spentKeyImages, [
+      'ki_from_signed_txset',
+    ]);
+    expect(walletState.pendingSpentKeyImages, contains('ki_from_signed_txset'));
+    expect(walletState.selectedOutputs, isEmpty);
   });
 }

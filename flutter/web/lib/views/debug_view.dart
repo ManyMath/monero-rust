@@ -4,6 +4,7 @@ import '../services/extension_service.dart';
 import '../services/wallet_persistence_browser.dart';
 import '../utils/clipboard_utils.dart';
 import '../utils/balance_utils.dart';
+import '../utils/offline_signing_import_utils.dart';
 import '../widgets/payment_proof_dialog.dart';
 import '../widgets/keys_display_panel.dart';
 import '../widgets/receive_panel.dart';
@@ -99,10 +100,14 @@ class _DebugViewState extends State<DebugView> {
     });
   }
 
-  Future<void> _handleCreateUnsignedTx(TransactionState ts) async {
+  Future<void> _handleCreateUnsignedTx(
+    TransactionState ts,
+    WalletState ws,
+  ) async {
     final result = await ts.createUnsignedTransaction();
-    if (result == null || !result.success || result.unsignedTxHex == null)
+    if (result == null || !result.success || result.unsignedTxHex == null) {
       return;
+    }
     if (!mounted) return;
 
     final signedResponse = await OfflineSigningDialog.show(
@@ -110,12 +115,17 @@ class _DebugViewState extends State<DebugView> {
       unsignedTxHex: result.unsignedTxHex!,
       fee: result.fee,
       isViewOnly: true,
+      viewKeyHex: viewKeyHexFromViewOnlySeed(ws.seedController.text),
     );
 
     if (signedResponse != null &&
         signedResponse.success &&
         signedResponse.txBlob != null) {
-      ts.broadcastSignedBlob(signedResponse.txBlob!);
+      ts.broadcastSignedBlob(
+        signedResponse.txBlob!,
+        txId: signedResponse.txId,
+        spentKeyImages: signedResponse.spentKeyImages,
+      );
     }
   }
 
@@ -130,7 +140,11 @@ class _DebugViewState extends State<DebugView> {
     if (signedResponse != null &&
         signedResponse.success &&
         signedResponse.txBlob != null) {
-      ts.broadcastSignedBlob(signedResponse.txBlob!);
+      ts.broadcastSignedBlob(
+        signedResponse.txBlob!,
+        txId: signedResponse.txId,
+        spentKeyImages: signedResponse.spentKeyImages,
+      );
     }
   }
 
@@ -273,7 +287,9 @@ class _DebugViewState extends State<DebugView> {
                           isLoadingWallet: fs.isLoadingWallet,
                           isExporting: fs.isExporting,
                           isImporting: fs.isImporting,
-                          isViewOnly: ws.seedController.text.trim().startsWith('viewonly:'),
+                          isViewOnly: ws.seedController.text.trim().startsWith(
+                            'viewonly:',
+                          ),
                           isExportingKeyImages: fs.isExportingKeyImages,
                           isImportingKeyImages: fs.isImportingKeyImages,
                           saveError: fs.saveError,
@@ -558,7 +574,8 @@ class _DebugViewState extends State<DebugView> {
                           onRemoveRecipient: ts.removeRecipient,
                           onCreateTransaction: ts.createTransaction,
                           onBroadcastTransaction: ts.broadcastTransaction,
-                          onCreateUnsignedTx: () => _handleCreateUnsignedTx(ts),
+                          onCreateUnsignedTx: () =>
+                              _handleCreateUnsignedTx(ts, ws),
                           onSignOffline: () => _handleSignOffline(ts, ws),
                           onProvePayment: () => PaymentProofDialog.show(
                             context,
