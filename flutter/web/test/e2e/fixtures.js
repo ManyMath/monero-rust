@@ -152,6 +152,46 @@ async function flushDoNotRelayTransactions(nodeUrl = 'http://127.0.0.1:38081') {
   return txIds;
 }
 
+async function waitForScanCompletion(page, requestJson, timeoutMs = 120000) {
+  await page.waitForFunction(
+    () =>
+      !!window.wasmBindings &&
+      typeof window.wasmBindings.register_rust_signal_callback === 'function',
+    { timeout: timeoutMs }
+  );
+
+  return page.evaluate(
+    ({ requestJson, timeoutMs }) => {
+      return new Promise((resolve, reject) => {
+        const timeout = setTimeout(
+          () => reject(new Error(`Timeout waiting for SyncProgressResponse after ${timeoutMs}ms`)),
+          timeoutMs
+        );
+
+        const origCallback = window._rustSignalCallback;
+        window.wasmBindings.register_rust_signal_callback((typeName, json) => {
+          if (origCallback) {
+            try { origCallback(typeName, json); } catch (e) { /* ignore */ }
+          }
+
+          if (typeName !== 'SyncProgressResponse') {
+            return;
+          }
+
+          const message = JSON.parse(json);
+          if (message.is_scanning === false) {
+            clearTimeout(timeout);
+            resolve(message);
+          }
+        });
+
+        window.wasmBindings.send_start_continuous_scan_request(requestJson);
+      });
+    },
+    { requestJson, timeoutMs }
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Signal round-trip helper
 // ---------------------------------------------------------------------------
@@ -212,4 +252,5 @@ module.exports = {
   reloadExtensionPage,
   probeNode,
   flushDoNotRelayTransactions,
+  waitForScanCompletion,
 };

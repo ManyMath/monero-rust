@@ -7,6 +7,7 @@ const {
   sendSignalAndWait,
   probeNode,
   flushDoNotRelayTransactions,
+  waitForScanCompletion,
 } = require('./fixtures');
 
 const NODE_URL = 'http://127.0.0.1:38081';
@@ -18,46 +19,6 @@ async function runIfNodeAvailable(nodeAvailable, testName, fn) {
     return;
   }
   await fn();
-}
-
-async function waitForScanCompletion(page, requestJson, timeoutMs = 120000) {
-  await page.waitForFunction(
-    () =>
-      !!window.wasmBindings &&
-      typeof window.wasmBindings.register_rust_signal_callback === 'function',
-    { timeout: timeoutMs }
-  );
-
-  return page.evaluate(
-    ({ requestJson, timeoutMs }) => {
-      return new Promise((resolve, reject) => {
-        const timeout = setTimeout(
-          () => reject(new Error(`Timeout waiting for SyncProgressResponse after ${timeoutMs}ms`)),
-          timeoutMs
-        );
-
-        const origCallback = window._rustSignalCallback;
-        window.wasmBindings.register_rust_signal_callback((typeName, json) => {
-          if (origCallback) {
-            try { origCallback(typeName, json); } catch (e) { /* ignore */ }
-          }
-
-          if (typeName !== 'SyncProgressResponse') {
-            return;
-          }
-
-          const message = JSON.parse(json);
-          if (message.is_scanning === false) {
-            clearTimeout(timeout);
-            resolve(message);
-          }
-        });
-
-        window.wasmBindings.send_start_continuous_scan_request(requestJson);
-      });
-    },
-    { requestJson, timeoutMs }
-  );
 }
 
 describe('Mempool & Live-Node Transaction Tests', () => {

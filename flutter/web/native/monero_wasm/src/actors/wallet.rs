@@ -1,8 +1,8 @@
+use crate::ffi_web::SendToDart;
 use crate::messages::*;
 use crate::signals::*;
 use async_trait::async_trait;
 use messages::prelude::{Actor, Address, Context, Handler, Notifiable};
-use crate::ffi_web::SendToDart;
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use tokio::task::JoinSet;
@@ -37,10 +37,33 @@ pub(crate) fn current_time_secs() -> u64 {
     }
 }
 
+fn fill_random_bytes(bytes: &mut [u8]) -> Result<(), String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let window = web_sys::window().ok_or_else(|| "window is unavailable".to_string())?;
+        let crypto = window
+            .crypto()
+            .map_err(|_| "window.crypto is unavailable".to_string())?;
+        crypto
+            .get_random_values_with_u8_array(bytes)
+            .map_err(|_| "window.crypto.getRandomValues failed".to_string())?;
+        Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        getrandom::getrandom(bytes).map_err(|e| format!("random bytes: {e}"))
+    }
+}
+
 /// Pre-convert BIP39 12-word seeds to legacy format using the given passphrase
 /// and account index. Non-BIP39 seeds pass through unchanged.
 /// View-only seeds (prefixed with `viewonly:`) pass through unchanged.
-pub(crate) fn pre_resolve_bip39(seed: &str, passphrase: &str, account_index: u32) -> Result<String, String> {
+pub(crate) fn pre_resolve_bip39(
+    seed: &str,
+    passphrase: &str,
+    account_index: u32,
+) -> Result<String, String> {
     if seed.starts_with("viewonly:") {
         return Ok(seed.to_string());
     }
@@ -76,7 +99,9 @@ fn bump_generation() -> u64 {
         g.set(next);
         next
     });
-    PREFETCH_SLOT.with(|s| { s.borrow_mut().take(); });
+    PREFETCH_SLOT.with(|s| {
+        s.borrow_mut().take();
+    });
     // SCANNER_CACHE and MULTI_SCANNER_CACHE are not cleared here; fingerprint-based
     // lookup handles wallet change detection. The prefetch slot is height-specific
     // and always stale after a generation bump.
@@ -119,9 +144,7 @@ fn store_prefetch(generation: u64, height: u64, data: monero_rust::FetchedBlocks
 // ---------------------------------------------------------------------------
 
 /// Takes the scanner cache entry whose fingerprint matches `fingerprint`.
-fn take_scanner_cache_by_fingerprint(
-    fingerprint: &[u8; 32],
-) -> Option<monero_rust::CachedScanner> {
+fn take_scanner_cache_by_fingerprint(fingerprint: &[u8; 32]) -> Option<monero_rust::CachedScanner> {
     SCANNER_CACHE.with(|s| {
         let matches = {
             let slot = s.borrow();
@@ -214,7 +237,9 @@ impl WalletActor {
         _owned_tasks.spawn(Self::listen_to_test(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_generate_seed(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_get_seed_birthday(self_addr.clone()));
-        _owned_tasks.spawn(Self::listen_to_get_block_height_from_timestamp(self_addr.clone()));
+        _owned_tasks.spawn(Self::listen_to_get_block_height_from_timestamp(
+            self_addr.clone(),
+        ));
         _owned_tasks.spawn(Self::listen_to_derive_address(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_derive_subaddress(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_derive_keys(self_addr.clone()));
@@ -328,14 +353,23 @@ impl WalletActor {
         let mut receiver = crate::ffi_web::get_get_seed_birthday_request_receiver();
         while let Some(dart_msg) = receiver.recv().await {
             let request = dart_msg;
-            let resolved = match pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
+            let resolved = match pre_resolve_bip39(
+                &request.seed,
+                &request.passphrase,
+                request.bip39_account_index,
+            ) {
                 Ok(s) => s,
                 Err(e) => {
                     let err = ErrorResponse::from_string(&e);
                     SeedBirthdayResponse {
-                        birthday: None, success: false, error: Some(e),
-                        error_code: Some(err.code), error_hint: err.hint, error_transient: Some(err.transient),
-                    }.send_signal_to_dart();
+                        birthday: None,
+                        success: false,
+                        error: Some(e),
+                        error_code: Some(err.code),
+                        error_hint: err.hint,
+                        error_transient: Some(err.transient),
+                    }
+                    .send_signal_to_dart();
                     continue;
                 }
             };
@@ -356,7 +390,8 @@ impl WalletActor {
         let mut receiver = crate::ffi_web::get_get_block_height_from_timestamp_request_receiver();
         while let Some(dart_msg) = receiver.recv().await {
             let request = dart_msg;
-            match Self::find_block_height_for_timestamp(&request.node_url, request.timestamp).await {
+            match Self::find_block_height_for_timestamp(&request.node_url, request.timestamp).await
+            {
                 Ok(block_height) => {
                     BlockHeightFromTimestampResponse {
                         block_height,
@@ -387,7 +422,10 @@ impl WalletActor {
     /// Binary search to find the block height closest to a given timestamp.
     /// Uses JSON-RPC methods (get_block_count, get_block_header_by_height)
     /// which are supported on the /json_rpc endpoint.
-    async fn find_block_height_for_timestamp(node_url: &str, target_timestamp: u64) -> Result<u64, String> {
+    async fn find_block_height_for_timestamp(
+        node_url: &str,
+        target_timestamp: u64,
+    ) -> Result<u64, String> {
         // Ensure we're hitting the /json_rpc endpoint
         let rpc_url = if node_url.ends_with("/json_rpc") {
             node_url.to_string()
@@ -396,8 +434,10 @@ impl WalletActor {
         };
 
         // Get current chain height via get_block_count (proper JSON-RPC method)
-        let height_resp = Self::json_rpc_call(&rpc_url, "get_block_count", serde_json::json!({})).await?;
-        let max_height = height_resp["count"].as_u64()
+        let height_resp =
+            Self::json_rpc_call(&rpc_url, "get_block_count", serde_json::json!({})).await?;
+        let max_height = height_resp["count"]
+            .as_u64()
             .ok_or_else(|| "Invalid get_block_count response".to_string())?;
 
         let mut low = 1u64; // skip genesis
@@ -412,9 +452,11 @@ impl WalletActor {
                 &rpc_url,
                 "get_block_header_by_height",
                 serde_json::json!({"height": mid}),
-            ).await?;
+            )
+            .await?;
 
-            let block_timestamp = header_resp["block_header"]["timestamp"].as_u64()
+            let block_timestamp = header_resp["block_header"]["timestamp"]
+                .as_u64()
                 .ok_or_else(|| format!("No timestamp in block header at height {}", mid))?;
 
             let diff = block_timestamp.abs_diff(target_timestamp);
@@ -426,7 +468,9 @@ impl WalletActor {
             if block_timestamp < target_timestamp {
                 low = mid + 1;
             } else if block_timestamp > target_timestamp {
-                if mid == 0 { break; }
+                if mid == 0 {
+                    break;
+                }
                 high = mid - 1;
             } else {
                 return Ok(mid);
@@ -438,10 +482,14 @@ impl WalletActor {
 
     /// Make a JSON-RPC call to a Monero daemon (WASM only; native uses reqwest).
     #[cfg(target_arch = "wasm32")]
-    async fn json_rpc_call(url: &str, method: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {
+    async fn json_rpc_call(
+        url: &str,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
         use wasm_bindgen::JsCast;
         use wasm_bindgen_futures::JsFuture;
-        use web_sys::{Request, RequestInit, RequestMode, RequestCredentials, Response};
+        use web_sys::{Request, RequestCredentials, RequestInit, RequestMode, Response};
 
         let window = web_sys::window().ok_or("No window object")?;
 
@@ -461,13 +509,16 @@ impl WalletActor {
 
         let request = Request::new_with_str_and_init(url, &opts)
             .map_err(|e| format!("Request creation failed: {:?}", e))?;
-        request.headers().set("Content-Type", "application/json")
+        request
+            .headers()
+            .set("Content-Type", "application/json")
             .map_err(|e| format!("Header set failed: {:?}", e))?;
 
         let resp_val = JsFuture::from(window.fetch_with_request(&request))
             .await
             .map_err(|e| format!("Fetch failed: {:?}", e))?;
-        let resp: Response = resp_val.dyn_into()
+        let resp: Response = resp_val
+            .dyn_into()
             .map_err(|e| format!("Invalid response: {:?}", e))?;
 
         let text_val = JsFuture::from(resp.text().map_err(|e| format!("{:?}", e))?)
@@ -481,7 +532,9 @@ impl WalletActor {
             return Err(format!("RPC error: {}", error));
         }
 
-        json.get("result").cloned().ok_or_else(|| "No 'result' in JSON-RPC response".to_string())
+        json.get("result")
+            .cloned()
+            .ok_or_else(|| "No 'result' in JSON-RPC response".to_string())
     }
 
     async fn listen_to_derive_address(_self_addr: Address<Self>) {
@@ -490,14 +543,23 @@ impl WalletActor {
         let mut receiver = crate::ffi_web::get_derive_address_request_receiver();
         while let Some(dart_msg) = receiver.recv().await {
             let request = dart_msg;
-            let resolved = match pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
+            let resolved = match pre_resolve_bip39(
+                &request.seed,
+                &request.passphrase,
+                request.bip39_account_index,
+            ) {
                 Ok(s) => s,
                 Err(e) => {
                     let err = ErrorResponse::from_string(&e);
                     AddressDerivedResponse {
-                        address: String::new(), success: false, error: Some(e),
-                        error_code: Some(err.code), error_hint: err.hint, error_transient: Some(err.transient),
-                    }.send_signal_to_dart();
+                        address: String::new(),
+                        success: false,
+                        error: Some(e),
+                        error_code: Some(err.code),
+                        error_hint: err.hint,
+                        error_transient: Some(err.transient),
+                    }
+                    .send_signal_to_dart();
                     continue;
                 }
             };
@@ -535,14 +597,23 @@ impl WalletActor {
         let mut receiver = crate::ffi_web::get_derive_subaddress_request_receiver();
         while let Some(dart_msg) = receiver.recv().await {
             let request = dart_msg;
-            let resolved = match pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
+            let resolved = match pre_resolve_bip39(
+                &request.seed,
+                &request.passphrase,
+                request.bip39_account_index,
+            ) {
                 Ok(s) => s,
                 Err(e) => {
                     let err = ErrorResponse::from_string(&e);
                     SubaddressDerivedResponse {
-                        address: String::new(), success: false, error: Some(e),
-                        error_code: Some(err.code), error_hint: err.hint, error_transient: Some(err.transient),
-                    }.send_signal_to_dart();
+                        address: String::new(),
+                        success: false,
+                        error: Some(e),
+                        error_code: Some(err.code),
+                        error_hint: err.hint,
+                        error_transient: Some(err.transient),
+                    }
+                    .send_signal_to_dart();
                     continue;
                 }
             };
@@ -586,16 +657,27 @@ impl WalletActor {
         let mut receiver = crate::ffi_web::get_derive_keys_request_receiver();
         while let Some(dart_msg) = receiver.recv().await {
             let request = dart_msg;
-            let resolved = match pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
+            let resolved = match pre_resolve_bip39(
+                &request.seed,
+                &request.passphrase,
+                request.bip39_account_index,
+            ) {
                 Ok(s) => s,
                 Err(e) => {
                     let err = ErrorResponse::from_string(&e);
                     KeysDerivedResponse {
-                        address: String::new(), secret_spend_key: String::new(),
-                        secret_view_key: String::new(), public_spend_key: String::new(),
-                        public_view_key: String::new(), success: false, error: Some(e),
-                        error_code: Some(err.code), error_hint: err.hint, error_transient: Some(err.transient),
-                    }.send_signal_to_dart();
+                        address: String::new(),
+                        secret_spend_key: String::new(),
+                        secret_view_key: String::new(),
+                        public_spend_key: String::new(),
+                        public_view_key: String::new(),
+                        success: false,
+                        error: Some(e),
+                        error_code: Some(err.code),
+                        error_hint: err.hint,
+                        error_transient: Some(err.transient),
+                    }
+                    .send_signal_to_dart();
                     continue;
                 }
             };
@@ -644,28 +726,48 @@ impl WalletActor {
 
             if let Err(err) = monero_rust::error_codes::Network::parse(&request.network) {
                 BlockScanResponse {
-                    success: false, error: Some(err.message.clone()),
-                    error_code: Some(err.code), error_hint: err.hint, error_transient: Some(err.transient),
+                    success: false,
+                    error: Some(err.message.clone()),
+                    error_code: Some(err.code),
+                    error_hint: err.hint,
+                    error_transient: Some(err.transient),
                     block_height: request.block_height,
-                    block_hash: String::new(), block_timestamp: 0, tx_count: 0,
-                    outputs: Vec::new(), daemon_height: 0, spent_key_images: Vec::new(),
+                    block_hash: String::new(),
+                    block_timestamp: 0,
+                    tx_count: 0,
+                    outputs: Vec::new(),
+                    daemon_height: 0,
+                    spent_key_images: Vec::new(),
                     spent_key_image_tx_hashes: Vec::new(),
-                }.send_signal_to_dart();
+                }
+                .send_signal_to_dart();
                 continue;
             }
 
-            let seed = match pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
+            let seed = match pre_resolve_bip39(
+                &request.seed,
+                &request.passphrase,
+                request.bip39_account_index,
+            ) {
                 Ok(s) => s,
                 Err(e) => {
                     let err = ErrorResponse::from_string(&e);
                     BlockScanResponse {
-                        success: false, error: Some(e),
-                        error_code: Some(err.code), error_hint: err.hint, error_transient: Some(err.transient),
+                        success: false,
+                        error: Some(e),
+                        error_code: Some(err.code),
+                        error_hint: err.hint,
+                        error_transient: Some(err.transient),
                         block_height: request.block_height,
-                        block_hash: String::new(), block_timestamp: 0, tx_count: 0,
-                        outputs: Vec::new(), daemon_height: 0, spent_key_images: Vec::new(),
+                        block_hash: String::new(),
+                        block_timestamp: 0,
+                        tx_count: 0,
+                        outputs: Vec::new(),
+                        daemon_height: 0,
+                        spent_key_images: Vec::new(),
                         spent_key_image_tx_hashes: Vec::new(),
-                    }.send_signal_to_dart();
+                    }
+                    .send_signal_to_dart();
                     continue;
                 }
             };
@@ -681,11 +783,8 @@ impl WalletActor {
             .await
             {
                 Ok(result) => {
-                    let outputs: Vec<OwnedOutput> = result
-                        .outputs
-                        .iter()
-                        .map(|o| o.into())
-                        .collect();
+                    let outputs: Vec<OwnedOutput> =
+                        result.outputs.iter().map(|o| o.into()).collect();
 
                     let _ = self_addr
                         .notify(StoreOutputs {
@@ -698,11 +797,13 @@ impl WalletActor {
                         .await;
 
                     if !result.spent_key_images.is_empty() {
-                        let _ = self_addr.notify(UpdateSpentStatus {
-                            key_images: result.spent_key_images.clone(),
-                            tx_hashes: result.spent_key_image_tx_hashes.clone(),
-                            height: result.block_height,
-                        }).await;
+                        let _ = self_addr
+                            .notify(UpdateSpentStatus {
+                                key_images: result.spent_key_images.clone(),
+                                tx_hashes: result.spent_key_image_tx_hashes.clone(),
+                                height: result.block_height,
+                            })
+                            .await;
                     }
 
                     BlockScanResponse {
@@ -757,9 +858,9 @@ impl WalletActor {
                     DaemonHeightResponse {
                         success: true,
                         error: None,
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
+                        error_code: None,
+                        error_hint: None,
+                        error_transient: None,
                         daemon_height: height,
                     }
                     .send_signal_to_dart();
@@ -789,28 +890,48 @@ impl WalletActor {
 
             if let Err(err) = monero_rust::error_codes::Network::parse(&request.network) {
                 BlockScanResponse {
-                    success: false, error: Some(err.message.clone()),
-                    error_code: Some(err.code), error_hint: err.hint, error_transient: Some(err.transient),
+                    success: false,
+                    error: Some(err.message.clone()),
+                    error_code: Some(err.code),
+                    error_hint: err.hint,
+                    error_transient: Some(err.transient),
                     block_height: request.start_height,
-                    block_hash: String::new(), block_timestamp: 0, tx_count: 0,
-                    outputs: Vec::new(), daemon_height: 0, spent_key_images: Vec::new(),
+                    block_hash: String::new(),
+                    block_timestamp: 0,
+                    tx_count: 0,
+                    outputs: Vec::new(),
+                    daemon_height: 0,
+                    spent_key_images: Vec::new(),
                     spent_key_image_tx_hashes: Vec::new(),
-                }.send_signal_to_dart();
+                }
+                .send_signal_to_dart();
                 continue;
             }
 
-            let resolved_seed = match pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
+            let resolved_seed = match pre_resolve_bip39(
+                &request.seed,
+                &request.passphrase,
+                request.bip39_account_index,
+            ) {
                 Ok(s) => s,
                 Err(e) => {
                     let err = ErrorResponse::from_string(&e);
                     BlockScanResponse {
-                        success: false, error: Some(e),
-                        error_code: Some(err.code), error_hint: err.hint, error_transient: Some(err.transient),
+                        success: false,
+                        error: Some(e),
+                        error_code: Some(err.code),
+                        error_hint: err.hint,
+                        error_transient: Some(err.transient),
                         block_height: request.start_height,
-                        block_hash: String::new(), block_timestamp: 0, tx_count: 0,
-                        outputs: Vec::new(), daemon_height: 0, spent_key_images: Vec::new(),
+                        block_hash: String::new(),
+                        block_timestamp: 0,
+                        tx_count: 0,
+                        outputs: Vec::new(),
+                        daemon_height: 0,
+                        spent_key_images: Vec::new(),
                         spent_key_image_tx_hashes: Vec::new(),
-                    }.send_signal_to_dart();
+                    }
+                    .send_signal_to_dart();
                     continue;
                 }
             };
@@ -846,26 +967,40 @@ impl WalletActor {
 
             if let Err(err) = monero_rust::error_codes::Network::parse(&request.network) {
                 MempoolScanResponse {
-                    success: false, error: Some(err.message.clone()),
-                    error_code: Some(err.code), error_hint: err.hint, error_transient: Some(err.transient),
+                    success: false,
+                    error: Some(err.message.clone()),
+                    error_code: Some(err.code),
+                    error_hint: err.hint,
+                    error_transient: Some(err.transient),
                     tx_count: 0,
-                    outputs: Vec::new(), spent_key_images: Vec::new(),
+                    outputs: Vec::new(),
+                    spent_key_images: Vec::new(),
                     spent_key_image_tx_hashes: Vec::new(),
-                }.send_signal_to_dart();
+                }
+                .send_signal_to_dart();
                 continue;
             }
 
-            let resolved_seed = match pre_resolve_bip39(&request.seed, &request.passphrase, request.bip39_account_index) {
+            let resolved_seed = match pre_resolve_bip39(
+                &request.seed,
+                &request.passphrase,
+                request.bip39_account_index,
+            ) {
                 Ok(s) => s,
                 Err(e) => {
                     let err = ErrorResponse::from_string(&e);
                     MempoolScanResponse {
-                        success: false, error: Some(e),
-                        error_code: Some(err.code), error_hint: err.hint, error_transient: Some(err.transient),
+                        success: false,
+                        error: Some(e),
+                        error_code: Some(err.code),
+                        error_hint: err.hint,
+                        error_transient: Some(err.transient),
                         tx_count: 0,
-                        outputs: Vec::new(), spent_key_images: Vec::new(),
+                        outputs: Vec::new(),
+                        spent_key_images: Vec::new(),
                         spent_key_image_tx_hashes: Vec::new(),
-                    }.send_signal_to_dart();
+                    }
+                    .send_signal_to_dart();
                     continue;
                 }
             };
@@ -898,9 +1033,9 @@ impl WalletActor {
                         MempoolScanResponse {
                             success: true,
                             error: None,
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
+                            error_code: None,
+                            error_hint: None,
+                            error_transient: None,
                             tx_count: result.tx_count as u32,
                             outputs,
                             spent_key_images: result.spent_key_images,
@@ -910,12 +1045,16 @@ impl WalletActor {
 
                         if !spent_key_images.is_empty() {
                             // Track mempool-detected spends as pending
-                            let _ = addr.notify(AddMempoolPendingSpends {
-                                key_images: spent_key_images.clone(),
-                            }).await;
-                            let _ = addr.notify(CheckMempoolConflicts {
-                                key_images: spent_key_images,
-                            }).await;
+                            let _ = addr
+                                .notify(AddMempoolPendingSpends {
+                                    key_images: spent_key_images.clone(),
+                                })
+                                .await;
+                            let _ = addr
+                                .notify(CheckMempoolConflicts {
+                                    key_images: spent_key_images,
+                                })
+                                .await;
                         }
                     }
                     Err(e) => {
@@ -949,19 +1088,30 @@ impl WalletActor {
             for w in &request.wallets {
                 match pre_resolve_bip39(&w.seed, &w.passphrase, w.bip39_account_index) {
                     Ok(s) => resolved_seeds.push(s),
-                    Err(e) => { resolve_err = Some(e); break; }
+                    Err(e) => {
+                        resolve_err = Some(e);
+                        break;
+                    }
                 }
             }
             if let Some(e) = resolve_err {
                 let err = monero_rust::error_codes::ErrorResponse::from_string(&e);
                 MultiWalletScanResponse {
-                    success: false, error: Some(e),
-                    error_code: Some(err.code), error_hint: err.hint, error_transient: Some(err.transient),
+                    success: false,
+                    error: Some(e),
+                    error_code: Some(err.code),
+                    error_hint: err.hint,
+                    error_transient: Some(err.transient),
                     block_height: request.block_height,
-                    block_hash: String::new(), block_timestamp: 0, tx_count: 0,
-                    daemon_height: 0, spent_key_images: Vec::new(),
-                    spent_key_image_tx_hashes: Vec::new(), wallet_results: Vec::new(),
-                }.send_signal_to_dart();
+                    block_hash: String::new(),
+                    block_timestamp: 0,
+                    tx_count: 0,
+                    daemon_height: 0,
+                    spent_key_images: Vec::new(),
+                    spent_key_image_tx_hashes: Vec::new(),
+                    wallet_results: Vec::new(),
+                }
+                .send_signal_to_dart();
                 continue;
             }
 
@@ -996,11 +1146,8 @@ impl WalletActor {
                             .wallet_results
                             .into_iter()
                             .map(|(address, wallet_data)| {
-                                let outputs = wallet_data
-                                    .outputs
-                                    .iter()
-                                    .map(|o| o.into())
-                                    .collect();
+                                let outputs =
+                                    wallet_data.outputs.iter().map(|o| o.into()).collect();
 
                                 WalletScanResult { address, outputs }
                             })
@@ -1009,9 +1156,9 @@ impl WalletActor {
                         MultiWalletScanResponse {
                             success: true,
                             error: None,
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
+                            error_code: None,
+                            error_hint: None,
+                            error_transient: None,
                             block_height: result.block_height,
                             block_hash: result.block_hash,
                             block_timestamp: result.block_timestamp,
@@ -1066,19 +1213,31 @@ impl WalletActor {
                         passphrase: w.passphrase.clone(),
                         bip39_account_index: 0,
                     }),
-                    Err(e) => { resolve_err = Some(e); break; }
+                    Err(e) => {
+                        resolve_err = Some(e);
+                        break;
+                    }
                 }
             }
             if let Some(e) = resolve_err {
                 let msg = format!("Failed to resolve BIP39 seed: {}", e);
                 let err = monero_rust::error_codes::ErrorResponse::from_string(&msg);
                 MultiWalletScanResponse {
-                    success: false, error: Some(msg),
-                    error_code: Some(err.code), error_hint: err.hint, error_transient: Some(err.transient),
-                    block_height: 0, block_hash: String::new(), block_timestamp: 0,
-                    tx_count: 0, daemon_height: 0, spent_key_images: Vec::new(),
-                    spent_key_image_tx_hashes: Vec::new(), wallet_results: Vec::new(),
-                }.send_signal_to_dart();
+                    success: false,
+                    error: Some(msg),
+                    error_code: Some(err.code),
+                    error_hint: err.hint,
+                    error_transient: Some(err.transient),
+                    block_height: 0,
+                    block_hash: String::new(),
+                    block_timestamp: 0,
+                    tx_count: 0,
+                    daemon_height: 0,
+                    spent_key_images: Vec::new(),
+                    spent_key_image_tx_hashes: Vec::new(),
+                    wallet_results: Vec::new(),
+                }
+                .send_signal_to_dart();
                 continue;
             }
 
@@ -1145,20 +1304,24 @@ impl WalletActor {
         let mut receiver = crate::ffi_web::get_restore_wallet_data_request_receiver();
         while let Some(dart_msg) = receiver.recv().await {
             let msg = dart_msg;
-            let resolved_seed = match pre_resolve_bip39(&msg.seed, &msg.passphrase, msg.bip39_account_index) {
-                Ok(s) => s,
-                Err(_e) => msg.seed.clone(), // Fall through; RestoreOutputs just stores seed
-            };
-            let outputs: Vec<monero_rust::WalletOutput> = msg.outputs.into_iter().map(|o| o.into()).collect();
-            let _ = self_addr.notify(RestoreOutputs {
-                seed: resolved_seed,
-                network: msg.network,
-                outputs,
-                daemon_height: msg.daemon_height,
-                current_height: msg.current_height,
-                block_hashes_json: msg.block_hashes_json,
-                pending_state_json: msg.pending_state_json,
-            }).await;
+            let resolved_seed =
+                match pre_resolve_bip39(&msg.seed, &msg.passphrase, msg.bip39_account_index) {
+                    Ok(s) => s,
+                    Err(_e) => msg.seed.clone(), // Fall through; RestoreOutputs just stores seed
+                };
+            let outputs: Vec<monero_rust::WalletOutput> =
+                msg.outputs.into_iter().map(|o| o.into()).collect();
+            let _ = self_addr
+                .notify(RestoreOutputs {
+                    seed: resolved_seed,
+                    network: msg.network,
+                    outputs,
+                    daemon_height: msg.daemon_height,
+                    current_height: msg.current_height,
+                    block_hashes_json: msg.block_hashes_json,
+                    pending_state_json: msg.pending_state_json,
+                })
+                .await;
         }
     }
 
@@ -1237,7 +1400,10 @@ impl Notifiable<RestoreOutputs> for WalletActor {
     async fn notify(&mut self, msg: RestoreOutputs, _ctx: &Context<Self>) {
         log::info!(
             "[RestoreOutputs] outputs={}, daemon_height={}, current_height={}, has_block_hashes={}",
-            msg.outputs.len(), msg.daemon_height, msg.current_height, msg.block_hashes_json.is_some()
+            msg.outputs.len(),
+            msg.daemon_height,
+            msg.current_height,
+            msg.block_hashes_json.is_some()
         );
         self.seed = Some(Zeroizing::new(msg.seed));
         self.network = Some(msg.network);
@@ -1263,17 +1429,23 @@ impl Notifiable<RestoreOutputs> for WalletActor {
                 #[serde(default)]
                 pending_spends: std::collections::HashMap<String, monero_rust::PendingSpend>,
                 #[serde(default)]
-                tracked_transactions: std::collections::HashMap<String, monero_rust::TrackedTransaction>,
+                tracked_transactions:
+                    std::collections::HashMap<String, monero_rust::TrackedTransaction>,
             }
             match serde_json::from_str::<PendingStateBlob>(&json) {
                 Ok(blob) => {
                     let now = current_time_secs();
-                    self.core_state.restore_pending_spends(blob.pending_spends, now);
-                    self.core_state.restore_tracked_transactions(blob.tracked_transactions);
+                    self.core_state
+                        .restore_pending_spends(blob.pending_spends, now);
+                    self.core_state
+                        .restore_tracked_transactions(blob.tracked_transactions);
                     log::info!("[RestoreOutputs] Pending state restored");
                 }
                 Err(e) => {
-                    log::error!("[RestoreOutputs] Failed to deserialize pending state: {}", e);
+                    log::error!(
+                        "[RestoreOutputs] Failed to deserialize pending state: {}",
+                        e
+                    );
                 }
             }
         }
@@ -1286,7 +1458,8 @@ impl Notifiable<GetPendingStateMsg> for WalletActor {
         #[derive(serde::Serialize)]
         struct PendingStateBlob<'a> {
             pending_spends: &'a std::collections::HashMap<String, monero_rust::PendingSpend>,
-            tracked_transactions: &'a std::collections::HashMap<String, monero_rust::TrackedTransaction>,
+            tracked_transactions:
+                &'a std::collections::HashMap<String, monero_rust::TrackedTransaction>,
         }
         let blob = PendingStateBlob {
             pending_spends: self.core_state.pending_spends(),
@@ -1385,7 +1558,8 @@ impl Notifiable<StoreOutputs> for WalletActor {
     async fn notify(&mut self, msg: StoreOutputs, _ctx: &Context<Self>) {
         log::info!(
             "[StoreOutputs] new_outputs={}, daemon_height={}, total_after={}, block_hashes={}",
-            msg.outputs.len(), msg.daemon_height,
+            msg.outputs.len(),
+            msg.daemon_height,
             self.core_state.outputs().len() + msg.outputs.len(),
             msg.block_hashes.len()
         );
@@ -1441,7 +1615,8 @@ impl Notifiable<UpdateOutputKeyImages> for WalletActor {
         // Sort by (block_height, output_index) to match Monero's positional
         // key image export ordering.
         outputs.sort_by(|a, b| {
-            a.block_height.cmp(&b.block_height)
+            a.block_height
+                .cmp(&b.block_height)
                 .then(a.output_index.cmp(&b.output_index))
         });
         let ki_count = msg.key_images.len();
@@ -1450,7 +1625,8 @@ impl Notifiable<UpdateOutputKeyImages> for WalletActor {
             log::warn!(
                 "[UpdateOutputKeyImages] count mismatch: {} key images vs {} outputs — \
                  positional assignment may pair key images with wrong outputs",
-                ki_count, out_count
+                ki_count,
+                out_count
             );
         }
         let count = ki_count.min(out_count);
@@ -1459,7 +1635,8 @@ impl Notifiable<UpdateOutputKeyImages> for WalletActor {
         }
         log::info!(
             "[UpdateOutputKeyImages] assigned {} key images to {} outputs",
-            count, out_count
+            count,
+            out_count
         );
     }
 }
@@ -1488,7 +1665,11 @@ impl Notifiable<UpdateScanState> for WalletActor {
         }
 
         self.is_scanning = msg.is_scanning;
-        self.active_scan_type = if msg.is_scanning { ScanType::SingleWallet } else { ScanType::None };
+        self.active_scan_type = if msg.is_scanning {
+            ScanType::SingleWallet
+        } else {
+            ScanType::None
+        };
         self.scan_current_height = msg.current_height;
         self.scan_target_height = msg.target_height;
         self.scan_node_url = msg.node_url;
@@ -1513,7 +1694,11 @@ impl Notifiable<UpdateMultiWalletScanState> for WalletActor {
         }
 
         self.is_scanning = msg.is_scanning;
-        self.active_scan_type = if msg.is_scanning { ScanType::MultiWallet } else { ScanType::None };
+        self.active_scan_type = if msg.is_scanning {
+            ScanType::MultiWallet
+        } else {
+            ScanType::None
+        };
         self.multi_wallet_scan_current_height = msg.current_height;
         self.multi_wallet_scan_target_height = msg.target_height;
         self.multi_wallet_scan_node_url = msg.node_url;
@@ -1657,7 +1842,10 @@ impl Notifiable<StopScan> for WalletActor {
         // Use correct state fields based on which scan was active
         let (current_height, target_height) = match self.active_scan_type {
             ScanType::SingleWallet => (self.scan_current_height, self.scan_target_height),
-            ScanType::MultiWallet => (self.multi_wallet_scan_current_height, self.multi_wallet_scan_target_height),
+            ScanType::MultiWallet => (
+                self.multi_wallet_scan_current_height,
+                self.multi_wallet_scan_target_height,
+            ),
             ScanType::None => unreachable!(),
         };
 
@@ -1725,12 +1913,15 @@ impl Notifiable<ContinueScan> for WalletActor {
                     batch_start_height,
                     &block_hash_history,
                     false,
-                ).await {
+                )
+                .await
+                {
                     Ok((data, _actual_start)) => data,
                     Err(e) => {
                         log::error!(
                             "[ContinueScan] Batch fetch error at height {}: {}",
-                            batch_start_height, e
+                            batch_start_height,
+                            e
                         );
 
                         let err = monero_rust::error_codes::ErrorResponse::from_string(&e);
@@ -1775,11 +1966,10 @@ impl Notifiable<ContinueScan> for WalletActor {
             if next_height < target_height {
                 let prefetch_url = node_url.clone();
                 spawn_local(async move {
-                    if let Ok(data) = monero_rust::fetch_blocks_batch_with_url(
-                        &prefetch_url,
-                        next_height,
-                        false,
-                    ).await {
+                    if let Ok(data) =
+                        monero_rust::fetch_blocks_batch_with_url(&prefetch_url, next_height, false)
+                            .await
+                    {
                         store_prefetch(scan_gen, next_height, data);
                     }
                 });
@@ -1797,7 +1987,9 @@ impl Notifiable<ContinueScan> for WalletActor {
                 lookahead,
                 cached_scanner,
                 &passphrase,
-            ).await {
+            )
+            .await
+            {
                 Ok((batch_results, returned_scanner)) => {
                     if batch_results.is_empty() {
                         let _ = self_addr.notify(StopScan).await;
@@ -1815,7 +2007,9 @@ impl Notifiable<ContinueScan> for WalletActor {
                                 break;
                             }
                         }
-                        if reorg_detected { break; }
+                        if reorg_detected {
+                            break;
+                        }
                     }
 
                     if reorg_detected {
@@ -1823,18 +2017,20 @@ impl Notifiable<ContinueScan> for WalletActor {
                             "[ContinueScan] Reorg detected at batch starting {}",
                             batch_start_height
                         );
-                        let _ = self_addr.notify(HandleReorg {
-                            batch_results,
-                            accounts_to_scan,
-                            target_height,
-                            batch_start_height,
-                            node_url,
-                            seed,
-                            passphrase,
-                            network,
-                            account_lookahead,
-                            subaddress_lookahead,
-                        }).await;
+                        let _ = self_addr
+                            .notify(HandleReorg {
+                                batch_results,
+                                accounts_to_scan,
+                                target_height,
+                                batch_start_height,
+                                node_url,
+                                seed,
+                                passphrase,
+                                network,
+                                account_lookahead,
+                                subaddress_lookahead,
+                            })
+                            .await;
                         return;
                     }
 
@@ -1850,13 +2046,14 @@ impl Notifiable<ContinueScan> for WalletActor {
 
                     // Send BlockScanResponse for each block with outputs
                     for block in &processed.blocks_with_outputs {
-                        let outputs: Vec<OwnedOutput> = block.outputs.iter().map(|o| o.into()).collect();
+                        let outputs: Vec<OwnedOutput> =
+                            block.outputs.iter().map(|o| o.into()).collect();
                         BlockScanResponse {
                             success: true,
                             error: None,
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
+                            error_code: None,
+                            error_hint: None,
+                            error_transient: None,
                             block_height: block.block_height,
                             block_hash: block.block_hash.clone(),
                             block_timestamp: block.block_timestamp,
@@ -1898,7 +2095,8 @@ impl Notifiable<ContinueScan> for WalletActor {
                         return;
                     }
 
-                    let progress = monero_rust::sync_progress(processed.batch_end_height, target_height);
+                    let progress =
+                        monero_rust::sync_progress(processed.batch_end_height, target_height);
                     SyncProgressResponse {
                         current_height: progress.current_height,
                         daemon_height: progress.target_height,
@@ -1931,7 +2129,8 @@ impl Notifiable<ContinueScan> for WalletActor {
                 Err(e) => {
                     log::error!(
                         "[ContinueScan] Batch scan error at height {}: {}",
-                        batch_start_height, e
+                        batch_start_height,
+                        e
                     );
 
                     let err = monero_rust::error_codes::ErrorResponse::from_string(&e);
@@ -1970,7 +2169,9 @@ impl Notifiable<ContinueScan> for WalletActor {
 #[async_trait]
 impl Notifiable<ContinueMultiWalletScan> for WalletActor {
     async fn notify(&mut self, _msg: ContinueMultiWalletScan, ctx: &Context<Self>) {
-        if !self.is_scanning || self.multi_wallet_scan_current_height >= self.multi_wallet_scan_target_height {
+        if !self.is_scanning
+            || self.multi_wallet_scan_current_height >= self.multi_wallet_scan_target_height
+        {
             if self.multi_wallet_scan_current_height >= self.multi_wallet_scan_target_height {
                 self.is_scanning = false;
                 SyncProgressResponse {
@@ -2019,7 +2220,9 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                     batch_start_height,
                     &block_hash_history,
                     false,
-                ).await {
+                )
+                .await
+                {
                     Ok((data, _actual_start)) => data,
                     Err(e) => {
                         let err = monero_rust::error_codes::ErrorResponse::from_string(&e);
@@ -2056,11 +2259,10 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
             if next_height < target_height {
                 let prefetch_url = node_url.clone();
                 spawn_local(async move {
-                    if let Ok(data) = monero_rust::fetch_blocks_batch_with_url(
-                        &prefetch_url,
-                        next_height,
-                        false,
-                    ).await {
+                    if let Ok(data) =
+                        monero_rust::fetch_blocks_batch_with_url(&prefetch_url, next_height, false)
+                            .await
+                    {
                         store_prefetch(scan_gen, next_height, data);
                     }
                 });
@@ -2072,7 +2274,9 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                 fetched,
                 wallet_configs,
                 cached_scanners,
-            ).await {
+            )
+            .await
+            {
                 Ok((batch_results, returned_scanners)) => {
                     if batch_results.is_empty() {
                         let _ = self_addr.notify(StopScan).await;
@@ -2083,12 +2287,16 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                     let mut reorg_detected = false;
                     for result in &batch_results {
                         for (known_height, known_hash) in &block_hash_history {
-                            if result.block_height == *known_height && result.block_hash != *known_hash {
+                            if result.block_height == *known_height
+                                && result.block_hash != *known_hash
+                            {
                                 reorg_detected = true;
                                 break;
                             }
                         }
-                        if reorg_detected { break; }
+                        if reorg_detected {
+                            break;
+                        }
                     }
 
                     if reorg_detected {
@@ -2098,8 +2306,9 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                         );
                         // Convert MultiWalletScanResult to BlockScanResult for HandleReorg
                         // Use first wallet's data as representative (all wallets see same blocks)
-                        let block_scan_results: Vec<monero_rust::BlockScanResult> = batch_results.iter().map(|r| {
-                            monero_rust::BlockScanResult {
+                        let block_scan_results: Vec<monero_rust::BlockScanResult> = batch_results
+                            .iter()
+                            .map(|r| monero_rust::BlockScanResult {
                                 block_height: r.block_height,
                                 block_hash: r.block_hash.clone(),
                                 block_timestamp: r.block_timestamp,
@@ -2108,22 +2317,24 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                                 daemon_height: r.daemon_height,
                                 spent_key_images: r.spent_key_images.clone(),
                                 spent_key_image_tx_hashes: r.spent_key_image_tx_hashes.clone(),
-                            }
-                        }).collect();
+                            })
+                            .collect();
                         // Use first wallet's config for reorg handling
                         let first_wallet = &wallets[0];
-                        let _ = self_addr.notify(HandleReorg {
-                            batch_results: block_scan_results,
-                            accounts_to_scan: first_wallet.accounts_to_scan.clone(),
-                            target_height,
-                            batch_start_height,
-                            node_url,
-                            seed: Zeroizing::new(first_wallet.seed.clone()),
-                            passphrase: Zeroizing::new(first_wallet.passphrase.clone()),
-                            network: first_wallet.network.clone(),
-                            account_lookahead: first_wallet.account_lookahead,
-                            subaddress_lookahead: first_wallet.subaddress_lookahead,
-                        }).await;
+                        let _ = self_addr
+                            .notify(HandleReorg {
+                                batch_results: block_scan_results,
+                                accounts_to_scan: first_wallet.accounts_to_scan.clone(),
+                                target_height,
+                                batch_start_height,
+                                node_url,
+                                seed: Zeroizing::new(first_wallet.seed.clone()),
+                                passphrase: Zeroizing::new(first_wallet.passphrase.clone()),
+                                network: first_wallet.network.clone(),
+                                account_lookahead: first_wallet.account_lookahead,
+                                subaddress_lookahead: first_wallet.subaddress_lookahead,
+                            })
+                            .await;
                         return;
                     }
 
@@ -2143,25 +2354,30 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                     for result in &batch_results {
                         block_hashes.push((result.block_height, result.block_hash.clone()));
                         all_spent_key_images.extend(result.spent_key_images.iter().cloned());
-                        all_spent_tx_hashes.extend(result.spent_key_image_tx_hashes.iter().cloned());
+                        all_spent_tx_hashes
+                            .extend(result.spent_key_image_tx_hashes.iter().cloned());
                         if result.daemon_height > last_daemon_height {
                             last_daemon_height = result.daemon_height;
                         }
                     }
 
                     // Record block hashes into core_state
-                    let _ = self_addr.notify(RecordBlockHashes {
-                        block_hashes,
-                        daemon_height: last_daemon_height,
-                    }).await;
+                    let _ = self_addr
+                        .notify(RecordBlockHashes {
+                            block_hashes,
+                            daemon_height: last_daemon_height,
+                        })
+                        .await;
 
                     // Record spent key images into core_state
                     if !all_spent_key_images.is_empty() {
-                        let _ = self_addr.notify(UpdateSpentStatus {
-                            key_images: all_spent_key_images,
-                            tx_hashes: all_spent_tx_hashes,
-                            height: batch_end_height,
-                        }).await;
+                        let _ = self_addr
+                            .notify(UpdateSpentStatus {
+                                key_images: all_spent_key_images,
+                                tx_hashes: all_spent_tx_hashes,
+                                height: batch_end_height,
+                            })
+                            .await;
                     }
 
                     // If scan was cancelled while we were processing, stop here.
@@ -2174,7 +2390,8 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                             .wallet_results
                             .iter()
                             .map(|(address, wallet_data)| {
-                                let outputs: Vec<OwnedOutput> = wallet_data.outputs.iter().map(|o| o.into()).collect();
+                                let outputs: Vec<OwnedOutput> =
+                                    wallet_data.outputs.iter().map(|o| o.into()).collect();
 
                                 WalletScanResult {
                                     address: address.clone(),
@@ -2189,9 +2406,9 @@ impl Notifiable<ContinueMultiWalletScan> for WalletActor {
                             MultiWalletScanResponse {
                                 success: true,
                                 error: None,
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
+                                error_code: None,
+                                error_hint: None,
+                                error_transient: None,
                                 block_height: result.block_height,
                                 block_hash: result.block_hash.clone(),
                                 block_timestamp: result.block_timestamp,
@@ -2279,26 +2496,28 @@ impl Notifiable<UpdateSpentStatus> for WalletActor {
         }
 
         let (updated_count, conflicts) = self.core_state.mark_spent_detecting_conflicts(
-            &msg.key_images, &msg.tx_hashes, msg.height
+            &msg.key_images,
+            &msg.tx_hashes,
+            msg.height,
         );
 
         if !conflicts.is_empty() {
             DoubleSpendDetectedResponse {
-                conflicts: conflicts.iter().map(|c| DoubleSpendConflict {
-                    key_image: c.key_image.clone(),
-                    previous_spent_height: c.previous_spent_height.unwrap_or(0),
-                    new_height: c.new_height,
-                }).collect(),
+                conflicts: conflicts
+                    .iter()
+                    .map(|c| DoubleSpendConflict {
+                        key_image: c.key_image.clone(),
+                        previous_spent_height: c.previous_spent_height.unwrap_or(0),
+                        new_height: c.new_height,
+                    })
+                    .collect(),
             }
             .send_signal_to_dart();
         }
 
         // Check if any tracked transaction is now fully confirmed
         for tx_id in &confirmed_tx_ids {
-            let all_confirmed = self
-                .core_state
-                .pending_spends_for_tx(tx_id)
-                .is_empty();
+            let all_confirmed = self.core_state.pending_spends_for_tx(tx_id).is_empty();
             if all_confirmed {
                 if let Some(new_status) = self.core_state.advance_tx_status(
                     tx_id,
@@ -2342,11 +2561,14 @@ impl Notifiable<CheckMempoolConflicts> for WalletActor {
         let conflicts = self.core_state.check_spent_conflicts(&msg.key_images);
         if !conflicts.is_empty() {
             DoubleSpendDetectedResponse {
-                conflicts: conflicts.iter().map(|c| DoubleSpendConflict {
-                    key_image: c.key_image.clone(),
-                    previous_spent_height: c.previous_spent_height.unwrap_or(0),
-                    new_height: c.new_height,
-                }).collect(),
+                conflicts: conflicts
+                    .iter()
+                    .map(|c| DoubleSpendConflict {
+                        key_image: c.key_image.clone(),
+                        previous_spent_height: c.previous_spent_height.unwrap_or(0),
+                        new_height: c.new_height,
+                    })
+                    .collect(),
             }
             .send_signal_to_dart();
         }
@@ -2368,8 +2590,10 @@ impl Notifiable<HandleReorg> for WalletActor {
             Ok(monero_rust::ScanBatchOutcome::Reorg(info)) => {
                 log::info!(
                     "[HandleReorg] Reorg at height {}: {} blocks detached, {} outputs removed, {} outputs unspent",
-                    info.split_height, info.blocks_detached,
-                    info.outputs_removed, info.outputs_unspent
+                    info.split_height,
+                    info.blocks_detached,
+                    info.outputs_removed,
+                    info.outputs_unspent
                 );
 
                 ReorgDetectedResponse {
@@ -2379,12 +2603,16 @@ impl Notifiable<HandleReorg> for WalletActor {
                     outputs_unspent: info.outputs_unspent as u64,
                     removed_key_images: info.removed_key_images.clone(),
                     unspent_key_images: info.unspent_key_images.clone(),
-                }.send_signal_to_dart();
+                }
+                .send_signal_to_dart();
 
                 // Process new-chain blocks from same batch
-                let new_blocks: Vec<_> = msg.batch_results.iter()
+                let new_blocks: Vec<_> = msg
+                    .batch_results
+                    .iter()
                     .filter(|r| r.block_height >= info.split_height)
-                    .cloned().collect();
+                    .cloned()
+                    .collect();
                 let processed = monero_rust::process_single_wallet_batch(
                     &new_blocks,
                     msg.accounts_to_scan.as_deref(),
@@ -2410,22 +2638,25 @@ impl Notifiable<HandleReorg> for WalletActor {
                     confirmed: balance.confirmed,
                     unconfirmed: balance.unconfirmed,
                     pending_spend: balance.pending_spend,
-                }.send_signal_to_dart();
+                }
+                .send_signal_to_dart();
 
                 // Continue scanning from where the batch left off
                 let mut self_addr = ctx.address();
-                let _ = self_addr.notify(UpdateScanState {
-                    is_scanning: processed.should_continue,
-                    current_height: processed.batch_end_height,
-                    target_height: msg.target_height,
-                    node_url: msg.node_url,
-                    seed: msg.seed,
-                    passphrase: msg.passphrase,
-                    network: msg.network,
-                    account_lookahead: msg.account_lookahead,
-                    subaddress_lookahead: msg.subaddress_lookahead,
-                    accounts_to_scan: msg.accounts_to_scan,
-                }).await;
+                let _ = self_addr
+                    .notify(UpdateScanState {
+                        is_scanning: processed.should_continue,
+                        current_height: processed.batch_end_height,
+                        target_height: msg.target_height,
+                        node_url: msg.node_url,
+                        seed: msg.seed,
+                        passphrase: msg.passphrase,
+                        network: msg.network,
+                        account_lookahead: msg.account_lookahead,
+                        subaddress_lookahead: msg.subaddress_lookahead,
+                        accounts_to_scan: msg.accounts_to_scan,
+                    })
+                    .await;
 
                 if processed.should_continue {
                     let _ = self_addr.notify(ContinueScan).await;
@@ -2525,7 +2756,12 @@ impl Notifiable<AddMempoolPendingSpends> for WalletActor {
                 continue;
             }
             // Check if this key image belongs to one of our outputs
-            if let Some(output) = self.core_state.outputs().iter().find(|o| &o.key_image == ki && !o.spent) {
+            if let Some(output) = self
+                .core_state
+                .outputs()
+                .iter()
+                .find(|o| &o.key_image == ki && !o.spent)
+            {
                 let tx_id = format!("mempool_{}", ki);
                 let spend = monero_rust::PendingSpend {
                     tx_id: tx_id.clone(),
@@ -2563,32 +2799,43 @@ impl WalletActor {
                     ImportKeysFileResponse {
                         success: false,
                         error: Some(format!("hex decode: {e}")),
-                        error_code: None, error_hint: None, error_transient: None,
-                        spend_secret_key: None, view_secret_key: None,
-                        spend_public_key: None, view_public_key: None,
-                        creation_timestamp: 0, watch_only: false,
+                        error_code: None,
+                        error_hint: None,
+                        error_transient: None,
+                        spend_secret_key: None,
+                        view_secret_key: None,
+                        spend_public_key: None,
+                        view_public_key: None,
+                        creation_timestamp: 0,
+                        watch_only: false,
                         network: None,
-                        seed_language: None, mnemonic: None,
-                    }.send_signal_to_dart();
+                        seed_language: None,
+                        mnemonic: None,
+                    }
+                    .send_signal_to_dart();
                     continue;
                 }
             };
 
-            let result = monero_rust::decrypt_keys_data(&file_bytes, &request.password)
-                .and_then(|(plaintext, key, iv)| monero_rust::parse_decrypted_keys(&plaintext, &key, iv));
+            let result = monero_rust::decrypt_keys_data(&file_bytes, &request.password).and_then(
+                |(plaintext, key, iv)| monero_rust::parse_decrypted_keys(&plaintext, &key, iv),
+            );
 
             match result {
                 Ok(imported) => {
                     let network = match imported.nettype {
                         0 => "mainnet",
-                        1 => "stagenet",
-                        2 => "testnet",
+                        1 => "testnet",
+                        2 => "stagenet",
                         _ => "mainnet",
                     };
 
                     ImportKeysFileResponse {
                         success: true,
-                        error: None, error_code: None, error_hint: None, error_transient: None,
+                        error: None,
+                        error_code: None,
+                        error_hint: None,
+                        error_transient: None,
                         spend_secret_key: Some(hex::encode(imported.spend_secret_key)),
                         view_secret_key: Some(hex::encode(imported.view_secret_key)),
                         spend_public_key: Some(hex::encode(imported.spend_public_key)),
@@ -2598,19 +2845,27 @@ impl WalletActor {
                         network: Some(network.to_string()),
                         seed_language: imported.seed_language,
                         mnemonic: imported.mnemonic,
-                    }.send_signal_to_dart();
+                    }
+                    .send_signal_to_dart();
                 }
                 Err(e) => {
                     ImportKeysFileResponse {
                         success: false,
                         error: Some(e),
-                        error_code: None, error_hint: None, error_transient: None,
-                        spend_secret_key: None, view_secret_key: None,
-                        spend_public_key: None, view_public_key: None,
-                        creation_timestamp: 0, watch_only: false,
+                        error_code: None,
+                        error_hint: None,
+                        error_transient: None,
+                        spend_secret_key: None,
+                        view_secret_key: None,
+                        spend_public_key: None,
+                        view_public_key: None,
+                        creation_timestamp: 0,
+                        watch_only: false,
                         network: None,
-                        seed_language: None, mnemonic: None,
-                    }.send_signal_to_dart();
+                        seed_language: None,
+                        mnemonic: None,
+                    }
+                    .send_signal_to_dart();
                 }
             }
         }
@@ -2625,12 +2880,12 @@ impl WalletActor {
 
                 let spend_secret = hex::decode(&keys.secret_spend_key)
                     .map_err(|e| format!("spend key hex: {e}"))?;
-                let view_secret = hex::decode(&keys.secret_view_key)
-                    .map_err(|e| format!("view key hex: {e}"))?;
+                let view_secret =
+                    hex::decode(&keys.secret_view_key).map_err(|e| format!("view key hex: {e}"))?;
                 let spend_public = hex::decode(&keys.public_spend_key)
                     .map_err(|e| format!("spend pub hex: {e}"))?;
-                let view_public = hex::decode(&keys.public_view_key)
-                    .map_err(|e| format!("view pub hex: {e}"))?;
+                let view_public =
+                    hex::decode(&keys.public_view_key).map_err(|e| format!("view pub hex: {e}"))?;
 
                 let spend_secret: [u8; 32] = spend_secret
                     .try_into()
@@ -2645,15 +2900,13 @@ impl WalletActor {
                     .try_into()
                     .map_err(|_| "view public key is not 32 bytes".to_string())?;
 
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
+                let now = current_time_secs();
 
                 let mut outer_iv = [0u8; 8];
                 let mut encryption_iv = [0u8; 8];
-                rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut outer_iv);
-                rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut encryption_iv);
+                fill_random_bytes(&mut outer_iv).map_err(|e| format!("outer IV random: {e}"))?;
+                fill_random_bytes(&mut encryption_iv)
+                    .map_err(|e| format!("encryption IV random: {e}"))?;
 
                 let nettype = match request.network.as_str() {
                     "mainnet" => 0u8,
@@ -2685,14 +2938,16 @@ impl WalletActor {
                         success: true,
                         error: None,
                         file_bytes_hex: Some(hex::encode(&file_bytes)),
-                    }.send_signal_to_dart();
+                    }
+                    .send_signal_to_dart();
                 }
                 Err(e) => {
                     ExportKeysFileResponse {
                         success: false,
                         error: Some(e),
                         file_bytes_hex: None,
-                    }.send_signal_to_dart();
+                    }
+                    .send_signal_to_dart();
                 }
             }
         }

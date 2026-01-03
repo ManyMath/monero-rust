@@ -702,6 +702,22 @@ pub struct SignUnsignedTransactionRequest {
     pub passphrase: String,
     #[serde(default)]
     pub bip39_account_index: u32,
+    #[serde(default)]
+    pub spend_secret_key_hex: Option<String>,
+    #[serde(default)]
+    pub view_secret_key_hex: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct ExtractSignedTxSetRequest {
+    pub data_hex: String,
+    pub view_key_hex: String,
+}
+
+#[derive(Deserialize)]
+pub struct InspectUnsignedTxSetRequest {
+    pub data_hex: String,
+    pub view_key_hex: String,
 }
 
 #[derive(Deserialize)]
@@ -750,6 +766,146 @@ pub struct TransactionSignedOfflineResponse {
     pub tx_key: Option<String>,
     pub tx_key_additional: Vec<String>,
     pub change_outputs: Vec<ChangeOutput>,
+    pub spent_key_images: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct ExtractedSignedTransaction {
+    pub tx_id: String,
+    pub tx_blob: String,
+    pub tx_version: u64,
+    pub tx_unlock_time: u64,
+    pub tx_input_count: u64,
+    pub tx_input_ring_sizes: Vec<u64>,
+    pub tx_output_count: u64,
+    pub tx_extra_len: usize,
+    pub rct_type: Option<u8>,
+    pub rct_fee: Option<u64>,
+    pub dust: u64,
+    pub fee: u64,
+    pub dust_added_to_fee: bool,
+    pub change_amount: u64,
+    pub selected_transfer_count: u64,
+    pub selected_transfer_indices: Vec<u64>,
+    pub key_images_len: usize,
+    pub key_images_blob_hex: String,
+    pub tx_key_is_zero: bool,
+    pub tx_key: Option<String>,
+    pub additional_tx_key_count: u64,
+    pub tx_key_additional: Vec<String>,
+    pub destination_count: u64,
+    pub destination_total_amount: u64,
+    pub multisig_sig_count: u64,
+}
+
+#[derive(Serialize)]
+pub struct SignedTxSetKeyImageEntry {
+    pub public_key: String,
+    pub key_image: String,
+}
+
+#[derive(Serialize)]
+pub struct SignedTxSetExtractedResponse {
+    pub success: bool,
+    pub error: Option<String>,
+    pub error_code: Option<u32>,
+    pub error_hint: Option<String>,
+    pub error_transient: Option<bool>,
+    pub transactions: Vec<ExtractedSignedTransaction>,
+    pub key_images: Vec<String>,
+    pub tx_key_images: Vec<SignedTxSetKeyImageEntry>,
+}
+
+#[derive(Serialize)]
+pub struct UnsignedTxSetSourceRingEntry {
+    pub global_output_index: u64,
+    pub output_public_key: String,
+    pub commitment: String,
+}
+
+#[derive(Serialize)]
+pub struct UnsignedTxSetSourceSummary {
+    pub ring_size: u64,
+    pub ring: Vec<UnsignedTxSetSourceRingEntry>,
+    pub real_output: u64,
+    pub real_global_output_index: u64,
+    pub real_output_public_key: String,
+    pub real_tx_public_key: String,
+    pub real_out_additional_tx_keys: Vec<String>,
+    pub real_output_in_tx_index: u64,
+    pub amount: u64,
+    pub rct: bool,
+    pub mask: String,
+}
+
+#[derive(Serialize)]
+pub struct UnsignedTxSetDestinationSummary {
+    pub original_address_hex: String,
+    pub amount: u64,
+    pub spend_public_key: String,
+    pub view_public_key: String,
+    pub is_subaddress: bool,
+    pub is_integrated: bool,
+}
+
+#[derive(Serialize)]
+pub struct UnsignedTxSetConstructionSummary {
+    pub source_count: u64,
+    pub source_ring_sizes: Vec<u64>,
+    pub sources: Vec<UnsignedTxSetSourceSummary>,
+    pub change_amount: u64,
+    pub change: UnsignedTxSetDestinationSummary,
+    pub split_destination_count: u64,
+    pub split_destination_total_amount: u64,
+    pub split_destinations: Vec<UnsignedTxSetDestinationSummary>,
+    pub selected_transfer_indices: Vec<u64>,
+    pub extra_hex: String,
+    pub unlock_time: u64,
+    pub construction_flags: u8,
+    pub use_rct: bool,
+    pub use_view_tags: bool,
+    pub rct_range_proof_type: u64,
+    pub rct_bp_version: u64,
+    pub destination_count: u64,
+    pub destination_total_amount: u64,
+    pub destinations: Vec<UnsignedTxSetDestinationSummary>,
+    pub subaddr_account: u32,
+    pub subaddr_indices: Vec<u32>,
+}
+
+#[derive(Serialize)]
+pub struct UnsignedTxSetTransferSummary {
+    pub output_public_key: String,
+    pub internal_output_index: u64,
+    pub global_output_index: u64,
+    pub tx_public_key: String,
+    pub flags_raw: u8,
+    pub spent: bool,
+    pub frozen: bool,
+    pub rct: bool,
+    pub key_image_known: bool,
+    pub key_image_request: bool,
+    pub key_image_partial: bool,
+    pub amount: u64,
+    pub additional_tx_keys: Vec<String>,
+    pub subaddress_major: u64,
+    pub subaddress_minor: u64,
+}
+
+#[derive(Serialize)]
+pub struct UnsignedTxSetInspectedResponse {
+    pub success: bool,
+    pub error: Option<String>,
+    pub error_code: Option<u32>,
+    pub error_hint: Option<String>,
+    pub error_transient: Option<bool>,
+    pub archive_version: u64,
+    pub transaction_count: u64,
+    pub new_transfer_first: u64,
+    pub new_transfer_second: u64,
+    pub new_transfer_count: u64,
+    pub new_transfers: Vec<UnsignedTxSetTransferSummary>,
+    pub constructions: Vec<UnsignedTxSetConstructionSummary>,
 }
 
 #[derive(Serialize)]
@@ -867,7 +1023,6 @@ mod tests {
         serde_json::from_str(&json_str).expect("deserialize")
     }
 
-
     #[test]
     fn owned_output_round_trip_no_optionals() {
         let output = OwnedOutput {
@@ -932,7 +1087,6 @@ mod tests {
         assert!(restored.frozen);
     }
 
-
     #[test]
     fn change_output_round_trip() {
         let change = ChangeOutput {
@@ -977,7 +1131,6 @@ mod tests {
         assert_eq!(restored.subaddress_index, None);
     }
 
-
     #[test]
     fn block_scan_response_round_trip() {
         let output = OwnedOutput {
@@ -1015,8 +1168,7 @@ mod tests {
         };
 
         let json_str = serde_json::to_string(&response).expect("serialize");
-        let restored: BlockScanResponse =
-            serde_json::from_str(&json_str).expect("deserialize");
+        let restored: BlockScanResponse = serde_json::from_str(&json_str).expect("deserialize");
 
         assert!(restored.success);
         assert_eq!(restored.error, None);
@@ -1048,8 +1200,7 @@ mod tests {
         };
 
         let json_str = serde_json::to_string(&response).expect("serialize");
-        let restored: BlockScanResponse =
-            serde_json::from_str(&json_str).expect("deserialize");
+        let restored: BlockScanResponse = serde_json::from_str(&json_str).expect("deserialize");
 
         assert!(restored.outputs.is_empty());
         assert!(restored.spent_key_images.is_empty());
@@ -1077,7 +1228,6 @@ mod tests {
         assert_eq!(v["success"], false);
         assert_eq!(v["error"], "Connection refused");
     }
-
 
     #[test]
     fn transaction_created_response_round_trip() {
@@ -1116,12 +1266,14 @@ mod tests {
         assert_eq!(v["tx_blob"], "blob_hex");
         assert_eq!(v["tx_key"], "txkey_hex");
         assert_eq!(v["tx_key_additional"].as_array().map(|a| a.len()), Some(1));
-        assert_eq!(v["spent_output_hashes"].as_array().map(|a| a.len()), Some(2));
+        assert_eq!(
+            v["spent_output_hashes"].as_array().map(|a| a.len()),
+            Some(2)
+        );
         assert_eq!(v["change_outputs"].as_array().map(|a| a.len()), Some(1));
         assert_eq!(v["change_outputs"][0]["subaddress_index"][0], 0);
         assert_eq!(v["change_outputs"][0]["subaddress_index"][1], 0);
     }
-
 
     #[test]
     fn multi_wallet_scan_response_round_trip() {
@@ -1170,11 +1322,20 @@ mod tests {
 
         let v = round_trip(&response);
         assert_eq!(v["wallet_results"].as_array().map(|a| a.len()), Some(2));
-        assert_eq!(v["wallet_results"][0]["outputs"].as_array().map(|a| a.len()), Some(0));
-        assert_eq!(v["wallet_results"][1]["outputs"].as_array().map(|a| a.len()), Some(1));
+        assert_eq!(
+            v["wallet_results"][0]["outputs"]
+                .as_array()
+                .map(|a| a.len()),
+            Some(0)
+        );
+        assert_eq!(
+            v["wallet_results"][1]["outputs"]
+                .as_array()
+                .map(|a| a.len()),
+            Some(1)
+        );
         assert_eq!(v["wallet_results"][1]["address"], "5wallet2addr");
     }
-
 
     #[test]
     fn recipient_round_trip() {
@@ -1190,7 +1351,6 @@ mod tests {
         assert_eq!(restored.amount, 1_000_000_000_000);
     }
 
-
     #[test]
     fn wallet_scan_result_round_trip() {
         let result = WalletScanResult {
@@ -1199,13 +1359,11 @@ mod tests {
         };
 
         let json_str = serde_json::to_string(&result).expect("serialize");
-        let restored: WalletScanResult =
-            serde_json::from_str(&json_str).expect("deserialize");
+        let restored: WalletScanResult = serde_json::from_str(&json_str).expect("deserialize");
 
         assert_eq!(restored.address, "5scanaddr");
         assert!(restored.outputs.is_empty());
     }
-
 
     #[test]
     fn double_spend_conflict_round_trip() {
@@ -1216,14 +1374,12 @@ mod tests {
         };
 
         let json_str = serde_json::to_string(&conflict).expect("serialize");
-        let restored: DoubleSpendConflict =
-            serde_json::from_str(&json_str).expect("deserialize");
+        let restored: DoubleSpendConflict = serde_json::from_str(&json_str).expect("deserialize");
 
         assert_eq!(restored.key_image, "ki_conflict");
         assert_eq!(restored.previous_spent_height, 1000);
         assert_eq!(restored.new_height, 1005);
     }
-
 
     #[test]
     fn sync_progress_response_serialize() {
@@ -1374,13 +1530,248 @@ mod tests {
             tx_key: Some("signed_key".into()),
             tx_key_additional: vec![],
             change_outputs: vec![change],
+            spent_key_images: vec!["spent_ki".into()],
         };
 
         let v = round_trip(&response);
         assert_eq!(v["tx_id"], "signed_txid");
-        assert_eq!(v["change_outputs"][0]["subaddress_index"], serde_json::Value::Null);
+        assert_eq!(
+            v["change_outputs"][0]["subaddress_index"],
+            serde_json::Value::Null
+        );
+        assert_eq!(v["spent_key_images"][0], "spent_ki");
     }
 
+    #[test]
+    fn signed_txset_extracted_response_serialize() {
+        let response = SignedTxSetExtractedResponse {
+            success: true,
+            error: None,
+            error_code: None,
+            error_hint: None,
+            error_transient: None,
+            transactions: vec![ExtractedSignedTransaction {
+                tx_id: "signed_txid".into(),
+                tx_blob: "signed_blob".into(),
+                tx_version: 2,
+                tx_unlock_time: 0,
+                tx_input_count: 2,
+                tx_input_ring_sizes: vec![16, 16],
+                tx_output_count: 2,
+                tx_extra_len: 44,
+                rct_type: Some(6),
+                rct_fee: Some(123),
+                dust: 0,
+                fee: 123,
+                dust_added_to_fee: false,
+                change_amount: 456,
+                selected_transfer_count: 2,
+                selected_transfer_indices: vec![0, 20],
+                key_images_len: 64,
+                key_images_blob_hex: "abcd".into(),
+                tx_key_is_zero: false,
+                tx_key: Some("txkey".into()),
+                additional_tx_key_count: 1,
+                tx_key_additional: vec!["txkey2".into()],
+                destination_count: 1,
+                destination_total_amount: 789,
+                multisig_sig_count: 0,
+            }],
+            key_images: vec!["ki1".into(), "ki2".into()],
+            tx_key_images: vec![SignedTxSetKeyImageEntry {
+                public_key: "pubkey".into(),
+                key_image: "ki1".into(),
+            }],
+        };
+
+        let v = round_trip(&response);
+        assert_eq!(v["success"], true);
+        assert_eq!(v["transactions"].as_array().map(|a| a.len()), Some(1));
+        assert_eq!(v["transactions"][0]["tx_id"], "signed_txid");
+        assert_eq!(v["transactions"][0]["tx_blob"], "signed_blob");
+        assert_eq!(v["transactions"][0]["tx_version"], 2);
+        assert_eq!(v["transactions"][0]["tx_unlock_time"], 0);
+        assert_eq!(v["transactions"][0]["tx_input_count"], 2);
+        assert_eq!(
+            v["transactions"][0]["tx_input_ring_sizes"],
+            serde_json::json!([16, 16])
+        );
+        assert_eq!(v["transactions"][0]["tx_output_count"], 2);
+        assert_eq!(v["transactions"][0]["tx_extra_len"], 44);
+        assert_eq!(v["transactions"][0]["rct_type"], 6);
+        assert_eq!(v["transactions"][0]["rct_fee"], 123);
+        assert_eq!(v["transactions"][0]["dust"], 0);
+        assert_eq!(v["transactions"][0]["fee"], 123);
+        assert_eq!(v["transactions"][0]["dust_added_to_fee"], false);
+        assert_eq!(v["transactions"][0]["change_amount"], 456);
+        assert_eq!(v["transactions"][0]["selected_transfer_count"], 2);
+        assert_eq!(
+            v["transactions"][0]["selected_transfer_indices"],
+            serde_json::json!([0, 20])
+        );
+        assert_eq!(v["transactions"][0]["key_images_len"], 64);
+        assert_eq!(v["transactions"][0]["key_images_blob_hex"], "abcd");
+        assert_eq!(v["transactions"][0]["tx_key_is_zero"], false);
+        assert_eq!(v["transactions"][0]["tx_key"], "txkey");
+        assert_eq!(v["transactions"][0]["additional_tx_key_count"], 1);
+        assert_eq!(v["transactions"][0]["tx_key_additional"][0], "txkey2");
+        assert_eq!(v["transactions"][0]["destination_count"], 1);
+        assert_eq!(v["transactions"][0]["destination_total_amount"], 789);
+        assert_eq!(v["transactions"][0]["multisig_sig_count"], 0);
+        assert_eq!(v["key_images"].as_array().map(|a| a.len()), Some(2));
+        assert_eq!(v["tx_key_images"].as_array().map(|a| a.len()), Some(1));
+        assert_eq!(v["tx_key_images"][0]["public_key"], "pubkey");
+        assert_eq!(v["tx_key_images"][0]["key_image"], "ki1");
+    }
+
+    #[test]
+    fn unsigned_txset_inspected_response_serialize() {
+        let response = UnsignedTxSetInspectedResponse {
+            success: true,
+            error: None,
+            error_code: None,
+            error_hint: None,
+            error_transient: None,
+            archive_version: 2,
+            transaction_count: 1,
+            new_transfer_first: 80,
+            new_transfer_second: 81,
+            new_transfer_count: 1,
+            new_transfers: vec![UnsignedTxSetTransferSummary {
+                output_public_key: "transfer_opk".into(),
+                internal_output_index: 2,
+                global_output_index: 1234,
+                tx_public_key: "transfer_tpk".into(),
+                flags_raw: 0x0c,
+                spent: false,
+                frozen: false,
+                rct: true,
+                key_image_known: true,
+                key_image_request: false,
+                key_image_partial: false,
+                amount: 42,
+                additional_tx_keys: vec!["transfer_extra_tpk".into()],
+                subaddress_major: 0,
+                subaddress_minor: 1,
+            }],
+            constructions: vec![UnsignedTxSetConstructionSummary {
+                source_count: 2,
+                source_ring_sizes: vec![16, 16],
+                sources: vec![UnsignedTxSetSourceSummary {
+                    ring_size: 16,
+                    ring: vec![
+                        UnsignedTxSetSourceRingEntry {
+                            global_output_index: 122,
+                            output_public_key: "ring_opk_0".into(),
+                            commitment: "ring_commitment_0".into(),
+                        },
+                        UnsignedTxSetSourceRingEntry {
+                            global_output_index: 123,
+                            output_public_key: "opk".into(),
+                            commitment: "ring_commitment_1".into(),
+                        },
+                    ],
+                    real_output: 4,
+                    real_global_output_index: 123,
+                    real_output_public_key: "opk".into(),
+                    real_tx_public_key: "tpk".into(),
+                    real_out_additional_tx_keys: vec!["extra_tpk".into()],
+                    real_output_in_tx_index: 1,
+                    amount: 0,
+                    rct: true,
+                    mask: "mask".into(),
+                }],
+                change_amount: 10,
+                change: UnsignedTxSetDestinationSummary {
+                    original_address_hex: String::new(),
+                    amount: 10,
+                    spend_public_key: "change_spend".into(),
+                    view_public_key: "change_view".into(),
+                    is_subaddress: false,
+                    is_integrated: false,
+                },
+                split_destination_count: 2,
+                split_destination_total_amount: 50,
+                split_destinations: vec![
+                    UnsignedTxSetDestinationSummary {
+                        original_address_hex: String::new(),
+                        amount: 10,
+                        spend_public_key: "change_spend".into(),
+                        view_public_key: "change_view".into(),
+                        is_subaddress: false,
+                        is_integrated: false,
+                    },
+                    UnsignedTxSetDestinationSummary {
+                        original_address_hex: "0011".into(),
+                        amount: 40,
+                        spend_public_key: "spend".into(),
+                        view_public_key: "view".into(),
+                        is_subaddress: false,
+                        is_integrated: false,
+                    },
+                ],
+                selected_transfer_indices: vec![0, 20],
+                extra_hex: "abcd".into(),
+                unlock_time: 0,
+                construction_flags: 3,
+                use_rct: true,
+                use_view_tags: true,
+                rct_range_proof_type: 3,
+                rct_bp_version: 4,
+                destination_count: 1,
+                destination_total_amount: 40,
+                destinations: vec![UnsignedTxSetDestinationSummary {
+                    original_address_hex: "0011".into(),
+                    amount: 40,
+                    spend_public_key: "spend".into(),
+                    view_public_key: "view".into(),
+                    is_subaddress: false,
+                    is_integrated: false,
+                }],
+                subaddr_account: 0,
+                subaddr_indices: vec![0],
+            }],
+        };
+
+        let v = round_trip(&response);
+        assert_eq!(v["success"], true);
+        assert_eq!(v["archive_version"], 2);
+        assert_eq!(v["transaction_count"], 1);
+        assert_eq!(v["new_transfer_first"], 80);
+        assert_eq!(v["new_transfer_second"], 81);
+        assert_eq!(v["new_transfer_count"], 1);
+        assert_eq!(v["new_transfers"][0]["flags_raw"], 12);
+        assert_eq!(
+            v["new_transfers"][0]["additional_tx_keys"][0],
+            "transfer_extra_tpk"
+        );
+        assert_eq!(v["constructions"][0]["source_ring_sizes"][0], 16);
+        assert_eq!(
+            v["constructions"][0]["sources"][0]["ring"]
+                .as_array()
+                .map(|a| a.len()),
+            Some(2)
+        );
+        assert_eq!(
+            v["constructions"][0]["sources"][0]["ring"][1]["commitment"],
+            "ring_commitment_1"
+        );
+        assert_eq!(
+            v["constructions"][0]["sources"][0]["real_out_additional_tx_keys"][0],
+            "extra_tpk"
+        );
+        assert_eq!(v["constructions"][0]["sources"][0]["mask"], "mask");
+        assert_eq!(v["constructions"][0]["change"]["amount"], 10);
+        assert_eq!(v["constructions"][0]["construction_flags"], 3);
+        assert_eq!(
+            v["constructions"][0]["split_destinations"]
+                .as_array()
+                .map(|a| a.len()),
+            Some(2)
+        );
+        assert_eq!(v["constructions"][0]["selected_transfer_indices"][1], 20);
+        assert_eq!(v["constructions"][0]["destinations"][0]["amount"], 40);
+    }
 
     #[test]
     fn create_transaction_request_deserialize() {
@@ -1395,8 +1786,7 @@ mod tests {
             "subtract_fee": true
         }"#;
 
-        let req: CreateTransactionRequest =
-            serde_json::from_str(json).expect("deserialize");
+        let req: CreateTransactionRequest = serde_json::from_str(json).expect("deserialize");
 
         assert_eq!(req.node_url, "http://localhost:38081");
         assert_eq!(req.recipients.len(), 1);
@@ -1416,8 +1806,7 @@ mod tests {
             "recipients": [{"address": "a", "amount": 1}]
         }"#;
 
-        let req: CreateTransactionRequest =
-            serde_json::from_str(json).expect("deserialize");
+        let req: CreateTransactionRequest = serde_json::from_str(json).expect("deserialize");
 
         assert_eq!(req.selected_outputs, None);
         assert_eq!(req.passphrase, "");
@@ -1437,8 +1826,7 @@ mod tests {
             "accounts_to_scan": [0, 1, 2]
         }"#;
 
-        let req: StartContinuousScanRequest =
-            serde_json::from_str(json).expect("deserialize");
+        let req: StartContinuousScanRequest = serde_json::from_str(json).expect("deserialize");
 
         assert_eq!(req.start_height, 1000);
         assert_eq!(req.account_lookahead, 5);
@@ -1473,8 +1861,7 @@ mod tests {
             "pending_state_json": "{\"pending\":[]}"
         }"#;
 
-        let req: RestoreWalletDataRequest =
-            serde_json::from_str(json).expect("deserialize");
+        let req: RestoreWalletDataRequest = serde_json::from_str(json).expect("deserialize");
 
         assert_eq!(req.outputs.len(), 1);
         assert_eq!(req.outputs[0].subaddress_index, Some((1, 3)));
@@ -1483,7 +1870,6 @@ mod tests {
         assert!(req.block_hashes_json.is_some());
         assert!(req.pending_state_json.is_some());
     }
-
 
     #[test]
     fn owned_output_zero_values() {

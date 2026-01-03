@@ -308,7 +308,8 @@ void main() {
         'seed': req.seed,
         'network': req.network,
         'recipients': req.recipients.map((e) => e.toJson()).toList(),
-        if (req.selectedOutputs != null) 'selected_outputs': req.selectedOutputs,
+        if (req.selectedOutputs != null)
+          'selected_outputs': req.selectedOutputs,
         'passphrase': req.passphrase,
         'bip39_account_index': req.bip39AccountIndex,
         'subtract_fee': req.subtractFee,
@@ -334,7 +335,8 @@ void main() {
         'seed': req.seed,
         'network': req.network,
         'recipients': req.recipients.map((e) => e.toJson()).toList(),
-        if (req.selectedOutputs != null) 'selected_outputs': req.selectedOutputs,
+        if (req.selectedOutputs != null)
+          'selected_outputs': req.selectedOutputs,
         'passphrase': req.passphrase,
         'bip39_account_index': req.bip39AccountIndex,
         'subtract_fee': req.subtractFee,
@@ -415,8 +417,10 @@ void main() {
         'outputs': req.outputs.map((e) => e.toJson()).toList(),
         'daemon_height': req.daemonHeight,
         'current_height': req.currentHeight,
-        if (req.blockHashesJson != null) 'block_hashes_json': req.blockHashesJson,
-        if (req.pendingStateJson != null) 'pending_state_json': req.pendingStateJson,
+        if (req.blockHashesJson != null)
+          'block_hashes_json': req.blockHashesJson,
+        if (req.pendingStateJson != null)
+          'pending_state_json': req.pendingStateJson,
         'passphrase': req.passphrase,
         'bip39_account_index': req.bip39AccountIndex,
       };
@@ -472,11 +476,72 @@ void main() {
         'pub_spend_key_hex': req.pubSpendKeyHex,
         'network': req.network,
         'recipients': req.recipients.map((e) => e.toJson()).toList(),
-        if (req.selectedOutputs != null) 'selected_outputs': req.selectedOutputs,
+        if (req.selectedOutputs != null)
+          'selected_outputs': req.selectedOutputs,
       };
 
       expect(json['view_key_hex'], 'aabb' * 16);
       expect(json['selected_outputs'], ['out1:0']);
+    });
+  });
+
+  group('DartSignal: SignUnsignedTransactionRequest', () {
+    test('wallet2 key-based signing fields', () {
+      const req = SignUnsignedTransactionRequest(
+        seed: 'imported seed fallback',
+        unsignedTxHex: '4d6f6e65726f20756e7369676e65642074782073657405',
+        network: 'mainnet',
+        spendSecretKeyHex:
+            '148d78d2aba7dbca5cd8f6abcfb0b3c009ffbdbea1ff373d50ed94d78286640e',
+        viewSecretKeyHex:
+            '49774391fa5e8d249fc2c5b45dadef13534bf2483dede880dac88f061e809100',
+      );
+
+      final json = {
+        'seed': req.seed,
+        'unsigned_tx_hex': req.unsignedTxHex,
+        'network': req.network,
+        'passphrase': req.passphrase,
+        'bip39_account_index': req.bip39AccountIndex,
+        if (req.spendSecretKeyHex != null)
+          'spend_secret_key_hex': req.spendSecretKeyHex,
+        if (req.viewSecretKeyHex != null)
+          'view_secret_key_hex': req.viewSecretKeyHex,
+      };
+
+      expect(json['unsigned_tx_hex'], startsWith('4d6f6e65726f'));
+      expect(json['spend_secret_key_hex'], hasLength(64));
+      expect(json['view_secret_key_hex'], hasLength(64));
+    });
+  });
+
+  group('DartSignal: ExtractSignedTxSetRequest', () {
+    test('wallet2 signed txset fields', () {
+      const req = ExtractSignedTxSetRequest(
+        dataHex: '4d6f6e65726f207369676e65642074782073657405',
+        viewKeyHex:
+            '49774391fa5e8d249fc2c5b45dadef13534bf2483dede880dac88f061e809100',
+      );
+
+      final json = {'data_hex': req.dataHex, 'view_key_hex': req.viewKeyHex};
+
+      expect(json['data_hex'], startsWith('4d6f6e65726f'));
+      expect(json['view_key_hex'], hasLength(64));
+    });
+  });
+
+  group('DartSignal: InspectUnsignedTxSetRequest', () {
+    test('wallet2 unsigned txset fields', () {
+      const req = InspectUnsignedTxSetRequest(
+        dataHex: '4d6f6e65726f20756e7369676e65642074782073657405',
+        viewKeyHex:
+            '49774391fa5e8d249fc2c5b45dadef13534bf2483dede880dac88f061e809100',
+      );
+
+      final json = {'data_hex': req.dataHex, 'view_key_hex': req.viewKeyHex};
+
+      expect(json['data_hex'], startsWith('4d6f6e65726f'));
+      expect(json['view_key_hex'], hasLength(64));
     });
   });
 
@@ -490,12 +555,14 @@ void main() {
         'success': true,
         'error': null,
         'block_height': 1384526,
-        'block_hash': 'a5918cf3adadfabee8675011d574aa5cea619d7cedd62a58bd81d391dc4234db',
+        'block_hash':
+            'a5918cf3adadfabee8675011d574aa5cea619d7cedd62a58bd81d391dc4234db',
         'block_timestamp': 1688074142,
         'tx_count': 2,
         'outputs': [
           {
-            'tx_hash': '07a561e60118c0a485b20bbfac787fd8efead96a9f422d9dff4a86f2985db7c5',
+            'tx_hash':
+                '07a561e60118c0a485b20bbfac787fd8efead96a9f422d9dff4a86f2985db7c5',
             'output_index': 0,
             'amount': 10000000000000,
             'amount_xmr': '10.000000000000',
@@ -509,7 +576,7 @@ void main() {
             'key_image': 'somekeyimage',
             'is_coinbase': false,
             'frozen': false,
-          }
+          },
         ],
         'daemon_height': 2037532,
         'spent_key_images': ['spent_ki_1', 'spent_ki_2'],
@@ -594,7 +661,7 @@ void main() {
             'subaddress_index': [0, 0],
             'received_output_bytes': 'change_bytes',
             'key_image': 'change_ki',
-          }
+          },
         ],
       };
 
@@ -644,10 +711,7 @@ void main() {
         'spent_key_images': ['ki1'],
         'spent_key_image_tx_hashes': ['txh1'],
         'wallet_results': [
-          {
-            'address': '5wallet1addr',
-            'outputs': [],
-          },
+          {'address': '5wallet1addr', 'outputs': []},
           {
             'address': '5wallet2addr',
             'outputs': [
@@ -665,7 +729,7 @@ void main() {
                 'key_image': 'ki',
                 'is_coinbase': false,
                 'frozen': false,
-              }
+              },
             ],
           },
         ],
@@ -722,10 +786,7 @@ void main() {
   group('RustSignal: TransactionBroadcastResponse', () {
     test('with default booleans', () {
       // Simulate Rust omitting optional booleans (they default to false)
-      final json = {
-        'success': true,
-        'tx_id': 'broadcasted_txid',
-      };
+      final json = {'success': true, 'tx_id': 'broadcasted_txid'};
 
       final response = TransactionBroadcastResponse.fromJson(json);
       expect(response.success, true);
@@ -758,11 +819,7 @@ void main() {
             'previous_spent_height': 100,
             'new_height': 105,
           },
-          {
-            'key_image': 'ki_b',
-            'previous_spent_height': 0,
-            'new_height': 0,
-          },
+          {'key_image': 'ki_b', 'previous_spent_height': 0, 'new_height': 0},
         ],
       };
 
@@ -837,8 +894,9 @@ void main() {
             'commitment_mask': 'cm',
             'received_output_bytes': 'cb',
             'key_image': 'cki',
-          }
+          },
         ],
+        'spent_key_images': ['spent_ki'],
       };
 
       final response = TransactionSignedOfflineResponse.fromJson(json);
@@ -846,6 +904,234 @@ void main() {
       expect(response.fee, 44000000);
       expect(response.changeOutputs.length, 1);
       expect(response.changeOutputs[0].subaddressIndex, isNull);
+      expect(response.spentKeyImages, ['spent_ki']);
+    });
+  });
+
+  group('RustSignal: SignedTxSetExtractedResponse', () {
+    test('success with extracted transactions', () {
+      final response = SignedTxSetExtractedResponse.fromJson({
+        'success': true,
+        'error': null,
+        'error_code': null,
+        'error_hint': null,
+        'error_transient': null,
+        'transactions': [
+          {
+            'tx_id': 'signed_txid',
+            'tx_blob': 'signed_blob',
+            'tx_version': 2,
+            'tx_unlock_time': 0,
+            'tx_input_count': 2,
+            'tx_input_ring_sizes': [16, 16],
+            'tx_output_count': 2,
+            'tx_extra_len': 44,
+            'rct_type': 6,
+            'rct_fee': 2599200000,
+            'dust': 0,
+            'fee': 2599200000,
+            'dust_added_to_fee': false,
+            'change_amount': 69364735717119,
+            'selected_transfer_count': 2,
+            'selected_transfer_indices': [0, 20],
+            'key_images_len': 64,
+            'key_images_blob_hex': 'abcd',
+            'tx_key_is_zero': false,
+            'tx_key': 'a' * 64,
+            'additional_tx_key_count': 1,
+            'tx_key_additional': ['b' * 64],
+            'destination_count': 1,
+            'destination_total_amount': 1000000000000,
+            'multisig_sig_count': 0,
+          },
+        ],
+        'key_images': ['ki1', 'ki2'],
+        'tx_key_images': [
+          {'public_key': 'pubkey', 'key_image': 'ki1'},
+        ],
+      });
+
+      expect(response.success, true);
+      expect(response.transactions.length, 1);
+      expect(response.transactions[0].txId, 'signed_txid');
+      expect(response.transactions[0].txBlob, 'signed_blob');
+      expect(response.transactions[0].txVersion, 2);
+      expect(response.transactions[0].txUnlockTime, 0);
+      expect(response.transactions[0].txInputCount, 2);
+      expect(response.transactions[0].txInputRingSizes, [16, 16]);
+      expect(response.transactions[0].txOutputCount, 2);
+      expect(response.transactions[0].txExtraLen, 44);
+      expect(response.transactions[0].rctType, 6);
+      expect(response.transactions[0].rctFee, 2599200000);
+      expect(response.transactions[0].dust, 0);
+      expect(response.transactions[0].fee, 2599200000);
+      expect(response.transactions[0].dustAddedToFee, false);
+      expect(response.transactions[0].changeAmount, 69364735717119);
+      expect(response.transactions[0].selectedTransferCount, 2);
+      expect(response.transactions[0].selectedTransferIndices, [0, 20]);
+      expect(response.transactions[0].keyImagesLen, 64);
+      expect(response.transactions[0].keyImagesBlobHex, 'abcd');
+      expect(response.transactions[0].txKeyIsZero, false);
+      expect(response.transactions[0].txKey, 'a' * 64);
+      expect(response.transactions[0].additionalTxKeyCount, 1);
+      expect(response.transactions[0].txKeyAdditional, ['b' * 64]);
+      expect(response.transactions[0].destinationCount, 1);
+      expect(response.transactions[0].destinationTotalAmount, 1000000000000);
+      expect(response.transactions[0].multisigSigCount, 0);
+      expect(response.keyImages, ['ki1', 'ki2']);
+      expect(response.txKeyImages.length, 1);
+      expect(response.txKeyImages[0].publicKey, 'pubkey');
+      expect(response.txKeyImages[0].keyImage, 'ki1');
+    });
+  });
+
+  group('RustSignal: UnsignedTxSetInspectedResponse', () {
+    test('success with construction summary', () {
+      final response = UnsignedTxSetInspectedResponse.fromJson({
+        'success': true,
+        'error': null,
+        'error_code': null,
+        'error_hint': null,
+        'error_transient': null,
+        'archive_version': 2,
+        'transaction_count': 1,
+        'new_transfer_first': 80,
+        'new_transfer_second': 81,
+        'new_transfer_count': 1,
+        'new_transfers': [
+          {
+            'output_public_key': 'transfer_opk',
+            'internal_output_index': 2,
+            'global_output_index': 1234,
+            'tx_public_key': 'transfer_tpk',
+            'flags_raw': 12,
+            'spent': false,
+            'frozen': false,
+            'rct': true,
+            'key_image_known': true,
+            'key_image_request': false,
+            'key_image_partial': false,
+            'amount': 42,
+            'additional_tx_keys': ['transfer_extra_tpk'],
+            'subaddress_major': 0,
+            'subaddress_minor': 1,
+          },
+        ],
+        'constructions': [
+          {
+            'source_count': 2,
+            'source_ring_sizes': [16, 16],
+            'sources': [
+              {
+                'ring_size': 16,
+                'ring': [
+                  {
+                    'global_output_index': 122,
+                    'output_public_key': 'ring_opk_0',
+                    'commitment': 'ring_commitment_0',
+                  },
+                  {
+                    'global_output_index': 123,
+                    'output_public_key': 'opk',
+                    'commitment': 'ring_commitment_1',
+                  },
+                ],
+                'real_output': 4,
+                'real_global_output_index': 123,
+                'real_output_public_key': 'opk',
+                'real_tx_public_key': 'tpk',
+                'real_out_additional_tx_keys': ['extra_tpk'],
+                'real_output_in_tx_index': 1,
+                'amount': 0,
+                'rct': true,
+                'mask': 'mask',
+              },
+            ],
+            'change_amount': 10,
+            'change': {
+              'original_address_hex': '',
+              'amount': 10,
+              'spend_public_key': 'change_spend',
+              'view_public_key': 'change_view',
+              'is_subaddress': false,
+              'is_integrated': false,
+            },
+            'split_destination_count': 2,
+            'split_destination_total_amount': 50,
+            'split_destinations': [
+              {
+                'original_address_hex': '',
+                'amount': 10,
+                'spend_public_key': 'change_spend',
+                'view_public_key': 'change_view',
+                'is_subaddress': false,
+                'is_integrated': false,
+              },
+              {
+                'original_address_hex': '0011',
+                'amount': 40,
+                'spend_public_key': 'spend',
+                'view_public_key': 'view',
+                'is_subaddress': false,
+                'is_integrated': false,
+              },
+            ],
+            'selected_transfer_indices': [0, 20],
+            'extra_hex': 'abcd',
+            'unlock_time': 0,
+            'construction_flags': 3,
+            'use_rct': true,
+            'use_view_tags': true,
+            'rct_range_proof_type': 3,
+            'rct_bp_version': 4,
+            'destination_count': 1,
+            'destination_total_amount': 40,
+            'destinations': [
+              {
+                'original_address_hex': '0011',
+                'amount': 40,
+                'spend_public_key': 'spend',
+                'view_public_key': 'view',
+                'is_subaddress': false,
+                'is_integrated': false,
+              },
+            ],
+            'subaddr_account': 0,
+            'subaddr_indices': [0],
+          },
+        ],
+      });
+
+      expect(response.archiveVersion, 2);
+      expect(response.transactionCount, 1);
+      expect(response.newTransferFirst, 80);
+      expect(response.newTransferSecond, 81);
+      expect(response.newTransferCount, 1);
+      expect(response.newTransfers.single.flagsRaw, 12);
+      expect(response.newTransfers.single.additionalTxKeys, [
+        'transfer_extra_tpk',
+      ]);
+      expect(response.constructions.single.sourceRingSizes, [16, 16]);
+      expect(response.constructions.single.sources.single.ring.length, 2);
+      expect(
+        response.constructions.single.sources.single.ring[1].commitment,
+        'ring_commitment_1',
+      );
+      expect(
+        response.constructions.single.sources.single.realOutAdditionalTxKeys,
+        ['extra_tpk'],
+      );
+      expect(response.constructions.single.sources.single.mask, 'mask');
+      expect(response.constructions.single.change.amount, 10);
+      expect(
+        response.constructions.single.change.spendPublicKey,
+        'change_spend',
+      );
+      expect(response.constructions.single.splitDestinations.length, 2);
+      expect(response.constructions.single.splitDestinations[1].amount, 40);
+      expect(response.constructions.single.constructionFlags, 3);
+      expect(response.constructions.single.selectedTransferIndices, [0, 20]);
+      expect(response.constructions.single.destinations.single.amount, 40);
     });
   });
 

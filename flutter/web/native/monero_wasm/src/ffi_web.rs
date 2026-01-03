@@ -77,7 +77,7 @@ macro_rules! dart_signal {
     };
 }
 
-// All 41 DartSignal types
+// All DartSignal types
 dart_signal!(MoneroTestRequest, monero_test_request);
 dart_signal!(CreateWalletRequest, create_wallet_request);
 dart_signal!(StartSyncRequest, start_sync_request);
@@ -86,7 +86,10 @@ dart_signal!(CreateTransactionRequest, create_transaction_request);
 dart_signal!(SweepAllRequest, sweep_all_request);
 dart_signal!(GenerateSeedRequest, generate_seed_request);
 dart_signal!(GetSeedBirthdayRequest, get_seed_birthday_request);
-dart_signal!(GetBlockHeightFromTimestampRequest, get_block_height_from_timestamp_request);
+dart_signal!(
+    GetBlockHeightFromTimestampRequest,
+    get_block_height_from_timestamp_request
+);
 dart_signal!(DeriveAddressRequest, derive_address_request);
 dart_signal!(DeriveSubaddressRequest, derive_subaddress_request);
 dart_signal!(DeriveKeysRequest, derive_keys_request);
@@ -109,8 +112,16 @@ dart_signal!(GetPendingStateRequest, get_pending_state_request);
 dart_signal!(ConvertBip39ToLegacyRequest, convert_bip39_to_legacy_request);
 dart_signal!(FreezeOutputRequest, freeze_output_request);
 dart_signal!(ThawOutputRequest, thaw_output_request);
-dart_signal!(CreateUnsignedTransactionRequest, create_unsigned_transaction_request);
-dart_signal!(SignUnsignedTransactionRequest, sign_unsigned_transaction_request);
+dart_signal!(
+    CreateUnsignedTransactionRequest,
+    create_unsigned_transaction_request
+);
+dart_signal!(
+    SignUnsignedTransactionRequest,
+    sign_unsigned_transaction_request
+);
+dart_signal!(InspectUnsignedTxSetRequest, inspect_unsigned_txset_request);
+dart_signal!(ExtractSignedTxSetRequest, extract_signed_txset_request);
 dart_signal!(ExportKeyImagesRequest, export_key_images_request);
 dart_signal!(ImportKeyImagesRequest, import_key_images_request);
 dart_signal!(ImportKeysFileRequest, import_keys_file_request);
@@ -132,7 +143,9 @@ thread_local! {
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub fn register_rust_signal_callback(callback: js_sys::Function) {
-    DART_CALLBACK.with(|c| { *c.borrow_mut() = Some(callback); });
+    DART_CALLBACK.with(|c| {
+        *c.borrow_mut() = Some(callback);
+    });
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -221,6 +234,8 @@ impl_send_to_dart! {
     TransactionStatusUpdate => "TransactionStatusUpdate",
     UnsignedTransactionCreatedResponse => "UnsignedTransactionCreatedResponse",
     TransactionSignedOfflineResponse => "TransactionSignedOfflineResponse",
+    SignedTxSetExtractedResponse => "SignedTxSetExtractedResponse",
+    UnsignedTxSetInspectedResponse => "UnsignedTxSetInspectedResponse",
     KeyImagesExportedResponse => "KeyImagesExportedResponse",
     KeyImagesImportedResponse => "KeyImagesImportedResponse",
     ImportKeysFileResponse => "ImportKeysFileResponse",
