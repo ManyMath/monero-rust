@@ -47,6 +47,7 @@ pub const UR_DECODE_FRAME_REQUEST: u32 = 40;
 pub const RESET_UR_DECODER_REQUEST: u32 = 41;
 pub const EXTRACT_SIGNED_TXSET_REQUEST: u32 = 42;
 pub const INSPECT_UNSIGNED_TXSET_REQUEST: u32 = 43;
+pub const BUILD_SIGNED_TXSET_REQUEST: u32 = 44;
 
 // -- RustSignal IDs (Rust -> Dart) --
 pub const MONERO_TEST_RESPONSE: u32 = 101;
@@ -88,6 +89,7 @@ pub const UR_DECODE_PROGRESS_RESPONSE: u32 = 136;
 pub const UR_DECODE_COMPLETE_RESPONSE: u32 = 137;
 pub const SIGNED_TXSET_EXTRACTED_RESPONSE: u32 = 138;
 pub const UNSIGNED_TXSET_INSPECTED_RESPONSE: u32 = 139;
+pub const SIGNED_TXSET_BUILT_RESPONSE: u32 = 140;
 
 /// Map a RustSignal type name to its numeric ID for native FFI dispatch.
 ///
@@ -129,6 +131,7 @@ pub(crate) fn rust_signal_id_for_name(name: &str) -> u32 {
         "TransactionSignedOfflineResponse" => TRANSACTION_SIGNED_OFFLINE_RESPONSE,
         "SignedTxSetExtractedResponse" => SIGNED_TXSET_EXTRACTED_RESPONSE,
         "UnsignedTxSetInspectedResponse" => UNSIGNED_TXSET_INSPECTED_RESPONSE,
+        "SignedTxSetBuiltResponse" => SIGNED_TXSET_BUILT_RESPONSE,
         "KeyImagesExportedResponse" => KEY_IMAGES_EXPORTED_RESPONSE,
         "KeyImagesImportedResponse" => KEY_IMAGES_IMPORTED_RESPONSE,
         "ImportKeysFileResponse" => IMPORT_KEYS_FILE_RESPONSE,
@@ -218,6 +221,7 @@ pub(crate) fn route_dart_signal(signal_id: u32, data: Vec<u8>) {
             crate::ffi_web::send_inspect_unsigned_txset_request(json_str)
         }
         EXTRACT_SIGNED_TXSET_REQUEST => crate::ffi_web::send_extract_signed_txset_request(json_str),
+        BUILD_SIGNED_TXSET_REQUEST => crate::ffi_web::send_build_signed_txset_request(json_str),
         EXPORT_KEY_IMAGES_REQUEST => crate::ffi_web::send_export_key_images_request(json_str),
         IMPORT_KEY_IMAGES_REQUEST => crate::ffi_web::send_import_key_images_request(json_str),
         IMPORT_KEYS_FILE_REQUEST => crate::ffi_web::send_import_keys_file_request(json_str),

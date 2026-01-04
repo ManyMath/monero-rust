@@ -545,6 +545,39 @@ void main() {
     });
   });
 
+  group('DartSignal: BuildSignedTxSetRequest', () {
+    test('wallet2 signed txset builder fields', () {
+      final req = BuildSignedTxSetRequest(
+        unsignedTxSetHex: '4d6f6e65726f20756e7369676e65642074782073657405aabb',
+        viewKeyHex:
+            '49774391fa5e8d249fc2c5b45dadef13534bf2483dede880dac88f061e809100',
+        txBlobHex: '010203',
+        keyImages: ['a' * 64, 'b' * 64],
+        txKeyImages: [
+          SignedTxSetKeyImageEntry(publicKey: 'c' * 64, keyImage: 'd' * 64),
+        ],
+      );
+
+      final json = {
+        'unsigned_txset_hex': req.unsignedTxSetHex,
+        'view_key_hex': req.viewKeyHex,
+        'tx_blob_hex': req.txBlobHex,
+        'key_images': req.keyImages,
+        'tx_key_images': req.txKeyImages
+            .map((entry) => entry.toJson())
+            .toList(),
+      };
+
+      expect(json['unsigned_txset_hex'], startsWith('4d6f6e65726f'));
+      expect(json['view_key_hex'], hasLength(64));
+      expect(json['tx_blob_hex'], '010203');
+      expect(json['key_images'], ['a' * 64, 'b' * 64]);
+      expect(json['tx_key_images'], [
+        {'public_key': 'c' * 64, 'key_image': 'd' * 64},
+      ]);
+    });
+  });
+
   // -----------------------------------------------------------------------
   // RustSignal types: JSON map -> fromJson() -> verify fields
   // -----------------------------------------------------------------------
@@ -1132,6 +1165,22 @@ void main() {
       expect(response.constructions.single.constructionFlags, 3);
       expect(response.constructions.single.selectedTransferIndices, [0, 20]);
       expect(response.constructions.single.destinations.single.amount, 40);
+    });
+  });
+
+  group('RustSignal: SignedTxSetBuiltResponse', () {
+    test('success with signed txset hex', () {
+      final response = SignedTxSetBuiltResponse.fromJson({
+        'success': true,
+        'error': null,
+        'error_code': null,
+        'error_hint': null,
+        'error_transient': null,
+        'signed_txset_hex': '4d6f6e65726f207369676e65642074782073657405aabbcc',
+      });
+
+      expect(response.success, true);
+      expect(response.signedTxSetHex, startsWith('4d6f6e65726f'));
     });
   });
 

@@ -868,6 +868,30 @@ class InspectUnsignedTxSetRequest {
   });
 }
 
+class BuildSignedTxSetRequest {
+  final String unsignedTxSetHex;
+  final String viewKeyHex;
+  final String txBlobHex;
+  final List<String> keyImages;
+  final List<SignedTxSetKeyImageEntry> txKeyImages;
+
+  const BuildSignedTxSetRequest({
+    required this.unsignedTxSetHex,
+    required this.viewKeyHex,
+    required this.txBlobHex,
+    required this.keyImages,
+    required this.txKeyImages,
+  });
+
+  void sendSignalToRust() => _send('send_build_signed_txset_request', {
+    'unsigned_txset_hex': unsignedTxSetHex,
+    'view_key_hex': viewKeyHex,
+    'tx_blob_hex': txBlobHex,
+    'key_images': keyImages,
+    'tx_key_images': txKeyImages.map((entry) => entry.toJson()).toList(),
+  });
+}
+
 class ExportKeyImagesRequest {
   final String seed;
   final String network;
@@ -2077,6 +2101,11 @@ class SignedTxSetKeyImageEntry {
     required this.keyImage,
   });
 
+  Map<String, dynamic> toJson() => {
+    'public_key': publicKey,
+    'key_image': keyImage,
+  };
+
   factory SignedTxSetKeyImageEntry.fromJson(Map<String, dynamic> json) =>
       SignedTxSetKeyImageEntry(
         publicKey: json['public_key'] as String,
@@ -2451,6 +2480,38 @@ class UnsignedTxSetInspectedResponse {
   static Stream<UnsignedTxSetInspectedResponse> get stream => signalSender
       .onRawSignal('UnsignedTxSetInspectedResponse')
       .map(UnsignedTxSetInspectedResponse.fromJson);
+}
+
+class SignedTxSetBuiltResponse {
+  final bool success;
+  final String? error;
+  final int? errorCode;
+  final String? errorHint;
+  final bool? errorTransient;
+  final String? signedTxSetHex;
+
+  const SignedTxSetBuiltResponse({
+    required this.success,
+    this.error,
+    this.errorCode,
+    this.errorHint,
+    this.errorTransient,
+    this.signedTxSetHex,
+  });
+
+  factory SignedTxSetBuiltResponse.fromJson(Map<String, dynamic> json) =>
+      SignedTxSetBuiltResponse(
+        success: json['success'] as bool,
+        error: json['error'] as String?,
+        errorCode: json['error_code'] as int?,
+        errorHint: json['error_hint'] as String?,
+        errorTransient: json['error_transient'] as bool?,
+        signedTxSetHex: json['signed_txset_hex'] as String?,
+      );
+
+  static Stream<SignedTxSetBuiltResponse> get stream => signalSender
+      .onRawSignal('SignedTxSetBuiltResponse')
+      .map(SignedTxSetBuiltResponse.fromJson);
 }
 
 class KeyImagesExportedResponse {

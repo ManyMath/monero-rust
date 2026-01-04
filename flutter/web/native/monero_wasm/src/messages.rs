@@ -228,6 +228,15 @@ pub struct ExtractSignedTxSet {
 }
 
 #[derive(Debug, Clone)]
+pub struct BuildSignedTxSet {
+    pub unsigned_txset_hex: String,
+    pub view_key_hex: String,
+    pub tx_blob_hex: String,
+    pub key_images: Vec<String>,
+    pub tx_key_images: Vec<crate::signals::SignedTxSetKeyImageEntry>,
+}
+
+#[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct ExportKeyImages {
     pub seed: String,

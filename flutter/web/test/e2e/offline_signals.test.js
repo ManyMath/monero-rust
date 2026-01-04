@@ -107,6 +107,7 @@ describe('Offline Signal Tests', () => {
       hasSendDeriveSubaddress: typeof window.wasmBindings?.send_derive_subaddress_request === 'function',
       hasSendExtractSignedTxSet: typeof window.wasmBindings?.send_extract_signed_txset_request === 'function',
       hasSendInspectUnsignedTxSet: typeof window.wasmBindings?.send_inspect_unsigned_txset_request === 'function',
+      hasSendBuildSignedTxSet: typeof window.wasmBindings?.send_build_signed_txset_request === 'function',
     }));
     expect(result.hasWasmBindings).toBe(true);
     expect(result.hasSendRestore).toBe(true);
@@ -115,6 +116,7 @@ describe('Offline Signal Tests', () => {
     expect(result.hasSendDeriveSubaddress).toBe(true);
     expect(result.hasSendExtractSignedTxSet).toBe(true);
     expect(result.hasSendInspectUnsignedTxSet).toBe(true);
+    expect(result.hasSendBuildSignedTxSet).toBe(true);
   }, 15000);
 
   describe('Wallet Restoration', () => {
@@ -209,6 +211,7 @@ describe('Offline Signal Tests', () => {
       expect(importResp.view_public_key).toMatch(/^[0-9a-f]{64}$/);
       expect(importResp.mnemonic).toBeNull();
     }, 20000);
+
   });
 
   describe('Wallet2 Signed Txset Import', () => {
@@ -278,6 +281,63 @@ describe('Offline Signal Tests', () => {
         expect(entry.key_image).toMatch(/^[0-9a-f]{64}$/);
       }
     }, 20000);
+
+    it('builds a wallet2 signed_monero_tx from unsigned txset and extracted key images', async () => {
+      const unsignedTxSetHex = fs
+        .readFileSync(path.join(COLD_SIGNING_VECTOR_PATH, 'unsigned_monero_tx'))
+        .toString('hex');
+      const signedTxSetHex = fs
+        .readFileSync(path.join(COLD_SIGNING_VECTOR_PATH, 'signed_monero_tx'))
+        .toString('hex');
+
+      const extracted = await sendSignalAndWait(
+        extPage,
+        'send_extract_signed_txset_request',
+        JSON.stringify({
+          data_hex: signedTxSetHex,
+          view_key_hex: COLD_SIGNING_VIEW_KEY,
+        }),
+        'SignedTxSetExtractedResponse',
+        10000
+      );
+      expect(extracted.success).toBe(true);
+      expect(extracted.transactions).toHaveLength(1);
+
+      const built = await sendSignalAndWait(
+        extPage,
+        'send_build_signed_txset_request',
+        JSON.stringify({
+          unsigned_txset_hex: unsignedTxSetHex,
+          view_key_hex: COLD_SIGNING_VIEW_KEY,
+          tx_blob_hex: extracted.transactions[0].tx_blob,
+          key_images: extracted.key_images,
+          tx_key_images: extracted.tx_key_images,
+        }),
+        'SignedTxSetBuiltResponse',
+        10000
+      );
+
+      expect(built.success).toBe(true);
+      expect(built.signed_txset_hex).toMatch(/^4d6f6e65726f207369676e65642074782073657405/);
+
+      const roundtrip = await sendSignalAndWait(
+        extPage,
+        'send_extract_signed_txset_request',
+        JSON.stringify({
+          data_hex: built.signed_txset_hex,
+          view_key_hex: COLD_SIGNING_VIEW_KEY,
+        }),
+        'SignedTxSetExtractedResponse',
+        10000
+      );
+
+      expect(roundtrip.success).toBe(true);
+      expect(roundtrip.transactions).toHaveLength(1);
+      expect(roundtrip.transactions[0].tx_id).toBe(extracted.transactions[0].tx_id);
+      expect(roundtrip.transactions[0].tx_blob).toBe(extracted.transactions[0].tx_blob);
+      expect(roundtrip.key_images).toEqual(extracted.key_images);
+      expect(roundtrip.tx_key_images).toEqual(extracted.tx_key_images);
+    }, 25000);
   });
 
   describe('Wallet2 Unsigned Txset Inspection', () => {

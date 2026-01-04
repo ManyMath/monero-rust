@@ -53,6 +53,7 @@ impl TxBuilderActor {
         _owned_tasks.spawn(Self::listen_to_sign_unsigned_requests(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_inspect_unsigned_txsets(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_extract_signed_txsets(self_addr.clone()));
+        _owned_tasks.spawn(Self::listen_to_build_signed_txsets(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_export_key_images(self_addr.clone()));
         _owned_tasks.spawn(Self::listen_to_import_key_images(self_addr));
 
@@ -298,6 +299,22 @@ impl TxBuilderActor {
                 .notify(ExtractSignedTxSet {
                     data_hex: request.data_hex,
                     view_key_hex: request.view_key_hex,
+                })
+                .await;
+        }
+    }
+
+    async fn listen_to_build_signed_txsets(mut self_addr: Address<Self>) {
+        let mut receiver = crate::ffi_web::get_build_signed_txset_request_receiver();
+        while let Some(dart_msg) = receiver.recv().await {
+            let request = dart_msg;
+            let _ = self_addr
+                .notify(BuildSignedTxSet {
+                    unsigned_txset_hex: request.unsigned_txset_hex,
+                    view_key_hex: request.view_key_hex,
+                    tx_blob_hex: request.tx_blob_hex,
+                    key_images: request.key_images,
+                    tx_key_images: request.tx_key_images,
                 })
                 .await;
         }
@@ -1153,6 +1170,20 @@ impl Notifiable<ExtractSignedTxSet> for TxBuilderActor {
     }
 }
 
+#[async_trait]
+impl Notifiable<BuildSignedTxSet> for TxBuilderActor {
+    async fn notify(&mut self, msg: BuildSignedTxSet, _ctx: &Context<Self>) {
+        spawn_local(async move {
+            let response = match build_signed_txset_response(msg) {
+                Ok(response) => response,
+                Err(e) => signed_txset_built_error_response(e),
+            };
+
+            response.send_signal_to_dart();
+        });
+    }
+}
+
 fn decode_txset_request(
     data_hex: &str,
     view_key_hex: &str,
@@ -1165,6 +1196,58 @@ fn decode_txset_request(
         .try_into()
         .map_err(|_| "View key must be exactly 32 bytes".to_string())?;
     Ok((data, view_key))
+}
+
+fn build_signed_txset_response(msg: BuildSignedTxSet) -> Result<SignedTxSetBuiltResponse, String> {
+    let (unsigned_txset, view_key) =
+        decode_txset_request(&msg.unsigned_txset_hex, &msg.view_key_hex, "unsigned txset")?;
+    let tx_blob = hex::decode(msg.tx_blob_hex.trim())
+        .map_err(|e| format!("Invalid signed transaction blob hex: {e}"))?;
+    let key_images = decode_fixed_hex_list(msg.key_images, "key image")?;
+    let tx_key_images = msg
+        .tx_key_images
+        .into_iter()
+        .map(|entry| {
+            Ok(monero_rust::epee_compat::SignedTxSetKeyImagePair {
+                public_key: decode_fixed_hex(&entry.public_key, "tx key image public key")?,
+                key_image: decode_fixed_hex(&entry.key_image, "tx key image key image")?,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    let signed_txset = monero_rust::epee_compat::build_signed_monero_txset(
+        monero_rust::epee_compat::BuildSignedTxSetRequest {
+            unsigned_txset: &unsigned_txset,
+            view_secret_key: &view_key,
+            tx_blob: &tx_blob,
+            key_images: &key_images,
+            tx_key_images: &tx_key_images,
+        },
+    )?;
+
+    Ok(SignedTxSetBuiltResponse {
+        success: true,
+        error: None,
+        error_code: None,
+        error_hint: None,
+        error_transient: None,
+        signed_txset_hex: Some(hex::encode(signed_txset)),
+    })
+}
+
+fn decode_fixed_hex_list(values: Vec<String>, label: &str) -> Result<Vec<[u8; 32]>, String> {
+    values
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| decode_fixed_hex(&value, &format!("{label} {index}")))
+        .collect()
+}
+
+fn decode_fixed_hex(hex_value: &str, label: &str) -> Result<[u8; 32], String> {
+    let bytes = hex::decode(hex_value.trim()).map_err(|e| format!("Invalid {label} hex: {e}"))?;
+    bytes
+        .try_into()
+        .map_err(|bytes: Vec<u8>| format!("{label} must be 32 bytes, got {}", bytes.len()))
 }
 
 fn unsigned_txset_response(
@@ -1350,6 +1433,18 @@ fn signed_txset_error_response(msg: String) -> SignedTxSetExtractedResponse {
         transactions: Vec::new(),
         key_images: Vec::new(),
         tx_key_images: Vec::new(),
+    }
+}
+
+fn signed_txset_built_error_response(msg: String) -> SignedTxSetBuiltResponse {
+    let err = ErrorResponse::from_string(&msg);
+    SignedTxSetBuiltResponse {
+        success: false,
+        error: Some(msg),
+        error_code: Some(err.code),
+        error_hint: err.hint,
+        error_transient: Some(err.transient),
+        signed_txset_hex: None,
     }
 }
 
@@ -1613,7 +1708,11 @@ impl Notifiable<ImportKeyImages> for TxBuilderActor {
                             .zip(statuses.iter())
                             .filter_map(
                                 |(ki, &status)| {
-                                    if status > 0 { Some(ki.clone()) } else { None }
+                                    if status > 0 {
+                                        Some(ki.clone())
+                                    } else {
+                                        None
+                                    }
                                 },
                             )
                             .collect::<Vec<_>>(),

@@ -48,6 +48,7 @@ class HubSignalIds {
   static const int resetUrDecoderRequest = 41;
   static const int extractSignedTxSetRequest = 42;
   static const int inspectUnsignedTxSetRequest = 43;
+  static const int buildSignedTxSetRequest = 44;
 
   // -- RustSignal IDs (Rust -> Dart) --
   static const int moneroTestResponse = 101;
@@ -89,4 +90,5 @@ class HubSignalIds {
   static const int urDecodeCompleteResponse = 137;
   static const int signedTxSetExtractedResponse = 138;
   static const int unsignedTxSetInspectedResponse = 139;
+  static const int signedTxSetBuiltResponse = 140;
 }

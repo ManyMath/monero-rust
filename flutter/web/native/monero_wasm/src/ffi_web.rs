@@ -122,6 +122,7 @@ dart_signal!(
 );
 dart_signal!(InspectUnsignedTxSetRequest, inspect_unsigned_txset_request);
 dart_signal!(ExtractSignedTxSetRequest, extract_signed_txset_request);
+dart_signal!(BuildSignedTxSetRequest, build_signed_txset_request);
 dart_signal!(ExportKeyImagesRequest, export_key_images_request);
 dart_signal!(ImportKeyImagesRequest, import_key_images_request);
 dart_signal!(ImportKeysFileRequest, import_keys_file_request);
@@ -182,7 +183,7 @@ fn send_to_dart_raw<T: serde::Serialize + ?Sized>(type_name: &str, msg: &T) {
 }
 
 // ---------------------------------------------------------------------------
-// SendToDart trait — replaces rinf's .send_signal_to_dart()
+// SendToDart trait, replaces rinf's .send_signal_to_dart()
 // ---------------------------------------------------------------------------
 
 pub trait SendToDart: serde::Serialize {
@@ -236,6 +237,7 @@ impl_send_to_dart! {
     TransactionSignedOfflineResponse => "TransactionSignedOfflineResponse",
     SignedTxSetExtractedResponse => "SignedTxSetExtractedResponse",
     UnsignedTxSetInspectedResponse => "UnsignedTxSetInspectedResponse",
+    SignedTxSetBuiltResponse => "SignedTxSetBuiltResponse",
     KeyImagesExportedResponse => "KeyImagesExportedResponse",
     KeyImagesImportedResponse => "KeyImagesImportedResponse",
     ImportKeysFileResponse => "ImportKeysFileResponse",

@@ -721,6 +721,15 @@ pub struct InspectUnsignedTxSetRequest {
 }
 
 #[derive(Deserialize)]
+pub struct BuildSignedTxSetRequest {
+    pub unsigned_txset_hex: String,
+    pub view_key_hex: String,
+    pub tx_blob_hex: String,
+    pub key_images: Vec<String>,
+    pub tx_key_images: Vec<SignedTxSetKeyImageEntry>,
+}
+
+#[derive(Deserialize)]
 pub struct ExportKeyImagesRequest {
     pub seed: String,
     pub network: String,
@@ -798,7 +807,7 @@ pub struct ExtractedSignedTransaction {
     pub multisig_sig_count: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignedTxSetKeyImageEntry {
     pub public_key: String,
     pub key_image: String,
@@ -906,6 +915,16 @@ pub struct UnsignedTxSetInspectedResponse {
     pub new_transfer_count: u64,
     pub new_transfers: Vec<UnsignedTxSetTransferSummary>,
     pub constructions: Vec<UnsignedTxSetConstructionSummary>,
+}
+
+#[derive(Serialize)]
+pub struct SignedTxSetBuiltResponse {
+    pub success: bool,
+    pub error: Option<String>,
+    pub error_code: Option<u32>,
+    pub error_hint: Option<String>,
+    pub error_transient: Option<bool>,
+    pub signed_txset_hex: Option<String>,
 }
 
 #[derive(Serialize)]
