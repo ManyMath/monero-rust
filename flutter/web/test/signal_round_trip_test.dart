@@ -914,6 +914,7 @@ void main() {
         'tx_id': 'signed_txid',
         'fee': 44000000,
         'tx_blob': 'signed_blob',
+        'signed_txset_hex': 'signed_txset',
         'tx_key': 'signed_key',
         'tx_key_additional': [],
         'change_outputs': [
@@ -935,6 +936,7 @@ void main() {
       final response = TransactionSignedOfflineResponse.fromJson(json);
       expect(response.txId, 'signed_txid');
       expect(response.fee, 44000000);
+      expect(response.signedTxSetHex, 'signed_txset');
       expect(response.changeOutputs.length, 1);
       expect(response.changeOutputs[0].subaddressIndex, isNull);
       expect(response.spentKeyImages, ['spent_ki']);

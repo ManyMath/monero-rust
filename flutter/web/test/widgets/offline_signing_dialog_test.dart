@@ -153,6 +153,7 @@ void main() {
       'tx_id': 'd' * 64,
       'fee': 4321,
       'tx_blob': 'feedface',
+      'signed_txset_hex': '${signedMoneroTxSetMagicHex}feedface',
       'tx_key': 'e' * 64,
       'tx_key_additional': ['f' * 64],
       'change_outputs': [],
@@ -167,6 +168,7 @@ void main() {
     expect(result, isNotNull);
     expect(result!.txId, 'd' * 64);
     expect(result!.txBlob, 'feedface');
+    expect(result!.signedTxSetHex, '${signedMoneroTxSetMagicHex}feedface');
     expect(result!.fee, 4321);
     expect(result!.txKey, 'e' * 64);
     expect(result!.txKeyAdditional, ['f' * 64]);

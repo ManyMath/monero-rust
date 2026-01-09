@@ -259,6 +259,13 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
     ).sendSignalToRust();
   }
 
+  String? get _signedDisplayHex =>
+      _signedResponse?.signedTxSetHex ?? _signedTxBlob;
+
+  String get _signedDownloadFilename => _signedResponse?.signedTxSetHex != null
+      ? 'signed_monero_tx'
+      : 'signed_tx.bin';
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
@@ -427,17 +434,18 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
         const SizedBox(height: 8),
         const Text('Scan this QR code with your online wallet to broadcast:'),
         const SizedBox(height: 12),
-        if (_signedTxBlob != null)
+        if (_signedDisplayHex != null)
           Center(
             child: AnimatedQrDisplay(
-              dataHex: _signedTxBlob!,
+              dataHex: _signedDisplayHex!,
               urType: 'xmr-txsigned',
             ),
           ),
         const SizedBox(height: 12),
-        if (_signedTxBlob != null)
+        if (_signedDisplayHex != null)
           OutlinedButton.icon(
-            onPressed: () => _downloadFile(_signedTxBlob!, 'signed_tx.bin'),
+            onPressed: () =>
+                _downloadFile(_signedDisplayHex!, _signedDownloadFilename),
             icon: const Icon(Icons.download, size: 16),
             label: const Text('Download File'),
           ),
@@ -457,7 +465,7 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
               setState(() => _step = OfflineSignStep.importSignedTx),
           child: const Text('Import Signed TX'),
         ),
-      if (_step == OfflineSignStep.showSignedQr && _signedTxBlob != null)
+      if (_step == OfflineSignStep.showSignedQr && _signedDisplayHex != null)
         ElevatedButton(
           onPressed: () {
             Navigator.of(context).pop(

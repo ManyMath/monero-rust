@@ -772,6 +772,7 @@ pub struct TransactionSignedOfflineResponse {
     pub tx_id: Option<String>,
     pub fee: u64,
     pub tx_blob: Option<String>,
+    pub signed_txset_hex: Option<String>,
     pub tx_key: Option<String>,
     pub tx_key_additional: Vec<String>,
     pub change_outputs: Vec<ChangeOutput>,
@@ -1546,6 +1547,7 @@ mod tests {
             tx_id: Some("signed_txid".into()),
             fee: 44_000_000,
             tx_blob: Some("signed_blob".into()),
+            signed_txset_hex: Some("signed_txset".into()),
             tx_key: Some("signed_key".into()),
             tx_key_additional: vec![],
             change_outputs: vec![change],
@@ -1554,6 +1556,7 @@ mod tests {
 
         let v = round_trip(&response);
         assert_eq!(v["tx_id"], "signed_txid");
+        assert_eq!(v["signed_txset_hex"], "signed_txset");
         assert_eq!(
             v["change_outputs"][0]["subaddress_index"],
             serde_json::Value::Null

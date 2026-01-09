@@ -1958,6 +1958,7 @@ class TransactionSignedOfflineResponse {
   final String? txId;
   final int fee;
   final String? txBlob;
+  final String? signedTxSetHex;
   final String? txKey;
   final List<String> txKeyAdditional;
   final List<ChangeOutput> changeOutputs;
@@ -1972,6 +1973,7 @@ class TransactionSignedOfflineResponse {
     this.txId,
     required this.fee,
     this.txBlob,
+    this.signedTxSetHex,
     this.txKey,
     required this.txKeyAdditional,
     required this.changeOutputs,
@@ -1989,6 +1991,7 @@ class TransactionSignedOfflineResponse {
     txId: json['tx_id'] as String?,
     fee: json['fee'] as int,
     txBlob: json['tx_blob'] as String?,
+    signedTxSetHex: json['signed_txset_hex'] as String?,
     txKey: json['tx_key'] as String?,
     txKeyAdditional: (json['tx_key_additional'] as List).cast<String>(),
     changeOutputs: (json['change_outputs'] as List)
