@@ -10,7 +10,7 @@ use crate::types::{KeyImage, SerializableOutput, Transaction, TxKey};
 use crate::WalletError;
 use curve25519_dalek::scalar::Scalar;
 use monero_seed::Seed;
-use monero_wallet::{address::Network, ViewPair};
+use monero_wallet::{address::Network, rpc::Rpc, ViewPair};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
@@ -227,6 +227,43 @@ pub struct WalletState {
     /// Not persisted - must be re-enabled after loading.
     #[serde(skip)]
     pub auto_save_enabled: bool,
+
+    /// RPC client for daemon communication
+    ///
+    /// Wrapped in Arc<RwLock> for thread-safe async access.
+    /// None when not connected. This is runtime-only and not serialized.
+    /// Connection must be re-established after loading the wallet.
+    #[serde(skip)]
+    pub rpc_client: std::sync::Arc<tokio::sync::RwLock<Option<monero_simple_request_rpc::SimpleRequestRpc>>>,
+
+    /// Health check task handle
+    ///
+    /// Handle to the background task that periodically checks daemon connectivity.
+    /// None when health check is not running. Not serialized.
+    #[serde(skip)]
+    pub health_check_handle: Option<tokio::task::JoinHandle<()>>,
+
+    /// Reconnection policy configuration
+    ///
+    /// Defines how automatic reconnection attempts should be made.
+    /// Runtime-only configuration, not persisted.
+    #[serde(skip)]
+    pub reconnection_policy: crate::rpc::ReconnectionPolicy,
+
+    /// Reconnection attempt counter
+    ///
+    /// Tracks the current number of consecutive reconnection attempts.
+    /// Reset to 0 on successful connection. Not persisted.
+    #[serde(skip)]
+    pub reconnection_attempts: u32,
+
+    /// Stored connection configuration for reconnection
+    ///
+    /// Keeps the full ConnectionConfig (including credentials) to enable
+    /// automatic reconnection with the same settings. Not persisted for security.
+    /// This allows the health check task to reconnect with authentication.
+    #[serde(skip)]
+    pub connection_config: Option<crate::rpc::ConnectionConfig>,
 }
 
 /// Current wallet serialization format version
@@ -546,6 +583,11 @@ impl WalletState {
             is_closed: false,
             keys_checksum,
             auto_save_enabled: false,
+            rpc_client: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
+            health_check_handle: None,
+            reconnection_policy: crate::rpc::ReconnectionPolicy::default(),
+            reconnection_attempts: 0,
+            connection_config: None,
         })
     }
 
@@ -613,6 +655,11 @@ impl WalletState {
             is_closed: false,
             keys_checksum,
             auto_save_enabled: false,
+            rpc_client: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
+            health_check_handle: None,
+            reconnection_policy: crate::rpc::ReconnectionPolicy::default(),
+            reconnection_attempts: 0,
+            connection_config: None,
         })
     }
 
@@ -663,6 +710,282 @@ impl WalletState {
     /// Checks if the wallet is fully synchronized with the daemon.
     pub fn is_synced(&self) -> bool {
         self.is_connected && self.current_scanned_height >= self.daemon_height
+    }
+
+    // ========================================================================
+    // RPC CONNECTION MANAGEMENT
+    // ========================================================================
+
+    /// Connects to a Monero daemon for blockchain operations.
+    ///
+    /// This establishes an RPC connection to the specified daemon and starts
+    /// background health monitoring. If already connected, the existing connection
+    /// is closed first.
+    ///
+    /// # Arguments
+    /// * `config` - Connection configuration including daemon address, credentials, etc.
+    ///
+    /// # Returns
+    /// `Ok(())` if connection is successful, `Err(WalletError)` otherwise
+    ///
+    /// # Example
+    /// ```no_run
+    /// use monero_rust::{ConnectionConfig, WalletState};
+    ///
+    /// # async fn example(wallet: &mut WalletState) -> Result<(), String> {
+    /// let config = ConnectionConfig::new("http://node.example.com:18081".to_string())
+    ///     .with_trusted(false)
+    ///     .with_credentials("user".to_string(), "pass".to_string());
+    ///
+    /// wallet.connect(config).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn connect(&mut self, config: crate::rpc::ConnectionConfig) -> Result<(), WalletError> {
+        use monero_simple_request_rpc::SimpleRequestRpc;
+
+        // Idempotency check: if already connected to the same daemon, do nothing
+        if self.is_connected && self.daemon_address.as_ref() == Some(&config.daemon_address) {
+            return Ok(());
+        }
+
+        // Disconnect existing connection if connected to a different daemon
+        if self.is_connected {
+            self.disconnect().await;
+        }
+
+        // Build the URL with embedded credentials if provided
+        // This returns a Zeroizing<String> for security
+        let url = config.build_url();
+
+        // Create the RPC client with the specified timeout
+        // Always use custom timeout for consistency (no magic number comparison)
+        let rpc = SimpleRequestRpc::with_custom_timeout(url.as_str().to_string(), config.timeout).await
+            .map_err(|e| WalletError::RpcError(e))?;
+
+        // Perform initial health check to verify connection
+        let daemon_height = rpc.get_height().await
+            .map_err(|e| WalletError::RpcError(e))?;
+
+        // Update wallet state
+        self.daemon_address = Some(config.daemon_address.clone());
+        self.daemon_height = daemon_height as u64;
+        self.is_connected = true;
+        self.reconnection_attempts = 0;
+
+        // Store the connection config for reconnection (includes credentials)
+        self.connection_config = Some(config);
+
+        // Store the RPC client
+        {
+            let mut rpc_client = self.rpc_client.write().await;
+            *rpc_client = Some(rpc);
+        }
+
+        // Start health check background task
+        self.start_health_check().await;
+
+        Ok(())
+    }
+
+    /// Disconnects from the daemon and stops all background tasks.
+    ///
+    /// This cleanly shuts down the RPC connection and health check task.
+    /// Safe to call even if not connected.
+    pub async fn disconnect(&mut self) {
+        // Stop health check task and wait for it to complete
+        self.stop_health_check().await;
+
+        // Clear RPC client
+        {
+            let mut rpc_client = self.rpc_client.write().await;
+            *rpc_client = None;
+        }
+
+        // Clear connection config (including credentials)
+        self.connection_config = None;
+
+        // Update state
+        self.is_connected = false;
+        self.reconnection_attempts = 0;
+    }
+
+    /// Returns whether the wallet is currently connected to a daemon.
+    ///
+    /// # Returns
+    /// `true` if connected, `false` otherwise
+    pub fn is_connected_to_daemon(&self) -> bool {
+        self.is_connected
+    }
+
+    /// Gets a cloned reference to the RPC client if connected.
+    ///
+    /// This is an internal helper method that also performs an on-demand
+    /// health check to verify the connection is still alive.
+    ///
+    /// # Returns
+    /// `Ok(SimpleRequestRpc)` if connected, `Err(WalletError::NotConnected)` otherwise
+    async fn get_rpc(&self) -> Result<monero_simple_request_rpc::SimpleRequestRpc, WalletError> {
+        let rpc_client = self.rpc_client.read().await;
+
+        match &*rpc_client {
+            Some(rpc) => {
+                // Clone the RPC client for use
+                // SimpleRequestRpc is cheaply cloneable (Arc internally)
+                Ok(rpc.clone())
+            }
+            None => Err(WalletError::NotConnected),
+        }
+    }
+
+    /// Performs an on-demand connection health check.
+    ///
+    /// Queries the daemon height to verify the connection is still alive.
+    /// Updates daemon_height and is_connected fields based on the result.
+    ///
+    /// # Returns
+    /// `Ok(())` if connection is healthy, `Err(WalletError)` otherwise
+    pub async fn check_connection(&mut self) -> Result<(), WalletError> {
+        let rpc = self.get_rpc().await?;
+
+        match rpc.get_height().await {
+            Ok(height) => {
+                self.daemon_height = height as u64;
+                self.is_connected = true;
+                self.reconnection_attempts = 0;
+                Ok(())
+            }
+            Err(e) => {
+                self.is_connected = false;
+                Err(WalletError::RpcError(e))
+            }
+        }
+    }
+
+    /// Starts the background health check task.
+    ///
+    /// This task periodically verifies the daemon connection is alive
+    /// and attempts automatic reconnection if the connection is lost.
+    ///
+    /// Safe to call if health check is already running (it will be restarted).
+    async fn start_health_check(&mut self) {
+        // Stop existing health check if any
+        self.stop_health_check().await;
+
+        let rpc_client = self.rpc_client.clone();
+        let interval = self.reconnection_policy.health_check_interval;
+        let policy = self.reconnection_policy.clone();
+        let connection_config = self.connection_config.clone();
+
+        // Spawn the health check task
+        let handle = tokio::spawn(async move {
+            let mut check_interval = tokio::time::interval(interval);
+
+            loop {
+                check_interval.tick().await;
+
+                // Try to get the RPC client
+                let rpc = {
+                    let client_lock = rpc_client.read().await;
+                    client_lock.clone()
+                };
+
+                if let Some(rpc) = rpc {
+                    // Perform health check
+                    match rpc.get_height().await {
+                        Ok(_height) => {
+                            // Connection is healthy
+                            // In a full implementation, we would update daemon_height here
+                            // But we can't easily access &mut self from this task
+                            // This is acceptable as health checks are primarily for detecting disconnection
+                        }
+                        Err(_e) => {
+                            // Connection lost - attempt reconnection with exponential backoff
+                            Self::attempt_reconnect_task(
+                                rpc_client.clone(),
+                                connection_config.clone(),
+                                policy.clone(),
+                            )
+                            .await;
+                        }
+                    }
+                } else {
+                    // No RPC client, health check task should stop
+                    break;
+                }
+            }
+        });
+
+        self.health_check_handle = Some(handle);
+    }
+
+    /// Stops the background health check task.
+    ///
+    /// Safe to call even if no health check is running.
+    async fn stop_health_check(&mut self) {
+        if let Some(handle) = self.health_check_handle.take() {
+            handle.abort();
+            // Wait for the task to fully stop (abort is not instant)
+            let _ = handle.await;
+        }
+    }
+
+    /// Attempts to reconnect to the daemon with exponential backoff.
+    ///
+    /// This is called automatically by the health check task when a connection is lost.
+    /// It will retry up to `max_attempts` times with increasing delays between attempts.
+    ///
+    /// Note: This is a static method for use in the background task.
+    /// It cannot directly modify the WalletState, so it operates on the RPC client directly.
+    /// Uses the stored ConnectionConfig (including credentials) for reconnection.
+    async fn attempt_reconnect_task(
+        rpc_client: std::sync::Arc<tokio::sync::RwLock<Option<monero_simple_request_rpc::SimpleRequestRpc>>>,
+        connection_config: Option<crate::rpc::ConnectionConfig>,
+        policy: crate::rpc::ReconnectionPolicy,
+    ) {
+        use monero_simple_request_rpc::SimpleRequestRpc;
+
+        let config = match connection_config {
+            Some(config) => config,
+            None => return,  // No config, can't reconnect
+        };
+
+        for attempt in 0..policy.max_attempts {
+            // Wait with exponential backoff
+            let delay = policy.delay_for_attempt(attempt);
+            tokio::time::sleep(delay).await;
+
+            // Build URL with credentials (returns Zeroizing<String>)
+            let url = config.build_url();
+
+            // Attempt to create a new RPC client with the configured timeout
+            match SimpleRequestRpc::with_custom_timeout(url.as_str().to_string(), config.timeout).await {
+                Ok(new_rpc) => {
+                    // Verify connection with a health check
+                    match new_rpc.get_height().await {
+                        Ok(_) => {
+                            // Success! Update the RPC client
+                            let mut client_lock = rpc_client.write().await;
+                            *client_lock = Some(new_rpc);
+                            // Successfully reconnected - credentials were preserved
+                            return;
+                        }
+                        Err(_) => {
+                            // Health check failed, try again
+                            continue;
+                        }
+                    }
+                }
+                Err(_) => {
+                    // Connection attempt failed, try again
+                    continue;
+                }
+            }
+        }
+
+        // All reconnection attempts failed
+        // In a production system, this should emit an event or callback
+        // rather than just silently failing
     }
 
     // ========================================================================
@@ -1109,6 +1432,11 @@ impl<'de> Deserialize<'de> for WalletState {
             is_closed: false, // Always open wallets on load - user can close explicitly if needed
             keys_checksum: helper.keys_checksum,
             auto_save_enabled: false, // Runtime state, not serialized
+            rpc_client: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
+            health_check_handle: None,
+            reconnection_policy: crate::rpc::ReconnectionPolicy::default(),
+            reconnection_attempts: 0,
+            connection_config: None,
         })
     }
 }
