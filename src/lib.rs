@@ -1,3 +1,7 @@
+// Module declarations
+pub mod types;
+pub mod wallet_state;
+
 use monero_wallet::{
     address::{AddressType, MoneroAddress, SubaddressIndex},
     ViewPair,
@@ -6,6 +10,9 @@ use monero_wallet::{
 // Mnemonic support via monero-seed.
 pub use monero_seed::Language;
 use monero_seed::Seed;
+
+// Re-export WalletState for external use
+pub use wallet_state::WalletState;
 
 // Re-export Network for external users/tests.
 pub use monero_wallet::address::Network;
