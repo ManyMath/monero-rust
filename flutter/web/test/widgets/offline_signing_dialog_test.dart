@@ -174,4 +174,96 @@ void main() {
     expect(result!.txKeyAdditional, ['f' * 64]);
     expect(result!.spentKeyImages, ['wallet2_ki_0', 'wallet2_ki_20']);
   });
+
+  testWidgets('packages signed wallet2 txset when metadata is available', (
+    tester,
+  ) async {
+    TransactionSignedOfflineResponse? result;
+    final unsignedTxSetHex = '${unsignedMoneroTxSetMagicHex}aabbccdd';
+    final builtTxSetHex = '${signedMoneroTxSetMagicHex}feedface';
+    final keyImages = ['a' * 64, 'b' * 64];
+    final txKeyImages = [
+      SignedTxSetKeyImageEntry(publicKey: 'c' * 64, keyImage: 'd' * 64),
+    ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => ElevatedButton(
+            onPressed: () async {
+              result = await OfflineSigningDialog.show(
+                context,
+                isViewOnly: false,
+                seed: 'cold seed words',
+                network: 'mainnet',
+                viewKeyHex: 'e' * 64,
+                wallet2KeyImages: keyImages,
+                wallet2TxKeyImages: txKeyImages,
+              );
+            },
+            child: const Text('Open'),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), unsignedTxSetHex);
+    await tester.tap(find.text('From Text'));
+    await tester.pump();
+
+    expect(sender.sent.last.name, 'send_sign_unsigned_transaction_request');
+    expect(sender.sent.last.data['unsigned_tx_hex'], unsignedTxSetHex);
+
+    sender.emit('TransactionSignedOfflineResponse', {
+      'success': true,
+      'error': null,
+      'error_code': null,
+      'error_hint': null,
+      'error_transient': null,
+      'tx_id': '1' * 64,
+      'fee': 5555,
+      'tx_blob': 'cafebabe',
+      'signed_txset_hex': null,
+      'tx_key': '2' * 64,
+      'tx_key_additional': ['3' * 64],
+      'change_outputs': [],
+      'spent_key_images': ['d' * 64],
+    });
+    await tester.pump();
+
+    expect(find.text('Packaging Signed Transaction'), findsOneWidget);
+    expect(sender.sent.last.name, 'send_build_signed_txset_request');
+    expect(sender.sent.last.data['unsigned_txset_hex'], unsignedTxSetHex);
+    expect(sender.sent.last.data['view_key_hex'], 'e' * 64);
+    expect(sender.sent.last.data['tx_blob_hex'], 'cafebabe');
+    expect(sender.sent.last.data['key_images'], keyImages);
+    expect(sender.sent.last.data['tx_key_images'], [
+      {'public_key': 'c' * 64, 'key_image': 'd' * 64},
+    ]);
+
+    sender.emit('SignedTxSetBuiltResponse', {
+      'success': true,
+      'error': null,
+      'error_code': null,
+      'error_hint': null,
+      'error_transient': null,
+      'signed_txset_hex': builtTxSetHex,
+    });
+    await tester.pump();
+
+    expect(find.text('Done'), findsOneWidget);
+    await tester.tap(find.text('Done'));
+    await tester.pump();
+
+    expect(result, isNotNull);
+    expect(result!.txId, '1' * 64);
+    expect(result!.txBlob, 'cafebabe');
+    expect(result!.signedTxSetHex, builtTxSetHex);
+    expect(result!.fee, 5555);
+    expect(result!.txKey, '2' * 64);
+    expect(result!.txKeyAdditional, ['3' * 64]);
+    expect(result!.spentKeyImages, ['d' * 64]);
+  });
 }

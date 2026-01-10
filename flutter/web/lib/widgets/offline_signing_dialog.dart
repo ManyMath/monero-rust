@@ -12,6 +12,7 @@ enum OfflineSignStep {
   importSignedTx,
   importUnsignedTx,
   signing,
+  buildingSignedTxSet,
   extractingSignedTxSet,
   showSignedQr,
   done,
@@ -28,6 +29,8 @@ class OfflineSigningDialog extends StatefulWidget {
   final String? seed;
   final String? network;
   final String? viewKeyHex;
+  final List<String> wallet2KeyImages;
+  final List<SignedTxSetKeyImageEntry> wallet2TxKeyImages;
 
   const OfflineSigningDialog({
     super.key,
@@ -37,6 +40,8 @@ class OfflineSigningDialog extends StatefulWidget {
     this.seed,
     this.network,
     this.viewKeyHex,
+    this.wallet2KeyImages = const [],
+    this.wallet2TxKeyImages = const [],
   });
 
   static Future<TransactionSignedOfflineResponse?> show(
@@ -47,6 +52,8 @@ class OfflineSigningDialog extends StatefulWidget {
     String? seed,
     String? network,
     String? viewKeyHex,
+    List<String> wallet2KeyImages = const [],
+    List<SignedTxSetKeyImageEntry> wallet2TxKeyImages = const [],
   }) {
     return showDialog<TransactionSignedOfflineResponse?>(
       context: context,
@@ -58,6 +65,8 @@ class OfflineSigningDialog extends StatefulWidget {
         seed: seed,
         network: network,
         viewKeyHex: viewKeyHex,
+        wallet2KeyImages: wallet2KeyImages,
+        wallet2TxKeyImages: wallet2TxKeyImages,
       ),
     );
   }
@@ -78,6 +87,7 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
 
   StreamSubscription? _signSub;
   StreamSubscription? _signedTxSetSub;
+  StreamSubscription? _builtTxSetSub;
 
   @override
   void initState() {
@@ -97,6 +107,7 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
   void dispose() {
     _signSub?.cancel();
     _signedTxSetSub?.cancel();
+    _builtTxSetSub?.cancel();
     _importController.dispose();
     super.dispose();
   }
@@ -146,13 +157,7 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
       _signSub = null;
       if (!mounted) return;
       if (msg.success) {
-        setState(() {
-          _signedResponse = msg;
-          _signedTxBlob = msg.txBlob;
-          _signedTxId = msg.txId;
-          _fee = msg.fee.toInt();
-          _step = OfflineSignStep.showSignedQr;
-        });
+        _handleSignedOfflineResponse(unsignedHex, msg);
       } else {
         setState(() {
           _error = msg.error ?? 'Signing failed';
@@ -168,6 +173,93 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
       passphrase: '',
       bip39AccountIndex: 0,
     ).sendSignalToRust();
+  }
+
+  void _handleSignedOfflineResponse(
+    String unsignedHex,
+    TransactionSignedOfflineResponse msg,
+  ) {
+    if (msg.signedTxSetHex != null ||
+        msg.txBlob == null ||
+        !isUnsignedMoneroTxSetHex(unsignedHex) ||
+        widget.wallet2KeyImages.isEmpty) {
+      _showSignedResponse(msg);
+      return;
+    }
+
+    final viewKeyHex = _effectiveViewKeyHex();
+    if (viewKeyHex == null || viewKeyHex.isEmpty) {
+      _showSignedResponse(msg);
+      return;
+    }
+
+    _builtTxSetSub?.cancel();
+    setState(() {
+      _step = OfflineSignStep.buildingSignedTxSet;
+      _error = null;
+    });
+
+    _builtTxSetSub = SignedTxSetBuiltResponse.stream.listen((built) {
+      _builtTxSetSub?.cancel();
+      _builtTxSetSub = null;
+      if (!mounted) return;
+
+      if (built.success && built.signedTxSetHex != null) {
+        _showSignedResponse(
+          _responseWithSignedTxSet(msg, built.signedTxSetHex!),
+        );
+        return;
+      }
+
+      _showSignedResponse(
+        msg,
+        warning:
+            'Signed txset packaging failed; showing raw signed transaction.',
+      );
+    });
+
+    BuildSignedTxSetRequest(
+      unsignedTxSetHex: unsignedHex,
+      viewKeyHex: viewKeyHex,
+      txBlobHex: msg.txBlob!,
+      keyImages: widget.wallet2KeyImages,
+      txKeyImages: widget.wallet2TxKeyImages,
+    ).sendSignalToRust();
+  }
+
+  TransactionSignedOfflineResponse _responseWithSignedTxSet(
+    TransactionSignedOfflineResponse msg,
+    String signedTxSetHex,
+  ) {
+    return TransactionSignedOfflineResponse(
+      success: msg.success,
+      error: msg.error,
+      errorCode: msg.errorCode,
+      errorHint: msg.errorHint,
+      errorTransient: msg.errorTransient,
+      txId: msg.txId,
+      fee: msg.fee,
+      txBlob: msg.txBlob,
+      signedTxSetHex: signedTxSetHex,
+      txKey: msg.txKey,
+      txKeyAdditional: msg.txKeyAdditional,
+      changeOutputs: msg.changeOutputs,
+      spentKeyImages: msg.spentKeyImages,
+    );
+  }
+
+  void _showSignedResponse(
+    TransactionSignedOfflineResponse msg, {
+    String? warning,
+  }) {
+    setState(() {
+      _signedResponse = msg;
+      _signedTxBlob = msg.txBlob;
+      _signedTxId = msg.txId;
+      _fee = msg.fee.toInt();
+      _error = warning;
+      _step = OfflineSignStep.showSignedQr;
+    });
   }
 
   String? _effectiveViewKeyHex() {
@@ -288,6 +380,8 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
         return 'Import Unsigned Transaction';
       case OfflineSignStep.signing:
         return 'Signing...';
+      case OfflineSignStep.buildingSignedTxSet:
+        return 'Packaging Signed Transaction';
       case OfflineSignStep.extractingSignedTxSet:
         return 'Importing Signed Transaction';
       case OfflineSignStep.showSignedQr:
@@ -306,6 +400,7 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
       case OfflineSignStep.importUnsignedTx:
         return _buildImportTx(signed: false);
       case OfflineSignStep.signing:
+      case OfflineSignStep.buildingSignedTxSet:
       case OfflineSignStep.extractingSignedTxSet:
         return const Center(
           child: Padding(
@@ -449,6 +544,10 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
             icon: const Icon(Icons.download, size: 16),
             label: const Text('Download File'),
           ),
+        if (_error != null) ...[
+          const SizedBox(height: 8),
+          Text(_error!, style: const TextStyle(color: Colors.orange)),
+        ],
       ],
     );
   }
