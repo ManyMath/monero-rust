@@ -24,6 +24,74 @@ use curve25519_dalek::{edwards::EdwardsPoint, scalar::Scalar, constants::ED25519
 use sha3::{Digest, Keccak256};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
+/// Error type for wallet operations.
+///
+/// This enum covers all possible errors that can occur during wallet
+/// operations including file I/O, encryption, serialization, and validation.
+#[derive(Debug)]
+pub enum WalletError {
+    /// I/O error occurred (file read/write)
+    IoError(std::io::Error),
+
+    /// Encryption or decryption failed
+    EncryptionError(String),
+
+    /// Invalid password provided
+    InvalidPassword,
+
+    /// Wallet file is corrupted or invalid
+    CorruptedFile(String),
+
+    /// Wallet file version is not supported
+    UnsupportedVersion(u32),
+
+    /// Serialization or deserialization failed
+    SerializationError(String),
+
+    /// Wallet is closed and cannot be used
+    WalletClosed,
+
+    /// Generic error with message
+    Other(String),
+}
+
+impl std::fmt::Display for WalletError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WalletError::IoError(e) => write!(f, "I/O error: {}", e),
+            WalletError::EncryptionError(msg) => write!(f, "Encryption error: {}", msg),
+            WalletError::InvalidPassword => write!(f, "Invalid password"),
+            WalletError::CorruptedFile(msg) => write!(f, "Corrupted wallet file: {}", msg),
+            WalletError::UnsupportedVersion(v) => write!(f, "Unsupported wallet version: {}", v),
+            WalletError::SerializationError(msg) => write!(f, "Serialization error: {}", msg),
+            WalletError::WalletClosed => write!(f, "Wallet is closed"),
+            WalletError::Other(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
+impl std::error::Error for WalletError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            WalletError::IoError(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for WalletError {
+    fn from(err: std::io::Error) -> Self {
+        WalletError::IoError(err)
+    }
+}
+
+impl From<String> for WalletError {
+    fn from(err: String) -> Self {
+        WalletError::Other(err)
+    }
+}
 
 /// Helper function to parse a mnemonic seed by trying all supported languages.
 fn seed_from_string(mnemonic: &str) -> Result<(Language, Seed), String> {
