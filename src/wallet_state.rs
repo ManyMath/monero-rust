@@ -5,13 +5,17 @@
 //! The state is designed to be serializable for persistence to disk with
 //! encryption.
 
+use crate::crypto::{decrypt_wallet_data, encrypt_wallet_data, generate_nonce};
 use crate::types::{KeyImage, SerializableOutput, Transaction, TxKey};
+use crate::WalletError;
 use curve25519_dalek::scalar::Scalar;
 use monero_seed::Seed;
 use monero_wallet::{address::Network, ViewPair};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::fs::{self, OpenOptions};
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
 
 /// Comprehensive wallet state containing all data needed for wallet operations.
@@ -661,6 +665,244 @@ impl WalletState {
         self.is_connected && self.current_scanned_height >= self.daemon_height
     }
 
+    // ========================================================================
+    // FILE I/O - Encrypted wallet persistence
+    // ========================================================================
+
+    /// Magic bytes identifying a monero-rust wallet file: "MNRS"
+    const MAGIC_BYTES: &'static [u8; 4] = b"MNRS";
+
+    /// Size of the fixed header in bytes (magic + version + salt + nonce)
+    const HEADER_SIZE: usize = 4 + 4 + 32 + 12; // 52 bytes
+
+    /// Saves the wallet to its configured path with password encryption.
+    ///
+    /// This is a convenience method that saves to `self.wallet_path`.
+    /// For saving to a different location, use `save_to_file()`.
+    ///
+    /// # Arguments
+    /// * `password` - Password for encrypting the wallet file
+    ///
+    /// # Errors
+    /// Returns `WalletError` if the wallet is closed, serialization fails,
+    /// encryption fails, or file writing fails.
+    ///
+    /// # File Format
+    /// The wallet file has the following structure:
+    /// ```text
+    /// [Magic: "MNRS" (4 bytes)]
+    /// [Version: u32 little-endian (4 bytes)]
+    /// [Salt: (32 bytes)]
+    /// [Nonce: (12 bytes)]
+    /// [Encrypted data with auth tag: (variable)]
+    /// ```
+    ///
+    /// # Security
+    /// - The entire wallet state is encrypted with AES-256-GCM
+    /// - Password is stretched with Argon2id for key derivation
+    /// - Authentication tag prevents tampering
+    /// - Atomic writes (temp file + rename) prevent corruption
+    pub fn save(&self, password: &str) -> Result<(), WalletError> {
+        let path = self.wallet_path.clone();
+        self.save_to_file(&path, password)
+    }
+
+    /// Saves the wallet to a specific path with password encryption.
+    ///
+    /// # Arguments
+    /// * `path` - Path where the wallet file should be saved
+    /// * `password` - Password for encrypting the wallet file
+    ///
+    /// # Errors
+    /// Returns `WalletError` if the wallet is closed, serialization fails,
+    /// encryption fails, or file writing fails.
+    ///
+    /// # Implementation Notes
+    /// Uses atomic writes (write to temp file, then rename) to prevent
+    /// corruption if the process is interrupted.
+    pub fn save_to_file<P: AsRef<Path>>(&self, path: P, password: &str) -> Result<(), WalletError> {
+        // Check if wallet is closed
+        if self.is_closed {
+            return Err(WalletError::WalletClosed);
+        }
+
+        // CRITICAL: Verify password matches wallet's stored password before saving
+        // This prevents accidentally saving with wrong password and locking out funds
+        Self::verify_password(password, &self.password_salt, &self.password_hash)
+            .map_err(|_| WalletError::InvalidPassword)?;
+
+        let path = path.as_ref();
+
+        // Serialize the wallet state to bytes using bincode
+        let serialized_data = bincode::serialize(self)
+            .map_err(|e| WalletError::SerializationError(format!("Failed to serialize wallet: {}", e)))?;
+
+        // Generate a new nonce for this encryption
+        let nonce = generate_nonce();
+
+        // Encrypt the serialized data
+        let encrypted_data = encrypt_wallet_data(
+            &serialized_data,
+            password,
+            &self.password_salt,
+            &nonce,
+        )
+        .map_err(|e| WalletError::EncryptionError(e))?;
+
+        // Build the complete file contents
+        let mut file_contents = Vec::with_capacity(Self::HEADER_SIZE + encrypted_data.len());
+
+        // Write magic bytes
+        file_contents.extend_from_slice(Self::MAGIC_BYTES);
+
+        // Write version (u32 little-endian)
+        file_contents.extend_from_slice(&self.version.to_le_bytes());
+
+        // Write salt
+        file_contents.extend_from_slice(&self.password_salt);
+
+        // Write nonce
+        file_contents.extend_from_slice(&nonce);
+
+        // Write encrypted data (includes auth tag from AES-GCM)
+        file_contents.extend_from_slice(&encrypted_data);
+
+        // Atomic write: write to temp file with proper permissions, then rename
+        let temp_path = path.with_extension("tmp");
+
+        // Create temp file with exclusive access (prevents TOCTOU race conditions)
+        // Set restrictive permissions on Unix (owner read/write only)
+        #[cfg(unix)]
+        let mut temp_file = {
+            use std::os::unix::fs::OpenOptionsExt;
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)  // Fails if file exists - prevents races and symlink attacks
+                .mode(0o600)       // Owner read/write only
+                .open(&temp_path)?
+        };
+
+        #[cfg(not(unix))]
+        let mut temp_file = OpenOptions::new()
+            .write(true)
+            .create_new(true)  // Fails if file exists - prevents races
+            .open(&temp_path)?;
+
+        // Write data and ensure it's flushed to disk before rename
+        temp_file.write_all(&file_contents)?;
+        temp_file.sync_all()?;
+        drop(temp_file);  // Close file before rename
+
+        // Atomically rename to final destination
+        // If rename fails, clean up temp file
+        match fs::rename(&temp_path, path) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                // Clean up temp file on failure
+                let _ = fs::remove_file(&temp_path);
+                Err(WalletError::IoError(e))
+            }
+        }
+    }
+
+    /// Loads a wallet from a file with password decryption.
+    ///
+    /// # Arguments
+    /// * `path` - Path to the wallet file
+    /// * `password` - Password for decrypting the wallet file
+    ///
+    /// # Returns
+    /// A fully reconstructed `WalletState` with ViewPair initialized.
+    ///
+    /// # Errors
+    /// Returns `WalletError` if:
+    /// - File cannot be read
+    /// - File format is invalid (wrong magic bytes, truncated header)
+    /// - Wallet version is unsupported
+    /// - Password is incorrect
+    /// - Data is corrupted or tampered with
+    /// - Deserialization fails
+    ///
+    /// # Security
+    /// - Password is verified indirectly through decryption (wrong password = decryption failure)
+    /// - Authentication tag ensures data integrity
+    /// - Checksum verification ensures keys are correctly reconstructed
+    pub fn load_from_file<P: AsRef<Path>>(path: P, password: &str) -> Result<Self, WalletError> {
+        let path = path.as_ref();
+
+        // Read the entire file
+        let mut file = fs::File::open(path)?;
+        let mut file_contents = Vec::new();
+        file.read_to_end(&mut file_contents)?;
+
+        // Validate minimum size
+        if file_contents.len() < Self::HEADER_SIZE {
+            return Err(WalletError::CorruptedFile(format!(
+                "File too small: expected at least {} bytes, got {}",
+                Self::HEADER_SIZE,
+                file_contents.len()
+            )));
+        }
+
+        // Parse magic bytes
+        let magic = &file_contents[0..4];
+        if magic != Self::MAGIC_BYTES {
+            return Err(WalletError::CorruptedFile(format!(
+                "Invalid magic bytes: expected {:?}, got {:?}",
+                Self::MAGIC_BYTES,
+                magic
+            )));
+        }
+
+        // Parse version
+        let version_bytes: [u8; 4] = file_contents[4..8]
+            .try_into()
+            .map_err(|_| WalletError::CorruptedFile("Failed to read version".to_string()))?;
+        let version = u32::from_le_bytes(version_bytes);
+
+        // Check version compatibility
+        if version > WALLET_VERSION {
+            return Err(WalletError::UnsupportedVersion(version));
+        }
+
+        // Parse salt
+        let salt: [u8; 32] = file_contents[8..40]
+            .try_into()
+            .map_err(|_| WalletError::CorruptedFile("Failed to read salt".to_string()))?;
+
+        // Parse nonce
+        let nonce: [u8; 12] = file_contents[40..52]
+            .try_into()
+            .map_err(|_| WalletError::CorruptedFile("Failed to read nonce".to_string()))?;
+
+        // Remaining bytes are encrypted data (includes 16-byte auth tag)
+        let encrypted_data = &file_contents[52..];
+
+        // Decrypt the data - wrap in Zeroizing to ensure memory is cleared even on error
+        let decrypted_data = Zeroizing::new(
+            decrypt_wallet_data(encrypted_data, password, &salt, &nonce).map_err(|e| {
+                // Check if it's a decryption failure (likely wrong password)
+                if e.contains("invalid password") || e.contains("corrupted") {
+                    WalletError::InvalidPassword
+                } else {
+                    WalletError::EncryptionError(e)
+                }
+            })?,
+        );
+
+        // Deserialize the wallet state
+        // decrypted_data is automatically zeroized when it goes out of scope
+        let wallet: WalletState = bincode::deserialize(&*decrypted_data)
+            .map_err(|e| WalletError::SerializationError(format!("Failed to deserialize wallet: {}", e)))?;
+
+        // The custom Deserialize implementation automatically:
+        // - Reconstructs ViewPair from seed or view-only keys
+        // - Verifies keys checksum for integrity
+        // - Sets runtime state (is_syncing, auto_save_enabled) to defaults
+
+        Ok(wallet)
+    }
+
     /// Reconstructs the ViewPair from the seed.
     ///
     /// NOTE: This method is deprecated and no longer needed since ViewPair
@@ -864,7 +1106,7 @@ impl<'de> Deserialize<'de> for WalletState {
             password_salt: helper.password_salt,
             password_hash: helper.password_hash,
             wallet_path: helper.wallet_path,
-            is_closed: helper.is_closed,
+            is_closed: false, // Always open wallets on load - user can close explicitly if needed
             keys_checksum: helper.keys_checksum,
             auto_save_enabled: false, // Runtime state, not serialized
         })
