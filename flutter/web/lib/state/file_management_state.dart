@@ -43,9 +43,9 @@ class FileManagementState extends ChangeNotifier {
     required WalletState walletState,
     required OutputState outputState,
     required ScanState scanState,
-  })  : _walletState = walletState,
-        _outputState = outputState,
-        _scanState = scanState;
+  }) : _walletState = walletState,
+       _outputState = outputState,
+       _scanState = scanState;
 
   Future<void> saveWalletData(BuildContext context) async {
     isSaving = true;
@@ -56,7 +56,9 @@ class FileManagementState extends ChangeNotifier {
       context: context,
       barrierDismissible: false,
       builder: (context) => SaveWalletDialog(
-        initialWalletId: _walletState.walletId.isEmpty ? 'my_wallet' : _walletState.walletId,
+        initialWalletId: _walletState.walletId.isEmpty
+            ? 'my_wallet'
+            : _walletState.walletId,
         existingWalletIds: _walletState.availableWalletIds,
       ),
     );
@@ -71,7 +73,8 @@ class FileManagementState extends ChangeNotifier {
     final password = result['password']!;
 
     final oldWalletId = _walletState.walletId;
-    final isRenamingFromTemp = oldWalletId == 'temp_wallet' && walletId != 'temp_wallet';
+    final isRenamingFromTemp =
+        oldWalletId == 'temp_wallet' && walletId != 'temp_wallet';
 
     _walletState.walletId = walletId;
     notifyListeners();
@@ -99,8 +102,10 @@ class FileManagementState extends ChangeNotifier {
       }
     }
 
-    final accounts = activeWallet?.accounts ?? derivedAccounts.toList()..sort();
-    final activeAccount = activeWallet?.activeAccount ?? _walletState.activeAccount;
+    final accounts = activeWallet?.accounts ?? derivedAccounts.toList()
+      ..sort();
+    final activeAccount =
+        activeWallet?.activeAccount ?? _walletState.activeAccount;
     final scanningAccounts = activeWallet?.scanningAccounts ?? derivedAccounts;
 
     // Request block hashes from Rust before saving
@@ -109,7 +114,9 @@ class FileManagementState extends ChangeNotifier {
       final completer = Completer<String?>();
       final sub = BlockHashesResponse.stream.listen((response) {
         if (!completer.isCompleted) {
-          completer.complete(response.success ? response.blockHashesJson : null);
+          completer.complete(
+            response.success ? response.blockHashesJson : null,
+          );
         }
       });
       const GetBlockHashesRequest().sendSignalToRust();
@@ -126,7 +133,9 @@ class FileManagementState extends ChangeNotifier {
       final completer = Completer<String?>();
       final sub = PendingStateResponse.stream.listen((response) {
         if (!completer.isCompleted) {
-          completer.complete(response.success ? response.pendingStateJson : null);
+          completer.complete(
+            response.success ? response.pendingStateJson : null,
+          );
         }
       });
       const GetPendingStateRequest().sendSignalToRust();
@@ -171,7 +180,9 @@ class FileManagementState extends ChangeNotifier {
 
     // Derive encryption key for auto-save
     if (success) {
-      final derived = await WalletPersistenceBrowser.deriveEncryptionKey(password);
+      final derived = await WalletPersistenceBrowser.deriveEncryptionKey(
+        password,
+      );
       if (derived != null) {
         _cachedKeyHex = derived.keyHex;
         _cachedSaltHex = derived.saltHex;
@@ -219,7 +230,11 @@ class FileManagementState extends ChangeNotifier {
     if (success) {
       _walletState.showSnackBar?.call('Wallet "$walletId" saved successfully');
     } else {
-      _walletState.showSnackBar?.call('Save failed: $saveError', backgroundColor: Colors.red, seconds: 3);
+      _walletState.showSnackBar?.call(
+        'Save failed: $saveError',
+        backgroundColor: Colors.red,
+        seconds: 3,
+      );
     }
   }
 
@@ -266,8 +281,9 @@ class FileManagementState extends ChangeNotifier {
     final loadedHeight = loadResult.continuousScanCurrentHeight!;
     final loadedSelectedOutputs = loadResult.selectedOutputs!;
     final loadedAccounts = loadResult.accounts ?? [0];
-    final loadedOutputsByAccount = loadResult.outputsByAccount
-        ?? _walletState.reconstructOutputsByAccount(loadedOutputs);
+    final loadedOutputsByAccount =
+        loadResult.outputsByAccount ??
+        _walletState.reconstructOutputsByAccount(loadedOutputs);
 
     _walletState.isRestoringWallet = true;
 
@@ -334,8 +350,10 @@ class FileManagementState extends ChangeNotifier {
     _walletState.pendingSpentKeyImages.clear();
     if (loadResult.pendingStateJson != null) {
       try {
-        final blob = jsonDecode(loadResult.pendingStateJson!) as Map<String, dynamic>;
-        final pendingSpends = blob['pending_spends'] as Map<String, dynamic>? ?? {};
+        final blob =
+            jsonDecode(loadResult.pendingStateJson!) as Map<String, dynamic>;
+        final pendingSpends =
+            blob['pending_spends'] as Map<String, dynamic>? ?? {};
         _walletState.pendingSpentKeyImages.addAll(pendingSpends.keys);
       } catch (_) {}
     }
@@ -343,7 +361,9 @@ class FileManagementState extends ChangeNotifier {
     _walletState.deriveAddress();
 
     // Cache encryption key so auto-save can work without a manual save
-    final derived = await WalletPersistenceBrowser.deriveEncryptionKey(password);
+    final derived = await WalletPersistenceBrowser.deriveEncryptionKey(
+      password,
+    );
     if (derived != null) {
       _cachedKeyHex = derived.keyHex;
       _cachedSaltHex = derived.saltHex;
@@ -358,7 +378,10 @@ class FileManagementState extends ChangeNotifier {
     if (seed.isEmpty) {
       exportError = 'No seed available for export';
       notifyListeners();
-      _walletState.showSnackBar?.call('No seed to export', backgroundColor: Colors.orange);
+      _walletState.showSnackBar?.call(
+        'No seed to export',
+        backgroundColor: Colors.orange,
+      );
       return;
     }
 
@@ -385,7 +408,9 @@ class FileManagementState extends ChangeNotifier {
         if (!completer.isCompleted) completer.complete(response);
       });
 
-      final network = _walletState.network.isNotEmpty ? _walletState.network : 'mainnet';
+      final network = _walletState.network.isNotEmpty
+          ? _walletState.network
+          : 'mainnet';
 
       ExportKeysFileRequest(
         seed: seed,
@@ -417,7 +442,9 @@ class FileManagementState extends ChangeNotifier {
       final fileBytes = _hexDecode(response.fileBytesHex!);
       final blob = html.Blob([fileBytes], 'application/octet-stream');
       final url = html.Url.createObjectUrlFromBlob(blob);
-      final walletName = _walletState.walletId.isNotEmpty ? _walletState.walletId : 'wallet';
+      final walletName = _walletState.walletId.isNotEmpty
+          ? _walletState.walletId
+          : 'wallet';
       final anchor = html.AnchorElement(href: url)
         ..setAttribute('download', '$walletName.keys')
         ..click();
@@ -432,7 +459,11 @@ class FileManagementState extends ChangeNotifier {
       isExporting = false;
       exportError = 'Export failed: $e';
       notifyListeners();
-      _walletState.showSnackBar?.call('Export failed: $e', backgroundColor: Colors.red, seconds: 4);
+      _walletState.showSnackBar?.call(
+        'Export failed: $e',
+        backgroundColor: Colors.red,
+        seconds: 4,
+      );
     }
   }
 
@@ -452,7 +483,10 @@ class FileManagementState extends ChangeNotifier {
     if (seed.isEmpty) {
       keyImageExportError = 'No wallet seed available for key image export';
       notifyListeners();
-      _walletState.showSnackBar?.call('No wallet loaded', backgroundColor: Colors.orange);
+      _walletState.showSnackBar?.call(
+        'No wallet loaded',
+        backgroundColor: Colors.orange,
+      );
       return;
     }
     if (seed.startsWith('viewonly:')) {
@@ -508,7 +542,9 @@ class FileManagementState extends ChangeNotifier {
       final fileBytes = _hexDecode(response.keyImagesHex!);
       final blob = html.Blob([fileBytes], 'application/octet-stream');
       final url = html.Url.createObjectUrlFromBlob(blob);
-      final walletName = _walletState.walletId.isNotEmpty ? _walletState.walletId : 'wallet';
+      final walletName = _walletState.walletId.isNotEmpty
+          ? _walletState.walletId
+          : 'wallet';
       final anchor = html.AnchorElement(href: url)
         ..setAttribute('download', '$walletName.key-images')
         ..click();
@@ -539,11 +575,15 @@ class FileManagementState extends ChangeNotifier {
     if (seed.isEmpty) {
       keyImageImportError = 'No wallet loaded for key image import';
       notifyListeners();
-      _walletState.showSnackBar?.call('No wallet loaded', backgroundColor: Colors.orange);
+      _walletState.showSnackBar?.call(
+        'No wallet loaded',
+        backgroundColor: Colors.orange,
+      );
       return;
     }
     if (!seed.startsWith('viewonly:')) {
-      keyImageImportError = 'Key image import is intended for view-only wallets';
+      keyImageImportError =
+          'Key image import is intended for view-only wallets';
       notifyListeners();
       _walletState.showSnackBar?.call(
         'Open the view-only wallet to import key images',
@@ -708,7 +748,9 @@ class FileManagementState extends ChangeNotifier {
         return;
       }
       final bytes = Uint8List.view(result as ByteBuffer);
-      final hexBytes = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      final hexBytes = bytes
+          .map((b) => b.toRadixString(16).padLeft(2, '0'))
+          .join();
 
       final completer = Completer<ImportKeysFileResponse>();
       final sub = ImportKeysFileResponse.stream.listen((response) {
@@ -768,7 +810,11 @@ class FileManagementState extends ChangeNotifier {
         isImporting = false;
         importError = 'No mnemonic recovered from .keys file';
         notifyListeners();
-        _walletState.showSnackBar?.call(importError!, backgroundColor: Colors.orange, seconds: 4);
+        _walletState.showSnackBar?.call(
+          importError!,
+          backgroundColor: Colors.orange,
+          seconds: 4,
+        );
         return;
       }
 
@@ -779,13 +825,16 @@ class FileManagementState extends ChangeNotifier {
       }
 
       final walletName = file.name.replaceAll('.keys', '');
-      final network = response.network ??
+      final network =
+          response.network ??
           (_walletState.network.isNotEmpty ? _walletState.network : 'stagenet');
 
       _walletState.beginImportedWallet(
         id: walletName.isNotEmpty ? walletName : 'imported',
         seed: importedSeed,
         walletNetwork: network,
+        spendSecretKey: response.watchOnly ? null : response.spendSecretKey,
+        viewSecretKey: response.watchOnly ? null : response.viewSecretKey,
       );
 
       isImporting = false;
@@ -800,12 +849,19 @@ class FileManagementState extends ChangeNotifier {
       isImporting = false;
       importError = 'Import failed: $e';
       notifyListeners();
-      _walletState.showSnackBar?.call('Import failed: $e', backgroundColor: Colors.red, seconds: 4);
+      _walletState.showSnackBar?.call(
+        'Import failed: $e',
+        backgroundColor: Colors.red,
+        seconds: 4,
+      );
     }
   }
 
   Future<void> clearStoredData(BuildContext context) async {
-    final confirmed = await DeleteConfirmationDialog.show(context, _walletState.walletId);
+    final confirmed = await DeleteConfirmationDialog.show(
+      context,
+      _walletState.walletId,
+    );
     if (confirmed != true || !context.mounted) return;
 
     final deletedWalletId = _walletState.walletId;
@@ -838,7 +894,10 @@ class FileManagementState extends ChangeNotifier {
 
   Future<void> autoSaveIfReady() async {
     if (!autoSaveEnabled) return;
-    if (_cachedKeyHex == null || _walletState.walletId.isEmpty || _walletState.walletId == 'temp_wallet') return;
+    if (_cachedKeyHex == null ||
+        _walletState.walletId.isEmpty ||
+        _walletState.walletId == 'temp_wallet')
+      return;
     if (_scanState.isContinuousScanning && !_scanState.isSynced) return;
     if (isSaving || _isAutoSaving) return;
 
@@ -846,7 +905,8 @@ class FileManagementState extends ChangeNotifier {
     try {
       final activeWallet = _walletState.lifecycle.activeWallet;
       final accounts = activeWallet?.accounts ?? [0];
-      final activeAccount = activeWallet?.activeAccount ?? _walletState.activeAccount;
+      final activeAccount =
+          activeWallet?.activeAccount ?? _walletState.activeAccount;
       final scanningAccounts = activeWallet?.scanningAccounts ?? {0};
 
       final saveResult = await WalletPersistenceBrowser.saveWithDerivedKey(

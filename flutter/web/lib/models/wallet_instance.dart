@@ -7,6 +7,8 @@ class WalletInstance {
   final String seed;
   final String network;
   final String address;
+  final String? importedSpendSecretKey;
+  final String? importedViewSecretKey;
 
   List<OwnedOutput> outputs;
   List<WalletTransaction> transactions;
@@ -26,6 +28,8 @@ class WalletInstance {
     required this.seed,
     required this.network,
     required this.address,
+    this.importedSpendSecretKey,
+    this.importedViewSecretKey,
     List<OwnedOutput>? outputs,
     List<WalletTransaction>? transactions,
     this.currentHeight = 0,
@@ -36,11 +40,13 @@ class WalletInstance {
     List<int>? accounts,
     Map<int, List<OwnedOutput>>? outputsByAccount,
     Set<int>? scanningAccounts,
-  })  : outputs = outputs ?? [],
-        transactions = transactions ?? [],
-        accounts = accounts ?? [0],
-        outputsByAccount = outputsByAccount ?? {0: []},
-        scanningAccounts = scanningAccounts ?? Set.from(accounts ?? [0]); // By default, scan all accounts
+  }) : outputs = outputs ?? [],
+       transactions = transactions ?? [],
+       accounts = accounts ?? [0],
+       outputsByAccount = outputsByAccount ?? {0: []},
+       scanningAccounts =
+           scanningAccounts ??
+           Set.from(accounts ?? [0]); // By default, scan all accounts
   // Get outputs for the active account (or all outputs if activeAccount == -1)
   List<OwnedOutput> get activeAccountOutputs {
     // If "All" is selected, return all outputs
@@ -67,7 +73,10 @@ class WalletInstance {
     int unconfirmedAtomic = 0;
     for (var output in activeAccountOutputs) {
       if (output.spent) continue;
-      if (OutputLockUtils.isOutputUnlocked(output: output, currentHeight: daemonHeight)) {
+      if (OutputLockUtils.isOutputUnlocked(
+        output: output,
+        currentHeight: daemonHeight,
+      )) {
         confirmedAtomic += output.amount;
       } else {
         unconfirmedAtomic += output.amount;
@@ -93,6 +102,8 @@ class WalletInstance {
     String? seed,
     String? network,
     String? address,
+    String? importedSpendSecretKey,
+    String? importedViewSecretKey,
     List<OwnedOutput>? outputs,
     List<WalletTransaction>? transactions,
     int? currentHeight,
@@ -109,6 +120,10 @@ class WalletInstance {
       seed: seed ?? this.seed,
       network: network ?? this.network,
       address: address ?? this.address,
+      importedSpendSecretKey:
+          importedSpendSecretKey ?? this.importedSpendSecretKey,
+      importedViewSecretKey:
+          importedViewSecretKey ?? this.importedViewSecretKey,
       outputs: outputs ?? this.outputs,
       transactions: transactions ?? this.transactions,
       currentHeight: currentHeight ?? this.currentHeight,
@@ -131,11 +146,14 @@ class WalletInstance {
     final newAccounts = List<int>.from(accounts)..add(accountIndex);
     newAccounts.sort(); // Keep accounts sorted
 
-    final newOutputsByAccount = Map<int, List<OwnedOutput>>.from(outputsByAccount);
+    final newOutputsByAccount = Map<int, List<OwnedOutput>>.from(
+      outputsByAccount,
+    );
     newOutputsByAccount[accountIndex] = [];
 
     // Enable scanning for the new account by default
-    final newScanningAccounts = Set<int>.from(scanningAccounts)..add(accountIndex);
+    final newScanningAccounts = Set<int>.from(scanningAccounts)
+      ..add(accountIndex);
 
     return copyWith(
       accounts: newAccounts,
@@ -172,8 +190,12 @@ class WalletInstance {
 
   /// Add an output to a specific account
   WalletInstance addOutputToAccount(int accountIndex, OwnedOutput output) {
-    final newOutputsByAccount = Map<int, List<OwnedOutput>>.from(outputsByAccount);
-    final accountOutputs = List<OwnedOutput>.from(newOutputsByAccount[accountIndex] ?? []);
+    final newOutputsByAccount = Map<int, List<OwnedOutput>>.from(
+      outputsByAccount,
+    );
+    final accountOutputs = List<OwnedOutput>.from(
+      newOutputsByAccount[accountIndex] ?? [],
+    );
     accountOutputs.add(output);
     newOutputsByAccount[accountIndex] = accountOutputs;
 
@@ -182,15 +204,18 @@ class WalletInstance {
         ? (List<OwnedOutput>.from(outputs)..add(output))
         : outputs;
 
-    return copyWith(
-      outputsByAccount: newOutputsByAccount,
-      outputs: newOutputs,
-    );
+    return copyWith(outputsByAccount: newOutputsByAccount, outputs: newOutputs);
   }
 
-  WalletConfig toWalletConfig({int subaddressLookahead = 0, String passphrase = '', int bip39AccountIndex = 0}) {
+  WalletConfig toWalletConfig({
+    int subaddressLookahead = 0,
+    String passphrase = '',
+    int bip39AccountIndex = 0,
+  }) {
     // Calculate the highest account index for lookahead
-    final highestAccount = accounts.isEmpty ? 0 : accounts.reduce((a, b) => a > b ? a : b);
+    final highestAccount = accounts.isEmpty
+        ? 0
+        : accounts.reduce((a, b) => a > b ? a : b);
 
     return WalletConfig(
       seed: seed,
@@ -207,25 +232,29 @@ class WalletInstance {
     'seed': seed,
     'network': network,
     'address': address,
-    'outputs': outputs.map((o) => {
-      'txHash': o.txHash,
-      'outputIndex': o.outputIndex,
-      'amount': o.amount.toString(),
-      'amountXmr': o.amountXmr,
-      'key': o.key,
-      'keyOffset': o.keyOffset,
-      'commitmentMask': o.commitmentMask,
-      'subaddressIndex': o.subaddressIndex != null
-          ? [o.subaddressIndex!.$1, o.subaddressIndex!.$2]
-          : null,
-      'paymentId': o.paymentId,
-      'receivedOutputBytes': o.receivedOutputBytes,
-      'blockHeight': o.blockHeight.toString(),
-      'spent': o.spent,
-      'keyImage': o.keyImage,
-      'isCoinbase': o.isCoinbase,
-      'frozen': o.frozen,
-    }).toList(),
+    'outputs': outputs
+        .map(
+          (o) => {
+            'txHash': o.txHash,
+            'outputIndex': o.outputIndex,
+            'amount': o.amount.toString(),
+            'amountXmr': o.amountXmr,
+            'key': o.key,
+            'keyOffset': o.keyOffset,
+            'commitmentMask': o.commitmentMask,
+            'subaddressIndex': o.subaddressIndex != null
+                ? [o.subaddressIndex!.$1, o.subaddressIndex!.$2]
+                : null,
+            'paymentId': o.paymentId,
+            'receivedOutputBytes': o.receivedOutputBytes,
+            'blockHeight': o.blockHeight.toString(),
+            'spent': o.spent,
+            'keyImage': o.keyImage,
+            'isCoinbase': o.isCoinbase,
+            'frozen': o.frozen,
+          },
+        )
+        .toList(),
     'transactions': transactions.map((t) => t.toJson()).toList(),
     'currentHeight': currentHeight,
     'daemonHeight': daemonHeight,
@@ -237,25 +266,29 @@ class WalletInstance {
     'outputsByAccount': outputsByAccount.map((accountIndex, accountOutputs) {
       return MapEntry(
         accountIndex.toString(),
-        accountOutputs.map((o) => {
-          'txHash': o.txHash,
-          'outputIndex': o.outputIndex,
-          'amount': o.amount.toString(),
-          'amountXmr': o.amountXmr,
-          'key': o.key,
-          'keyOffset': o.keyOffset,
-          'commitmentMask': o.commitmentMask,
-          'subaddressIndex': o.subaddressIndex != null
-              ? [o.subaddressIndex!.$1, o.subaddressIndex!.$2]
-              : null,
-          'paymentId': o.paymentId,
-          'receivedOutputBytes': o.receivedOutputBytes,
-          'blockHeight': o.blockHeight.toString(),
-          'spent': o.spent,
-          'keyImage': o.keyImage,
-          'isCoinbase': o.isCoinbase,
-          'frozen': o.frozen,
-        }).toList(),
+        accountOutputs
+            .map(
+              (o) => {
+                'txHash': o.txHash,
+                'outputIndex': o.outputIndex,
+                'amount': o.amount.toString(),
+                'amountXmr': o.amountXmr,
+                'key': o.key,
+                'keyOffset': o.keyOffset,
+                'commitmentMask': o.commitmentMask,
+                'subaddressIndex': o.subaddressIndex != null
+                    ? [o.subaddressIndex!.$1, o.subaddressIndex!.$2]
+                    : null,
+                'paymentId': o.paymentId,
+                'receivedOutputBytes': o.receivedOutputBytes,
+                'blockHeight': o.blockHeight.toString(),
+                'spent': o.spent,
+                'keyImage': o.keyImage,
+                'isCoinbase': o.isCoinbase,
+                'frozen': o.frozen,
+              },
+            )
+            .toList(),
       );
     }),
   };
@@ -288,12 +321,15 @@ class WalletInstance {
           // Handle backward compatibility: these fields were added later
           spent: outputData.containsKey('spent') && outputData['spent'] != null
               ? outputData['spent'] as bool
-              : false,  // Default to unspent for backward compatibility
+              : false, // Default to unspent for backward compatibility
           keyImage: outputData['keyImage'] as String,
-          isCoinbase: outputData.containsKey('isCoinbase') && outputData['isCoinbase'] != null
+          isCoinbase:
+              outputData.containsKey('isCoinbase') &&
+                  outputData['isCoinbase'] != null
               ? outputData['isCoinbase'] as bool
-              : false,  // Default to non-coinbase for backward compatibility
-          frozen: outputData.containsKey('frozen') && outputData['frozen'] != null
+              : false, // Default to non-coinbase for backward compatibility
+          frozen:
+              outputData.containsKey('frozen') && outputData['frozen'] != null
               ? outputData['frozen'] as bool
               : false,
         );
@@ -307,45 +343,52 @@ class WalletInstance {
       isClosed: json['isClosed'] as bool,
       activeAccount: json['activeAccount'] as int,
       accounts: (json['accounts'] as List).cast<int>(),
-      scanningAccounts: Set<int>.from((json['scanningAccounts'] as List).cast<int>()),
-      outputsByAccount: (json['outputsByAccount'] as Map<String, dynamic>).map(
-        (key, value) {
-          final accountIndex = int.parse(key);
-          final accountOutputs = (value as List).map((o) {
-            final outputData = o as Map<String, dynamic>;
-            return OwnedOutput(
-              txHash: outputData['txHash'] as String,
-              outputIndex: outputData['outputIndex'] as int,
-              amount: int.parse(outputData['amount'] as String),
-              amountXmr: outputData['amountXmr'] as String,
-              key: outputData['key'] as String,
-              keyOffset: outputData['keyOffset'] as String,
-              commitmentMask: outputData['commitmentMask'] as String,
-              subaddressIndex: outputData['subaddressIndex'] != null
-                  ? (
-                      outputData['subaddressIndex'][0] as int,
-                      outputData['subaddressIndex'][1] as int,
-                    )
-                  : null,
-              paymentId: outputData['paymentId'] as String?,
-              receivedOutputBytes: outputData['receivedOutputBytes'] as String,
-              blockHeight: int.parse(outputData['blockHeight'] as String),
-              // Handle backward compatibility: these fields were added later
-              spent: outputData.containsKey('spent') && outputData['spent'] != null
-                  ? outputData['spent'] as bool
-                  : false,  // Default to unspent for backward compatibility
-              keyImage: outputData['keyImage'] as String,
-              isCoinbase: outputData.containsKey('isCoinbase') && outputData['isCoinbase'] != null
-                  ? outputData['isCoinbase'] as bool
-                  : false,  // Default to non-coinbase for backward compatibility
-              frozen: outputData.containsKey('frozen') && outputData['frozen'] != null
-                  ? outputData['frozen'] as bool
-                  : false,
-            );
-          }).toList();
-          return MapEntry(accountIndex, accountOutputs);
-        },
+      scanningAccounts: Set<int>.from(
+        (json['scanningAccounts'] as List).cast<int>(),
       ),
+      outputsByAccount: (json['outputsByAccount'] as Map<String, dynamic>).map((
+        key,
+        value,
+      ) {
+        final accountIndex = int.parse(key);
+        final accountOutputs = (value as List).map((o) {
+          final outputData = o as Map<String, dynamic>;
+          return OwnedOutput(
+            txHash: outputData['txHash'] as String,
+            outputIndex: outputData['outputIndex'] as int,
+            amount: int.parse(outputData['amount'] as String),
+            amountXmr: outputData['amountXmr'] as String,
+            key: outputData['key'] as String,
+            keyOffset: outputData['keyOffset'] as String,
+            commitmentMask: outputData['commitmentMask'] as String,
+            subaddressIndex: outputData['subaddressIndex'] != null
+                ? (
+                    outputData['subaddressIndex'][0] as int,
+                    outputData['subaddressIndex'][1] as int,
+                  )
+                : null,
+            paymentId: outputData['paymentId'] as String?,
+            receivedOutputBytes: outputData['receivedOutputBytes'] as String,
+            blockHeight: int.parse(outputData['blockHeight'] as String),
+            // Handle backward compatibility: these fields were added later
+            spent:
+                outputData.containsKey('spent') && outputData['spent'] != null
+                ? outputData['spent'] as bool
+                : false, // Default to unspent for backward compatibility
+            keyImage: outputData['keyImage'] as String,
+            isCoinbase:
+                outputData.containsKey('isCoinbase') &&
+                    outputData['isCoinbase'] != null
+                ? outputData['isCoinbase'] as bool
+                : false, // Default to non-coinbase for backward compatibility
+            frozen:
+                outputData.containsKey('frozen') && outputData['frozen'] != null
+                ? outputData['frozen'] as bool
+                : false,
+          );
+        }).toList();
+        return MapEntry(accountIndex, accountOutputs);
+      }),
     );
   }
 }

@@ -64,6 +64,8 @@ void main() {
                 isViewOnly: false,
                 seed: 'cold seed words',
                 network: 'mainnet',
+                spendSecretKeyHex: '1' * 64,
+                viewSecretKeyHex: '2' * 64,
               );
             },
             child: const Text('Open'),
@@ -80,6 +82,8 @@ void main() {
 
     expect(sender.sent.last.name, 'send_sign_unsigned_transaction_request');
     expect(sender.sent.last.data['unsigned_tx_hex'], 'abcdef');
+    expect(sender.sent.last.data['spend_secret_key_hex'], '1' * 64);
+    expect(sender.sent.last.data['view_secret_key_hex'], '2' * 64);
 
     sender.emit('TransactionSignedOfflineResponse', {
       'success': true,

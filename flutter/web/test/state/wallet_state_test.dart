@@ -147,6 +147,38 @@ void main() {
     expect(state.network, 'stagenet');
   });
 
+  test('beginImportedWallet stores imported full wallet keys in memory', () {
+    final hub = SignalHub();
+    final state = createWalletState(hub);
+    addTearDown(state.dispose);
+
+    final spendSecretKey = 'd' * 64;
+    final viewSecretKey = 'e' * 64;
+
+    state.beginImportedWallet(
+      id: 'cold_keys_wallet',
+      seed: 'imported mnemonic words',
+      walletNetwork: 'mainnet',
+      spendSecretKey: spendSecretKey,
+      viewSecretKey: viewSecretKey,
+    );
+
+    hub.onKeysDerived!(
+      const KeysDerivedResponse(
+        address: '4fullWalletAddress',
+        secretSpendKey: 'derived_spend',
+        secretViewKey: 'derived_view',
+        publicSpendKey: 'public_spend',
+        publicViewKey: 'public_view',
+        success: true,
+      ),
+    );
+
+    expect(state.activeWalletId, 'cold_keys_wallet');
+    expect(state.activeWallet!.importedSpendSecretKey, spendSecretKey);
+    expect(state.activeWallet!.importedViewSecretKey, viewSecretKey);
+  });
+
   test('applyImportedKeyImages assigns by wallet export ordering', () {
     final hub = SignalHub();
     final state = createWalletState(hub);

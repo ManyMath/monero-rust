@@ -29,6 +29,8 @@ class OfflineSigningDialog extends StatefulWidget {
   final String? seed;
   final String? network;
   final String? viewKeyHex;
+  final String? spendSecretKeyHex;
+  final String? viewSecretKeyHex;
   final List<String> wallet2KeyImages;
   final List<SignedTxSetKeyImageEntry> wallet2TxKeyImages;
 
@@ -40,6 +42,8 @@ class OfflineSigningDialog extends StatefulWidget {
     this.seed,
     this.network,
     this.viewKeyHex,
+    this.spendSecretKeyHex,
+    this.viewSecretKeyHex,
     this.wallet2KeyImages = const [],
     this.wallet2TxKeyImages = const [],
   });
@@ -52,6 +56,8 @@ class OfflineSigningDialog extends StatefulWidget {
     String? seed,
     String? network,
     String? viewKeyHex,
+    String? spendSecretKeyHex,
+    String? viewSecretKeyHex,
     List<String> wallet2KeyImages = const [],
     List<SignedTxSetKeyImageEntry> wallet2TxKeyImages = const [],
   }) {
@@ -65,6 +71,8 @@ class OfflineSigningDialog extends StatefulWidget {
         seed: seed,
         network: network,
         viewKeyHex: viewKeyHex,
+        spendSecretKeyHex: spendSecretKeyHex,
+        viewSecretKeyHex: viewSecretKeyHex,
         wallet2KeyImages: wallet2KeyImages,
         wallet2TxKeyImages: wallet2TxKeyImages,
       ),
@@ -172,6 +180,8 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
       network: widget.network!,
       passphrase: '',
       bip39AccountIndex: 0,
+      spendSecretKeyHex: widget.spendSecretKeyHex,
+      viewSecretKeyHex: widget.viewSecretKeyHex,
     ).sendSignalToRust();
   }
 

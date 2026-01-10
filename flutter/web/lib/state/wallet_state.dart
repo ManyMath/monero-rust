@@ -24,7 +24,9 @@ class WalletState extends ChangeNotifier {
   final passphraseController = TextEditingController();
   final viewKeyController = TextEditingController();
   final spendKeyController = TextEditingController();
-  final nodeUrlController = TextEditingController(text: 'http://127.0.0.1:38081');
+  final nodeUrlController = TextEditingController(
+    text: 'http://127.0.0.1:38081',
+  );
   final blockHeightController = TextEditingController();
   final blockHeightFocusNode = FocusNode();
   bool blockHeightUserEdited = false;
@@ -45,6 +47,8 @@ class WalletState extends ChangeNotifier {
   Timer? _debounceTimer;
   String? _pendingImportedWalletId;
   String? _pendingImportedWalletSeed;
+  String? _pendingImportedSpendSecretKey;
+  String? _pendingImportedViewSecretKey;
 
   bool isChangingSeed = false;
   bool isRestoringWallet = false;
@@ -64,10 +68,10 @@ class WalletState extends ChangeNotifier {
     required SignalHub signalHub,
     HasStoredWallet? hasStoredWallet,
     ClearStoredWallet? clearStoredWallet,
-  })  : lifecycle = lifecycle,
-        _signalHub = signalHub,
-        _hasStoredWallet = hasStoredWallet,
-        _clearStoredWallet = clearStoredWallet {
+  }) : lifecycle = lifecycle,
+       _signalHub = signalHub,
+       _hasStoredWallet = hasStoredWallet,
+       _clearStoredWallet = clearStoredWallet {
     seedController.addListener(_onSeedChanged);
     passphraseController.addListener(_onPassphraseChanged);
     viewKeyController.addListener(_onViewOnlyKeysChanged);
@@ -96,12 +100,14 @@ class WalletState extends ChangeNotifier {
   int get lowestSyncedHeight => lifecycle.lowestSyncedHeight;
   WalletInstance? get activeWallet => lifecycle.activeWallet;
   int get continuousScanCurrentHeight => lifecycle.continuousScanCurrentHeight;
-  set continuousScanCurrentHeight(int v) => lifecycle.continuousScanCurrentHeight = v;
+  set continuousScanCurrentHeight(int v) =>
+      lifecycle.continuousScanCurrentHeight = v;
 
   List<OwnedOutput> get allOutputs => lifecycle.allOutputs;
   set allOutputs(List<OwnedOutput> v) => lifecycle.allOutputs = v;
   List<WalletTransaction> get allTransactions => lifecycle.allTransactions;
-  set allTransactions(List<WalletTransaction> v) => lifecycle.allTransactions = v;
+  set allTransactions(List<WalletTransaction> v) =>
+      lifecycle.allTransactions = v;
   Set<String> get selectedOutputs => lifecycle.selectedOutputs;
   set selectedOutputs(Set<String> v) => lifecycle.selectedOutputs = v;
 
@@ -128,22 +134,42 @@ class WalletState extends ChangeNotifier {
 
       final seed = seedController.text.trim();
       final shouldOpenImportedWallet =
-          _pendingImportedWalletId != null && _pendingImportedWalletSeed == seed;
+          _pendingImportedWalletId != null &&
+          _pendingImportedWalletSeed == seed;
       if (seed.isNotEmpty &&
           derivedAddress != null &&
           (lifecycle.activeWallet == null || shouldOpenImportedWallet)) {
         final id = shouldOpenImportedWallet
             ? _pendingImportedWalletId!
-            : walletId.isEmpty ? 'temp_wallet' : walletId;
-        openWallet(id, seed, network, derivedAddress!);
+            : walletId.isEmpty
+            ? 'temp_wallet'
+            : walletId;
+        openWallet(
+          id,
+          seed,
+          network,
+          derivedAddress!,
+          importedSpendSecretKey: shouldOpenImportedWallet
+              ? _pendingImportedSpendSecretKey
+              : null,
+          importedViewSecretKey: shouldOpenImportedWallet
+              ? _pendingImportedViewSecretKey
+              : null,
+        );
         if (shouldOpenImportedWallet) {
           _pendingImportedWalletId = null;
           _pendingImportedWalletSeed = null;
+          _pendingImportedSpendSecretKey = null;
+          _pendingImportedViewSecretKey = null;
         }
       }
 
       if (seed.isNotEmpty && !seed.startsWith('viewonly:')) {
-        GetSeedBirthdayRequest(seed: seed, passphrase: passphrase, bip39AccountIndex: bip39AccountIndex).sendSignalToRust();
+        GetSeedBirthdayRequest(
+          seed: seed,
+          passphrase: passphrase,
+          bip39AccountIndex: bip39AccountIndex,
+        ).sendSignalToRust();
       }
     } else {
       derivedAddress = null;
@@ -155,6 +181,8 @@ class WalletState extends ChangeNotifier {
       polyseedRestoreHeight = null;
       _pendingImportedWalletId = null;
       _pendingImportedWalletSeed = null;
+      _pendingImportedSpendSecretKey = null;
+      _pendingImportedViewSecretKey = null;
     }
     notifyListeners();
   }
@@ -247,7 +275,12 @@ class WalletState extends ChangeNotifier {
   void _handleBip39LegacySeed(Bip39LegacySeedResponse msg) {
     if (msg.success) {
       derivedLegacySeed = msg.legacySeed;
-      DeriveKeysRequest(seed: msg.legacySeed, network: network, passphrase: passphrase, bip39AccountIndex: bip39AccountIndex).sendSignalToRust();
+      DeriveKeysRequest(
+        seed: msg.legacySeed,
+        network: network,
+        passphrase: passphrase,
+        bip39AccountIndex: bip39AccountIndex,
+      ).sendSignalToRust();
     } else {
       responseError = msg.error ?? 'BIP39 conversion failed';
       derivedLegacySeed = null;
@@ -274,8 +307,8 @@ class WalletState extends ChangeNotifier {
     final seedTypeBackend = seedType.contains('polyseed')
         ? 'polyseed'
         : seedType.contains('bip39')
-            ? 'bip39'
-            : 'classic';
+        ? 'bip39'
+        : 'classic';
     GenerateSeedRequest(seedType: seedTypeBackend).sendSignalToRust();
   }
 
@@ -383,7 +416,8 @@ class WalletState extends ChangeNotifier {
         while (derived < 3) {
           if (!used.contains(index)) {
             final key = '$account,$index';
-            if (!subaddresses.containsKey(key) && !_pendingSubaddresses.contains(key)) {
+            if (!subaddresses.containsKey(key) &&
+                !_pendingSubaddresses.contains(key)) {
               _pendingSubaddresses.add(key);
               DeriveSubaddressRequest(
                 seed: result.normalizedInput!,
@@ -406,7 +440,8 @@ class WalletState extends ChangeNotifier {
       while (derived < 5) {
         if (!used.contains(index)) {
           final key = '$activeAccount,$index';
-          if (!subaddresses.containsKey(key) && !_pendingSubaddresses.contains(key)) {
+          if (!subaddresses.containsKey(key) &&
+              !_pendingSubaddresses.contains(key)) {
             _pendingSubaddresses.add(key);
             DeriveSubaddressRequest(
               seed: result.normalizedInput!,
@@ -512,10 +547,12 @@ class WalletState extends ChangeNotifier {
       return a.output.outputIndex.compareTo(b.output.outputIndex);
     });
 
-    final count = keyImages.length < indexed.length ? keyImages.length : indexed.length;
+    final count = keyImages.length < indexed.length
+        ? keyImages.length
+        : indexed.length;
     for (var i = 0; i < count; i++) {
-      updatedOutputs[indexed[i].index] =
-          updatedOutputs[indexed[i].index].copyWith(keyImage: keyImages[i]);
+      updatedOutputs[indexed[i].index] = updatedOutputs[indexed[i].index]
+          .copyWith(keyImage: keyImages[i]);
     }
 
     allOutputs = updatedOutputs;
@@ -578,9 +615,13 @@ class WalletState extends ChangeNotifier {
     required String id,
     required String seed,
     required String walletNetwork,
+    String? spendSecretKey,
+    String? viewSecretKey,
   }) {
     _pendingImportedWalletId = id;
     _pendingImportedWalletSeed = seed;
+    _pendingImportedSpendSecretKey = spendSecretKey;
+    _pendingImportedViewSecretKey = viewSecretKey;
     walletId = id;
     network = walletNetwork;
     if (seed.startsWith('viewonly:')) {
@@ -628,8 +669,9 @@ class WalletState extends ChangeNotifier {
       final updatedWallet = w.switchAccount(accountIndex);
       lifecycle.openWallets[w.walletId] = updatedWallet;
       if (accountIndex >= 0) {
-        final keysToRemove = subaddresses.keys.where((key) =>
-            !key.startsWith('$accountIndex,')).toList();
+        final keysToRemove = subaddresses.keys
+            .where((key) => !key.startsWith('$accountIndex,'))
+            .toList();
         for (var key in keysToRemove) {
           subaddresses.remove(key);
         }
@@ -646,8 +688,15 @@ class WalletState extends ChangeNotifier {
     final newAccountIndex = accounts.isEmpty ? 0 : accounts.last + 1;
     var aw = lifecycle.activeWallet;
 
-    if (aw == null && seedController.text.trim().isNotEmpty && derivedAddress != null) {
-      openWallet(walletId, seedController.text.trim(), network, derivedAddress!);
+    if (aw == null &&
+        seedController.text.trim().isNotEmpty &&
+        derivedAddress != null) {
+      openWallet(
+        walletId,
+        seedController.text.trim(),
+        network,
+        derivedAddress!,
+      );
       aw = lifecycle.activeWallet;
     }
 
@@ -668,13 +717,26 @@ class WalletState extends ChangeNotifier {
     }
   }
 
-  WalletInstance openWallet(String id, String seed, String net, String address, {
+  WalletInstance openWallet(
+    String id,
+    String seed,
+    String net,
+    String address, {
     List<int>? accounts,
     Map<int, List<OwnedOutput>>? outputsByAccount,
     int? activeAccount,
+    String? importedSpendSecretKey,
+    String? importedViewSecretKey,
   }) {
     Log.info(_tag, 'Opening wallet: $id (network=$net)');
-    final wallet = lifecycle.openWallet(id, seed, net, address);
+    final wallet = lifecycle.openWallet(
+      id,
+      seed,
+      net,
+      address,
+      importedSpendSecretKey: importedSpendSecretKey,
+      importedViewSecretKey: importedViewSecretKey,
+    );
 
     if (accounts != null && accounts.isNotEmpty) {
       final updatedWallet = wallet.copyWith(
@@ -703,11 +765,14 @@ class WalletState extends ChangeNotifier {
     network = wallet.network;
     derivedAddress = wallet.address;
     isRestoringWallet = false;
-    onDaemonHeightRestored?.call(wallet.daemonHeight > 0 ? wallet.daemonHeight : null);
+    onDaemonHeightRestored?.call(
+      wallet.daemonHeight > 0 ? wallet.daemonHeight : null,
+    );
     notifyListeners();
   }
 
-  Future<void> switchWallet(String newWalletId, {
+  Future<void> switchWallet(
+    String newWalletId, {
     required Future<void> Function() loadWalletData,
   }) async {
     final result = lifecycle.switchWallet(newWalletId);
@@ -723,7 +788,9 @@ class WalletState extends ChangeNotifier {
         network = wallet.network;
         derivedAddress = wallet.address;
         isRestoringWallet = false;
-        onDaemonHeightRestored?.call(wallet.daemonHeight > 0 ? wallet.daemonHeight : null);
+        onDaemonHeightRestored?.call(
+          wallet.daemonHeight > 0 ? wallet.daemonHeight : null,
+        );
         notifyListeners();
         return;
       case SwitchResult.needsLoad:
@@ -735,7 +802,9 @@ class WalletState extends ChangeNotifier {
     }
   }
 
-  Future<void> closeWallet(BuildContext context, String wId, {
+  Future<void> closeWallet(
+    BuildContext context,
+    String wId, {
     required Future<void> Function() saveWalletData,
     required void Function() pauseScan,
     required void Function() startScan,
@@ -767,7 +836,9 @@ class WalletState extends ChangeNotifier {
       derivedAddress = closeResult.switchedTo!.address;
       isRestoringWallet = false;
       onDaemonHeightRestored?.call(
-        closeResult.switchedTo!.daemonHeight > 0 ? closeResult.switchedTo!.daemonHeight : null,
+        closeResult.switchedTo!.daemonHeight > 0
+            ? closeResult.switchedTo!.daemonHeight
+            : null,
       );
     } else {
       onWalletStateCleared?.call();
@@ -796,7 +867,9 @@ class WalletState extends ChangeNotifier {
       _clearStoredWallet?.call('temp_wallet');
     }
 
-    showSnackBar?.call('Ready for new wallet - generate or enter a seed phrase');
+    showSnackBar?.call(
+      'Ready for new wallet - generate or enter a seed phrase',
+    );
   }
 
   void refreshAvailableWallets() {
@@ -814,7 +887,9 @@ class WalletState extends ChangeNotifier {
     }
   }
 
-  Map<int, List<OwnedOutput>> reconstructOutputsByAccount(List<OwnedOutput> outputs) {
+  Map<int, List<OwnedOutput>> reconstructOutputsByAccount(
+    List<OwnedOutput> outputs,
+  ) {
     final map = <int, List<OwnedOutput>>{};
     for (final output in outputs) {
       final account = output.subaddressIndex?.$1 ?? 0;

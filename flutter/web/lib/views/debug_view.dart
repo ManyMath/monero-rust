@@ -135,6 +135,9 @@ class _DebugViewState extends State<DebugView> {
       isViewOnly: false,
       seed: ws.seedController.text.trim(),
       network: ws.network,
+      viewKeyHex: ws.activeWallet?.importedViewSecretKey,
+      spendSecretKeyHex: ws.activeWallet?.importedSpendSecretKey,
+      viewSecretKeyHex: ws.activeWallet?.importedViewSecretKey,
     );
 
     if (signedResponse != null &&
