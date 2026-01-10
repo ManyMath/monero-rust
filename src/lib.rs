@@ -1,5 +1,6 @@
 // Module declarations
 pub mod crypto;
+pub mod rpc;
 pub mod types;
 pub mod wallet_state;
 
@@ -17,6 +18,9 @@ pub use wallet_state::WalletState;
 
 // Re-export Network for external users/tests.
 pub use monero_wallet::address::Network;
+
+// Re-export RPC types for external use
+pub use rpc::{ConnectionConfig, ReconnectionPolicy};
 
 use rand_core::OsRng;
 use zeroize::{Zeroizing};
@@ -53,6 +57,12 @@ pub enum WalletError {
     /// Wallet is closed and cannot be used
     WalletClosed,
 
+    /// RPC error occurred (daemon communication)
+    RpcError(monero_wallet::rpc::RpcError),
+
+    /// Daemon is not connected
+    NotConnected,
+
     /// Generic error with message
     Other(String),
 }
@@ -67,6 +77,8 @@ impl std::fmt::Display for WalletError {
             WalletError::UnsupportedVersion(v) => write!(f, "Unsupported wallet version: {}", v),
             WalletError::SerializationError(msg) => write!(f, "Serialization error: {}", msg),
             WalletError::WalletClosed => write!(f, "Wallet is closed"),
+            WalletError::RpcError(e) => write!(f, "RPC error: {}", e),
+            WalletError::NotConnected => write!(f, "Daemon is not connected"),
             WalletError::Other(msg) => write!(f, "{}", msg),
         }
     }
@@ -90,6 +102,12 @@ impl From<std::io::Error> for WalletError {
 impl From<String> for WalletError {
     fn from(err: String) -> Self {
         WalletError::Other(err)
+    }
+}
+
+impl From<monero_wallet::rpc::RpcError> for WalletError {
+    fn from(err: monero_wallet::rpc::RpcError) -> Self {
+        WalletError::RpcError(err)
     }
 }
 
