@@ -18,6 +18,29 @@
 
 
 /**
+ * Comprehensive wallet state containing all data needed for wallet operations.
+ *
+ * This structure maintains the complete state of a Monero wallet, including:
+ * - Cryptographic keys and seed (with secure memory handling)
+ * - Transaction and output tracking
+ * - Synchronization state with the blockchain
+ * - Connection status and configuration
+ *
+ * # Security Considerations
+ *
+ * Sensitive fields (seed, spend_key) use `Zeroizing` to ensure they are
+ * cleared from memory when dropped. When serialized, the entire structure
+ * should be encrypted before writing to disk.
+ *
+ * # Serialization
+ *
+ * The state implements `Serialize` and custom `Deserialize` for persistence.
+ * ViewPair is automatically reconstructed from the seed after deserialization.
+ * Fields marked with `#[serde(skip)]` are runtime-only and not persisted.
+ */
+typedef struct WalletState WalletState;
+
+/**
  * Frees a C string allocated by this library.
  *
  * # Safety
@@ -29,3 +52,49 @@ void free_string(char *ptr);
 char *generate_address(const char *mnemonic, uint8_t network, uint32_t account, uint32_t index);
 
 char *generate_mnemonic(uint8_t language);
+
+/**
+ * Frees a WalletState allocated by this library.
+ *
+ * # Safety
+ * Must only be called on wallets allocated by this library's functions (e.g., wallet_load).
+ * Must not be called more than once on the same pointer.
+ */
+void wallet_free(struct WalletState *wallet);
+
+/**
+ * Loads a WalletState from a file with password decryption.
+ *
+ * # Arguments
+ * * `path` - C string containing the file path
+ * * `password` - C string containing the password
+ *
+ * # Returns
+ * * Pointer to WalletState on success
+ * * null pointer on failure
+ *
+ * # Safety
+ * The returned pointer must be freed using `wallet_free()`.
+ * The path and password must be valid, null-terminated UTF-8 C strings.
+ */
+struct WalletState *wallet_load(const char *path, const char *password);
+
+/**
+ * Saves a WalletState to a file with password encryption.
+ *
+ * # Arguments
+ * * `wallet` - Pointer to WalletState
+ * * `password` - C string containing the password
+ *
+ * # Returns
+ * * 0 on success
+ * * -1 if wallet pointer is null
+ * * -2 if password is null or invalid UTF-8
+ * * -3 if wallet is closed
+ * * -4 if save operation failed
+ *
+ * # Safety
+ * The wallet pointer must be valid and point to a WalletState instance.
+ * The password must be a valid, null-terminated UTF-8 C string.
+ */
+int32_t wallet_save(const struct WalletState *wallet, const char *password);

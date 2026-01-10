@@ -338,6 +338,142 @@ pub extern "C" fn generate_address(
     }
 }
 
+// ========================================================================
+// FFI BINDINGS FOR WALLET FILE I/O
+// ========================================================================
+
+/// Saves a WalletState to a file with password encryption.
+///
+/// # Arguments
+/// * `wallet` - Pointer to WalletState
+/// * `password` - C string containing the password
+///
+/// # Returns
+/// * 0 on success
+/// * -1 if wallet pointer is null
+/// * -2 if password is null or invalid UTF-8
+/// * -3 if wallet is closed
+/// * -4 if save operation failed
+///
+/// # Safety
+/// The wallet pointer must be valid and point to a WalletState instance.
+/// The password must be a valid, null-terminated UTF-8 C string.
+#[no_mangle]
+pub extern "C" fn wallet_save(
+    wallet: *const WalletState,
+    password: *const c_char,
+) -> i32 {
+    // Catch panics to prevent undefined behavior across FFI boundary
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // Validate wallet pointer
+        if wallet.is_null() {
+            return -1;
+        }
+
+        // Validate and convert password
+        if password.is_null() {
+            return -2;
+        }
+
+        let password_str = unsafe {
+            match CStr::from_ptr(password).to_str() {
+                Ok(s) => s,
+                Err(_) => return -2,
+            }
+        };
+
+        // Get wallet reference
+        let wallet_ref = unsafe { &*wallet };
+
+        // Attempt to save
+        match wallet_ref.save(password_str) {
+            Ok(()) => 0,
+            Err(WalletError::WalletClosed) => -3,
+            Err(WalletError::InvalidPassword) => -2,  // Wrong password
+            Err(_) => -4,
+        }
+    }));
+
+    match result {
+        Ok(code) => code,
+        Err(_) => {
+            eprintln!("PANIC in wallet_save - this should never happen");
+            -5  // Panic error code
+        }
+    }
+}
+
+/// Loads a WalletState from a file with password decryption.
+///
+/// # Arguments
+/// * `path` - C string containing the file path
+/// * `password` - C string containing the password
+///
+/// # Returns
+/// * Pointer to WalletState on success
+/// * null pointer on failure
+///
+/// # Safety
+/// The returned pointer must be freed using `wallet_free()`.
+/// The path and password must be valid, null-terminated UTF-8 C strings.
+#[no_mangle]
+pub extern "C" fn wallet_load(
+    path: *const c_char,
+    password: *const c_char,
+) -> *mut WalletState {
+    // Catch panics to prevent undefined behavior across FFI boundary
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // Validate path
+        if path.is_null() {
+            return std::ptr::null_mut();
+        }
+
+        // Validate password
+        if password.is_null() {
+            return std::ptr::null_mut();
+        }
+
+        // Convert C strings to Rust strings
+        let (path_str, password_str) = unsafe {
+            let path_result = CStr::from_ptr(path).to_str();
+            let password_result = CStr::from_ptr(password).to_str();
+
+            match (path_result, password_result) {
+                (Ok(p), Ok(pw)) => (p, pw),
+                _ => return std::ptr::null_mut(),
+            }
+        };
+
+        // Attempt to load wallet
+        match WalletState::load_from_file(path_str, password_str) {
+            Ok(wallet) => Box::into_raw(Box::new(wallet)),
+            Err(_) => std::ptr::null_mut(),
+        }
+    }));
+
+    match result {
+        Ok(ptr) => ptr,
+        Err(_) => {
+            eprintln!("PANIC in wallet_load - this should never happen");
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Frees a WalletState allocated by this library.
+///
+/// # Safety
+/// Must only be called on wallets allocated by this library's functions (e.g., wallet_load).
+/// Must not be called more than once on the same pointer.
+#[no_mangle]
+pub extern "C" fn wallet_free(wallet: *mut WalletState) {
+    if !wallet.is_null() {
+        unsafe {
+            let _ = Box::from_raw(wallet);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
