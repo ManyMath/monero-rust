@@ -3,7 +3,7 @@
 /// These tests verify that WalletState can be correctly serialized to both
 /// JSON and binary formats, and then deserialized back without data loss.
 
-use monero_rust::{types::SerializableOutput, wallet_state::WalletState, Language, Network};
+use monero_rust::{types::SerializableOutput, wallet_state::WalletState, Language, Network, WalletError};
 use monero_seed::Seed;
 use rand_core::OsRng;
 use std::path::PathBuf;
@@ -319,4 +319,469 @@ fn test_wallet_state_is_synced() {
         serde_json::from_str(&json).expect("Failed to deserialize");
 
     assert!(deserialized.is_synced());
+}
+
+// ========================================================================
+// ENCRYPTED FILE I/O TESTS
+// ========================================================================
+
+#[test]
+fn test_wallet_save_and_load_roundtrip() {
+    use std::fs;
+    use tempfile::tempdir;
+
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let wallet_path = temp_dir.path().join("test_wallet.bin");
+
+    let password = "my_secure_password_123!";
+
+    // Create a wallet
+    let seed = Seed::new(&mut OsRng, Language::English);
+    let mut wallet_state = WalletState::new(
+        seed,
+        String::from("English"),
+        Network::Mainnet,
+        password,
+        wallet_path.clone(),
+        100,
+    )
+    .expect("Failed to create WalletState");
+
+    // Add some test data
+    wallet_state.daemon_address = Some(String::from("http://node.example.com:18081"));
+    wallet_state.is_connected = true;
+    wallet_state.daemon_height = 1000;
+    wallet_state.current_scanned_height = 500;
+
+    let output = SerializableOutput {
+        tx_hash: [1u8; 32],
+        output_index: 0,
+        amount: 5000000000000,
+        key_image: [2u8; 32],
+        subaddress_indices: (0, 1),
+        height: 250,
+        unlocked: true,
+        spent: false,
+        frozen: false,
+    };
+    wallet_state.outputs.insert([2u8; 32], output);
+    wallet_state.frozen_outputs.insert([3u8; 32]);
+
+    let balance_before = wallet_state.get_balance();
+    let seed_before = wallet_state.seed.as_ref().expect("Seed should be Some").to_string();
+
+    // Save the wallet
+    wallet_state.save(password).expect("Failed to save wallet");
+
+    // Verify file was created
+    assert!(wallet_path.exists());
+
+    // Load the wallet
+    let loaded_wallet = WalletState::load_from_file(&wallet_path, password)
+        .expect("Failed to load wallet");
+
+    // Verify all data matches
+    assert_eq!(
+        loaded_wallet.seed.as_ref().expect("Seed should be Some").to_string(),
+        seed_before
+    );
+    assert_eq!(loaded_wallet.network, wallet_state.network);
+    assert_eq!(loaded_wallet.seed_language, wallet_state.seed_language);
+    assert_eq!(loaded_wallet.daemon_address, wallet_state.daemon_address);
+    assert_eq!(loaded_wallet.daemon_height, wallet_state.daemon_height);
+    assert_eq!(loaded_wallet.current_scanned_height, wallet_state.current_scanned_height);
+    assert_eq!(loaded_wallet.get_balance(), balance_before);
+    assert_eq!(loaded_wallet.outputs.len(), wallet_state.outputs.len());
+    assert_eq!(loaded_wallet.frozen_outputs.len(), wallet_state.frozen_outputs.len());
+
+    // Verify ViewPair was reconstructed correctly
+    assert_eq!(
+        loaded_wallet.view_pair.spend().compress().to_bytes(),
+        wallet_state.view_pair.spend().compress().to_bytes()
+    );
+    assert_eq!(
+        loaded_wallet.view_pair.view().compress().to_bytes(),
+        wallet_state.view_pair.view().compress().to_bytes()
+    );
+}
+
+#[test]
+fn test_wallet_load_wrong_password() {
+    use tempfile::tempdir;
+
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let wallet_path = temp_dir.path().join("test_wallet.bin");
+
+    let correct_password = "correct_password";
+    let wrong_password = "wrong_password";
+
+    // Create and save a wallet
+    let seed = Seed::new(&mut OsRng, Language::English);
+    let wallet_state = WalletState::new(
+        seed,
+        String::from("English"),
+        Network::Mainnet,
+        correct_password,
+        wallet_path.clone(),
+        0,
+    )
+    .expect("Failed to create WalletState");
+
+    wallet_state.save(correct_password).expect("Failed to save wallet");
+
+    // Try to load with wrong password
+    let result = WalletState::load_from_file(&wallet_path, wrong_password);
+
+    assert!(result.is_err());
+    if let Err(e) = result {
+        match e {
+            WalletError::InvalidPassword => {}, // Expected
+            e => panic!("Expected InvalidPassword, got {:?}", e),
+        }
+    }
+}
+
+#[test]
+fn test_wallet_save_to_custom_path() {
+    use tempfile::tempdir;
+
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let default_path = temp_dir.path().join("default.bin");
+    let custom_path = temp_dir.path().join("custom_location.bin");
+
+    let password = "secure_password_123";
+
+    // Create a wallet with default path
+    let seed = Seed::new(&mut OsRng, Language::English);
+    let wallet_state = WalletState::new(
+        seed,
+        String::from("English"),
+        Network::Mainnet,
+        password,
+        default_path.clone(),
+        0,
+    )
+    .expect("Failed to create WalletState");
+
+    // Save to custom path
+    wallet_state.save_to_file(&custom_path, password)
+        .expect("Failed to save to custom path");
+
+    // Verify custom path exists
+    assert!(custom_path.exists());
+
+    // Default path should NOT exist
+    assert!(!default_path.exists());
+
+    // Load from custom path
+    let loaded = WalletState::load_from_file(&custom_path, password)
+        .expect("Failed to load from custom path");
+
+    assert_eq!(
+        loaded.seed.as_ref().expect("Seed should be Some").to_string(),
+        wallet_state.seed.as_ref().expect("Seed should be Some").to_string()
+    );
+}
+
+#[test]
+fn test_wallet_corrupted_file_wrong_magic() {
+    use std::fs;
+    use tempfile::tempdir;
+
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let wallet_path = temp_dir.path().join("corrupted.bin");
+
+    // Write a file with wrong magic bytes
+    let mut fake_data = b"FAKE".to_vec(); // Wrong magic
+    fake_data.extend_from_slice(&[1u8; 100]); // Random data
+
+    fs::write(&wallet_path, &fake_data).expect("Failed to write fake file");
+
+    // Try to load
+    let result = WalletState::load_from_file(&wallet_path, "password");
+
+    assert!(result.is_err());
+    if let Err(e) = result {
+        match e {
+            WalletError::CorruptedFile(msg) => {
+                assert!(msg.contains("Invalid magic bytes"));
+            }
+            e => panic!("Expected CorruptedFile, got {:?}", e),
+        }
+    }
+}
+
+#[test]
+fn test_wallet_corrupted_file_truncated() {
+    use std::fs;
+    use tempfile::tempdir;
+
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let wallet_path = temp_dir.path().join("truncated.bin");
+
+    // Write a truncated file (less than header size)
+    fs::write(&wallet_path, &[1u8; 20]).expect("Failed to write truncated file");
+
+    // Try to load
+    let result = WalletState::load_from_file(&wallet_path, "password");
+
+    assert!(result.is_err());
+    if let Err(e) = result {
+        match e {
+            WalletError::CorruptedFile(msg) => {
+                assert!(msg.contains("File too small"));
+            }
+            e => panic!("Expected CorruptedFile, got {:?}", e),
+        }
+    }
+}
+
+#[test]
+fn test_wallet_unsupported_version() {
+    use std::fs;
+    use tempfile::tempdir;
+
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let wallet_path = temp_dir.path().join("future_version.bin");
+
+    // Create a file with future version
+    let mut fake_data = b"MNRS".to_vec(); // Correct magic
+    fake_data.extend_from_slice(&999u32.to_le_bytes()); // Future version
+    fake_data.extend_from_slice(&[1u8; 100]); // Rest of data
+
+    fs::write(&wallet_path, &fake_data).expect("Failed to write fake file");
+
+    // Try to load
+    let result = WalletState::load_from_file(&wallet_path, "password");
+
+    assert!(result.is_err());
+    if let Err(e) = result {
+        match e {
+            WalletError::UnsupportedVersion(v) => {
+                assert_eq!(v, 999);
+            }
+            e => panic!("Expected UnsupportedVersion, got {:?}", e),
+        }
+    }
+}
+
+#[test]
+fn test_wallet_closed_cannot_save() {
+    use tempfile::tempdir;
+
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let wallet_path = temp_dir.path().join("closed.bin");
+
+    let password = "secure_password_123";
+
+    // Create a wallet
+    let seed = Seed::new(&mut OsRng, Language::English);
+    let mut wallet_state = WalletState::new(
+        seed,
+        String::from("English"),
+        Network::Mainnet,
+        password,
+        wallet_path.clone(),
+        0,
+    )
+    .expect("Failed to create WalletState");
+
+    // Close the wallet
+    wallet_state.is_closed = true;
+
+    // Try to save - should fail
+    let result = wallet_state.save(password);
+
+    assert!(result.is_err());
+    if let Err(e) = result {
+        match e {
+            WalletError::WalletClosed => {}, // Expected
+            e => panic!("Expected WalletClosed, got {:?}", e),
+        }
+    }
+}
+
+#[test]
+fn test_view_only_wallet_file_io() {
+    use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
+    use tempfile::tempdir;
+
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let wallet_path = temp_dir.path().join("view_only.bin");
+
+    let password = "view_only_password";
+
+    // Generate test keys
+    let spend_scalar = Scalar::from_bytes_mod_order([42u8; 32]);
+    let spend_point = &spend_scalar * ED25519_BASEPOINT_TABLE;
+    let spend_public_key = spend_point.compress().to_bytes();
+    let view_private_key = [99u8; 32];
+
+    let wallet_state = WalletState::new_view_only(
+        spend_public_key,
+        view_private_key,
+        Network::Testnet,
+        password,
+        wallet_path.clone(),
+        500,
+    )
+    .expect("Failed to create view-only wallet");
+
+    assert!(wallet_state.is_view_only());
+
+    // Save the wallet
+    wallet_state.save(password).expect("Failed to save view-only wallet");
+
+    // Load the wallet
+    let loaded = WalletState::load_from_file(&wallet_path, password)
+        .expect("Failed to load view-only wallet");
+
+    // Verify it's still view-only
+    assert!(loaded.is_view_only());
+    assert_eq!(loaded.spend_key, None);
+    assert_eq!(loaded.network, Network::Testnet);
+    assert_eq!(loaded.refresh_from_height, 500);
+
+    // Verify ViewPair was reconstructed correctly
+    assert_eq!(
+        loaded.view_pair.spend().compress().to_bytes(),
+        wallet_state.view_pair.spend().compress().to_bytes()
+    );
+    assert_eq!(
+        loaded.view_pair.view().compress().to_bytes(),
+        wallet_state.view_pair.view().compress().to_bytes()
+    );
+}
+
+#[test]
+fn test_wallet_file_io_different_networks() {
+    use tempfile::tempdir;
+
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let password = "secure_password_123";
+
+    for network in [Network::Mainnet, Network::Testnet, Network::Stagenet] {
+        let wallet_path = temp_dir.path().join(format!("{:?}.bin", network));
+
+        let seed = Seed::new(&mut OsRng, Language::English);
+        let wallet_state = WalletState::new(
+            seed,
+            String::from("English"),
+            network,
+            password,
+            wallet_path.clone(),
+            0,
+        )
+        .expect("Failed to create WalletState");
+
+        // Save
+        wallet_state.save(password).expect("Failed to save wallet");
+
+        // Load
+        let loaded = WalletState::load_from_file(&wallet_path, password)
+            .expect("Failed to load wallet");
+
+        assert_eq!(loaded.network, network);
+    }
+}
+
+#[test]
+fn test_wallet_file_io_with_outputs_and_transactions() {
+    use tempfile::tempdir;
+
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let wallet_path = temp_dir.path().join("full_wallet.bin");
+    let password = "secure_password_123";
+
+    // Create a wallet with lots of data
+    let seed = Seed::new(&mut OsRng, Language::English);
+    let mut wallet_state = WalletState::new(
+        seed,
+        String::from("English"),
+        Network::Mainnet,
+        password,
+        wallet_path.clone(),
+        0,
+    )
+    .expect("Failed to create WalletState");
+
+    // Add multiple outputs
+    for i in 0..10 {
+        let output = SerializableOutput {
+            tx_hash: [i; 32],
+            output_index: i,
+            amount: (i as u64 + 1) * 1000000000000,
+            key_image: [i + 10; 32],
+            subaddress_indices: (0, i as u32),
+            height: 100 + i as u64,
+            unlocked: true,
+            spent: i % 3 == 0,
+            frozen: i % 4 == 0,
+        };
+        wallet_state.outputs.insert([i + 10; 32], output);
+
+        if i % 3 == 0 {
+            wallet_state.spent_outputs.insert([i + 10; 32]);
+        }
+        if i % 4 == 0 {
+            wallet_state.frozen_outputs.insert([i + 10; 32]);
+        }
+    }
+
+    let balance_before = wallet_state.get_balance();
+    let unlocked_balance_before = wallet_state.get_unlocked_balance();
+
+    // Save
+    wallet_state.save(password).expect("Failed to save wallet");
+
+    // Load
+    let loaded = WalletState::load_from_file(&wallet_path, password)
+        .expect("Failed to load wallet");
+
+    // Verify all data
+    assert_eq!(loaded.outputs.len(), 10);
+    assert_eq!(loaded.spent_outputs.len(), wallet_state.spent_outputs.len());
+    assert_eq!(loaded.frozen_outputs.len(), wallet_state.frozen_outputs.len());
+    assert_eq!(loaded.get_balance(), balance_before);
+    assert_eq!(loaded.get_unlocked_balance(), unlocked_balance_before);
+}
+
+#[test]
+fn test_wallet_atomic_write_integrity() {
+    use std::fs;
+    use tempfile::tempdir;
+
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let wallet_path = temp_dir.path().join("atomic.bin");
+    let password = "secure_password_123";
+
+    // Create and save initial wallet
+    let seed = Seed::new(&mut OsRng, Language::English);
+    let wallet_state = WalletState::new(
+        seed,
+        String::from("English"),
+        Network::Mainnet,
+        password,
+        wallet_path.clone(),
+        0,
+    )
+    .expect("Failed to create WalletState");
+
+    wallet_state.save(password).expect("Failed to save wallet");
+
+    // Verify temp file doesn't exist after successful save
+    let temp_path = wallet_path.with_extension("tmp");
+    assert!(!temp_path.exists(), "Temp file should be cleaned up");
+
+    // Verify wallet file exists
+    assert!(wallet_path.exists());
+
+    // Load and verify
+    let loaded = WalletState::load_from_file(&wallet_path, password)
+        .expect("Failed to load wallet");
+
+    assert_eq!(
+        loaded.seed.as_ref().expect("Seed should be Some").to_string(),
+        wallet_state.seed.as_ref().expect("Seed should be Some").to_string()
+    );
 }
