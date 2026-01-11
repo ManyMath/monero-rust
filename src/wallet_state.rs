@@ -1030,6 +1030,23 @@ impl WalletState {
     /// * `WalletError::WalletClosed` - Wallet is closed
     /// * `WalletError::Other` - Scanner error occurred
     ///
+    /// # ⚠️ Important: Persistence Warning
+    /// **This method does NOT automatically save the wallet state to disk.**
+    /// You MUST call `save()` after scanning to persist discovered outputs.
+    /// Failing to save will result in complete loss of all scan progress if
+    /// the application crashes or is terminated before the next manual save.
+    ///
+    /// Recommended pattern:
+    /// ```no_run
+    /// # use monero_rust::{WalletState};
+    /// # async fn example(wallet: &mut WalletState, block: monero_rpc::ScannableBlock) -> Result<(), Box<dyn std::error::Error>> {
+    /// let count = wallet.scan_block(block, 1234567).await?;
+    /// wallet.save().await?;  // CRITICAL: Save after scanning
+    /// println!("Found and saved {} outputs", count);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
     /// # Example
     /// ```no_run
     /// # use monero_rust::{WalletState};
@@ -1051,7 +1068,7 @@ impl WalletState {
         let scan_result = self
             .scanner
             .scan(block)
-            .map_err(|e| WalletError::Other(format!("Scan error: {:?}", e)))?;
+            .map_err(|e| WalletError::Other(format!("Failed to scan block {}: {}", block_height, e)))?;
 
         // Extract outputs that are not additionally timelocked
         // (most outputs fall into this category)
@@ -1059,9 +1076,49 @@ impl WalletState {
 
         let count = outputs.len();
 
-        // Process each discovered output with the correct block height
+        // ATOMIC UPDATE PATTERN:
+        // Collect all changes first, then apply atomically.
+        // This prevents partial state corruption if processing fails midway.
+        let mut new_outputs = Vec::with_capacity(outputs.len());
+
+        // Process each discovered output - collect changes without mutating state
         for wallet_output in outputs {
-            self.process_discovered_output(wallet_output, block_height)?;
+            let serializable_output = self.convert_wallet_output_to_serializable(
+                wallet_output,
+                block_height,
+            )?;
+            new_outputs.push(serializable_output);
+        }
+
+        // Now apply all changes atomically
+        // If we reach here, all outputs were processed successfully
+        for serializable_output in new_outputs {
+            let key_image = serializable_output.key_image;
+
+            // Check for duplicates before inserting
+            if let Some(existing) = self.outputs.get(&key_image) {
+                // Check if it's the exact same output (rescanning after reorg)
+                if existing.tx_hash == serializable_output.tx_hash
+                    && existing.output_index == serializable_output.output_index
+                {
+                    // Same output being rescanned - update it
+                    self.outputs.insert(key_image, serializable_output);
+                    continue;
+                }
+
+                // Different output with same key image - critical error
+                return Err(WalletError::Other(format!(
+                    "Key image collision detected at block {}! Key image {} already exists for output {}:{}, \
+                     cannot insert new output {}:{}. This indicates broken key image computation.",
+                    block_height,
+                    hex::encode(key_image),
+                    hex::encode(existing.tx_hash), existing.output_index,
+                    hex::encode(serializable_output.tx_hash), serializable_output.output_index
+                )));
+            }
+
+            // Store in outputs map (indexed by key image)
+            self.outputs.insert(key_image, serializable_output);
         }
 
         // CRITICAL: Update scanned height after successful scan
@@ -1087,6 +1144,33 @@ impl WalletState {
     /// * `WalletError::WalletClosed` - Wallet is closed
     /// * `WalletError::RpcError` - Failed to fetch block from daemon
     /// * `WalletError::Other` - Scanner error occurred
+    ///
+    /// # ⚠️ Important: Persistence Warning
+    /// **This method does NOT automatically save the wallet state to disk.**
+    /// You MUST call `save()` periodically to persist discovered outputs.
+    /// Failing to save will result in complete loss of all scan progress if
+    /// the application crashes or is terminated before the next manual save.
+    ///
+    /// Recommended pattern for batch scanning:
+    /// ```no_run
+    /// # use monero_rust::{WalletState, rpc::ConnectionConfig};
+    /// # async fn example(wallet: &mut WalletState) -> Result<(), Box<dyn std::error::Error>> {
+    /// let config = ConnectionConfig::new("http://node.example.com:18081".to_string());
+    /// wallet.connect(config).await?;
+    ///
+    /// for height in 1000000..1001000 {
+    ///     wallet.scan_block_by_height(height).await?;
+    ///
+    ///     // Save every 100 blocks to avoid losing too much progress
+    ///     if height % 100 == 0 {
+    ///         wallet.save().await?;
+    ///         println!("Progress saved at block {}", height);
+    ///     }
+    /// }
+    /// wallet.save().await?;  // Final save
+    /// # Ok(())
+    /// # }
+    /// ```
     ///
     /// # Example
     /// ```no_run
@@ -1119,25 +1203,26 @@ impl WalletState {
         self.scan_block(block, height).await
     }
 
-    /// Processes a single discovered output and adds it to wallet state.
+    /// Converts a WalletOutput to SerializableOutput format without mutating state.
     ///
-    /// Converts monero-oxide WalletOutput to our SerializableOutput format
-    /// and stores it indexed by key image.
+    /// This function performs pure conversion, computing the key image and extracting
+    /// all necessary data from the WalletOutput. It does not modify wallet state,
+    /// allowing for atomic updates in the caller.
     ///
     /// # Arguments
     /// * `wallet_output` - The discovered output from scanner
     /// * `block_height` - The height of the block containing this output
     ///
     /// # Returns
-    /// * `Ok(())` on success
+    /// * `Ok(SerializableOutput)` - The converted output ready to be stored
     ///
     /// # Errors
     /// * `WalletError::Other` - If key image computation fails
-    fn process_discovered_output(
-        &mut self,
+    fn convert_wallet_output_to_serializable(
+        &self,
         wallet_output: monero_wallet::WalletOutput,
         block_height: u64,
-    ) -> Result<(), WalletError> {
+    ) -> Result<SerializableOutput, WalletError> {
         // Extract key image (for indexing and spent detection)
         let key_image = self.compute_key_image(&wallet_output)?;
 
@@ -1163,33 +1248,7 @@ impl WalletState {
             frozen: false,
         };
 
-        // Check for duplicates before inserting
-        if let Some(existing) = self.outputs.get(&key_image) {
-            // Check if it's the exact same output (rescanning after reorg)
-    /// Computes the cryptographically correct key image for an output.
-                // Same output being rescanned - this is OK, just update it
-                self.outputs.insert(key_image, serializable_output);
-                return Ok(());
-            }
-
-            // Different output with same key image - this is a critical error
-            // This indicates either:
-            // 1. Broken key image computation (our current placeholder)
-            // 2. Cryptographic collision (extremely unlikely)
-            // 3. Data corruption
-            return Err(WalletError::Other(format!(
-                "Key image collision detected! Key image {} already exists for output {}:{}, \
-                 cannot insert new output {}:{}. This indicates broken key image computation.",
-                hex::encode(key_image),
-                hex::encode(existing.tx_hash), existing.output_index,
-                hex::encode(tx_hash), serializable_output.output_index
-            )));
-        }
-
-        // Store in outputs map (indexed by key image)
-        self.outputs.insert(key_image, serializable_output);
-
-        Ok(())
+        Ok(serializable_output)
     }
 
     /// Computes the key image for an output.
