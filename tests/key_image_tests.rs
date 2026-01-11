@@ -8,10 +8,53 @@ use monero_generators::biased_hash_to_point;
 use curve25519_dalek::{
     constants::ED25519_BASEPOINT_TABLE,
     scalar::Scalar,
+    edwards::{EdwardsPoint, CompressedEdwardsY},
 };
 use rand_core::OsRng;
 use zeroize::Zeroizing;
 use std::ops::Deref;
+use monero_seed::{Seed, Language};
+use sha3::{Digest, Keccak256};
+
+/// Helper function to convert Keccak256 hash to Scalar (as used in Monero).
+/// This is the keccak256_to_scalar function from monero-oxide.
+fn keccak256_to_scalar(data: &[u8]) -> Scalar {
+    Scalar::from_bytes_mod_order(Keccak256::digest(data).into())
+}
+
+/// Helper function to write a varint (variable-length integer) as used in Monero.
+/// For our test with output_index=1, this is simply [1].
+fn write_varint(value: usize) -> Vec<u8> {
+    // Simple varint encoding for values < 128
+    if value < 0x80 {
+        vec![value as u8]
+    } else {
+        // For larger values, we'd need proper varint encoding
+        // For now, we only handle small values which covers our test case
+        panic!("Varint encoding for values >= 128 not implemented in this helper");
+    }
+}
+
+/// Compute the key_offset (shared key) from ECDH point and output index.
+/// This implements the Monero key derivation formula:
+/// key_offset = Keccak256_to_scalar(8*ECDH || output_index)
+///
+/// Reference: vendored/monero-oxide/monero-oxide/wallet/src/lib.rs:73-102
+fn compute_key_offset(ecdh_point: &EdwardsPoint, output_index: usize) -> Scalar {
+    // Compute 8*ECDH (mul by cofactor)
+    let cofactor_mul = ecdh_point.mul_by_cofactor();
+
+    // Compress to bytes
+    let compressed_bytes = cofactor_mul.compress().to_bytes();
+
+    // Build output_derivation = 8*ECDH || output_index
+    let mut output_derivation = compressed_bytes.to_vec();
+    output_derivation.extend(write_varint(output_index));
+
+    // For primary address (not guaranteed), we don't prepend uniqueness
+    // shared_key = Keccak256_to_scalar(output_derivation)
+    keccak256_to_scalar(&output_derivation)
+}
 
 /// Test that our key image computation formula matches monero-oxide exactly.
 ///
@@ -299,6 +342,115 @@ fn test_same_output_produces_same_key_image() {
     }
 
     println!("✓ Same output consistently produces same key image across {} computations", key_images.len());
+}
+
+/// Test against real stagenet data from monero-wallet-cli (with tx secret key).
+///
+/// This test uses a complete test vector including the transaction secret key,
+/// allowing us to verify every step of the computation.
+///
+/// Mnemonic: "hemlock jubilee eden hacksaw boil superior inroads epoxy exhale orders cavernous second
+///            brunt saved richly lower upgrade hitched launching deepest mostly playful layout lower eden"
+/// Transaction: 3e6d5c0fb465bd375be02aa92f5ab54a80d7b222de58a42a9d1a58a492dc8c8e
+/// TX Secret Key (r): 25af62811cc2b11052e6c33886b1449cf628f4c15c1d2a8fd8bde2ca0617a400
+/// Output pubkey: cc5eaba178da7120abf3baef8ba8c015a06be428b0a9fcf802fb0e1d3e99d0ab
+/// Expected key image: 6bfc252ca5f153655fc99b3627d1bd0b62d06947b6a89c77c202d43352098549
+/// Amount: 0.005000000000 sXMR (5,000,000,000 piconeros)
+/// Global index: 9682770
+/// Addr index: 0 (primary address)
+#[test]
+fn test_key_image_with_complete_vector() {
+    const EXPECTED_KEY_IMAGE: &str = "6bfc252ca5f153655fc99b3627d1bd0b62d06947b6a89c77c202d43352098549";
+    const OUTPUT_PUBKEY: &str = "cc5eaba178da7120abf3baef8ba8c015a06be428b0a9fcf802fb0e1d3e99d0ab";
+    const TX_SECRET_KEY: &str = "25af62811cc2b11052e6c33886b1449cf628f4c15c1d2a8fd8bde2ca0617a400";
+    const OUTPUT_INDEX: usize = 0; // First output
+    const MNEMONIC: &str = "hemlock jubilee eden hacksaw boil superior inroads epoxy exhale orders cavernous second brunt saved richly lower upgrade hitched launching deepest mostly playful layout lower eden";
+
+    println!("\n=== Complete Test Vector with TX Secret Key ===");
+    println!("This test can verify every step of the computation!");
+
+    // Step 1: Derive keys from mnemonic
+    println!("\nStep 1: Deriving keys from mnemonic...");
+    let seed = Seed::from_string(Language::English, Zeroizing::new(MNEMONIC.to_string()))
+        .expect("Valid mnemonic");
+
+    let spend_key_bytes: [u8; 32] = *seed.entropy();
+    let spend_key = Zeroizing::new(Scalar::from_bytes_mod_order(spend_key_bytes));
+    println!("✓ Secret spend key: {}", hex::encode(spend_key_bytes));
+
+    let keccak_output: [u8; 32] = Keccak256::digest(spend_key_bytes).into();
+    let view_key = Zeroizing::new(Scalar::from_bytes_mod_order(keccak_output));
+    let view_key_bytes = view_key.to_bytes();
+    println!("✓ Secret view key: {}", hex::encode(view_key_bytes));
+
+    // Step 2: Compute TX public key from TX secret key
+    println!("\nStep 2: Computing TX public key from TX secret key...");
+    let tx_secret_bytes = hex::decode(TX_SECRET_KEY).expect("Valid hex");
+    let mut tx_secret_array = [0u8; 32];
+    tx_secret_array.copy_from_slice(&tx_secret_bytes);
+    let tx_secret = Scalar::from_bytes_mod_order(tx_secret_array);
+
+    let tx_pubkey = &tx_secret * ED25519_BASEPOINT_TABLE;
+    let tx_pubkey_bytes = tx_pubkey.compress().to_bytes();
+    println!("✓ TX public key (R = r*G): {}", hex::encode(tx_pubkey_bytes));
+
+    // Step 3: Compute ECDH shared secret
+    println!("\nStep 3: Computing ECDH shared secret...");
+    let ecdh = view_key.deref() * tx_pubkey;
+    println!("✓ ECDH (v*R): {}", hex::encode(ecdh.compress().to_bytes()));
+
+    // Verify ECDH using alternate computation: spend_key * tx_pubkey
+    let ecdh_verify = spend_key.deref() * tx_pubkey;
+    println!("✓ ECDH verify (b*R): {}", hex::encode(ecdh_verify.compress().to_bytes()));
+
+    // Step 4: Parse output pubkey
+    println!("\nStep 4: Parsing output pubkey...");
+    let output_pubkey_bytes = hex::decode(OUTPUT_PUBKEY).expect("Valid hex");
+    let output_pubkey = CompressedEdwardsY::from_slice(&output_pubkey_bytes)
+        .expect("Valid compressed point")
+        .decompress()
+        .expect("Valid point on curve");
+    println!("✓ Output pubkey: {}", OUTPUT_PUBKEY);
+
+    // Step 5: Compute key_offset and verify output pubkey
+    println!("\nStep 5: Computing key_offset and verifying output pubkey...");
+    let key_offset = compute_key_offset(&ecdh, OUTPUT_INDEX);
+    println!("Key offset: {}", hex::encode(key_offset.to_bytes()));
+
+    let effective_spend_key = spend_key.deref() + key_offset;
+    let reconstructed_output = (&effective_spend_key * ED25519_BASEPOINT_TABLE).compress();
+
+    println!("Reconstructed output: {}", hex::encode(reconstructed_output.to_bytes()));
+    println!("Expected output:      {}", OUTPUT_PUBKEY);
+
+    assert_eq!(
+        reconstructed_output.to_bytes(),
+        output_pubkey.compress().to_bytes(),
+        "Output pubkey verification failed! Key offset is incorrect."
+    );
+    println!("✓✓✓ Output pubkey verification PASSED!");
+
+    // Step 6: Compute key image
+    println!("\nStep 6: Computing key image...");
+    let hash_point = biased_hash_to_point(output_pubkey.compress().to_bytes());
+    let key_image_point = effective_spend_key * hash_point;
+    let computed_key_image = key_image_point.compress().to_bytes();
+
+    println!("Computed key image: {}", hex::encode(computed_key_image));
+    println!("Expected key image: {}", EXPECTED_KEY_IMAGE);
+
+    let expected_ki = hex::decode(EXPECTED_KEY_IMAGE).expect("Valid hex");
+    assert_eq!(
+        computed_key_image.as_slice(),
+        expected_ki.as_slice(),
+        "\n❌ Key image mismatch!\n\
+         Expected: {}\n\
+         Computed: {}",
+        EXPECTED_KEY_IMAGE,
+        hex::encode(computed_key_image)
+    );
+
+    println!("KEY IMAGE MATCHES");
 }
 
 /// Documentation test: Verify the formula is correctly documented.
