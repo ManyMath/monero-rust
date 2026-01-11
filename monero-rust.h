@@ -63,6 +63,143 @@ char *generate_mnemonic(uint8_t language);
 void wallet_free(struct WalletState *wallet);
 
 /**
+ * Gets the filesystem path where the wallet is stored.
+ *
+ * # Arguments
+ * * `wallet` - Pointer to WalletState
+ *
+ * # Returns
+ * * C string containing the wallet file path (UTF-8 encoded)
+ * * null pointer on error or if the path contains invalid UTF-8
+ *
+ * # Safety
+ * The returned string must be freed using `free_string()`.
+ *
+ * # Note
+ * Returns null if the path is not valid UTF-8. On Unix systems, paths can
+ * contain arbitrary bytes, so callers should handle this case appropriately.
+ */
+char *wallet_get_path(const struct WalletState *wallet);
+
+/**
+ * Gets the wallet's private spend key.
+ *
+ * # Arguments
+ * * `wallet` - Pointer to WalletState
+ *
+ * # Returns
+ * * C string containing the hex-encoded private spend key for normal wallets
+ * * null pointer for view-only wallets or on error
+ *
+ * # Safety
+ * The returned string must be freed using `free_string()`.
+ */
+char *wallet_get_private_spend_key(const struct WalletState *wallet);
+
+/**
+ * Gets the wallet's private view key.
+ *
+ * # Arguments
+ * * `wallet` - Pointer to WalletState
+ *
+ * # Returns
+ * * C string containing the hex-encoded private view key
+ * * null pointer on error
+ *
+ * # Safety
+ * The returned string must be freed using `free_string()`.
+ */
+char *wallet_get_private_view_key(const struct WalletState *wallet);
+
+/**
+ * Gets the wallet's public spend key.
+ *
+ * # Arguments
+ * * `wallet` - Pointer to WalletState
+ *
+ * # Returns
+ * * C string containing the hex-encoded public spend key
+ * * null pointer on error
+ *
+ * # Safety
+ * The returned string must be freed using `free_string()`.
+ */
+char *wallet_get_public_spend_key(const struct WalletState *wallet);
+
+/**
+ * Gets the wallet's public view key.
+ *
+ * # Arguments
+ * * `wallet` - Pointer to WalletState
+ *
+ * # Returns
+ * * C string containing the hex-encoded public view key
+ * * null pointer on error
+ *
+ * # Safety
+ * The returned string must be freed using `free_string()`.
+ */
+char *wallet_get_public_view_key(const struct WalletState *wallet);
+
+/**
+ * Gets the wallet's mnemonic seed.
+ *
+ * # Arguments
+ * * `wallet` - Pointer to WalletState
+ *
+ * # Returns
+ * * C string containing the mnemonic seed for normal wallets
+ * * null pointer for view-only wallets or on error
+ *
+ * # Safety
+ * The returned string must be freed using `free_string()`.
+ */
+char *wallet_get_seed(const struct WalletState *wallet);
+
+/**
+ * Gets the language of the wallet's mnemonic seed.
+ *
+ * # Arguments
+ * * `wallet` - Pointer to WalletState
+ *
+ * # Returns
+ * * C string containing the seed language (e.g., "English")
+ * * null pointer on error
+ *
+ * # Safety
+ * The returned string must be freed using `free_string()`.
+ */
+char *wallet_get_seed_language(const struct WalletState *wallet);
+
+/**
+ * Checks if the wallet is closed.
+ *
+ * # Arguments
+ * * `wallet` - Pointer to WalletState
+ *
+ * # Returns
+ * * 1 if wallet is closed
+ * * 0 if wallet is open
+ * * -1 on error (null pointer)
+ * * -5 on panic
+ */
+int32_t wallet_is_closed(const struct WalletState *wallet);
+
+/**
+ * Checks if the wallet is view-only (no spend key).
+ *
+ * # Arguments
+ * * `wallet` - Pointer to WalletState
+ *
+ * # Returns
+ * * 1 if view-only wallet
+ * * 0 if normal wallet (has spend key)
+ * * -1 on error (null pointer)
+ * * -5 on panic
+ */
+int32_t wallet_is_view_only(const struct WalletState *wallet);
+
+/**
  * Loads a WalletState from a file with password decryption.
  *
  * # Arguments
