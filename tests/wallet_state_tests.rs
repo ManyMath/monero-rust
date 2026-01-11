@@ -785,3 +785,256 @@ fn test_wallet_atomic_write_integrity() {
         wallet_state.seed.as_ref().expect("Seed should be Some").to_string()
     );
 }
+// ==================== GETTER TESTS ====================
+
+#[test]
+fn test_getters_on_normal_wallet() {
+    use monero_seed::Seed;
+    use rand_core::OsRng;
+    use tempfile::tempdir;
+
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let wallet_path = temp_dir.path().join("test_getter_wallet.bin");
+    let password = "test_password_123";
+
+    // Create a normal wallet (with spend key)
+    let seed = Seed::new(&mut OsRng, Language::English);
+    let wallet = WalletState::new(
+        seed,
+        String::from("English"),
+        Network::Mainnet,
+        password,
+        wallet_path.clone(),
+        0,
+    )
+    .expect("Failed to create wallet");
+
+    // Test get_seed() - should return Some for normal wallet
+    let seed_result = wallet.get_seed();
+    assert!(seed_result.is_some(), "get_seed() should return Some for normal wallet");
+    let seed_string = seed_result.unwrap();
+    assert!(!seed_string.is_empty(), "Seed should not be empty");
+    // Monero seeds are 25 words
+    assert_eq!(seed_string.split_whitespace().count(), 25, "Seed should have 25 words");
+
+    // Test get_seed_language()
+    let language = wallet.get_seed_language();
+    assert_eq!(language, "English", "Seed language should be English");
+
+    // Test get_private_spend_key() - should return Some for normal wallet
+    let spend_key = wallet.get_private_spend_key();
+    assert!(spend_key.is_some(), "get_private_spend_key() should return Some for normal wallet");
+    let spend_key_hex = spend_key.unwrap();
+    assert_eq!(spend_key_hex.len(), 64, "Private spend key should be 64 hex chars (32 bytes)");
+    assert!(spend_key_hex.chars().all(|c| c.is_ascii_hexdigit()), "Spend key should be valid hex");
+
+    // Test get_private_view_key()
+    let view_key = wallet.get_private_view_key();
+    assert_eq!(view_key.len(), 64, "Private view key should be 64 hex chars (32 bytes)");
+    assert!(view_key.chars().all(|c| c.is_ascii_hexdigit()), "View key should be valid hex");
+
+    // Test get_public_spend_key()
+    let pub_spend = wallet.get_public_spend_key();
+    assert_eq!(pub_spend.len(), 64, "Public spend key should be 64 hex chars (32 bytes)");
+    assert!(pub_spend.chars().all(|c| c.is_ascii_hexdigit()), "Public spend key should be valid hex");
+
+    // Test get_public_view_key()
+    let pub_view = wallet.get_public_view_key();
+    assert_eq!(pub_view.len(), 64, "Public view key should be 64 hex chars (32 bytes)");
+    assert!(pub_view.chars().all(|c| c.is_ascii_hexdigit()), "Public view key should be valid hex");
+
+    // Test get_path()
+    let path = wallet.get_path();
+    assert_eq!(path, wallet_path.as_path(), "get_path() should return the correct wallet path");
+
+    // Test is_view_only() - should be false for normal wallet
+    assert!(!wallet.is_view_only(), "Normal wallet should not be view-only");
+
+    // Test is_closed flag - should be false initially
+    assert!(!wallet.is_closed, "Wallet should not be closed initially");
+}
+
+#[test]
+fn test_getters_on_view_only_wallet() {
+    use monero_seed::Seed;
+    use rand_core::OsRng;
+    use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar, edwards::EdwardsPoint};
+    use sha3::{Digest, Keccak256};
+    use tempfile::tempdir;
+
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let wallet_path = temp_dir.path().join("test_view_only_getter_wallet.bin");
+    let password = "view_only_password";
+
+    // Create keys from a seed (but won't store the spend key)
+    let seed = Seed::new(&mut OsRng, Language::Spanish);
+    let spend: [u8; 32] = *seed.entropy();
+    let spend_scalar = Scalar::from_bytes_mod_order(spend);
+    let spend_point: EdwardsPoint = &spend_scalar * ED25519_BASEPOINT_TABLE;
+    let view: [u8; 32] = Keccak256::digest(&spend).into();
+
+    // Create a view-only wallet
+    let wallet = WalletState::new_view_only(
+        spend_point.compress().to_bytes(),
+        view,
+        Network::Testnet,
+        password,
+        wallet_path.clone(),
+        0,
+    )
+    .expect("Failed to create view-only wallet");
+
+    // Test get_seed() - should return None for view-only wallet
+    assert!(wallet.get_seed().is_none(), "get_seed() should return None for view-only wallet");
+
+    // Test get_private_spend_key() - should return None for view-only wallet
+    assert!(
+        wallet.get_private_spend_key().is_none(),
+        "get_private_spend_key() should return None for view-only wallet"
+    );
+
+    // Test get_private_view_key() - should work for view-only wallet
+    let view_key = wallet.get_private_view_key();
+    assert_eq!(view_key.len(), 64, "Private view key should be 64 hex chars");
+    assert!(view_key.chars().all(|c| c.is_ascii_hexdigit()), "View key should be valid hex");
+
+    // Test get_public_spend_key() - should work for view-only wallet
+    let pub_spend = wallet.get_public_spend_key();
+    assert_eq!(pub_spend.len(), 64, "Public spend key should be 64 hex chars");
+    assert!(pub_spend.chars().all(|c| c.is_ascii_hexdigit()), "Public spend key should be valid hex");
+
+    // Test get_public_view_key() - should work for view-only wallet
+    let pub_view = wallet.get_public_view_key();
+    assert_eq!(pub_view.len(), 64, "Public view key should be 64 hex chars");
+    assert!(pub_view.chars().all(|c| c.is_ascii_hexdigit()), "Public view key should be valid hex");
+
+    // Test is_view_only() - should be true
+    assert!(wallet.is_view_only(), "View-only wallet should report as view-only");
+
+    // Test get_path()
+    assert_eq!(wallet.get_path(), wallet_path.as_path());
+}
+
+#[test]
+fn test_getter_key_consistency() {
+    use monero_seed::Seed;
+    use rand_core::OsRng;
+    use tempfile::tempdir;
+
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let wallet_path = temp_dir.path().join("test_consistency_wallet.bin");
+    let password = "consistency_test";
+
+    let seed = Seed::new(&mut OsRng, Language::English);
+    let wallet = WalletState::new(
+        seed,
+        String::from("English"),
+        Network::Mainnet,
+        password,
+        wallet_path,
+        0,
+    )
+    .expect("Failed to create wallet");
+
+    // Get keys multiple times to ensure consistency
+    let seed1 = wallet.get_seed();
+    let seed2 = wallet.get_seed();
+    assert_eq!(seed1, seed2, "get_seed() should return consistent results");
+
+    let priv_spend1 = wallet.get_private_spend_key();
+    let priv_spend2 = wallet.get_private_spend_key();
+    assert_eq!(priv_spend1, priv_spend2, "get_private_spend_key() should return consistent results");
+
+    let priv_view1 = wallet.get_private_view_key();
+    let priv_view2 = wallet.get_private_view_key();
+    assert_eq!(priv_view1, priv_view2, "get_private_view_key() should return consistent results");
+
+    let pub_spend1 = wallet.get_public_spend_key();
+    let pub_spend2 = wallet.get_public_spend_key();
+    assert_eq!(pub_spend1, pub_spend2, "get_public_spend_key() should return consistent results");
+
+    let pub_view1 = wallet.get_public_view_key();
+    let pub_view2 = wallet.get_public_view_key();
+    assert_eq!(pub_view1, pub_view2, "get_public_view_key() should return consistent results");
+}
+
+#[test]
+fn test_getter_after_save_and_load() {
+    use monero_seed::Seed;
+    use rand_core::OsRng;
+    use tempfile::tempdir;
+
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let wallet_path = temp_dir.path().join("test_persistence_getter_wallet.bin");
+    let password = "test_password_456";
+
+    // Create and save wallet
+    let seed = Seed::new(&mut OsRng, Language::German);
+    let original_wallet = WalletState::new(
+        seed,
+        String::from("German"),
+        Network::Stagenet,
+        password,
+        wallet_path.clone(),
+        0,
+    )
+    .expect("Failed to create wallet");
+
+    // Capture original values
+    let original_seed = original_wallet.get_seed().unwrap();
+    let original_language = original_wallet.get_seed_language().to_string();
+    let original_priv_spend = original_wallet.get_private_spend_key().unwrap();
+    let original_priv_view = original_wallet.get_private_view_key();
+    let original_pub_spend = original_wallet.get_public_spend_key();
+    let original_pub_view = original_wallet.get_public_view_key();
+
+    // Save wallet
+    original_wallet.save(password).expect("Failed to save wallet");
+
+    // Load wallet
+    let loaded_wallet = WalletState::load_from_file(&wallet_path, password)
+        .expect("Failed to load wallet");
+
+    // Verify all getters return the same values
+    assert_eq!(loaded_wallet.get_seed().unwrap(), original_seed, "Seed should match after load");
+    assert_eq!(loaded_wallet.get_seed_language(), original_language, "Language should match after load");
+    assert_eq!(loaded_wallet.get_private_spend_key().unwrap(), original_priv_spend, "Private spend key should match after load");
+    assert_eq!(loaded_wallet.get_private_view_key(), original_priv_view, "Private view key should match after load");
+    assert_eq!(loaded_wallet.get_public_spend_key(), original_pub_spend, "Public spend key should match after load");
+    assert_eq!(loaded_wallet.get_public_view_key(), original_pub_view, "Public view key should match after load");
+    assert_eq!(loaded_wallet.get_path(), wallet_path.as_path(), "Path should match after load");
+    assert!(!loaded_wallet.is_view_only(), "Wallet should still be normal (not view-only) after load");
+}
+
+#[test]
+fn test_getter_is_closed_flag() {
+    use monero_seed::Seed;
+    use rand_core::OsRng;
+    use tempfile::tempdir;
+
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let wallet_path = temp_dir.path().join("test_closed_wallet.bin");
+    let password = "closed_test";
+
+    let seed = Seed::new(&mut OsRng, Language::English);
+    let mut wallet = WalletState::new(
+        seed,
+        String::from("English"),
+        Network::Mainnet,
+        password,
+        wallet_path,
+        0,
+    )
+    .expect("Failed to create wallet");
+
+    // Initially should not be closed
+    assert!(!wallet.is_closed, "Wallet should not be closed initially");
+
+    // Manually set closed flag (simulating close operation)
+    wallet.is_closed = true;
+
+    // Now should be closed
+    assert!(wallet.is_closed, "Wallet should be closed after setting flag");
+}
+
+// ==================== END GETTER TESTS ====================
