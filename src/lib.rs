@@ -492,6 +492,308 @@ pub extern "C" fn wallet_free(wallet: *mut WalletState) {
     }
 }
 
+// ==================== WALLET GETTERS FFI ====================
+
+/// Gets the wallet's mnemonic seed.
+///
+/// # Arguments
+/// * `wallet` - Pointer to WalletState
+///
+/// # Returns
+/// * C string containing the mnemonic seed for normal wallets
+/// * null pointer for view-only wallets or on error
+///
+/// # Safety
+/// The returned string must be freed using `free_string()`.
+#[no_mangle]
+pub extern "C" fn wallet_get_seed(wallet: *const WalletState) -> *mut c_char {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() {
+            return std::ptr::null_mut();
+        }
+
+        let wallet_ref = unsafe { &*wallet };
+
+        match wallet_ref.get_seed() {
+            Some(seed) => to_c_string(seed),
+            None => std::ptr::null_mut(),
+        }
+    }));
+
+    match result {
+        Ok(ptr) => ptr,
+        Err(_) => {
+            eprintln!("PANIC in wallet_get_seed");
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Gets the language of the wallet's mnemonic seed.
+///
+/// # Arguments
+/// * `wallet` - Pointer to WalletState
+///
+/// # Returns
+/// * C string containing the seed language (e.g., "English")
+/// * null pointer on error
+///
+/// # Safety
+/// The returned string must be freed using `free_string()`.
+#[no_mangle]
+pub extern "C" fn wallet_get_seed_language(wallet: *const WalletState) -> *mut c_char {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() {
+            return std::ptr::null_mut();
+        }
+
+        let wallet_ref = unsafe { &*wallet };
+        to_c_string(wallet_ref.get_seed_language().to_string())
+    }));
+
+    match result {
+        Ok(ptr) => ptr,
+        Err(_) => {
+            eprintln!("PANIC in wallet_get_seed_language");
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Gets the wallet's private spend key.
+///
+/// # Arguments
+/// * `wallet` - Pointer to WalletState
+///
+/// # Returns
+/// * C string containing the hex-encoded private spend key for normal wallets
+/// * null pointer for view-only wallets or on error
+///
+/// # Safety
+/// The returned string must be freed using `free_string()`.
+#[no_mangle]
+pub extern "C" fn wallet_get_private_spend_key(wallet: *const WalletState) -> *mut c_char {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() {
+            return std::ptr::null_mut();
+        }
+
+        let wallet_ref = unsafe { &*wallet };
+
+        match wallet_ref.get_private_spend_key() {
+            Some(key) => to_c_string(key),
+            None => std::ptr::null_mut(),
+        }
+    }));
+
+    match result {
+        Ok(ptr) => ptr,
+        Err(_) => {
+            eprintln!("PANIC in wallet_get_private_spend_key");
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Gets the wallet's private view key.
+///
+/// # Arguments
+/// * `wallet` - Pointer to WalletState
+///
+/// # Returns
+/// * C string containing the hex-encoded private view key
+/// * null pointer on error
+///
+/// # Safety
+/// The returned string must be freed using `free_string()`.
+#[no_mangle]
+pub extern "C" fn wallet_get_private_view_key(wallet: *const WalletState) -> *mut c_char {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() {
+            return std::ptr::null_mut();
+        }
+
+        let wallet_ref = unsafe { &*wallet };
+        to_c_string(wallet_ref.get_private_view_key())
+    }));
+
+    match result {
+        Ok(ptr) => ptr,
+        Err(_) => {
+            eprintln!("PANIC in wallet_get_private_view_key");
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Gets the wallet's public spend key.
+///
+/// # Arguments
+/// * `wallet` - Pointer to WalletState
+///
+/// # Returns
+/// * C string containing the hex-encoded public spend key
+/// * null pointer on error
+///
+/// # Safety
+/// The returned string must be freed using `free_string()`.
+#[no_mangle]
+pub extern "C" fn wallet_get_public_spend_key(wallet: *const WalletState) -> *mut c_char {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() {
+            return std::ptr::null_mut();
+        }
+
+        let wallet_ref = unsafe { &*wallet };
+        to_c_string(wallet_ref.get_public_spend_key())
+    }));
+
+    match result {
+        Ok(ptr) => ptr,
+        Err(_) => {
+            eprintln!("PANIC in wallet_get_public_spend_key");
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Gets the wallet's public view key.
+///
+/// # Arguments
+/// * `wallet` - Pointer to WalletState
+///
+/// # Returns
+/// * C string containing the hex-encoded public view key
+/// * null pointer on error
+///
+/// # Safety
+/// The returned string must be freed using `free_string()`.
+#[no_mangle]
+pub extern "C" fn wallet_get_public_view_key(wallet: *const WalletState) -> *mut c_char {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() {
+            return std::ptr::null_mut();
+        }
+
+        let wallet_ref = unsafe { &*wallet };
+        to_c_string(wallet_ref.get_public_view_key())
+    }));
+
+    match result {
+        Ok(ptr) => ptr,
+        Err(_) => {
+            eprintln!("PANIC in wallet_get_public_view_key");
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Gets the filesystem path where the wallet is stored.
+///
+/// # Arguments
+/// * `wallet` - Pointer to WalletState
+///
+/// # Returns
+/// * C string containing the wallet file path (UTF-8 encoded)
+/// * null pointer on error or if the path contains invalid UTF-8
+///
+/// # Safety
+/// The returned string must be freed using `free_string()`.
+///
+/// # Note
+/// Returns null if the path is not valid UTF-8. On Unix systems, paths can
+/// contain arbitrary bytes, so callers should handle this case appropriately.
+#[no_mangle]
+pub extern "C" fn wallet_get_path(wallet: *const WalletState) -> *mut c_char {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() {
+            return std::ptr::null_mut();
+        }
+
+        let wallet_ref = unsafe { &*wallet };
+
+        // Try to convert path to UTF-8 string
+        // Return null if the path contains invalid UTF-8 (rather than silently corrupting it)
+        match wallet_ref.get_path().to_str() {
+            Some(path_str) => to_c_string(path_str.to_string()),
+            None => {
+                eprintln!("WARN: wallet_get_path called on wallet with non-UTF-8 path");
+                std::ptr::null_mut()
+            }
+        }
+    }));
+
+    match result {
+        Ok(ptr) => ptr,
+        Err(_) => {
+            eprintln!("PANIC in wallet_get_path");
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Checks if the wallet is view-only (no spend key).
+///
+/// # Arguments
+/// * `wallet` - Pointer to WalletState
+///
+/// # Returns
+/// * 1 if view-only wallet
+/// * 0 if normal wallet (has spend key)
+/// * -1 on error (null pointer)
+/// * -5 on panic
+#[no_mangle]
+pub extern "C" fn wallet_is_view_only(wallet: *const WalletState) -> i32 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() {
+            return -1;
+        }
+
+        let wallet_ref = unsafe { &*wallet };
+        if wallet_ref.is_view_only() { 1 } else { 0 }
+    }));
+
+    match result {
+        Ok(code) => code,
+        Err(_) => {
+            eprintln!("PANIC in wallet_is_view_only");
+            -5
+        }
+    }
+}
+
+/// Checks if the wallet is closed.
+///
+/// # Arguments
+/// * `wallet` - Pointer to WalletState
+///
+/// # Returns
+/// * 1 if wallet is closed
+/// * 0 if wallet is open
+/// * -1 on error (null pointer)
+/// * -5 on panic
+#[no_mangle]
+pub extern "C" fn wallet_is_closed(wallet: *const WalletState) -> i32 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if wallet.is_null() {
+            return -1;
+        }
+
+        let wallet_ref = unsafe { &*wallet };
+        if wallet_ref.is_closed { 1 } else { 0 }
+    }));
+
+    match result {
+        Ok(code) => code,
+        Err(_) => {
+            eprintln!("PANIC in wallet_is_closed");
+            -5
+        }
+    }
+}
+
+// ==================== END WALLET GETTERS FFI ====================
+
 #[cfg(test)]
 mod tests {
     use super::*;
