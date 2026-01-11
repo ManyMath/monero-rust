@@ -18,6 +18,16 @@
 
 
 /**
+ * Size of AES-GCM nonce in bytes
+ */
+#define NONCE_SIZE 12
+
+/**
+ * Size of salt for Argon2id in bytes
+ */
+#define SALT_SIZE 32
+
+/**
  * Comprehensive wallet state containing all data needed for wallet operations.
  *
  * This structure maintains the complete state of a Monero wallet, including:
