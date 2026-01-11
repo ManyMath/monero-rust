@@ -818,6 +818,122 @@ impl WalletState {
         self.is_connected
     }
 
+    // ==================== BASIC GETTERS ====================
+
+    /// Returns the wallet's mnemonic seed as a string.
+    ///
+    /// # Returns
+    /// - `Some(String)` containing the mnemonic seed for normal wallets
+    /// - `None` for view-only wallets (no seed available)
+    ///
+    /// # Security Note
+    /// The returned String is NOT zeroized. Callers should avoid storing this value
+    /// long-term or should use a future secure API that returns Zeroizing types.
+    pub fn get_seed(&self) -> Option<String> {
+        self.seed.as_ref().map(|seed| {
+            // Seed::to_string() returns Zeroizing<String>
+            // We extract the inner String (this creates a copy, not zeroized)
+            let zeroized_string = seed.to_string();
+            (*zeroized_string).clone()
+        })
+    }
+
+    /// Returns the language of the wallet's mnemonic seed.
+    ///
+    /// # Returns
+    /// The seed language as a string (e.g., "English", "Spanish", etc.)
+    pub fn get_seed_language(&self) -> &str {
+        &self.seed_language
+    }
+
+    /// Returns the wallet's private spend key as a hex string.
+    ///
+    /// # Returns
+    /// - `Some(String)` containing the hex-encoded private spend key for normal wallets
+    /// - `None` for view-only wallets (no spend key available)
+    ///
+    /// # Security Note
+    /// Intermediate values are zeroized during computation, but the returned String
+    /// is NOT zeroized. Callers should avoid storing this value long-term or should
+    /// use a future secure API that returns Zeroizing types.
+    pub fn get_private_spend_key(&self) -> Option<String> {
+        self.spend_key.as_ref().map(|key| {
+            // Use Zeroizing for intermediate byte array
+            let bytes = Zeroizing::new(key.to_bytes());
+            hex::encode(&*bytes)
+        })
+    }
+
+    /// Returns the wallet's private view key as a hex string.
+    ///
+    /// # Returns
+    /// The hex-encoded private view key (available for all wallet types)
+    ///
+    /// # Implementation Notes
+    ///
+    /// For normal wallets: Recomputes the view key from the seed using Keccak256
+    /// as per Monero's key derivation spec (view_key = Keccak256(seed_entropy)).
+    /// This recomputation is necessary because ViewPair's private view scalar is
+    /// not directly accessible (pub(crate) field).
+    ///
+    /// For view-only wallets: Returns the stored private view key that was
+    /// provided during wallet creation.
+    ///
+    /// # Security Note
+    /// Intermediate values are zeroized during computation, but the returned String
+    /// is NOT zeroized. Callers should avoid storing this value long-term or should
+    /// use a future secure API that returns Zeroizing types.
+    ///
+    /// # Panics
+    /// Panics if the wallet is in an invalid state (no seed AND no view key).
+    /// This should never happen if the wallet was constructed correctly.
+    pub fn get_private_view_key(&self) -> String {
+        use sha3::{Digest, Keccak256};
+
+        // For regular wallets, compute from seed
+        if let Some(seed) = &self.seed {
+            // Use Zeroizing for the computed view key bytes
+            let view_bytes: [u8; 32] = Keccak256::digest(seed.entropy()).into();
+            let view = Zeroizing::new(view_bytes);
+            hex::encode(&*view)
+        }
+        // For view-only wallets, use stored private view key
+        else if let Some(view_private) = &self.view_only_view_private {
+            hex::encode(&**view_private)
+        }
+        // This should never happen - panic to catch bugs early
+        else {
+            panic!("CRITICAL: WalletState invariant violated - no seed or view key found. This indicates a bug in wallet construction.");
+        }
+    }
+
+    /// Returns the wallet's public spend key as a hex string.
+    ///
+    /// # Returns
+    /// The hex-encoded public spend key (available for all wallet types)
+    pub fn get_public_spend_key(&self) -> String {
+        hex::encode(self.view_pair.spend().compress().to_bytes())
+    }
+
+    /// Returns the wallet's public view key as a hex string.
+    ///
+    /// # Returns
+    /// The hex-encoded public view key (available for all wallet types)
+    pub fn get_public_view_key(&self) -> String {
+        // ViewPair::view() returns the public view key (EdwardsPoint)
+        hex::encode(self.view_pair.view().compress().to_bytes())
+    }
+
+    /// Returns the filesystem path where this wallet is stored.
+    ///
+    /// # Returns
+    /// A reference to the wallet's file path
+    pub fn get_path(&self) -> &std::path::Path {
+        &self.wallet_path
+    }
+
+    // ==================== END BASIC GETTERS ====================
+
     /// Gets a cloned reference to the RPC client if connected.
     ///
     /// This is an internal helper method that also performs an on-demand
