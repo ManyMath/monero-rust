@@ -9,27 +9,33 @@ fn parse_xmr_to_piconero(s: &str) -> Result<u64, String> {
     let parts: Vec<&str> = s.split('.').collect();
     match parts.len() {
         1 => {
-            let whole: u64 = parts[0].parse().map_err(|_| format!("Invalid amount: {}", s))?;
-            whole.checked_mul(1_000_000_000_000)
+            let whole: u64 = parts[0]
+                .parse()
+                .map_err(|_| format!("Invalid amount: {}", s))?;
+            whole
+                .checked_mul(1_000_000_000_000)
                 .ok_or_else(|| "Amount overflow".to_string())
         }
         2 => {
-            let whole: u64 = parts[0].parse().map_err(|_| format!("Invalid amount: {}", s))?;
+            let whole: u64 = parts[0]
+                .parse()
+                .map_err(|_| format!("Invalid amount: {}", s))?;
             let frac_str = parts[1];
             if frac_str.len() > 12 {
                 return Err("Too many decimal places (max 12)".to_string());
             }
             let padded = format!("{:0<12}", frac_str);
-            let frac: u64 = padded.parse().map_err(|_| format!("Invalid amount: {}", s))?;
-            whole.checked_mul(1_000_000_000_000)
+            let frac: u64 = padded
+                .parse()
+                .map_err(|_| format!("Invalid amount: {}", s))?;
+            whole
+                .checked_mul(1_000_000_000_000)
                 .and_then(|w| w.checked_add(frac))
                 .ok_or_else(|| "Amount overflow".to_string())
         }
         _ => Err(format!("Invalid amount format: {}", s)),
     }
 }
-
-
 
 #[derive(Parser)]
 #[command(name = "monero-cli")]
@@ -123,7 +129,6 @@ enum Command {
         #[arg(long)]
         wallet: Option<String>,
     },
-
 }
 
 #[tokio::main]
@@ -186,7 +191,8 @@ fn cmd_generate(
         if password.is_empty() {
             eprint!("Warning: empty password provides no protection. Continue? [y/N]: ");
             let mut confirm_empty = String::new();
-            std::io::stdin().read_line(&mut confirm_empty)
+            std::io::stdin()
+                .read_line(&mut confirm_empty)
                 .map_err(|e| format!("Failed to read input: {}", e))?;
             if !confirm_empty.trim().eq_ignore_ascii_case("y") {
                 return Err("Aborted".to_string());
@@ -274,10 +280,7 @@ fn cmd_balance(wallet_path: Option<&str>) -> Result<(), String> {
 
     println!("=== Wallet Balance ===");
     println!();
-    println!(
-        "Total:    {:.12} XMR",
-        total as f64 / 1_000_000_000_000.0
-    );
+    println!("Total:    {:.12} XMR", total as f64 / 1_000_000_000_000.0);
     println!(
         "Unlocked: {:.12} XMR  ({} outputs)",
         unlocked_total as f64 / 1_000_000_000_000.0,
@@ -349,7 +352,12 @@ async fn cmd_sync(daemon: &str, wallet_path: Option<&str>) -> Result<(), String>
         }
 
         let (batch_results, returned_scanner) = monero_rust::process_fetched_batch_cached(
-            fetched, mnemonic, network, lookahead, cached_scanner, "",
+            fetched,
+            mnemonic,
+            network,
+            lookahead,
+            cached_scanner,
+            "",
         )
         .await?;
         cached_scanner = Some(returned_scanner);
@@ -365,7 +373,11 @@ async fn cmd_sync(daemon: &str, wallet_path: Option<&str>) -> Result<(), String>
         // to handle interrupted syncs that may re-fetch overlapping blocks.
         let mut new_output_count = 0;
         for output in processed.outputs_to_store {
-            if !data.outputs.iter().any(|existing| existing.key_image == output.key_image) {
+            if !data
+                .outputs
+                .iter()
+                .any(|existing| existing.key_image == output.key_image)
+            {
                 data.outputs.push(output);
                 new_output_count += 1;
             }
@@ -415,10 +427,7 @@ async fn cmd_sync(daemon: &str, wallet_path: Option<&str>) -> Result<(), String>
         "Unspent outputs: {}",
         data.outputs.iter().filter(|o| !o.spent).count()
     );
-    println!(
-        "Balance: {:.12} XMR",
-        balance as f64 / 1_000_000_000_000.0
-    );
+    println!("Balance: {:.12} XMR", balance as f64 / 1_000_000_000_000.0);
 
     Ok(())
 }
@@ -434,6 +443,9 @@ async fn cmd_transfer(
         .map_err(|e| format!("Failed to read password: {}", e))?;
 
     let mut data = wallet_file::load_wallet(&path, &password)?;
+    if data.is_view_only() {
+        return Err("Cannot transfer from a view-only wallet".to_string());
+    }
     let seed = &data.mnemonic;
     let network = &data.network;
 
@@ -452,11 +464,8 @@ async fn cmd_transfer(
 
     let selection = monero_rust::select_inputs(&spendable, amount_pico, 1, None)?;
 
-    let stored_outputs: Vec<monero_rust::native::StoredOutputData> = selection
-        .selected
-        .iter()
-        .map(|o| o.into())
-        .collect();
+    let stored_outputs: Vec<monero_rust::native::StoredOutputData> =
+        selection.selected.iter().map(|o| o.into()).collect();
 
     let prepared = monero_rust::native::prepare_transaction(
         daemon,
@@ -468,10 +477,7 @@ async fn cmd_transfer(
 
     println!("=== Transaction Summary ===");
     println!();
-    println!(
-        "Destination: {}",
-        address
-    );
+    println!("Destination: {}", address);
     println!(
         "Amount:      {:.12} XMR",
         amount_pico as f64 / 1_000_000_000_000.0
@@ -586,7 +592,6 @@ fn cmd_info(wallet_path: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-
 async fn cmd_sweep_all(
     address: &str,
     daemon: &str,
@@ -597,6 +602,9 @@ async fn cmd_sweep_all(
         .map_err(|e| format!("Failed to read password: {}", e))?;
 
     let mut data = wallet_file::load_wallet(&path, &password)?;
+    if data.is_view_only() {
+        return Err("Cannot sweep from a view-only wallet".to_string());
+    }
     let seed = &data.mnemonic;
     let network = &data.network;
 
@@ -658,22 +666,14 @@ async fn cmd_sweep_all(
     }
 
     println!("Building sweep transaction...");
-    let result = monero_rust::native::sweep_all(
-        daemon,
-        seed,
-        network,
-        stored_outputs,
-        address,
-    )
-    .await?;
+    let result =
+        monero_rust::native::sweep_all(daemon, seed, network, stored_outputs, address).await?;
 
     println!("Broadcasting transaction...");
     monero_rust::native::broadcast_transaction(daemon, &result.tx_blob, false).await?;
 
-    let spent_key_set: std::collections::HashSet<String> = spendable
-        .iter()
-        .map(|o| o.key_image.clone())
-        .collect();
+    let spent_key_set: std::collections::HashSet<String> =
+        spendable.iter().map(|o| o.key_image.clone()).collect();
     for output in &mut data.outputs {
         if spent_key_set.contains(&output.key_image) && !output.spent {
             output.spent = true;
