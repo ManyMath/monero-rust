@@ -173,8 +173,8 @@ pub struct SerializableOutput {
     /// Transaction hash
     pub tx_hash: [u8; 32],
 
-    /// Output index in the transaction
-    pub output_index: u8,
+    /// Output index in the transaction (u64 to support large transactions)
+    pub output_index: u64,
 
     /// Amount in atomic units (piconeros)
     pub amount: u64,

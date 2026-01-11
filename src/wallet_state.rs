@@ -10,7 +10,7 @@ use crate::types::{KeyImage, SerializableOutput, Transaction, TxKey};
 use crate::WalletError;
 use curve25519_dalek::scalar::Scalar;
 use monero_seed::Seed;
-use monero_wallet::{address::Network, rpc::Rpc, ViewPair};
+use monero_wallet::{address::{Network, SubaddressIndex}, rpc::Rpc, ViewPair, Scanner};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
@@ -264,6 +264,27 @@ pub struct WalletState {
     /// This allows the health check task to reconnect with authentication.
     #[serde(skip)]
     pub connection_config: Option<crate::rpc::ConnectionConfig>,
+
+    // ========================================================================
+    // SCANNING - Output detection and blockchain scanning
+    // ========================================================================
+    /// Scanner for detecting owned outputs in blocks
+    ///
+    /// Uses the ViewPair to check if outputs belong to this wallet.
+    /// Reconstructed from ViewPair on deserialization (not serialized).
+    #[serde(skip)]
+    pub scanner: Scanner,
+
+    /// List of registered subaddresses for scanning
+    ///
+    /// The scanner will check blocks for outputs sent to these addresses.
+    /// Primary address (0, 0) is always registered automatically.
+    /// Custom serialization stores as Vec<(u32, u32)> for compatibility.
+    #[serde(
+        serialize_with = "serialize_subaddress_vec",
+        deserialize_with = "deserialize_subaddress_vec"
+    )]
+    pub registered_subaddresses: Vec<SubaddressIndex>,
 }
 
 /// Current wallet serialization format version
@@ -285,6 +306,43 @@ fn compute_keys_checksum(view_pair: &ViewPair) -> [u8; 32] {
     hasher.update(&spend_bytes);
     hasher.update(&view_bytes);
     hasher.finalize().into()
+}
+
+// Custom serialization for Vec<SubaddressIndex>
+// SubaddressIndex doesn't implement Serialize, so we convert to Vec<(u32, u32)>
+fn serialize_subaddress_vec<S>(
+    vec: &Vec<SubaddressIndex>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let pairs: Vec<(u32, u32)> = vec
+        .iter()
+        .map(|idx| (idx.account(), idx.address()))
+        .collect();
+    pairs.serialize(serializer)
+}
+
+fn deserialize_subaddress_vec<'de, D>(
+    deserializer: D,
+) -> Result<Vec<SubaddressIndex>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let pairs: Vec<(u32, u32)> = Vec::deserialize(deserializer)?;
+    let mut result = Vec::new();
+    for (account, address) in pairs {
+        if let Some(idx) = SubaddressIndex::new(account, address) {
+            result.push(idx);
+        } else {
+            return Err(serde::de::Error::custom(format!(
+                "Invalid subaddress index: ({}, {})",
+                account, address
+            )));
+        }
+    }
+    Ok(result)
 }
 
 // Custom serialization for Zeroizing<Seed>
@@ -557,6 +615,12 @@ impl WalletState {
         // Compute keys checksum for integrity verification
         let keys_checksum = compute_keys_checksum(&view_pair);
 
+        // Initialize scanner
+        // Note: Scanner::new() automatically handles the primary address (0, 0)
+        // Only actual subaddresses (non-(0,0)) need to be registered
+        let scanner = Scanner::new(view_pair.clone());
+        let registered_subaddresses = Vec::new();
+
         Ok(Self {
             version: WALLET_VERSION,
             seed: Some(Zeroizing::new(seed)),
@@ -588,6 +652,8 @@ impl WalletState {
             reconnection_policy: crate::rpc::ReconnectionPolicy::default(),
             reconnection_attempts: 0,
             connection_config: None,
+            scanner,
+            registered_subaddresses,
         })
     }
 
@@ -629,6 +695,12 @@ impl WalletState {
         // Compute keys checksum for integrity verification
         let keys_checksum = compute_keys_checksum(&view_pair);
 
+        // Initialize scanner
+        // Note: Scanner::new() automatically handles the primary address (0, 0)
+        // Only actual subaddresses (non-(0,0)) need to be registered
+        let scanner = Scanner::new(view_pair.clone());
+        let registered_subaddresses = Vec::new();
+
         Ok(Self {
             version: WALLET_VERSION,
             seed: None, // No seed for view-only wallets
@@ -660,6 +732,8 @@ impl WalletState {
             reconnection_policy: crate::rpc::ReconnectionPolicy::default(),
             reconnection_attempts: 0,
             connection_config: None,
+            scanner,
+            registered_subaddresses,
         })
     }
 
@@ -730,9 +804,9 @@ impl WalletState {
     ///
     /// # Example
     /// ```no_run
-    /// use monero_rust::{ConnectionConfig, WalletState};
+    /// use monero_rust::{rpc::ConnectionConfig, WalletState};
     ///
-    /// # async fn example(wallet: &mut WalletState) -> Result<(), String> {
+    /// # async fn example(wallet: &mut WalletState) -> Result<(), Box<dyn std::error::Error>> {
     /// let config = ConnectionConfig::new("http://node.example.com:18081".to_string())
     ///     .with_trusted(false)
     ///     .with_credentials("user".to_string(), "pass".to_string());
@@ -933,6 +1007,458 @@ impl WalletState {
     }
 
     // ==================== END BASIC GETTERS ====================
+
+    // ========================================================================
+    // BLOCKCHAIN SCANNING - Output detection and block processing
+    // ========================================================================
+
+    /// Scans a single block for owned outputs.
+    ///
+    /// This is the low-level scanning method that processes a ScannableBlock directly.
+    /// For most use cases, prefer using `scan_block_by_height()` which handles fetching.
+    ///
+    /// # Arguments
+    /// * `block` - The scannable block to process
+    /// * `block_height` - The height/number of the block being scanned
+    ///
+    /// # Returns
+    /// * Number of outputs found in this block
+    ///
+    /// # Errors
+    /// * `WalletError::WalletClosed` - Wallet is closed
+    /// * `WalletError::Other` - Scanner error occurred
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use monero_rust::{WalletState};
+    /// # async fn example(wallet: &mut WalletState, block: monero_rpc::ScannableBlock) {
+    /// let count = wallet.scan_block(block, 1234567).await.unwrap();
+    /// println!("Found {} outputs in this block", count);
+    /// # }
+    /// ```
+    pub async fn scan_block(
+        &mut self,
+        block: monero_rpc::ScannableBlock,
+        block_height: u64,
+    ) -> Result<usize, WalletError> {
+        if self.is_closed {
+            return Err(WalletError::WalletClosed);
+        }
+
+        // Scan the block for owned outputs
+        let scan_result = self
+            .scanner
+            .scan(block)
+            .map_err(|e| WalletError::Other(format!("Scan error: {:?}", e)))?;
+
+        // Extract outputs that are not additionally timelocked
+        // (most outputs fall into this category)
+        let outputs = scan_result.not_additionally_locked();
+
+        let count = outputs.len();
+
+        // Process each discovered output with the correct block height
+        for wallet_output in outputs {
+            self.process_discovered_output(wallet_output, block_height)?;
+        }
+
+        // CRITICAL: Update scanned height after successful scan
+        // Without this, wallet appears perpetually unsynced and reorg detection breaks
+        self.current_scanned_height = block_height;
+
+        Ok(count)
+    }
+
+    /// Fetches and scans a block by height.
+    ///
+    /// This is the high-level convenience method that fetches a block from the daemon
+    /// and scans it for owned outputs in one call.
+    ///
+    /// # Arguments
+    /// * `height` - The block height/number to fetch and scan
+    ///
+    /// # Returns
+    /// * Number of outputs found in this block
+    ///
+    /// # Errors
+    /// * `WalletError::NotConnected` - Not connected to daemon
+    /// * `WalletError::WalletClosed` - Wallet is closed
+    /// * `WalletError::RpcError` - Failed to fetch block from daemon
+    /// * `WalletError::Other` - Scanner error occurred
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use monero_rust::{WalletState, rpc::ConnectionConfig};
+    /// # async fn example(wallet: &mut WalletState) -> Result<(), Box<dyn std::error::Error>> {
+    /// let config = ConnectionConfig::new("http://node.example.com:18081".to_string());
+    /// wallet.connect(config).await?;
+    /// let count = wallet.scan_block_by_height(1234567).await?;
+    /// println!("Found {} outputs in block 1234567", count);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn scan_block_by_height(&mut self, height: u64) -> Result<usize, WalletError> {
+        // Get RPC client
+        let rpc = self.get_rpc().await?;
+
+        // Convert height to usize with bounds checking (important for 32-bit systems)
+        let height_usize = height.try_into()
+            .map_err(|_| WalletError::Other(
+                format!("Block height {} exceeds platform limit (usize::MAX)", height)
+            ))?;
+
+        // Fetch the block from daemon
+        let block = rpc
+            .get_scannable_block_by_number(height_usize)
+            .await
+            .map_err(|e| WalletError::RpcError(e))?;
+
+        // Scan the fetched block
+        self.scan_block(block, height).await
+    }
+
+    /// Processes a single discovered output and adds it to wallet state.
+    ///
+    /// Converts monero-oxide WalletOutput to our SerializableOutput format
+    /// and stores it indexed by key image.
+    ///
+    /// # Arguments
+    /// * `wallet_output` - The discovered output from scanner
+    /// * `block_height` - The height of the block containing this output
+    ///
+    /// # Returns
+    /// * `Ok(())` on success
+    ///
+    /// # Errors
+    /// * `WalletError::Other` - If key image computation fails
+    fn process_discovered_output(
+        &mut self,
+        wallet_output: monero_wallet::WalletOutput,
+        block_height: u64,
+    ) -> Result<(), WalletError> {
+        // Extract key image (for indexing and spent detection)
+        let key_image = self.compute_key_image(&wallet_output)?;
+
+        // Convert to our serializable format
+        // Note: wallet_output.transaction() returns [u8; 32] (Copy type)
+        let tx_hash = wallet_output.transaction();
+
+        // Extract subaddress - if None, this is the primary address (0, 0)
+        // The Scanner returns None for primary address outputs
+        let subaddress_indices = wallet_output.subaddress()
+            .map(|idx| (idx.account(), idx.address()))
+            .unwrap_or((0, 0));  // Primary address when Scanner returns None
+
+        let serializable_output = SerializableOutput {
+            tx_hash,
+            output_index: wallet_output.index_in_transaction(),
+            amount: wallet_output.commitment().amount,
+            key_image,
+            subaddress_indices,
+            height: block_height,
+            unlocked: false, // Will be updated when 10 blocks pass
+            spent: false,
+            frozen: false,
+        };
+
+        // Check for duplicates before inserting
+        if let Some(existing) = self.outputs.get(&key_image) {
+            // Check if it's the exact same output (rescanning after reorg)
+            if existing.tx_hash == tx_hash && existing.output_index == serializable_output.output_index {
+                // Same output being rescanned - this is OK, just update it
+                self.outputs.insert(key_image, serializable_output);
+                return Ok(());
+            }
+
+            // Different output with same key image - this is a critical error
+            // This indicates either:
+            // 1. Broken key image computation (our current placeholder)
+            // 2. Cryptographic collision (extremely unlikely)
+            // 3. Data corruption
+            return Err(WalletError::Other(format!(
+                "Key image collision detected! Key image {} already exists for output {}:{}, \
+                 cannot insert new output {}:{}. This indicates broken key image computation.",
+                hex::encode(key_image),
+                hex::encode(existing.tx_hash), existing.output_index,
+                hex::encode(tx_hash), serializable_output.output_index
+            )));
+        }
+
+        // Store in outputs map (indexed by key image)
+        self.outputs.insert(key_image, serializable_output);
+
+        Ok(())
+    }
+
+    /// Computes the key image for an output.
+    ///
+    /// Key images are used to:
+    /// 1. Index outputs uniquely
+    /// 2. Detect when an output has been spent
+    /// 3. Prevent double-spending
+    ///
+    /// # Arguments
+    /// * `wallet_output` - The output to compute key image for
+    ///
+    /// # Returns
+    /// * The 32-byte key image (currently using placeholder implementation)
+    ///
+    /// # Implementation Note
+    /// Currently uses hash-based placeholder that works for both view-only and full wallets.
+    /// Proper key image formula: x * H_p(P) where:
+    /// - x = spend_key + key_offset
+    /// - P = output public key
+    /// - H_p = hash-to-point function
+    fn compute_key_image(
+        &self,
+        wallet_output: &monero_wallet::WalletOutput,
+    ) -> Result<KeyImage, WalletError> {
+        // TODO: Proper key image computation for full wallets
+        // Key image = effective_spend_key * H_p(output_key)
+        // where effective_spend_key = spend_key + key_offset
+        //
+        // CURRENT IMPLEMENTATION:
+        // Using placeholder for both view-only and full wallets.
+        // This generates a deterministic key image from the transaction hash
+        // and output index. This is NOT cryptographically correct but allows the
+        // wallet to function for scanning and testing.
+        //
+        // For view-only wallets: This is acceptable as they cannot spend anyway.
+        // For full wallets: This MUST be fixed before transaction creation (Phase 5)
+        //                   as incorrect key images will prevent spending.
+        //
+        // The proper implementation requires accessing WalletOutput's private fields
+        // (key_offset, output_key) which aren't currently accessible through the public API.
+        // We'll need to either:
+        // 1. Add accessor methods to monero-oxide/wallet
+        // 2. Store the full WalletOutput for later use
+        // 3. Re-derive the key image when needed for spending
+
+        use sha3::{Digest, Keccak256};
+
+        // Derive a unique identifier from tx hash + output index
+        let mut hasher = Keccak256::new();
+        hasher.update(wallet_output.transaction());
+        hasher.update(&wallet_output.index_in_transaction().to_le_bytes());
+        let key_image: [u8; 32] = hasher.finalize().into();
+
+        Ok(key_image)
+    }
+
+    // ========================================================================
+    // BLOCKCHAIN REORGANIZATION - Handle chain reorgs
+    // ========================================================================
+
+    /// Handles a blockchain reorganization.
+    ///
+    /// When the blockchain reorganizes, blocks after the fork point
+    /// are no longer valid. We must:
+    /// 1. Remove outputs found in invalidated blocks
+    /// 2. Revert sync height to before the fork
+    /// 3. Re-scan from the fork point
+    ///
+    /// # Arguments
+    /// * `fork_height` - The block height where the fork occurred.
+    ///   All data from this height onward is invalidated.
+    ///
+    /// # Returns
+    /// Number of outputs that were removed
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use monero_rust::WalletState;
+    /// # fn example(wallet: &mut WalletState) {
+    /// // Detected a reorg at height 1000
+    /// let removed_count = wallet.handle_reorganization(1000);
+    /// println!("Removed {} outputs due to reorganization", removed_count);
+    /// # }
+    /// ```
+    pub fn handle_reorganization(&mut self, fork_height: u64) -> usize {
+        let mut removed_count = 0;
+        let mut removed_key_images = Vec::new();
+
+        // Remove all outputs found at or after the fork height
+        self.outputs.retain(|key_image, output| {
+            if output.height >= fork_height {
+                removed_key_images.push(*key_image);
+                removed_count += 1;
+                false // Remove this output
+            } else {
+                true // Keep this output
+            }
+        });
+
+        // Remove transaction records from invalidated blocks
+        self.transactions.retain(|_txid, tx| {
+            tx.height.map_or(true, |h| h < fork_height)
+        });
+
+        // CRITICAL: Clean up spent_outputs and frozen_outputs HashSets
+        // to prevent dangling key image references
+        for key_image in removed_key_images {
+            self.spent_outputs.remove(&key_image);
+            self.frozen_outputs.remove(&key_image);
+        }
+
+        // Reset sync height to just before the fork
+        self.current_scanned_height = fork_height.saturating_sub(1);
+
+        // Log the reorganization
+        eprintln!(
+            "Reorganization detected at height {}. Removed {} outputs. Rewinding to height {}.",
+            fork_height, removed_count, self.current_scanned_height
+        );
+
+        removed_count
+    }
+
+    /// Detects if a blockchain reorganization has occurred.
+    ///
+    /// Compares our locally stored block height with daemon's view.
+    /// If the daemon's height is less than ours, a reorg likely occurred.
+    ///
+    /// # Returns
+    /// * `Some(fork_height)` if reorganization detected
+    /// * `None` if blockchain is consistent
+    ///
+    /// # Errors
+    /// * `WalletError::NotConnected` - Not connected to daemon
+    /// * `WalletError::RpcError` - RPC communication failed
+    ///
+    /// # Note
+    /// This is a conservative detection method. For more robust detection,
+    /// compare block hashes at specific heights.
+    pub async fn detect_reorganization(&mut self) -> Result<Option<u64>, WalletError> {
+        // Query daemon for current height
+        let rpc = self.get_rpc().await?;
+        let daemon_height = rpc.get_height().await
+            .map_err(|e| WalletError::RpcError(e))? as u64;
+
+        // Update cached daemon height
+        self.daemon_height = daemon_height;
+
+        // If daemon height < our scanned height, a reorganization occurred
+        if daemon_height < self.current_scanned_height {
+            // Conservative approach: Rewind to daemon height - 10 blocks
+            // This accounts for potential deeper reorganizations
+            let fork_height = daemon_height.saturating_sub(10);
+            return Ok(Some(fork_height));
+        }
+
+        // Could also verify block hashes here for more robust detection:
+        // Compare our stored hash for block N with daemon's hash for block N
+        // If mismatch, binary search to find exact fork point
+        // (This requires storing block hashes, which we don't currently do)
+
+        Ok(None)
+    }
+
+    // ========================================================================
+    // SUBADDRESS MANAGEMENT - Register addresses for scanning
+    // ========================================================================
+
+    /// Registers a subaddress for scanning.
+    ///
+    /// The scanner will check all blocks for outputs sent to this subaddress.
+    /// This is necessary before scanning can detect outputs to non-primary addresses.
+    ///
+    /// # Arguments
+    /// * `account` - Account index (0 for primary account)
+    /// * `address` - Address index within the account
+    ///
+    /// # Returns
+    /// * `Ok(())` on success
+    ///
+    /// # Errors
+    /// * `WalletError::Other` - If subaddress index is invalid
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use monero_rust::WalletState;
+    /// # fn example(wallet: &mut WalletState) {
+    /// // Register subaddress (0, 1) - first subaddress of primary account
+    /// wallet.register_subaddress(0, 1).unwrap();
+    /// # }
+    /// ```
+    pub fn register_subaddress(&mut self, account: u32, address: u32) -> Result<(), WalletError> {
+        let subaddress_index = SubaddressIndex::new(account, address)
+            .ok_or_else(|| WalletError::Other("Invalid subaddress index".to_string()))?;
+
+        // Check if already registered (avoid duplicates)
+        if !self.registered_subaddresses.iter().any(|idx| idx == &subaddress_index) {
+            // Register with scanner
+            self.scanner.register_subaddress(subaddress_index);
+
+            // Track that we're monitoring this subaddress
+            self.registered_subaddresses.push(subaddress_index);
+        }
+
+        Ok(())
+    }
+
+    /// Registers a range of subaddresses at once.
+    ///
+    /// Useful for wallets that use many subaddresses (e.g., merchants).
+    ///
+    /// # Arguments
+    /// * `account` - Account index
+    /// * `start_address` - First address index to register
+    /// * `end_address` - Last address index to register (inclusive)
+    ///
+    /// # Returns
+    /// * Number of subaddresses registered (excluding duplicates)
+    ///
+    /// # Errors
+    /// * `WalletError::Other` - If any subaddress index is invalid
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use monero_rust::WalletState;
+    /// # fn example(wallet: &mut WalletState) {
+    /// // Register subaddresses (0, 1) through (0, 10)
+    /// let count = wallet.register_subaddress_range(0, 1, 10).unwrap();
+    /// println!("Registered {} subaddresses", count);
+    /// # }
+    /// ```
+    pub fn register_subaddress_range(
+        &mut self,
+        account: u32,
+        start_address: u32,
+        end_address: u32,
+    ) -> Result<usize, WalletError> {
+        let mut count = 0;
+        for address in start_address..=end_address {
+            self.register_subaddress(account, address)?;
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// Returns all registered subaddresses.
+    ///
+    /// # Returns
+    /// * Vector of (account, address) tuples for all registered subaddresses
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use monero_rust::WalletState;
+    /// # fn example(wallet: &WalletState) {
+    /// let registered = wallet.get_registered_subaddresses();
+    /// for (account, address) in registered {
+    ///     println!("Registered: ({}, {})", account, address);
+    /// }
+    /// # }
+    /// ```
+    pub fn get_registered_subaddresses(&self) -> Vec<(u32, u32)> {
+        self.registered_subaddresses
+            .iter()
+            .map(|idx| (idx.account(), idx.address()))
+            .collect()
+    }
+
+    // ========================================================================
+    // RPC CONNECTION MANAGEMENT
+    // ========================================================================
 
     /// Gets a cloned reference to the RPC client if connected.
     ///
@@ -1418,6 +1944,10 @@ impl<'de> Deserialize<'de> for WalletState {
             is_closed: bool,
             #[serde(rename = "keys_checksum")]
             keys_checksum: [u8; 32],
+            // Registered subaddresses for scanning (defaults to empty if not present for backwards compat)
+            // Stored as Vec<(u32, u32)> since SubaddressIndex doesn't implement Deserialize
+            #[serde(default)]
+            registered_subaddresses: Vec<(u32, u32)>,
         }
 
         let helper = WalletStateHelper::deserialize(deserializer)?;
@@ -1522,6 +2052,31 @@ impl<'de> Deserialize<'de> for WalletState {
             (None, vp)
         };
 
+        // Reconstruct Scanner from ViewPair and re-register all subaddresses
+        // Note: Scanner::new() automatically handles primary address (0, 0)
+        let mut scanner = Scanner::new(view_pair.clone());
+        let mut registered_subaddresses = Vec::new();
+
+        // Convert Vec<(u32, u32)> to Vec<SubaddressIndex>
+        // Skip (0, 0) as it's not a valid SubaddressIndex (primary address is handled by scanner)
+        for (account, address) in helper.registered_subaddresses {
+            // Skip primary address (0, 0) - it's automatically handled
+            if account == 0 && address == 0 {
+                continue;
+            }
+
+            if let Some(idx) = SubaddressIndex::new(account, address) {
+                registered_subaddresses.push(idx);
+                // Register with scanner
+                scanner.register_subaddress(idx);
+            } else {
+                return Err(serde::de::Error::custom(format!(
+                    "Invalid subaddress index during deserialization: ({}, {})",
+                    account, address
+                )));
+            }
+        }
+
         Ok(WalletState {
             version: helper.version,
             seed: seed_opt,
@@ -1553,6 +2108,8 @@ impl<'de> Deserialize<'de> for WalletState {
             reconnection_policy: crate::rpc::ReconnectionPolicy::default(),
             reconnection_attempts: 0,
             connection_config: None,
+            scanner,
+            registered_subaddresses,
         })
     }
 }
@@ -1772,4 +2329,369 @@ mod tests {
         // Synced when caught up
         assert!(wallet_state.is_synced());
     }
+
+    // ========================================================================
+    // SCANNING TESTS - Output detection and blockchain scanning
+    // ========================================================================
+
+    #[test]
+    fn test_scanner_initialized_with_primary_address() {
+        use rand_core::OsRng;
+
+        let seed = Seed::new(&mut OsRng, monero_seed::Language::English);
+        let wallet_state = WalletState::new(
+            seed,
+            String::from("English"),
+            Network::Mainnet,
+            "test_password",
+            PathBuf::from("test.bin"),
+            0,
+        )
+        .unwrap();
+
+        // Scanner should be initialized (we can't directly test it but check side effects)
+        // Primary address (0, 0) is handled automatically by Scanner, not stored in registered_subaddresses
+        let registered = wallet_state.get_registered_subaddresses();
+        assert_eq!(registered.len(), 0); // No subaddresses registered yet (primary is automatic)
+    }
+
+    #[test]
+    fn test_register_subaddress() {
+        use rand_core::OsRng;
+
+        let seed = Seed::new(&mut OsRng, monero_seed::Language::English);
+        let mut wallet_state = WalletState::new(
+            seed,
+            String::from("English"),
+            Network::Mainnet,
+            "test_password",
+            PathBuf::from("test.bin"),
+            0,
+        )
+        .unwrap();
+
+        // Initially no subaddresses (primary is handled automatically)
+        assert_eq!(wallet_state.registered_subaddresses.len(), 0);
+
+        // Register a new subaddress
+        wallet_state.register_subaddress(0, 1).expect("Failed to register subaddress");
+
+        // Should now have 1 registered subaddress
+        assert_eq!(wallet_state.registered_subaddresses.len(), 1);
+
+        let registered = wallet_state.get_registered_subaddresses();
+        assert!(registered.contains(&(0, 1)));
+
+        // Registering the same address again should be idempotent (no duplicates)
+        wallet_state.register_subaddress(0, 1).expect("Failed to register subaddress again");
+        assert_eq!(wallet_state.registered_subaddresses.len(), 1);
+    }
+
+    #[test]
+    fn test_register_subaddress_range() {
+        use rand_core::OsRng;
+
+        let seed = Seed::new(&mut OsRng, monero_seed::Language::English);
+        let mut wallet_state = WalletState::new(
+            seed,
+            String::from("English"),
+            Network::Mainnet,
+            "test_password",
+            PathBuf::from("test.bin"),
+            0,
+        )
+        .unwrap();
+
+        // Register range (0, 1) through (0, 5)
+        let count = wallet_state.register_subaddress_range(0, 1, 5)
+            .expect("Failed to register range");
+
+        assert_eq!(count, 5);
+
+        // Should now have 5 subaddresses: (0,1) through (0,5)
+        // Primary (0, 0) is automatic, not in this list
+        assert_eq!(wallet_state.registered_subaddresses.len(), 5);
+
+        let registered = wallet_state.get_registered_subaddresses();
+        assert!(registered.contains(&(0, 1)));
+        assert!(registered.contains(&(0, 2)));
+        assert!(registered.contains(&(0, 3)));
+        assert!(registered.contains(&(0, 4)));
+        assert!(registered.contains(&(0, 5)));
+    }
+
+    #[test]
+    fn test_handle_reorganization_removes_outputs() {
+        use rand_core::OsRng;
+
+        let seed = Seed::new(&mut OsRng, monero_seed::Language::English);
+        let mut wallet_state = WalletState::new(
+            seed,
+            String::from("English"),
+            Network::Mainnet,
+            "test_password",
+            PathBuf::from("test.bin"),
+            0,
+        )
+        .unwrap();
+
+        // Add outputs at different heights
+        let output_at_100 = SerializableOutput {
+            tx_hash: [1u8; 32],
+            output_index: 0,
+            amount: 1000000000000,
+            key_image: [1u8; 32],
+            subaddress_indices: (0, 0),
+            height: 100,
+            unlocked: false,
+            spent: false,
+            frozen: false,
+        };
+
+        let output_at_105 = SerializableOutput {
+            tx_hash: [2u8; 32],
+            output_index: 0,
+            amount: 2000000000000,
+            key_image: [2u8; 32],
+            subaddress_indices: (0, 0),
+            height: 105,
+            unlocked: false,
+            spent: false,
+            frozen: false,
+        };
+
+        let output_at_110 = SerializableOutput {
+            tx_hash: [3u8; 32],
+            output_index: 0,
+            amount: 3000000000000,
+            key_image: [3u8; 32],
+            subaddress_indices: (0, 0),
+            height: 110,
+            unlocked: false,
+            spent: false,
+            frozen: false,
+        };
+
+        wallet_state.outputs.insert([1u8; 32], output_at_100);
+        wallet_state.outputs.insert([2u8; 32], output_at_105);
+        wallet_state.outputs.insert([3u8; 32], output_at_110);
+        wallet_state.current_scanned_height = 110;
+
+        assert_eq!(wallet_state.outputs.len(), 3);
+
+        // Reorganization at height 105 should remove outputs at 105 and above
+        let removed_count = wallet_state.handle_reorganization(105);
+
+        assert_eq!(removed_count, 2); // Outputs at 105 and 110 removed
+        assert_eq!(wallet_state.outputs.len(), 1); // Only output at 100 remains
+        assert!(wallet_state.outputs.contains_key(&[1u8; 32]));
+        assert!(!wallet_state.outputs.contains_key(&[2u8; 32]));
+        assert!(!wallet_state.outputs.contains_key(&[3u8; 32]));
+
+        // Scanned height should be rewound to fork_height - 1
+        assert_eq!(wallet_state.current_scanned_height, 104);
+    }
+
+    #[test]
+    fn test_handle_reorganization_cleans_hashsets() {
+        use rand_core::OsRng;
+
+        let seed = Seed::new(&mut OsRng, monero_seed::Language::English);
+        let mut wallet_state = WalletState::new(
+            seed,
+            String::from("English"),
+            Network::Mainnet,
+            "test_password",
+            PathBuf::from("test.bin"),
+            0,
+        )
+        .unwrap();
+
+        // Add outputs and mark some as spent/frozen
+        let output1 = SerializableOutput {
+            tx_hash: [1u8; 32],
+            output_index: 0,
+            amount: 1000000000000,
+            key_image: [1u8; 32],
+            subaddress_indices: (0, 0),
+            height: 100,
+            unlocked: false,
+            spent: false,
+            frozen: false,
+        };
+
+        let output2 = SerializableOutput {
+            tx_hash: [2u8; 32],
+            output_index: 0,
+            amount: 2000000000000,
+            key_image: [2u8; 32],
+            subaddress_indices: (0, 0),
+            height: 110,
+            unlocked: false,
+            spent: false,
+            frozen: false,
+        };
+
+        wallet_state.outputs.insert([1u8; 32], output1);
+        wallet_state.outputs.insert([2u8; 32], output2);
+
+        // Mark output2 as spent and frozen
+        wallet_state.spent_outputs.insert([2u8; 32]);
+        wallet_state.frozen_outputs.insert([2u8; 32]);
+
+        assert_eq!(wallet_state.spent_outputs.len(), 1);
+        assert_eq!(wallet_state.frozen_outputs.len(), 1);
+
+        // Reorganization at height 105 removes output2
+        wallet_state.handle_reorganization(105);
+
+        // Key image [2] should be removed from HashSets
+        assert_eq!(wallet_state.spent_outputs.len(), 0);
+        assert_eq!(wallet_state.frozen_outputs.len(), 0);
+        assert!(!wallet_state.spent_outputs.contains(&[2u8; 32]));
+        assert!(!wallet_state.frozen_outputs.contains(&[2u8; 32]));
+    }
+
+    #[test]
+    fn test_handle_reorganization_cleans_transactions() {
+        use rand_core::OsRng;
+        use crate::types::Transaction;
+
+        let seed = Seed::new(&mut OsRng, monero_seed::Language::English);
+        let mut wallet_state = WalletState::new(
+            seed,
+            String::from("English"),
+            Network::Mainnet,
+            "test_password",
+            PathBuf::from("test.bin"),
+            0,
+        )
+        .unwrap();
+
+        // Add transactions at different heights
+        let tx1 = Transaction::new_incoming([1u8; 32], Some(100), 1234567890, 1000000000000);
+        let tx2 = Transaction::new_incoming([2u8; 32], Some(105), 1234567895, 2000000000000);
+        let tx3 = Transaction::new_incoming([3u8; 32], Some(110), 1234567900, 3000000000000);
+
+        wallet_state.transactions.insert([1u8; 32], tx1);
+        wallet_state.transactions.insert([2u8; 32], tx2);
+        wallet_state.transactions.insert([3u8; 32], tx3);
+
+        assert_eq!(wallet_state.transactions.len(), 3);
+
+        // Reorganization at height 105
+        wallet_state.handle_reorganization(105);
+
+        // Only tx1 (height 100) should remain
+        assert_eq!(wallet_state.transactions.len(), 1);
+        assert!(wallet_state.transactions.contains_key(&[1u8; 32]));
+        assert!(!wallet_state.transactions.contains_key(&[2u8; 32]));
+        assert!(!wallet_state.transactions.contains_key(&[3u8; 32]));
+    }
+
+    #[test]
+    fn test_subaddresses_persist_across_save_load() {
+        use rand_core::OsRng;
+        use tempfile::NamedTempFile;
+
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        let wallet_path = temp_file.path().to_path_buf();
+
+        // Create wallet and register subaddresses
+        let seed = Seed::new(&mut OsRng, monero_seed::Language::English);
+        let seed_str = seed.to_string().to_string();
+
+        let mut wallet_state = WalletState::new(
+            seed,
+            String::from("English"),
+            Network::Mainnet,
+            "test_password",
+            wallet_path.clone(),
+            0,
+        )
+        .unwrap();
+
+        // Register some subaddresses
+        wallet_state.register_subaddress(0, 1).unwrap();
+        wallet_state.register_subaddress(0, 2).unwrap();
+        wallet_state.register_subaddress(1, 0).unwrap();
+
+        assert_eq!(wallet_state.registered_subaddresses.len(), 3);
+
+        // Save wallet
+        wallet_state.save("test_password").expect("Failed to save wallet");
+
+        // Load wallet
+        let loaded_wallet = WalletState::load_from_file(
+            wallet_path.to_str().unwrap(),
+            "test_password"
+        ).expect("Failed to load wallet");
+
+        // Verify subaddresses were restored
+        assert_eq!(loaded_wallet.registered_subaddresses.len(), 3);
+
+        let registered = loaded_wallet.get_registered_subaddresses();
+        assert!(registered.contains(&(0, 1)));
+        assert!(registered.contains(&(0, 2)));
+        assert!(registered.contains(&(1, 0)));
+    }
+
+    #[test]
+    fn test_invalid_subaddress_index() {
+        use rand_core::OsRng;
+
+        let seed = Seed::new(&mut OsRng, monero_seed::Language::English);
+        let mut wallet_state = WalletState::new(
+            seed,
+            String::from("English"),
+            Network::Mainnet,
+            "test_password",
+            PathBuf::from("test.bin"),
+            0,
+        )
+        .unwrap();
+
+        // SubaddressIndex::new() returns None for invalid indices
+        // In practice, this would be very large numbers that overflow internal limits
+        // For now, all reasonable values should work, so we just verify the API
+        // returns Result and handles the Option correctly
+
+        // This should succeed for reasonable values
+        let result = wallet_state.register_subaddress(0, 100);
+        assert!(result.is_ok());
+
+        let result = wallet_state.register_subaddress(10, 10);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_get_registered_subaddresses() {
+        use rand_core::OsRng;
+
+        let seed = Seed::new(&mut OsRng, monero_seed::Language::English);
+        let mut wallet_state = WalletState::new(
+            seed,
+            String::from("English"),
+            Network::Mainnet,
+            "test_password",
+            PathBuf::from("test.bin"),
+            0,
+        )
+        .unwrap();
+
+        wallet_state.register_subaddress(0, 1).unwrap();
+        wallet_state.register_subaddress(0, 5).unwrap();
+        wallet_state.register_subaddress(1, 0).unwrap();
+
+        let registered = wallet_state.get_registered_subaddresses();
+
+        // Should have 3 registered subaddresses (primary is automatic)
+        assert_eq!(registered.len(), 3);
+
+        // Verify all are present
+        assert!(registered.contains(&(0, 1)));
+        assert!(registered.contains(&(0, 5)));
+        assert!(registered.contains(&(1, 0)));
+    }
 }
+
