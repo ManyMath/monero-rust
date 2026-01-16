@@ -477,6 +477,99 @@ describe('Offline Signal Tests', () => {
       expect(response.spent_key_images).toContain(keyImagesRpc.signed_key_images[20].key_image);
     }, 70000);
 
+    it('signs and packages generated unsigned_monero_tx as wallet2 signed_monero_tx', async () => {
+      const unsignedTxSetHex = fs
+        .readFileSync(path.join(COLD_SIGNING_VECTOR_PATH, 'unsigned_monero_tx'))
+        .toString('hex');
+      const signedTxSetHex = fs
+        .readFileSync(path.join(COLD_SIGNING_VECTOR_PATH, 'signed_monero_tx'))
+        .toString('hex');
+      const coldKeysHex = fs
+        .readFileSync(path.join(COLD_SIGNING_VECTOR_PATH, 'cold_full.keys'))
+        .toString('hex');
+
+      const importedCold = await sendSignalAndWait(
+        extPage,
+        'send_import_keys_file_request',
+        JSON.stringify({ file_bytes_hex: coldKeysHex, password: '' }),
+        'ImportKeysFileResponse',
+        10000
+      );
+      expect(importedCold.success).toBe(true);
+      expect(importedCold.watch_only).toBe(false);
+
+      const metadata = await sendSignalAndWait(
+        extPage,
+        'send_extract_signed_txset_request',
+        JSON.stringify({
+          data_hex: signedTxSetHex,
+          view_key_hex: importedCold.view_secret_key,
+        }),
+        'SignedTxSetExtractedResponse',
+        10000
+      );
+      expect(metadata.success).toBe(true);
+      expect(metadata.transactions).toHaveLength(1);
+      expect(metadata.key_images.length).toBeGreaterThan(20);
+      expect(metadata.tx_key_images).toHaveLength(2);
+
+      const signed = await sendSignalAndWait(
+        extPage,
+        'send_sign_unsigned_transaction_request',
+        JSON.stringify({
+          seed: importedCold.mnemonic ?? '',
+          unsigned_tx_hex: unsignedTxSetHex,
+          network: 'mainnet',
+          spend_secret_key_hex: importedCold.spend_secret_key,
+          view_secret_key_hex: importedCold.view_secret_key,
+        }),
+        'TransactionSignedOfflineResponse',
+        60000
+      );
+      expect(signed.success).toBe(true);
+      expect(signed.tx_id).toMatch(/^[0-9a-f]{64}$/);
+      expect(signed.tx_blob).toMatch(/^[0-9a-f]+$/);
+      expect(signed.spent_key_images).toEqual([
+        metadata.key_images[0],
+        metadata.key_images[20],
+      ]);
+
+      const built = await sendSignalAndWait(
+        extPage,
+        'send_build_signed_txset_request',
+        JSON.stringify({
+          unsigned_txset_hex: unsignedTxSetHex,
+          view_key_hex: importedCold.view_secret_key,
+          tx_blob_hex: signed.tx_blob,
+          key_images: metadata.key_images,
+          tx_key_images: metadata.tx_key_images,
+        }),
+        'SignedTxSetBuiltResponse',
+        10000
+      );
+
+      expect(built.success).toBe(true);
+      expect(built.signed_txset_hex).toMatch(/^4d6f6e65726f207369676e65642074782073657405/);
+
+      const roundtrip = await sendSignalAndWait(
+        extPage,
+        'send_extract_signed_txset_request',
+        JSON.stringify({
+          data_hex: built.signed_txset_hex,
+          view_key_hex: importedCold.view_secret_key,
+        }),
+        'SignedTxSetExtractedResponse',
+        10000
+      );
+
+      expect(roundtrip.success).toBe(true);
+      expect(roundtrip.transactions).toHaveLength(1);
+      expect(roundtrip.transactions[0].tx_id).toBe(signed.tx_id);
+      expect(roundtrip.transactions[0].tx_blob).toBe(signed.tx_blob);
+      expect(roundtrip.key_images).toEqual(metadata.key_images);
+      expect(roundtrip.tx_key_images).toEqual(metadata.tx_key_images);
+    }, 90000);
+
     it('rejects generated unsigned_monero_tx when the seed does not own the sources', async () => {
       const unsignedTxSetHex = fs
         .readFileSync(path.join(COLD_SIGNING_VECTOR_PATH, 'unsigned_monero_tx'))
