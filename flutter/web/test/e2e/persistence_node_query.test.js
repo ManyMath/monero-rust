@@ -5,6 +5,7 @@ const {
   HONKED_SEED, HONKED_ADDRESS,
   sendSignalAndWait,
   probeNode,
+  reloadExtensionPage,
 } = require('./fixtures');
 
 describe('Persistence & Node-Query Tests', () => {
@@ -149,6 +150,118 @@ describe('Persistence & Node-Query Tests', () => {
       expect(saveResp.encrypted_data).toBeTruthy();
       expect(saveResp.encrypted_data.length).toBeGreaterThan(0);
     }, 20000);
+
+    it('hydrates restored outputs after extension page reload', async () => {
+      const restoredOutputs = [
+        {
+          tx_hash: 'reload_tx_a',
+          output_index: 0,
+          amount: 1000000000000,
+          amount_xmr: '1.000000000000',
+          key: 'reload_key_a',
+          key_offset: 'reload_offset_a',
+          commitment_mask: 'reload_mask_a',
+          subaddress_index: [0, 0],
+          received_output_bytes: '',
+          block_height: 1000,
+          spent: false,
+          key_image: 'reload_ki_a',
+          is_coinbase: false,
+          frozen: false,
+        },
+        {
+          tx_hash: 'reload_tx_b',
+          output_index: 1,
+          amount: 2500000000000,
+          amount_xmr: '2.500000000000',
+          key: 'reload_key_b',
+          key_offset: 'reload_offset_b',
+          commitment_mask: 'reload_mask_b',
+          subaddress_index: [0, 1],
+          received_output_bytes: '',
+          block_height: 1001,
+          spent: false,
+          key_image: 'reload_ki_b',
+          is_coinbase: false,
+          frozen: false,
+        },
+        {
+          tx_hash: 'reload_tx_spent',
+          output_index: 0,
+          amount: 900000000000,
+          amount_xmr: '0.900000000000',
+          key: 'reload_key_spent',
+          key_offset: 'reload_offset_spent',
+          commitment_mask: 'reload_mask_spent',
+          subaddress_index: [1, 0],
+          received_output_bytes: '',
+          block_height: 1002,
+          spent: true,
+          key_image: 'reload_ki_spent',
+          is_coinbase: false,
+          frozen: false,
+        },
+      ];
+      const restorePayload = JSON.stringify({
+        seed: HONKED_SEED,
+        network: 'stagenet',
+        outputs: restoredOutputs,
+        daemon_height: 1500,
+        current_height: 1500,
+        block_hashes_json: JSON.stringify({
+          hashes: {
+            1000: 'reload_hash_1000',
+            1001: 'reload_hash_1001',
+            1002: 'reload_hash_1002',
+          },
+          genesis_hash: null,
+        }),
+        pending_state_json: JSON.stringify({
+          pending_spends: {},
+          tracked_transactions: {},
+        }),
+      });
+
+      await extPage.evaluate(({ fn, json }) => {
+        window.wasmBindings[fn](json);
+      }, {
+        fn: 'send_restore_wallet_data_request',
+        json: restorePayload,
+      });
+      await new Promise(resolve => setTimeout(resolve, 250));
+
+      const beforeReload = await sendSignalAndWait(
+        extPage,
+        'send_get_balance_request',
+        '{}',
+        'BalanceResponse',
+        10000
+      );
+      expect(beforeReload.confirmed).toBe(3500000000000);
+      expect(beforeReload.unconfirmed).toBe(0);
+      expect(beforeReload.pending_spend).toBe(0);
+
+      const previousPage = extPage;
+      extPage = await reloadExtensionPage(browser, extId);
+      await previousPage.close();
+
+      await extPage.evaluate(({ fn, json }) => {
+        window.wasmBindings[fn](json);
+      }, {
+        fn: 'send_restore_wallet_data_request',
+        json: restorePayload,
+      });
+      await new Promise(resolve => setTimeout(resolve, 250));
+
+      const afterReload = await sendSignalAndWait(
+        extPage,
+        'send_get_balance_request',
+        '{}',
+        'BalanceResponse',
+        10000
+      );
+      expect(afterReload).toEqual(beforeReload);
+    }, 30000);
   });
 
   const describeIfNode = nodeAvailable ? describe : describe.skip;
