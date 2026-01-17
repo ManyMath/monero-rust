@@ -299,7 +299,8 @@ impl<R: RpcConnection> Rpc<R> {
           .post(
             route,
             if let Some(params) = params {
-              serde_json::to_string(&params).unwrap().into_bytes()
+              serde_json::to_vec(&params)
+                .map_err(|_| RpcError::InternalError("Failed to serialize JSON request"))?
             } else {
               vec![]
             },
@@ -317,7 +318,10 @@ impl<R: RpcConnection> Rpc<R> {
   ) -> Result<Response, RpcError> {
     let mut req = json!({ "method": method });
     if let Some(params) = params {
-      req.as_object_mut().unwrap().insert("params".into(), params);
+      req
+        .as_object_mut()
+        .ok_or(RpcError::InternalError("Failed to build JSON-RPC request"))?
+        .insert("params".into(), params);
     }
     Ok(self.rpc_call::<_, JsonRpcResponse<Response>>("json_rpc", Some(req)).await?.result)
   }
@@ -519,7 +523,7 @@ impl<R: RpcConnection> Rpc<R> {
         // Make sure this is actually the block for this number
         match block.miner_tx.prefix.inputs[0] {
           Input::Gen(actual) => {
-            if usize::try_from(actual).unwrap() == number {
+            if usize::try_from(actual).map_err(|_| RpcError::InvalidNode)? == number {
               Ok(block)
             } else {
               Err(RpcError::InvalidNode)
@@ -1043,6 +1047,43 @@ pub struct GetBlocksFastResponse {
 #[cfg(test)]
 mod tests_block_commitment {
     use super::*;
+    use serde::ser::{Error as _, Serializer};
+
+    #[derive(Clone, Debug)]
+    struct PanickingConnection;
+
+    #[async_trait]
+    impl RpcConnection for PanickingConnection {
+        async fn post(&self, _route: &str, _body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
+            panic!("RPC connection should not be called after request serialization fails");
+        }
+    }
+
+    #[derive(Debug)]
+    struct FailingSerialize;
+
+    impl Serialize for FailingSerialize {
+        fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            Err(S::Error::custom("synthetic serialization failure"))
+        }
+    }
+
+    #[tokio::test]
+    async fn rpc_call_returns_error_when_json_params_fail_to_serialize() {
+        let rpc = Rpc::new_with_connection(PanickingConnection);
+        let err = rpc
+            .rpc_call::<_, EmptyResponse>("get_height", Some(FailingSerialize))
+            .await
+            .expect_err("serialization failure should return an RpcError");
+
+        assert_eq!(
+            err,
+            RpcError::InternalError("Failed to serialize JSON request")
+        );
+    }
 
     #[test]
     fn test_tree_hash_empty() {
