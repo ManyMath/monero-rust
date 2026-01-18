@@ -3,6 +3,7 @@ pub mod decoy_selection;
 pub mod fee_calculation;
 pub mod input_selection;
 pub mod rpc;
+pub mod signing;
 pub mod transaction_builder;
 pub mod types;
 pub mod wallet_state;
@@ -21,6 +22,11 @@ pub use input_selection::{InputSelectionConfig, InputSelectionError, SelectedInp
 pub use decoy_selection::{DecoySelectionConfig, select_decoys_for_output, select_decoys_for_outputs};
 pub use transaction_builder::{PendingTransaction, TransactionConfig, TransactionPriority};
 pub use fee_calculation::{WeightEstimator, estimate_fee, estimate_sweep_fee};
+pub use signing::{
+    ClsagSignature, SigningParameters, SignedInput,
+    generate_key_image, sign_clsag, verify_clsag,
+    verify_key_image, prove_key_image
+};
 
 use rand_core::OsRng;
 use zeroize::{Zeroizing};
