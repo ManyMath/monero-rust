@@ -206,6 +206,7 @@ class WalletScanService {
     required String network,
     int accountLookahead = 0,
     int subaddressLookahead = 0,
+    List<int>? accountsToScan,
     String passphrase = '',
     int bip39AccountIndex = 0,
   }) {
@@ -215,6 +216,7 @@ class WalletScanService {
       network: network,
       accountLookahead: accountLookahead,
       subaddressLookahead: subaddressLookahead,
+      accountsToScan: accountsToScan,
       passphrase: passphrase,
       bip39AccountIndex: bip39AccountIndex,
     ).sendSignalToRust();

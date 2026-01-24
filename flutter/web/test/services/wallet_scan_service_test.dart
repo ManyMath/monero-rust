@@ -438,4 +438,26 @@ void main() {
       expect((wallets[1] as Map<String, dynamic>)['subaddress_lookahead'], 50);
     });
   });
+
+  group('WalletScanService.scanMempool', () {
+    test('sends selected accounts to Rust', () {
+      final sender = _RecordingSignalSender();
+      setSignalSender(sender);
+
+      WalletScanService.scanMempool(
+        seed: _validSeed,
+        nodeUrl: 'http://node:38081',
+        network: 'stagenet',
+        accountLookahead: 3,
+        subaddressLookahead: 20,
+        accountsToScan: [0, 2],
+      );
+
+      expect(sender.sent, hasLength(1));
+      expect(sender.sent.single.name, 'send_mempool_scan_request');
+      expect(sender.sent.single.data['accounts_to_scan'], [0, 2]);
+      expect(sender.sent.single.data['account_lookahead'], 3);
+      expect(sender.sent.single.data['subaddress_lookahead'], 20);
+    });
+  });
 }

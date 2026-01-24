@@ -2439,6 +2439,7 @@ pub async fn scan_mempool_for_outputs_with_account_lookahead(
     network_str: &str,
     account_lookahead: u32,
     subaddress_lookahead: u32,
+    accounts_to_scan: Option<&[u32]>,
     passphrase: &str,
 ) -> Result<MempoolScanResult, String> {
     let lookahead = Lookahead {
@@ -2449,8 +2450,34 @@ pub async fn scan_mempool_for_outputs_with_account_lookahead(
             DEFAULT_LOOKAHEAD.subaddress
         },
     };
-    scan_mempool_for_outputs_with_lookahead(node_url, mnemonic, network_str, lookahead, passphrase)
-        .await
+    let mut result = scan_mempool_for_outputs_with_lookahead(
+        node_url,
+        mnemonic,
+        network_str,
+        lookahead,
+        passphrase,
+    )
+    .await?;
+
+    retain_mempool_outputs_for_accounts(&mut result.outputs, accounts_to_scan);
+
+    Ok(result)
+}
+
+fn retain_mempool_outputs_for_accounts(
+    outputs: &mut Vec<WalletOutput>,
+    accounts_to_scan: Option<&[u32]>,
+) {
+    if let Some(accounts) = accounts_to_scan {
+        let account_set: HashSet<u32> = accounts.iter().copied().collect();
+        outputs.retain(|output| {
+            let account = output
+                .subaddress_index
+                .map(|(account, _)| account)
+                .unwrap_or(0);
+            account_set.contains(&account)
+        });
+    }
 }
 
 pub async fn scan_mempool_for_outputs_with_lookahead(
@@ -2993,6 +3020,74 @@ mod tests {
         let json = serde_json::to_string(&result).unwrap();
         let deserialized: MempoolScanResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result.tx_count, deserialized.tx_count);
+    }
+
+    #[test]
+    fn test_mempool_account_filter_keeps_selected_accounts() {
+        fn output(tx_hash: &str, account: Option<u32>) -> WalletOutput {
+            WalletOutput {
+                tx_hash: tx_hash.to_string(),
+                output_index: 0,
+                amount: 1,
+                amount_xmr: "0.000000000001".to_string(),
+                key: "key".to_string(),
+                key_offset: "offset".to_string(),
+                commitment_mask: "mask".to_string(),
+                subaddress_index: account.map(|account| (account, 0)),
+                payment_id: None,
+                received_output_bytes: "bytes".to_string(),
+                block_height: 0,
+                spent: false,
+                spent_height: None,
+                key_image: String::new(),
+                is_coinbase: false,
+                frozen: false,
+            }
+        }
+
+        let mut outputs = vec![
+            output("account_0_explicit", Some(0)),
+            output("account_1", Some(1)),
+            output("account_2", Some(2)),
+            output("account_0_default", None),
+        ];
+
+        retain_mempool_outputs_for_accounts(&mut outputs, Some(&[0, 2]));
+        let tx_hashes = outputs
+            .iter()
+            .map(|output| output.tx_hash.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            tx_hashes,
+            vec!["account_0_explicit", "account_2", "account_0_default"]
+        );
+    }
+
+    #[test]
+    fn test_mempool_account_filter_none_keeps_all_outputs() {
+        let mut outputs = vec![WalletOutput {
+            tx_hash: "kept".to_string(),
+            output_index: 0,
+            amount: 1,
+            amount_xmr: "0.000000000001".to_string(),
+            key: "key".to_string(),
+            key_offset: "offset".to_string(),
+            commitment_mask: "mask".to_string(),
+            subaddress_index: Some((1, 0)),
+            payment_id: None,
+            received_output_bytes: "bytes".to_string(),
+            block_height: 0,
+            spent: false,
+            spent_height: None,
+            key_image: String::new(),
+            is_coinbase: false,
+            frozen: false,
+        }];
+
+        retain_mempool_outputs_for_accounts(&mut outputs, None);
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].tx_hash, "kept");
     }
 
     #[test]

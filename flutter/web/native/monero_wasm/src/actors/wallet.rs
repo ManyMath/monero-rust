@@ -1013,6 +1013,7 @@ impl WalletActor {
                     &request.network,
                     request.account_lookahead,
                     request.subaddress_lookahead,
+                    request.accounts_to_scan.as_deref(),
                     &request.passphrase,
                 )
                 .await

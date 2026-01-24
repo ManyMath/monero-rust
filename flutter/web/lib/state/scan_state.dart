@@ -532,6 +532,8 @@ class ScanState extends ChangeNotifier {
       network: _walletState.network,
       accountLookahead: highestAccount + lookaheadMode.accounts,
       subaddressLookahead: lookaheadMode.subaddresses,
+      accountsToScan: _walletState.activeWallet?.scanningAccounts.toList()
+        ?..sort(),
     );
   }
 
@@ -637,6 +639,8 @@ class ScanState extends ChangeNotifier {
       network: _walletState.network,
       accountLookahead: highestAccount + lookaheadMode.accounts,
       subaddressLookahead: lookaheadMode.subaddresses,
+      accountsToScan: _walletState.activeWallet?.scanningAccounts.toList()
+        ?..sort(),
       passphrase: _walletState.passphrase,
       bip39AccountIndex: _walletState.bip39AccountIndex,
     ).sendSignalToRust();
