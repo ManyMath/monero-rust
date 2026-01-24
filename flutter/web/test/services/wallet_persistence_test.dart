@@ -15,27 +15,110 @@ WalletPersistenceService createTestService({
 }
 
 void main() {
+  group('WalletPersistenceService - Async storage backend', () {
+    test('save load list export import and clear use async storage', () async {
+      final storage = AsyncInMemoryStorageBackend();
+      final svc = WalletPersistenceService.async(
+        storage: storage,
+        crypto: IdentityCryptoBackend(),
+      );
+      final outputs = [
+        TestHelpers.createMockOutput(
+          txHash: 'tx-async',
+          outputIndex: 0,
+          amountXmr: '3.0',
+          blockHeight: 42,
+          subaddressIndex: (1, 4),
+        ),
+      ];
+
+      final saveResult = await svc.save(
+        walletId: 'async-wallet',
+        password: 'pass123',
+        seed: 'async seed phrase',
+        network: 'stagenet',
+        address: '5async...',
+        nodeUrl: 'http://node:38081',
+        outputs: outputs,
+        transactions: [],
+        continuousScanCurrentHeight: 43,
+        selectedOutputs: {'tx-async:0'},
+        accounts: [0, 1],
+        activeAccount: 1,
+        scanningAccounts: {1},
+      );
+      expect(saveResult.success, true);
+      expect(await svc.hasAsync('async-wallet'), true);
+      expect(await svc.listWalletsAsync(), ['async-wallet']);
+
+      final exportedBlob = await svc.getRawDataAsync('async-wallet');
+      expect(exportedBlob, isNotNull);
+
+      final loadResult = await svc.load(
+        walletId: 'async-wallet',
+        password: 'pass123',
+      );
+      expect(loadResult.success, true);
+      expect(loadResult.seed, 'async seed phrase');
+      expect(loadResult.outputs, hasLength(1));
+      expect(loadResult.outputs!.single.subaddressIndex, (1, 4));
+      expect(loadResult.scanningAccounts, {1});
+
+      await svc.clearAsync('async-wallet');
+      expect(await svc.hasAsync('async-wallet'), false);
+
+      await svc.setRawDataAsync('imported-async-wallet', exportedBlob!);
+      expect(await svc.listWalletsAsync(), ['imported-async-wallet']);
+    });
+
+    test('sync helpers fail clearly for async-only storage', () {
+      final svc = WalletPersistenceService.async(
+        storage: AsyncInMemoryStorageBackend(),
+        crypto: IdentityCryptoBackend(),
+      );
+
+      expect(svc.listWallets, throwsStateError);
+      expect(() => svc.has('async-wallet'), throwsStateError);
+      expect(() => svc.clear('async-wallet'), throwsStateError);
+      expect(() => svc.getRawData('async-wallet'), throwsStateError);
+      expect(() => svc.setRawData('async-wallet', 'data'), throwsStateError);
+    });
+  });
+
   group('WalletPersistenceService - Save and Load', () {
     test('save then load preserves all wallet data', () async {
       final svc = createTestService();
       final outputs = [
         TestHelpers.createMockOutput(
-          txHash: 'tx1', outputIndex: 0, amountXmr: '10.0',
-          blockHeight: 100, subaddressIndex: (0, 0),
+          txHash: 'tx1',
+          outputIndex: 0,
+          amountXmr: '10.0',
+          blockHeight: 100,
+          subaddressIndex: (0, 0),
         ),
         TestHelpers.createMockOutput(
-          txHash: 'tx2', outputIndex: 0, amountXmr: '5.0',
-          blockHeight: 200, spent: true, keyImage: 'ki_spent',
+          txHash: 'tx2',
+          outputIndex: 0,
+          amountXmr: '5.0',
+          blockHeight: 200,
+          spent: true,
+          keyImage: 'ki_spent',
         ),
       ];
       final transactions = [
         WalletTransaction(
-          txHash: 'tx1', blockHeight: 100, blockTimestamp: 1700000000,
-          receivedOutputs: [outputs[0]], spentKeyImages: [],
+          txHash: 'tx1',
+          blockHeight: 100,
+          blockTimestamp: 1700000000,
+          receivedOutputs: [outputs[0]],
+          spentKeyImages: [],
         ),
         WalletTransaction(
-          txHash: 'spend:ki_spent', blockHeight: 250, blockTimestamp: 1700100000,
-          receivedOutputs: [], spentKeyImages: ['ki_spent'],
+          txHash: 'spend:ki_spent',
+          blockHeight: 250,
+          blockTimestamp: 1700100000,
+          receivedOutputs: [],
+          spentKeyImages: ['ki_spent'],
         ),
       ];
 
@@ -84,11 +167,19 @@ void main() {
     test('save returns error when encryption fails', () async {
       final svc = createTestService(failCrypto: true);
       final result = await svc.save(
-        walletId: 'w', password: 'p', seed: 's', network: 'stagenet',
-        address: null, nodeUrl: 'http://n', outputs: [],
-        transactions: [], continuousScanCurrentHeight: 0,
+        walletId: 'w',
+        password: 'p',
+        seed: 's',
+        network: 'stagenet',
+        address: null,
+        nodeUrl: 'http://n',
+        outputs: [],
+        transactions: [],
+        continuousScanCurrentHeight: 0,
         selectedOutputs: {},
-        accounts: [0], activeAccount: 0, scanningAccounts: {0},
+        accounts: [0],
+        activeAccount: 0,
+        scanningAccounts: {0},
       );
       expect(result.success, false);
       expect(result.error, contains('Encryption failed'));
@@ -116,27 +207,44 @@ void main() {
 
       final outputs = [
         TestHelpers.createMockOutput(
-          txHash: 'tx1', outputIndex: 0, amountXmr: '7.5',
-          blockHeight: 500, keyImage: 'ki1',
-          subaddressIndex: (0, 2), paymentId: 'pid1',
+          txHash: 'tx1',
+          outputIndex: 0,
+          amountXmr: '7.5',
+          blockHeight: 500,
+          keyImage: 'ki1',
+          subaddressIndex: (0, 2),
+          paymentId: 'pid1',
         ),
         TestHelpers.createMockOutput(
-          txHash: 'tx2', outputIndex: 0, amountXmr: '2.5',
-          blockHeight: 600, spent: true, keyImage: 'ki2',
+          txHash: 'tx2',
+          outputIndex: 0,
+          amountXmr: '2.5',
+          blockHeight: 600,
+          spent: true,
+          keyImage: 'ki2',
         ),
       ];
       final transactions = [
         WalletTransaction(
-          txHash: 'tx1', blockHeight: 500, blockTimestamp: 1700000000,
-          receivedOutputs: [outputs[0]], spentKeyImages: [],
+          txHash: 'tx1',
+          blockHeight: 500,
+          blockTimestamp: 1700000000,
+          receivedOutputs: [outputs[0]],
+          spentKeyImages: [],
         ),
         WalletTransaction(
-          txHash: 'tx2', blockHeight: 600, blockTimestamp: 1700100000,
-          receivedOutputs: [outputs[1]], spentKeyImages: [],
+          txHash: 'tx2',
+          blockHeight: 600,
+          blockTimestamp: 1700100000,
+          receivedOutputs: [outputs[1]],
+          spentKeyImages: [],
         ),
         WalletTransaction(
-          txHash: 'spend:ki2', blockHeight: 650, blockTimestamp: 1700150000,
-          receivedOutputs: [], spentKeyImages: ['ki2'],
+          txHash: 'spend:ki2',
+          blockHeight: 650,
+          blockTimestamp: 1700150000,
+          receivedOutputs: [],
+          spentKeyImages: ['ki2'],
         ),
       ];
 
@@ -168,7 +276,8 @@ void main() {
 
       // Verify load fails after delete
       final loadAfterDelete = await svc.load(
-        walletId: 'roundtrip-wallet', password: 'mypass',
+        walletId: 'roundtrip-wallet',
+        password: 'mypass',
       );
       expect(loadAfterDelete.success, false);
 
@@ -178,7 +287,8 @@ void main() {
 
       // 5. Load from the imported wallet
       final loadResult = await svc.load(
-        walletId: 'imported-wallet', password: 'mypass',
+        walletId: 'imported-wallet',
+        password: 'mypass',
       );
       expect(loadResult.success, true);
 
@@ -218,22 +328,36 @@ void main() {
 
       // Save wallet A
       await svc.save(
-        walletId: 'shared-id', password: 'p',
-        seed: 'seed A', network: 'stagenet', address: null,
-        nodeUrl: 'http://node', outputs: [],
-        transactions: [], continuousScanCurrentHeight: 100,
+        walletId: 'shared-id',
+        password: 'p',
+        seed: 'seed A',
+        network: 'stagenet',
+        address: null,
+        nodeUrl: 'http://node',
+        outputs: [],
+        transactions: [],
+        continuousScanCurrentHeight: 100,
         selectedOutputs: {},
-        accounts: [0], activeAccount: 0, scanningAccounts: {0},
+        accounts: [0],
+        activeAccount: 0,
+        scanningAccounts: {0},
       );
 
       // Save wallet B under the same ID (overwrite)
       await svc.save(
-        walletId: 'shared-id', password: 'p',
-        seed: 'seed B', network: 'mainnet', address: 'addr_B',
-        nodeUrl: 'http://other-node', outputs: [],
-        transactions: [], continuousScanCurrentHeight: 200,
+        walletId: 'shared-id',
+        password: 'p',
+        seed: 'seed B',
+        network: 'mainnet',
+        address: 'addr_B',
+        nodeUrl: 'http://other-node',
+        outputs: [],
+        transactions: [],
+        continuousScanCurrentHeight: 200,
         selectedOutputs: {'out1'},
-        accounts: [0], activeAccount: 0, scanningAccounts: {0},
+        accounts: [0],
+        activeAccount: 0,
+        scanningAccounts: {0},
       );
 
       final result = await svc.load(walletId: 'shared-id', password: 'p');
@@ -269,11 +393,19 @@ void main() {
     test('has returns true for existing wallet', () async {
       final svc = createTestService();
       await svc.save(
-        walletId: 'exists', password: 'p', seed: 's', network: 'stagenet',
-        address: null, nodeUrl: 'http://n', outputs: [],
-        transactions: [], continuousScanCurrentHeight: 0,
+        walletId: 'exists',
+        password: 'p',
+        seed: 's',
+        network: 'stagenet',
+        address: null,
+        nodeUrl: 'http://n',
+        outputs: [],
+        transactions: [],
+        continuousScanCurrentHeight: 0,
         selectedOutputs: {},
-        accounts: [0], activeAccount: 0, scanningAccounts: {0},
+        accounts: [0],
+        activeAccount: 0,
+        scanningAccounts: {0},
       );
       expect(svc.has('exists'), true);
       expect(svc.has('nope'), false);
@@ -282,11 +414,19 @@ void main() {
     test('clear removes wallet data', () async {
       final svc = createTestService();
       await svc.save(
-        walletId: 'to-delete', password: 'p', seed: 's', network: 'stagenet',
-        address: null, nodeUrl: 'http://n', outputs: [],
-        transactions: [], continuousScanCurrentHeight: 0,
+        walletId: 'to-delete',
+        password: 'p',
+        seed: 's',
+        network: 'stagenet',
+        address: null,
+        nodeUrl: 'http://n',
+        outputs: [],
+        transactions: [],
+        continuousScanCurrentHeight: 0,
         selectedOutputs: {},
-        accounts: [0], activeAccount: 0, scanningAccounts: {0},
+        accounts: [0],
+        activeAccount: 0,
+        scanningAccounts: {0},
       );
       expect(svc.has('to-delete'), true);
 

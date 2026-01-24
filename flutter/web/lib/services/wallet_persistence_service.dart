@@ -7,14 +7,23 @@ import 'crypto_backend.dart';
 import 'wallet_serializer.dart';
 
 class WalletPersistenceService {
-  final StorageBackend _storage;
+  final AsyncStorageBackend _storage;
+  final StorageBackend? _syncStorage;
   final CryptoBackend _crypto;
 
   WalletPersistenceService({
     required StorageBackend storage,
     required CryptoBackend crypto,
-  })  : _storage = storage,
-        _crypto = crypto;
+  }) : _storage = SyncStorageBackendAdapter(storage),
+       _syncStorage = storage,
+       _crypto = crypto;
+
+  WalletPersistenceService.async({
+    required AsyncStorageBackend storage,
+    required CryptoBackend crypto,
+  }) : _storage = storage,
+       _syncStorage = null,
+       _crypto = crypto;
 
   static String getStorageKey(String walletId) =>
       WalletSerializer.getStorageKey(walletId);
@@ -61,7 +70,7 @@ class WalletPersistenceService {
         return SaveWalletResult.error('Encryption failed');
       }
 
-      _storage.atomicSet(storageKey, encryptedData);
+      await _storage.atomicSet(storageKey, encryptedData);
       return SaveWalletResult.success();
     } catch (e) {
       return SaveWalletResult.error('Save failed: $e');
@@ -107,13 +116,16 @@ class WalletPersistenceService {
 
       final jsonString = jsonEncode(walletData);
 
-      final encryptedData =
-          await _crypto.encryptWithKey(keyHex, saltHex, jsonString);
+      final encryptedData = await _crypto.encryptWithKey(
+        keyHex,
+        saltHex,
+        jsonString,
+      );
       if (encryptedData == null) {
         return SaveWalletResult.error('Encryption with derived key failed');
       }
 
-      _storage.atomicSet(storageKey, encryptedData);
+      await _storage.atomicSet(storageKey, encryptedData);
       return SaveWalletResult.success();
     } catch (e) {
       return SaveWalletResult.error('Save failed: $e');
@@ -127,17 +139,19 @@ class WalletPersistenceService {
     try {
       final storageKey = getStorageKey(walletId);
 
-      _storage.maybeRecover(storageKey);
-      final encryptedData = _storage.get(storageKey);
+      await _storage.maybeRecover(storageKey);
+      final encryptedData = await _storage.get(storageKey);
       if (encryptedData == null) {
         return LoadWalletResult.error(
-            'No stored wallet data found for wallet: $walletId');
+          'No stored wallet data found for wallet: $walletId',
+        );
       }
 
       final jsonString = await _crypto.decrypt(password, encryptedData);
       if (jsonString == null) {
         return LoadWalletResult.error(
-            'Failed to decrypt wallet data (wrong password?)');
+          'Failed to decrypt wallet data (wrong password?)',
+        );
       }
 
       final walletData = jsonDecode(jsonString) as Map<String, dynamic>;
@@ -166,7 +180,20 @@ class WalletPersistenceService {
 
   List<String> listWallets() {
     final walletIds = <String>[];
-    for (final key in _storage.keys) {
+    for (final key in _requireSyncStorage().keys) {
+      if (key.startsWith('monero_wallet_') &&
+          !key.endsWith('_staging') &&
+          !key.endsWith('_wip')) {
+        walletIds.add(key.substring('monero_wallet_'.length));
+      }
+    }
+    walletIds.sort();
+    return walletIds;
+  }
+
+  Future<List<String>> listWalletsAsync() async {
+    final walletIds = <String>[];
+    for (final key in await _storage.getKeys()) {
       if (key.startsWith('monero_wallet_') &&
           !key.endsWith('_staging') &&
           !key.endsWith('_wip')) {
@@ -179,26 +206,56 @@ class WalletPersistenceService {
 
   void clear(String walletId) {
     final storageKey = getStorageKey(walletId);
-    _storage.remove(storageKey);
+    _requireSyncStorage().remove(storageKey);
+  }
+
+  Future<void> clearAsync(String walletId) {
+    final storageKey = getStorageKey(walletId);
+    return _storage.remove(storageKey);
   }
 
   bool has(String walletId) {
+    final storageKey = getStorageKey(walletId);
+    return _requireSyncStorage().containsKey(storageKey);
+  }
+
+  Future<bool> hasAsync(String walletId) {
     final storageKey = getStorageKey(walletId);
     return _storage.containsKey(storageKey);
   }
 
   String? getRawData(String walletId) {
     final storageKey = getStorageKey(walletId);
+    return _requireSyncStorage().get(storageKey);
+  }
+
+  Future<String?> getRawDataAsync(String walletId) {
+    final storageKey = getStorageKey(walletId);
     return _storage.get(storageKey);
   }
 
   void setRawData(String walletId, String data) {
     final storageKey = getStorageKey(walletId);
-    _storage.set(storageKey, data);
+    _requireSyncStorage().set(storageKey, data);
+  }
+
+  Future<void> setRawDataAsync(String walletId, String data) {
+    final storageKey = getStorageKey(walletId);
+    return _storage.set(storageKey, data);
   }
 
   Future<String?> decryptRaw(String password, String ciphertext) =>
       _crypto.decrypt(password, ciphertext);
+
+  StorageBackend _requireSyncStorage() {
+    final storage = _syncStorage;
+    if (storage == null) {
+      throw StateError(
+        'Synchronous storage access is unavailable for async storage backends',
+      );
+    }
+    return storage;
+  }
 
   /// Save a WalletInstance directly (convenience method)
   /// This uses WalletInstance.toJson() to serialize the wallet state
@@ -265,7 +322,9 @@ class WalletPersistenceService {
         blockHashesJson: result.blockHashesJson,
       );
     } catch (e) {
-      return LoadWalletInstanceResult.error('Failed to create wallet instance: $e');
+      return LoadWalletInstanceResult.error(
+        'Failed to create wallet instance: $e',
+      );
     }
   }
 }
@@ -276,8 +335,7 @@ class SaveWalletResult {
 
   SaveWalletResult._({required this.success, this.error});
 
-  factory SaveWalletResult.success() =>
-      SaveWalletResult._(success: true);
+  factory SaveWalletResult.success() => SaveWalletResult._(success: true);
 
   factory SaveWalletResult.error(String error) =>
       SaveWalletResult._(success: false, error: error);
@@ -335,24 +393,23 @@ class LoadWalletResult {
     required Set<int> scanningAccounts,
     String? blockHashesJson,
     String? pendingStateJson,
-  }) =>
-      LoadWalletResult._(
-        success: true,
-        seed: seed,
-        network: network,
-        address: address,
-        nodeUrl: nodeUrl,
-        outputs: outputs,
-        transactions: transactions,
-        continuousScanCurrentHeight: continuousScanCurrentHeight,
-        selectedOutputs: selectedOutputs,
-        accounts: accounts,
-        outputsByAccount: outputsByAccount,
-        activeAccount: activeAccount,
-        scanningAccounts: scanningAccounts,
-        blockHashesJson: blockHashesJson,
-        pendingStateJson: pendingStateJson,
-      );
+  }) => LoadWalletResult._(
+    success: true,
+    seed: seed,
+    network: network,
+    address: address,
+    nodeUrl: nodeUrl,
+    outputs: outputs,
+    transactions: transactions,
+    continuousScanCurrentHeight: continuousScanCurrentHeight,
+    selectedOutputs: selectedOutputs,
+    accounts: accounts,
+    outputsByAccount: outputsByAccount,
+    activeAccount: activeAccount,
+    scanningAccounts: scanningAccounts,
+    blockHashesJson: blockHashesJson,
+    pendingStateJson: pendingStateJson,
+  );
 
   factory LoadWalletResult.error(String error) =>
       LoadWalletResult._(success: false, error: error);
@@ -376,12 +433,11 @@ class ExportWalletResult {
   factory ExportWalletResult.success({
     required String filename,
     required bool usedSaveAsDialog,
-  }) =>
-      ExportWalletResult._(
-        success: true,
-        filename: filename,
-        usedSaveAsDialog: usedSaveAsDialog,
-      );
+  }) => ExportWalletResult._(
+    success: true,
+    filename: filename,
+    usedSaveAsDialog: usedSaveAsDialog,
+  );
 
   factory ExportWalletResult.cancelled() =>
       ExportWalletResult._(success: false, cancelled: true);
@@ -406,12 +462,11 @@ class ImportWalletResult {
   factory ImportWalletResult.success({
     required String walletId,
     required bool wasOverwritten,
-  }) =>
-      ImportWalletResult._(
-        success: true,
-        walletId: walletId,
-        wasOverwritten: wasOverwritten,
-      );
+  }) => ImportWalletResult._(
+    success: true,
+    walletId: walletId,
+    wasOverwritten: wasOverwritten,
+  );
 
   factory ImportWalletResult.error(String error) =>
       ImportWalletResult._(success: false, error: error);
@@ -442,15 +497,14 @@ class LoadWalletInstanceResult {
     required List<WalletTransaction> transactions,
     required Set<String> selectedOutputs,
     String? blockHashesJson,
-  }) =>
-      LoadWalletInstanceResult._(
-        success: true,
-        wallet: wallet,
-        nodeUrl: nodeUrl,
-        transactions: transactions,
-        selectedOutputs: selectedOutputs,
-        blockHashesJson: blockHashesJson,
-      );
+  }) => LoadWalletInstanceResult._(
+    success: true,
+    wallet: wallet,
+    nodeUrl: nodeUrl,
+    transactions: transactions,
+    selectedOutputs: selectedOutputs,
+    blockHashesJson: blockHashesJson,
+  );
 
   factory LoadWalletInstanceResult.error(String error) =>
       LoadWalletInstanceResult._(success: false, error: error);

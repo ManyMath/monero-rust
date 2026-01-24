@@ -26,6 +26,35 @@ class InMemoryStorageBackend implements StorageBackend {
   void maybeRecover(String key) {}
 }
 
+class AsyncInMemoryStorageBackend implements AsyncStorageBackend {
+  final Map<String, String> _data = {};
+
+  @override
+  Future<String?> get(String key) async => _data[key];
+
+  @override
+  Future<void> set(String key, String value) async {
+    _data[key] = value;
+  }
+
+  @override
+  Future<void> remove(String key) async {
+    _data.remove(key);
+  }
+
+  @override
+  Future<bool> containsKey(String key) async => _data.containsKey(key);
+
+  @override
+  Future<List<String>> getKeys() async => _data.keys.toList();
+
+  @override
+  Future<void> atomicSet(String key, String value) => set(key, value);
+
+  @override
+  Future<void> maybeRecover(String key) async {}
+}
+
 /// No-op crypto backend: returns plaintext unchanged.
 /// Simulates encryption/decryption without needing Rust signals.
 class IdentityCryptoBackend implements CryptoBackend {
