@@ -4,8 +4,8 @@ import '../src/ffi/signal_types.dart';
 /// Widget that displays receive addresses interface.
 ///
 /// Shows account expansion panels with scan controls and unused subaddresses.
-/// Note: The scan checkboxes are for UI feedback only. Due to Rust API limitations,
-/// scanning always processes ALL accounts from 0 to the highest account number.
+/// Scan checkboxes control which accounts are sent to the Rust continuous
+/// scanner for account-filtered block scanning.
 class ReceivePanel extends StatefulWidget {
   final String? seed;
   final String network;
@@ -18,7 +18,8 @@ class ReceivePanel extends StatefulWidget {
   final Map<String, String> subaddresses; // (account, index) -> address
   final Function(String txHash)? onNavigateToTransaction;
   final Set<int> scanningAccounts; // Which accounts are being scanned
-  final Function(int accountIndex, bool shouldScan) onScanToggle; // Toggle scan for account
+  final Function(int accountIndex, bool shouldScan)
+  onScanToggle; // Toggle scan for account
 
   const ReceivePanel({
     super.key,
@@ -65,12 +66,14 @@ class _ReceivePanelState extends State<ReceivePanel> {
     if (oldWidget.accounts != widget.accounts) {
       setState(() {
         // Check if a new account was added (list grew)
-        if (widget.accounts.length > oldWidget.accounts.length && widget.accounts.isNotEmpty) {
+        if (widget.accounts.length > oldWidget.accounts.length &&
+            widget.accounts.isNotEmpty) {
           // Keep the current expanded index stable - don't auto-switch
           // when scanner discovers new accounts via lookahead
         }
         // Clean up expanded index if it's out of bounds
-        else if (_expandedIndex != null && _expandedIndex! >= widget.accounts.length) {
+        else if (_expandedIndex != null &&
+            _expandedIndex! >= widget.accounts.length) {
           _expandedIndex = null;
         }
         // If no account is expanded but we have accounts, expand the first one
@@ -90,7 +93,10 @@ class _ReceivePanelState extends State<ReceivePanel> {
         final subIdx = output.subaddressIndex!;
         final outputAccount = subIdx.$1;
         final addressIndex = subIdx.$2;
-        final accountMap = grouped.putIfAbsent(outputAccount, () => <int, _SubaddressInfo>{});
+        final accountMap = grouped.putIfAbsent(
+          outputAccount,
+          () => <int, _SubaddressInfo>{},
+        );
         // Store the first output found for this subaddress
         if (!accountMap.containsKey(addressIndex)) {
           accountMap[addressIndex] = _SubaddressInfo(
@@ -120,7 +126,6 @@ class _ReceivePanelState extends State<ReceivePanel> {
     return unused;
   }
 
-
   @override
   Widget build(BuildContext context) {
     if (widget.seed == null || widget.seed!.isEmpty) {
@@ -136,7 +141,8 @@ class _ReceivePanelState extends State<ReceivePanel> {
     // If only one account, show its contents directly
     if (widget.accounts.length == 1) {
       final account = widget.accounts[0];
-      final usedSubaddresses = outputsByAccount[account] ?? <int, _SubaddressInfo>{};
+      final usedSubaddresses =
+          outputsByAccount[account] ?? <int, _SubaddressInfo>{};
       final unusedIndices = _getUnusedSubaddresses(usedSubaddresses);
       final isScanning = widget.scanningAccounts.contains(account);
 
@@ -176,7 +182,10 @@ class _ReceivePanelState extends State<ReceivePanel> {
                 icon: const Icon(Icons.add, size: 16),
                 label: const Text('Create new account'),
                 style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
                 ),
               ),
             ),
@@ -200,16 +209,19 @@ class _ReceivePanelState extends State<ReceivePanel> {
                 final index = entry.key;
                 final account = entry.value;
                 final isExpanded = _expandedIndex == index;
-                final usedSubaddresses = outputsByAccount[account] ?? <int, _SubaddressInfo>{};
+                final usedSubaddresses =
+                    outputsByAccount[account] ?? <int, _SubaddressInfo>{};
                 final unusedIndices = _getUnusedSubaddresses(usedSubaddresses);
                 final isScanning = widget.scanningAccounts.contains(account);
 
                 return Theme(
-                  data: Theme.of(context).copyWith(
-                    splashColor: Theme.of(context).hoverColor,
-                  ),
+                  data: Theme.of(
+                    context,
+                  ).copyWith(splashColor: Theme.of(context).hoverColor),
                   child: ExpansionTile(
-                    key: Key('account-$account-$isExpanded'), // Force rebuild when expansion state changes
+                    key: Key(
+                      'account-$account-$isExpanded',
+                    ), // Force rebuild when expansion state changes
                     initiallyExpanded: isExpanded,
                     onExpansionChanged: (expanded) {
                       setState(() {
@@ -236,7 +248,11 @@ class _ReceivePanelState extends State<ReceivePanel> {
                       ],
                     ),
                     children: [
-                      _buildAccountBody(account, unusedIndices, usedSubaddresses),
+                      _buildAccountBody(
+                        account,
+                        unusedIndices,
+                        usedSubaddresses,
+                      ),
                     ],
                   ),
                 );
@@ -256,7 +272,10 @@ class _ReceivePanelState extends State<ReceivePanel> {
               icon: const Icon(Icons.add, size: 16),
               label: const Text('Create new account'),
               style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
               ),
             ),
           ),
@@ -265,7 +284,11 @@ class _ReceivePanelState extends State<ReceivePanel> {
     );
   }
 
-  Widget _buildAccountBody(int account, List<int> unusedIndices, Map<int, _SubaddressInfo> usedSubaddresses) {
+  Widget _buildAccountBody(
+    int account,
+    List<int> unusedIndices,
+    Map<int, _SubaddressInfo> usedSubaddresses,
+  ) {
     return Padding(
       padding: const EdgeInsets.all(16.0),
       child: Column(
@@ -305,17 +328,24 @@ class _ReceivePanelState extends State<ReceivePanel> {
           if (_showUsedSubaddresses && usedSubaddresses.isNotEmpty) ...[
             const Text(
               'Used Subaddresses:',
-              style: TextStyle(fontWeight: FontWeight.w400, fontSize: 12, color: Colors.grey),
+              style: TextStyle(
+                fontWeight: FontWeight.w400,
+                fontSize: 12,
+                color: Colors.grey,
+              ),
             ),
             const SizedBox(height: 8),
             for (var entry in usedSubaddresses.entries)
-              if (widget.subaddresses['$account,${entry.key}'] != null && widget.subaddresses['$account,${entry.key}']!.isNotEmpty)
+              if (widget.subaddresses['$account,${entry.key}'] != null &&
+                  widget.subaddresses['$account,${entry.key}']!.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 8.0),
                   child: InkWell(
                     onTap: widget.onNavigateToTransaction != null
-                        ? () => widget.onNavigateToTransaction!(entry.value.txHash)
-                          : null,
+                        ? () => widget.onNavigateToTransaction!(
+                            entry.value.txHash,
+                          )
+                        : null,
                     borderRadius: BorderRadius.circular(4),
                     child: Container(
                       padding: const EdgeInsets.all(8),
@@ -334,14 +364,20 @@ class _ReceivePanelState extends State<ReceivePanel> {
                               children: [
                                 Text(
                                   'Index ${entry.key}',
-                                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w500,
+                                  ),
                                 ),
                                 Text(
                                   'Height: ${entry.value.blockHeight}',
-                                  style: TextStyle(fontSize: 10, color: Colors.blue.shade700),
-                              ),
-                            ],
-                          ),
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    color: Colors.blue.shade700,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                           Expanded(
                             child: SelectableText(
@@ -376,7 +412,8 @@ class _ReceivePanelState extends State<ReceivePanel> {
           ),
           const SizedBox(height: 8),
           for (var addressIndex in unusedIndices) ...[
-            if (widget.subaddresses['$account,$addressIndex'] == null || widget.subaddresses['$account,$addressIndex']!.isEmpty)
+            if (widget.subaddresses['$account,$addressIndex'] == null ||
+                widget.subaddresses['$account,$addressIndex']!.isEmpty)
               Padding(
                 padding: const EdgeInsets.only(bottom: 8.0),
                 child: Row(
@@ -403,7 +440,7 @@ class _ReceivePanelState extends State<ReceivePanel> {
               )
             else
               Padding(
-              padding: const EdgeInsets.only(bottom: 8.0),
+                padding: const EdgeInsets.only(bottom: 8.0),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -448,8 +485,5 @@ class _SubaddressInfo {
   final String txHash;
   final int blockHeight;
 
-  _SubaddressInfo({
-    required this.txHash,
-    required this.blockHeight,
-  });
+  _SubaddressInfo({required this.txHash, required this.blockHeight});
 }

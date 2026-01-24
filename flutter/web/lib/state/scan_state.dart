@@ -42,7 +42,8 @@ class ScanState extends ChangeNotifier {
   List<DoubleSpendConflict>? doubleSpendConflicts;
 
   int get currentHeight => daemonHeight ?? scanResult?.blockHeight ?? 0;
-  int get continuousScanCurrentHeight => _walletState.continuousScanCurrentHeight;
+  int get continuousScanCurrentHeight =>
+      _walletState.continuousScanCurrentHeight;
 
   NodeConnectionState get connectionState {
     if (scanError != null && !isContinuousScanning && !isScanning) {
@@ -64,8 +65,8 @@ class ScanState extends ChangeNotifier {
     required WalletState walletState,
     required WalletPollingService pollingService,
     required SignalHub signalHub,
-  })  : _walletState = walletState,
-        pollingService = pollingService {
+  }) : _walletState = walletState,
+       pollingService = pollingService {
     signalHub.onBlockScan = _handleBlockScan;
     signalHub.onDaemonHeight = _handleDaemonHeight;
     signalHub.onSyncProgress = _handleSyncProgress;
@@ -161,7 +162,9 @@ class ScanState extends ChangeNotifier {
       isContinuousPaused = false;
     }
     if (!_walletState.blockHeightFocusNode.hasFocus) {
-      _walletState.blockHeightController.text = _walletState.continuousScanCurrentHeight.toString();
+      _walletState.blockHeightController.text = _walletState
+          .continuousScanCurrentHeight
+          .toString();
       _walletState.blockHeightUserEdited = false;
     }
 
@@ -184,9 +187,17 @@ class ScanState extends ChangeNotifier {
   void _handleSpentStatusUpdated(SpentStatusUpdatedResponse msg) {
     _walletState.pendingSpentKeyImages.removeAll(msg.spentKeyImages);
     for (var wallet in _walletState.lifecycle.openWallets.values) {
-      OutputUtils.markSpentByKeyImages(wallet.outputs, msg.spentKeyImages, _walletState.selectedOutputs);
+      OutputUtils.markSpentByKeyImages(
+        wallet.outputs,
+        msg.spentKeyImages,
+        _walletState.selectedOutputs,
+      );
     }
-    OutputUtils.markSpentByKeyImages(_walletState.allOutputs, msg.spentKeyImages, _walletState.selectedOutputs);
+    OutputUtils.markSpentByKeyImages(
+      _walletState.allOutputs,
+      msg.spentKeyImages,
+      _walletState.selectedOutputs,
+    );
     _walletState.notify();
     notifyListeners();
   }
@@ -197,7 +208,11 @@ class ScanState extends ChangeNotifier {
     isScanningMempool = false;
     if (msg.success) {
       OutputUtils.addIfAbsent(_walletState.allOutputs, msg.outputs);
-      OutputUtils.markSpentByKeyImages(_walletState.allOutputs, msg.spentKeyImages, _walletState.selectedOutputs);
+      OutputUtils.markSpentByKeyImages(
+        _walletState.allOutputs,
+        msg.spentKeyImages,
+        _walletState.selectedOutputs,
+      );
       _walletState.ensureAccountsExistForOutputs(msg.outputs);
 
       if (msg.outputs.isNotEmpty) {
@@ -211,13 +226,15 @@ class ScanState extends ChangeNotifier {
         final newTxs = <WalletTransaction>[];
         for (var entry in outputsByTx.entries) {
           if (!existingTxHashes.contains(entry.key)) {
-            newTxs.add(WalletTransaction(
-              txHash: entry.key,
-              blockHeight: 0,
-              blockTimestamp: 0,
-              receivedOutputs: entry.value,
-              spentKeyImages: [],
-            ));
+            newTxs.add(
+              WalletTransaction(
+                txHash: entry.key,
+                blockHeight: 0,
+                blockTimestamp: 0,
+                receivedOutputs: entry.value,
+                spentKeyImages: [],
+              ),
+            );
           }
         }
         if (newTxs.isNotEmpty) {
@@ -266,8 +283,12 @@ class ScanState extends ChangeNotifier {
       unspentKeyImages: msg.unspentKeyImages,
     );
     if (_walletState.lifecycle.activeWallet != null) {
-      _walletState.allOutputs = List.from(_walletState.lifecycle.activeWallet!.outputs);
-      _walletState.allTransactions = List.from(_walletState.lifecycle.activeWallet!.transactions);
+      _walletState.allOutputs = List.from(
+        _walletState.lifecycle.activeWallet!.outputs,
+      );
+      _walletState.allTransactions = List.from(
+        _walletState.lifecycle.activeWallet!.transactions,
+      );
     }
     _walletState.notify();
     notifyListeners();
@@ -290,7 +311,9 @@ class ScanState extends ChangeNotifier {
       final txList = _walletState.allTransactions;
       final idx = txList.indexWhere((tx) => tx.txHash == msg.txId);
       if (idx != -1 && txList[idx].blockHeight == 0) {
-        _walletState.pendingSpentKeyImages.removeAll(txList[idx].spentKeyImages);
+        _walletState.pendingSpentKeyImages.removeAll(
+          txList[idx].spentKeyImages,
+        );
 
         final updated = txList[idx].copyWith(
           blockHeight: confirmedHeight,
@@ -500,7 +523,9 @@ class ScanState extends ChangeNotifier {
     scanError = null;
     notifyListeners();
 
-    final highestAccount = _walletState.accounts.isEmpty ? 0 : _walletState.accounts.reduce((a, b) => a > b ? a : b);
+    final highestAccount = _walletState.accounts.isEmpty
+        ? 0
+        : _walletState.accounts.reduce((a, b) => a > b ? a : b);
     WalletScanService.scanMempool(
       seed: validation.normalizedSeed!,
       nodeUrl: validation.nodeUrl!,
@@ -515,7 +540,9 @@ class ScanState extends ChangeNotifier {
     if (isContinuousPaused) {
       final currentText = _walletState.blockHeightController.text.trim();
       final height = int.tryParse(currentText);
-      if (_walletState.blockHeightUserEdited && height != null && height > _walletState.continuousScanCurrentHeight) {
+      if (_walletState.blockHeightUserEdited &&
+          height != null &&
+          height > _walletState.continuousScanCurrentHeight) {
         return 'Start Skipscan';
       }
       return 'Start Rescan';
@@ -543,7 +570,9 @@ class ScanState extends ChangeNotifier {
   void _onBlockRefreshTimer() {
     if (isContinuousPaused || isContinuousScanning) return;
 
-    final nodeUrl = NetworkUtils.normalizeNodeUrl(_walletState.nodeUrlController.text);
+    final nodeUrl = NetworkUtils.normalizeNodeUrl(
+      _walletState.nodeUrlController.text,
+    );
     var walletsToScan = _walletState.activeWallets;
     if (walletsToScan.isEmpty) {
       final aw = _walletState.activeWallet;
@@ -557,7 +586,15 @@ class ScanState extends ChangeNotifier {
     WalletScanService.queryDaemonHeight(nodeUrl);
 
     if (walletsToScan.length > 1) {
-      final walletConfigs = walletsToScan.map((w) => w.toWalletConfig(subaddressLookahead: lookaheadMode.subaddresses, passphrase: _walletState.passphrase, bip39AccountIndex: _walletState.bip39AccountIndex)).toList();
+      final walletConfigs = walletsToScan
+          .map(
+            (w) => w.toWalletConfig(
+              subaddressLookahead: lookaheadMode.subaddresses,
+              passphrase: _walletState.passphrase,
+              bip39AccountIndex: _walletState.bip39AccountIndex,
+            ),
+          )
+          .toList();
       StartMultiWalletScanRequest(
         nodeUrl: nodeUrl,
         startHeight: _walletState.continuousScanCurrentHeight,
@@ -566,7 +603,9 @@ class ScanState extends ChangeNotifier {
     } else {
       final wallet = walletsToScan.first;
       final walletAccounts = wallet.accounts;
-      final highestAccount = walletAccounts.isEmpty ? 0 : walletAccounts.reduce((a, b) => a > b ? a : b);
+      final highestAccount = walletAccounts.isEmpty
+          ? 0
+          : walletAccounts.reduce((a, b) => a > b ? a : b);
       StartContinuousScanRequest(
         nodeUrl: nodeUrl,
         startHeight: _walletState.continuousScanCurrentHeight,
@@ -574,6 +613,7 @@ class ScanState extends ChangeNotifier {
         network: wallet.network,
         accountLookahead: highestAccount + lookaheadMode.accounts,
         subaddressLookahead: lookaheadMode.subaddresses,
+        accountsToScan: wallet.scanningAccounts.toList()..sort(),
         passphrase: _walletState.passphrase,
         bip39AccountIndex: _walletState.bip39AccountIndex,
       ).sendSignalToRust();
@@ -584,8 +624,12 @@ class ScanState extends ChangeNotifier {
     final seed = _walletState.seedController.text.trim();
     if (seed.isEmpty) return;
 
-    final nodeUrl = NetworkUtils.normalizeNodeUrl(_walletState.nodeUrlController.text);
-    final highestAccount = _walletState.accounts.isEmpty ? 0 : _walletState.accounts.reduce((a, b) => a > b ? a : b);
+    final nodeUrl = NetworkUtils.normalizeNodeUrl(
+      _walletState.nodeUrlController.text,
+    );
+    final highestAccount = _walletState.accounts.isEmpty
+        ? 0
+        : _walletState.accounts.reduce((a, b) => a > b ? a : b);
 
     MempoolScanRequest(
       nodeUrl: nodeUrl,

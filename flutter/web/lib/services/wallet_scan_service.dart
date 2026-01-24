@@ -110,11 +110,20 @@ class WalletScanService {
     String? network,
     int accountLookahead = 0,
     int subaddressLookahead = 0,
+    List<int>? accountsToScan,
     String passphrase = '',
     int bip39AccountIndex = 0,
   }) {
     if (walletsToScan.length > 1) {
-      final walletConfigs = walletsToScan.map((w) => w.toWalletConfig(subaddressLookahead: subaddressLookahead, passphrase: passphrase, bip39AccountIndex: bip39AccountIndex)).toList();
+      final walletConfigs = walletsToScan
+          .map(
+            (w) => w.toWalletConfig(
+              subaddressLookahead: subaddressLookahead,
+              passphrase: passphrase,
+              bip39AccountIndex: bip39AccountIndex,
+            ),
+          )
+          .toList();
 
       StartMultiWalletScanRequest(
         nodeUrl: nodeUrl,
@@ -130,6 +139,7 @@ class WalletScanService {
         network: wallet.network,
         accountLookahead: accountLookahead,
         subaddressLookahead: subaddressLookahead,
+        accountsToScan: _sortedAccounts(wallet.scanningAccounts),
         passphrase: passphrase,
         bip39AccountIndex: bip39AccountIndex,
       ).sendSignalToRust();
@@ -141,11 +151,15 @@ class WalletScanService {
         network: network,
         accountLookahead: accountLookahead,
         subaddressLookahead: subaddressLookahead,
+        accountsToScan: accountsToScan,
         passphrase: passphrase,
         bip39AccountIndex: bip39AccountIndex,
       ).sendSignalToRust();
     }
   }
+
+  static List<int> _sortedAccounts(Set<int> accounts) =>
+      accounts.toList()..sort();
 
   /// Pause continuous scan
   static void pauseContinuousScan() {
@@ -170,7 +184,9 @@ class WalletScanService {
 
     final result = KeyParser.parse(seed);
     if (!result.isValid) {
-      return MempoolScanValidation.error('Invalid seed phrase: ${result.error}');
+      return MempoolScanValidation.error(
+        'Invalid seed phrase: ${result.error}',
+      );
     }
 
     if (nodeUrl.trim().isEmpty) {
@@ -235,10 +251,7 @@ class ScanBlockValidation {
   }
 
   factory ScanBlockValidation.error(String error) {
-    return ScanBlockValidation._(
-      isValid: false,
-      error: error,
-    );
+    return ScanBlockValidation._(isValid: false, error: error);
   }
 }
 
@@ -268,10 +281,7 @@ class ContinuousScanValidation {
   }
 
   factory ContinuousScanValidation.error(String error) {
-    return ContinuousScanValidation._(
-      isValid: false,
-      error: error,
-    );
+    return ContinuousScanValidation._(isValid: false, error: error);
   }
 }
 
@@ -301,9 +311,6 @@ class MempoolScanValidation {
   }
 
   factory MempoolScanValidation.error(String error) {
-    return MempoolScanValidation._(
-      isValid: false,
-      error: error,
-    );
+    return MempoolScanValidation._(isValid: false, error: error);
   }
 }

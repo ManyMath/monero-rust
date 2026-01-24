@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:monero_extension/models/wallet_instance.dart';
+import 'package:monero_extension/src/ffi/signal_sender.dart';
 import 'package:monero_extension/services/wallet_scan_service.dart';
 
 const _validSeed =
@@ -14,13 +17,37 @@ WalletInstance _makeWallet({
   String seed = _validSeed,
   String network = 'stagenet',
   String address = '5testaddr',
+  List<int>? accounts,
+  Set<int>? scanningAccounts,
 }) {
   return WalletInstance(
     walletId: walletId,
     seed: seed,
     network: network,
     address: address,
+    accounts: accounts,
+    scanningAccounts: scanningAccounts,
   );
+}
+
+class _RecordedSignal {
+  final String name;
+  final Map<String, dynamic> data;
+
+  const _RecordedSignal(this.name, this.data);
+}
+
+class _RecordingSignalSender implements SignalSender {
+  final sent = <_RecordedSignal>[];
+
+  @override
+  void sendSignal(String signalName, Map<String, dynamic> data) {
+    sent.add(_RecordedSignal(signalName, Map<String, dynamic>.from(data)));
+  }
+
+  @override
+  Stream<Map<String, dynamic>> onRawSignal(String typeName) =>
+      const Stream.empty();
 }
 
 void main() {
@@ -86,18 +113,21 @@ void main() {
       expect(result.error, contains('node URL'));
     });
 
-    test('valid params returns success with normalized seed and parsed height', () {
-      final result = WalletScanService.validateScanBlock(
-        seed: _validSeed,
-        blockHeight: '12345',
-        nodeUrl: _nodeUrl,
-      );
-      expect(result.isValid, true);
-      expect(result.error, isNull);
-      expect(result.normalizedSeed, _validSeed);
-      expect(result.blockHeight, 12345);
-      expect(result.nodeUrl, 'http://$_nodeUrl');
-    });
+    test(
+      'valid params returns success with normalized seed and parsed height',
+      () {
+        final result = WalletScanService.validateScanBlock(
+          seed: _validSeed,
+          blockHeight: '12345',
+          nodeUrl: _nodeUrl,
+        );
+        expect(result.isValid, true);
+        expect(result.error, isNull);
+        expect(result.normalizedSeed, _validSeed);
+        expect(result.blockHeight, 12345);
+        expect(result.nodeUrl, 'http://$_nodeUrl');
+      },
+    );
 
     test('node URL normalization adds http:// when no scheme present', () {
       final result = WalletScanService.validateScanBlock(
@@ -140,7 +170,8 @@ void main() {
     });
 
     test('seed with extra whitespace is normalized', () {
-      final messySeed = '  abandon   abandon abandon abandon abandon '
+      final messySeed =
+          '  abandon   abandon abandon abandon abandon '
           'abandon abandon abandon abandon abandon abandon abandon '
           'abandon abandon abandon abandon abandon abandon abandon '
           'abandon abandon abandon abandon abandon abandon  ';
@@ -190,27 +221,33 @@ void main() {
       expect(result.nodeUrl, 'http://$_nodeUrl');
     });
 
-    test('active wallets with empty seed returns success (wallets do not need seed)', () {
-      final result = WalletScanService.validateContinuousScan(
-        seed: '',
-        blockHeight: '500',
-        nodeUrl: _nodeUrl,
-        activeWallets: [_makeWallet()],
-      );
-      expect(result.isValid, true);
-      expect(result.startHeight, 500);
-    });
+    test(
+      'active wallets with empty seed returns success (wallets do not need seed)',
+      () {
+        final result = WalletScanService.validateContinuousScan(
+          seed: '',
+          blockHeight: '500',
+          nodeUrl: _nodeUrl,
+          activeWallets: [_makeWallet()],
+        );
+        expect(result.isValid, true);
+        expect(result.startHeight, 500);
+      },
+    );
 
-    test('active wallets with invalid seed still succeeds (seed validation skipped)', () {
-      final result = WalletScanService.validateContinuousScan(
-        seed: 'not a valid seed',
-        blockHeight: '500',
-        nodeUrl: _nodeUrl,
-        activeWallets: [_makeWallet()],
-      );
-      // When activeWallets is non-empty, seed validation is entirely skipped
-      expect(result.isValid, true);
-    });
+    test(
+      'active wallets with invalid seed still succeeds (seed validation skipped)',
+      () {
+        final result = WalletScanService.validateContinuousScan(
+          seed: 'not a valid seed',
+          blockHeight: '500',
+          nodeUrl: _nodeUrl,
+          activeWallets: [_makeWallet()],
+        );
+        // When activeWallets is non-empty, seed validation is entirely skipped
+        expect(result.isValid, true);
+      },
+    );
 
     test('empty block height returns error', () {
       final result = WalletScanService.validateContinuousScan(
@@ -349,6 +386,56 @@ void main() {
       );
       expect(result.isValid, true);
       expect(result.normalizedSeed, polyseed);
+    });
+  });
+
+  group('WalletScanService.startContinuousScan', () {
+    test('single-wallet scan sends selected accounts to Rust', () {
+      final sender = _RecordingSignalSender();
+      setSignalSender(sender);
+
+      WalletScanService.startContinuousScan(
+        nodeUrl: 'http://node:38081',
+        startHeight: 123,
+        walletsToScan: [
+          _makeWallet(accounts: [0, 1, 2], scanningAccounts: {2, 0}),
+        ],
+        accountLookahead: 2,
+        subaddressLookahead: 25,
+      );
+
+      expect(sender.sent, hasLength(1));
+      expect(sender.sent.single.name, 'send_start_continuous_scan_request');
+      expect(sender.sent.single.data['accounts_to_scan'], [0, 2]);
+      expect(sender.sent.single.data['account_lookahead'], 2);
+      expect(sender.sent.single.data['subaddress_lookahead'], 25);
+    });
+
+    test('multi-wallet scan sends each wallet selected accounts to Rust', () {
+      final sender = _RecordingSignalSender();
+      setSignalSender(sender);
+
+      WalletScanService.startContinuousScan(
+        nodeUrl: 'http://node:38081',
+        startHeight: 456,
+        walletsToScan: [
+          _makeWallet(walletId: 'w1', accounts: [0, 1], scanningAccounts: {1}),
+          _makeWallet(
+            walletId: 'w2',
+            accounts: [0, 1, 2],
+            scanningAccounts: {2, 0},
+          ),
+        ],
+        subaddressLookahead: 50,
+      );
+
+      expect(sender.sent, hasLength(1));
+      expect(sender.sent.single.name, 'send_start_multi_wallet_scan_request');
+      final wallets = sender.sent.single.data['wallets'] as List<dynamic>;
+      expect(wallets, hasLength(2));
+      expect((wallets[0] as Map<String, dynamic>)['accounts_to_scan'], [1]);
+      expect((wallets[1] as Map<String, dynamic>)['accounts_to_scan'], [0, 2]);
+      expect((wallets[1] as Map<String, dynamic>)['subaddress_lookahead'], 50);
     });
   });
 }

@@ -217,11 +217,14 @@ class WalletInstance {
         ? 0
         : accounts.reduce((a, b) => a > b ? a : b);
 
+    final accountsToScan = scanningAccounts.toList()..sort();
+
     return WalletConfig(
       seed: seed,
       network: network,
       accountLookahead: highestAccount,
       subaddressLookahead: subaddressLookahead,
+      accountsToScan: accountsToScan,
       passphrase: passphrase,
       bip39AccountIndex: bip39AccountIndex,
     );
