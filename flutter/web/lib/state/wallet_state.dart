@@ -10,8 +10,8 @@ import '../services/wallet_lifecycle_manager.dart';
 import '../widgets/close_wallet_dialog.dart';
 import '../src/ffi/signal_hub.dart';
 
-typedef HasStoredWallet = bool Function(String walletId);
-typedef ClearStoredWallet = void Function(String walletId);
+typedef HasStoredWallet = Future<bool> Function(String walletId);
+typedef ClearStoredWallet = Future<void> Function(String walletId);
 
 class WalletState extends ChangeNotifier {
   static const _tag = 'WalletState';
@@ -86,7 +86,7 @@ class WalletState extends ChangeNotifier {
     _signalHub.onBip39LegacySeed = _handleBip39LegacySeed;
     _signalHub.onFreezeThaw = _handleFreezeThaw;
 
-    refreshAvailableWallets();
+    unawaited(refreshAvailableWalletsAsync());
   }
 
   // Delegating getters
@@ -289,7 +289,7 @@ class WalletState extends ChangeNotifier {
   }
 
   void _handleFreezeThaw(FreezeThawResponse msg) {
-    // Response from Rust confirming freeze/thaw — UI already updated optimistically
+    // Response from Rust confirming freeze/thaw; UI already updated optimistically
   }
 
   // Methods
@@ -775,7 +775,7 @@ class WalletState extends ChangeNotifier {
     String newWalletId, {
     required Future<void> Function() loadWalletData,
   }) async {
-    final result = lifecycle.switchWallet(newWalletId);
+    final result = await lifecycle.switchWalletAsync(newWalletId);
 
     switch (result) {
       case SwitchResult.alreadyCurrent:
@@ -863,9 +863,7 @@ class WalletState extends ChangeNotifier {
     resetWalletState();
     notifyListeners();
 
-    if (_hasStoredWallet?.call('temp_wallet') == true) {
-      _clearStoredWallet?.call('temp_wallet');
-    }
+    unawaited(_clearTempWalletIfStored());
 
     showSnackBar?.call(
       'Ready for new wallet - generate or enter a seed phrase',
@@ -873,8 +871,21 @@ class WalletState extends ChangeNotifier {
   }
 
   void refreshAvailableWallets() {
-    lifecycle.refreshAvailableWallets();
+    unawaited(refreshAvailableWalletsAsync());
+  }
+
+  Future<void> refreshAvailableWalletsAsync() async {
+    await lifecycle.refreshAvailableWalletsAsync();
     notifyListeners();
+  }
+
+  Future<void> _clearTempWalletIfStored() async {
+    final hasStoredWallet = _hasStoredWallet;
+    final clearStoredWallet = _clearStoredWallet;
+    if (hasStoredWallet == null || clearStoredWallet == null) return;
+    if (await hasStoredWallet('temp_wallet')) {
+      await clearStoredWallet('temp_wallet');
+    }
   }
 
   void updateBlockHeightFromWallets() {

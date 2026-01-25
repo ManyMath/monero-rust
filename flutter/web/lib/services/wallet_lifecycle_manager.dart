@@ -58,6 +58,19 @@ class WalletLifecycleManager {
     }
   }
 
+  Future<void> refreshAvailableWalletsAsync() async {
+    final walletIds = await _persistence.listWalletsAsync();
+    availableWalletIds = walletIds.where((id) => id != 'temp_wallet').toList();
+    // Only auto-select when the current non-empty walletId disappeared from
+    // the list (e.g. after deletion). Do NOT auto-select when walletId is
+    // intentionally empty (e.g. after startNewWallet before an import).
+    if (walletIds.isNotEmpty &&
+        walletId.isNotEmpty &&
+        !walletIds.contains(walletId)) {
+      walletId = walletIds.first;
+    }
+  }
+
   SwitchResult switchWallet(String newWalletId) {
     if (newWalletId == walletId) {
       return SwitchResult.alreadyCurrent;
@@ -73,6 +86,28 @@ class WalletLifecycleManager {
     refreshAvailableWallets();
 
     if (_persistence.has(newWalletId)) {
+      return SwitchResult.needsLoad;
+    } else {
+      resetWalletState();
+      return SwitchResult.reset;
+    }
+  }
+
+  Future<SwitchResult> switchWalletAsync(String newWalletId) async {
+    if (newWalletId == walletId) {
+      return SwitchResult.alreadyCurrent;
+    }
+
+    if (openWallets.containsKey(newWalletId) &&
+        !openWallets[newWalletId]!.isClosed) {
+      switchToWallet(newWalletId);
+      return SwitchResult.switchedToOpen;
+    }
+
+    walletId = newWalletId;
+    await refreshAvailableWalletsAsync();
+
+    if (await _persistence.hasAsync(newWalletId)) {
       return SwitchResult.needsLoad;
     } else {
       resetWalletState();

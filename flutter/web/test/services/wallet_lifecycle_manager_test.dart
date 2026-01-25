@@ -15,6 +15,17 @@ WalletLifecycleManager createManager({InMemoryStorageBackend? storage}) {
   );
 }
 
+WalletLifecycleManager createAsyncManager({
+  required AsyncInMemoryStorageBackend storage,
+}) {
+  return WalletLifecycleManager(
+    persistence: WalletPersistenceService.async(
+      storage: storage,
+      crypto: IdentityCryptoBackend(),
+    ),
+  );
+}
+
 Future<void> saveTestWallet(
   InMemoryStorageBackend storage, {
   required String walletId,
@@ -62,6 +73,31 @@ Future<void> saveTestWallet(
   );
 }
 
+Future<void> saveAsyncTestWallet(
+  AsyncInMemoryStorageBackend storage, {
+  required String walletId,
+}) async {
+  final svc = WalletPersistenceService.async(
+    storage: storage,
+    crypto: IdentityCryptoBackend(),
+  );
+  await svc.save(
+    walletId: walletId,
+    password: 'pass',
+    seed: 'test seed for $walletId',
+    network: 'stagenet',
+    address: 'addr_$walletId',
+    nodeUrl: 'http://node:38081',
+    outputs: [],
+    transactions: [],
+    continuousScanCurrentHeight: 500,
+    selectedOutputs: {},
+    accounts: [0],
+    activeAccount: 0,
+    scanningAccounts: {0},
+  );
+}
+
 void main() {
   group('refreshAvailableWallets', () {
     test('updates available wallet list from persistence', () async {
@@ -84,8 +120,11 @@ void main() {
 
       mgr.refreshAvailableWallets();
 
-      expect(mgr.walletId, '',
-          reason: 'Empty walletId should not be auto-filled by refresh');
+      expect(
+        mgr.walletId,
+        '',
+        reason: 'Empty walletId should not be auto-filled by refresh',
+      );
       expect(mgr.availableWalletIds, ['w1']);
     });
 
@@ -98,8 +137,11 @@ void main() {
 
       mgr.refreshAvailableWallets();
 
-      expect(mgr.walletId, 'bravo',
-          reason: 'Should auto-select when current wallet was deleted');
+      expect(
+        mgr.walletId,
+        'bravo',
+        reason: 'Should auto-select when current wallet was deleted',
+      );
     });
 
     test('keeps current walletId if still in list', () async {
@@ -113,6 +155,56 @@ void main() {
       mgr.refreshAvailableWallets();
 
       expect(mgr.walletId, 'alpha');
+    });
+  });
+
+  group('async persistence routing', () {
+    test(
+      'refreshAvailableWalletsAsync updates available wallet list',
+      () async {
+        final storage = AsyncInMemoryStorageBackend();
+        await saveAsyncTestWallet(storage, walletId: 'alpha');
+        await saveAsyncTestWallet(storage, walletId: 'bravo');
+
+        final mgr = createAsyncManager(storage: storage);
+        await mgr.refreshAvailableWalletsAsync();
+
+        expect(mgr.availableWalletIds, ['alpha', 'bravo']);
+      },
+    );
+
+    test(
+      'switchWalletAsync returns needsLoad when async storage has data',
+      () async {
+        final storage = AsyncInMemoryStorageBackend();
+        await saveAsyncTestWallet(storage, walletId: 'hemlock');
+
+        final mgr = createAsyncManager(storage: storage);
+        final result = await mgr.switchWalletAsync('hemlock');
+
+        expect(result, SwitchResult.needsLoad);
+        expect(mgr.walletId, 'hemlock');
+        expect(mgr.availableWalletIds, ['hemlock']);
+      },
+    );
+
+    test('switchWalletAsync resets when async storage has no data', () async {
+      final storage = AsyncInMemoryStorageBackend();
+      final mgr = createAsyncManager(storage: storage);
+      mgr.allOutputs = [
+        TestHelpers.createMockOutput(
+          txHash: 'stale',
+          outputIndex: 0,
+          amountXmr: '1.0',
+          blockHeight: 1,
+        ),
+      ];
+
+      final result = await mgr.switchWalletAsync('missing');
+
+      expect(result, SwitchResult.reset);
+      expect(mgr.walletId, 'missing');
+      expect(mgr.allOutputs, isEmpty);
     });
   });
 
@@ -131,7 +223,10 @@ void main() {
       final mgr = createManager();
       final outputs = [
         TestHelpers.createMockOutput(
-          txHash: 'tx1', outputIndex: 0, amountXmr: '10.0', blockHeight: 100,
+          txHash: 'tx1',
+          outputIndex: 0,
+          amountXmr: '10.0',
+          blockHeight: 100,
         ),
       ];
       mgr.openWallet('w1', 'seed1', 'stagenet', 'addr1');
@@ -173,23 +268,28 @@ void main() {
       expect(mgr.allTransactions, isEmpty);
     });
 
-    test('skips closed wallet in openWallets and falls through to persistence',
-        () async {
-      final storage = InMemoryStorageBackend();
-      await saveTestWallet(storage, walletId: 'w1');
+    test(
+      'skips closed wallet in openWallets and falls through to persistence',
+      () async {
+        final storage = InMemoryStorageBackend();
+        await saveTestWallet(storage, walletId: 'w1');
 
-      final mgr = createManager(storage: storage);
-      mgr.openWallet('w1', 'seed1', 'stagenet', 'addr1');
-      mgr.openWallets['w1']!.isClosed = true;
+        final mgr = createManager(storage: storage);
+        mgr.openWallet('w1', 'seed1', 'stagenet', 'addr1');
+        mgr.openWallets['w1']!.isClosed = true;
 
-      // Switch away
-      mgr.walletId = 'other';
+        // Switch away
+        mgr.walletId = 'other';
 
-      final result = mgr.switchWallet('w1');
+        final result = mgr.switchWallet('w1');
 
-      expect(result, SwitchResult.needsLoad,
-          reason: 'Closed wallet should not count as switchedToOpen');
-    });
+        expect(
+          result,
+          SwitchResult.needsLoad,
+          reason: 'Closed wallet should not count as switchedToOpen',
+        );
+      },
+    );
   });
 
   group('switchToWallet', () {
@@ -197,7 +297,10 @@ void main() {
       final mgr = createManager();
       final outputs = [
         TestHelpers.createMockOutput(
-          txHash: 'tx1', outputIndex: 0, amountXmr: '10.0', blockHeight: 100,
+          txHash: 'tx1',
+          outputIndex: 0,
+          amountXmr: '10.0',
+          blockHeight: 100,
         ),
       ];
 
@@ -227,8 +330,11 @@ void main() {
       final mgr = createManager();
       final txs = [
         WalletTransaction(
-          txHash: 'tx1', blockHeight: 100, blockTimestamp: 1700000000,
-          receivedOutputs: [], spentKeyImages: [],
+          txHash: 'tx1',
+          blockHeight: 100,
+          blockTimestamp: 1700000000,
+          receivedOutputs: [],
+          spentKeyImages: [],
         ),
       ];
 
@@ -243,8 +349,11 @@ void main() {
       // Switch back
       mgr.switchToWallet('w1');
 
-      expect(mgr.allTransactions, isEmpty,
-          reason: 'WalletInstance does not store transactions');
+      expect(
+        mgr.allTransactions,
+        isEmpty,
+        reason: 'WalletInstance does not store transactions',
+      );
     });
 
     test('returns null for closed wallet', () {
@@ -274,13 +383,19 @@ void main() {
       mgr.restoreLoadedData(
         outputs: [
           TestHelpers.createMockOutput(
-            txHash: 'tx1', outputIndex: 0, amountXmr: '10.0', blockHeight: 100,
+            txHash: 'tx1',
+            outputIndex: 0,
+            amountXmr: '10.0',
+            blockHeight: 100,
           ),
         ],
         transactions: [
           WalletTransaction(
-            txHash: 'tx1', blockHeight: 100, blockTimestamp: 1700000000,
-            receivedOutputs: [], spentKeyImages: [],
+            txHash: 'tx1',
+            blockHeight: 100,
+            blockTimestamp: 1700000000,
+            receivedOutputs: [],
+            spentKeyImages: [],
           ),
         ],
         selectedOutputs: {'tx1:0'},
@@ -364,13 +479,19 @@ void main() {
       final mgr = createManager();
       mgr.allOutputs = [
         TestHelpers.createMockOutput(
-          txHash: 'tx1', outputIndex: 0, amountXmr: '10.0', blockHeight: 100,
+          txHash: 'tx1',
+          outputIndex: 0,
+          amountXmr: '10.0',
+          blockHeight: 100,
         ),
       ];
       mgr.allTransactions = [
         WalletTransaction(
-          txHash: 'tx1', blockHeight: 100, blockTimestamp: 1700000000,
-          receivedOutputs: [], spentKeyImages: [],
+          txHash: 'tx1',
+          blockHeight: 100,
+          blockTimestamp: 1700000000,
+          receivedOutputs: [],
+          spentKeyImages: [],
         ),
       ];
       mgr.selectedOutputs = {'tx1:0'};
@@ -400,16 +521,25 @@ void main() {
       final mgr = createManager();
       final outputs = [
         TestHelpers.createMockOutput(
-          txHash: 'tx1', outputIndex: 0, amountXmr: '10.0', blockHeight: 100,
+          txHash: 'tx1',
+          outputIndex: 0,
+          amountXmr: '10.0',
+          blockHeight: 100,
         ),
         TestHelpers.createMockOutput(
-          txHash: 'tx2', outputIndex: 0, amountXmr: '5.0', blockHeight: 200,
+          txHash: 'tx2',
+          outputIndex: 0,
+          amountXmr: '5.0',
+          blockHeight: 200,
         ),
       ];
       final transactions = [
         WalletTransaction(
-          txHash: 'tx1', blockHeight: 100, blockTimestamp: 1700000000,
-          receivedOutputs: [outputs[0]], spentKeyImages: [],
+          txHash: 'tx1',
+          blockHeight: 100,
+          blockTimestamp: 1700000000,
+          receivedOutputs: [outputs[0]],
+          spentKeyImages: [],
         ),
       ];
 
@@ -433,7 +563,10 @@ void main() {
       final mgr = createManager();
       final outputs = [
         TestHelpers.createMockOutput(
-          txHash: 'tx1', outputIndex: 0, amountXmr: '10.0', blockHeight: 100,
+          txHash: 'tx1',
+          outputIndex: 0,
+          amountXmr: '10.0',
+          blockHeight: 100,
         ),
       ];
 
@@ -446,10 +579,16 @@ void main() {
         daemonHeight: 1000,
       );
 
-      expect(mgr.activeWallet!.outputs.length, 1,
-          reason: 'activeWallet.outputs must be synced with allOutputs');
-      expect(identical(mgr.allOutputs, mgr.activeWallet!.outputs), true,
-          reason: 'Should be the same list reference');
+      expect(
+        mgr.activeWallet!.outputs.length,
+        1,
+        reason: 'activeWallet.outputs must be synced with allOutputs',
+      );
+      expect(
+        identical(mgr.allOutputs, mgr.activeWallet!.outputs),
+        true,
+        reason: 'Should be the same list reference',
+      );
       expect(mgr.activeWallet!.currentHeight, 500);
       expect(mgr.activeWallet!.daemonHeight, 1000);
     });
@@ -458,7 +597,10 @@ void main() {
       final mgr = createManager();
       final oldOutputs = [
         TestHelpers.createMockOutput(
-          txHash: 'old', outputIndex: 0, amountXmr: '1.0', blockHeight: 50,
+          txHash: 'old',
+          outputIndex: 0,
+          amountXmr: '1.0',
+          blockHeight: 50,
         ),
       ];
       mgr.allOutputs = oldOutputs;
@@ -471,10 +613,16 @@ void main() {
       // restoreLoadedData restores
       final newOutputs = [
         TestHelpers.createMockOutput(
-          txHash: 'new1', outputIndex: 0, amountXmr: '10.0', blockHeight: 100,
+          txHash: 'new1',
+          outputIndex: 0,
+          amountXmr: '10.0',
+          blockHeight: 100,
         ),
         TestHelpers.createMockOutput(
-          txHash: 'new2', outputIndex: 0, amountXmr: '5.0', blockHeight: 200,
+          txHash: 'new2',
+          outputIndex: 0,
+          amountXmr: '5.0',
+          blockHeight: 200,
         ),
       ];
       mgr.restoreLoadedData(
@@ -488,73 +636,95 @@ void main() {
       expect(mgr.allOutputs[0].txHash, 'new1');
     });
 
-    test('restoreLoadedData without activeWallet sets fields but skips wallet instance', () {
-      final mgr = createManager();
-      expect(mgr.activeWallet, isNull);
+    test(
+      'restoreLoadedData without activeWallet sets fields but skips wallet instance',
+      () {
+        final mgr = createManager();
+        expect(mgr.activeWallet, isNull);
 
-      final outputs = [
-        TestHelpers.createMockOutput(
-          txHash: 'tx1', outputIndex: 0, amountXmr: '10.0', blockHeight: 100,
-        ),
-      ];
-      final transactions = [
-        WalletTransaction(
-          txHash: 'tx1', blockHeight: 100, blockTimestamp: 1700000000,
-          receivedOutputs: [], spentKeyImages: [],
-        ),
-      ];
+        final outputs = [
+          TestHelpers.createMockOutput(
+            txHash: 'tx1',
+            outputIndex: 0,
+            amountXmr: '10.0',
+            blockHeight: 100,
+          ),
+        ];
+        final transactions = [
+          WalletTransaction(
+            txHash: 'tx1',
+            blockHeight: 100,
+            blockTimestamp: 1700000000,
+            receivedOutputs: [],
+            spentKeyImages: [],
+          ),
+        ];
 
-      mgr.restoreLoadedData(
-        outputs: outputs,
-        transactions: transactions,
-        selectedOutputs: {'tx1:0'},
-        scanHeight: 500,
-        daemonHeight: 1000,
-      );
+        mgr.restoreLoadedData(
+          outputs: outputs,
+          transactions: transactions,
+          selectedOutputs: {'tx1:0'},
+          scanHeight: 500,
+          daemonHeight: 1000,
+        );
 
-      expect(mgr.allOutputs.length, 1);
-      expect(mgr.allTransactions.length, 1);
-      expect(mgr.selectedOutputs, {'tx1:0'});
-      expect(mgr.continuousScanCurrentHeight, 500);
-      expect(mgr.activeWallet, isNull,
-          reason: 'No wallet instance to update');
-    });
+        expect(mgr.allOutputs.length, 1);
+        expect(mgr.allTransactions.length, 1);
+        expect(mgr.selectedOutputs, {'tx1:0'});
+        expect(mgr.continuousScanCurrentHeight, 500);
+        expect(
+          mgr.activeWallet,
+          isNull,
+          reason: 'No wallet instance to update',
+        );
+      },
+    );
   });
 
   group('Bug 1 regression: import after delete', () {
-    test('refreshAvailableWallets does not auto-select when walletId empty',
-        () async {
-      final storage = InMemoryStorageBackend();
-      await saveTestWallet(storage, walletId: 'hemlock');
+    test(
+      'refreshAvailableWallets does not auto-select when walletId empty',
+      () async {
+        final storage = InMemoryStorageBackend();
+        await saveTestWallet(storage, walletId: 'hemlock');
 
-      final mgr = createManager(storage: storage);
-      mgr.startNewWallet();
-      expect(mgr.walletId, '');
+        final mgr = createManager(storage: storage);
+        mgr.startNewWallet();
+        expect(mgr.walletId, '');
 
-      mgr.refreshAvailableWallets();
+        mgr.refreshAvailableWallets();
 
-      expect(mgr.walletId, '',
-          reason: 'Bug 1 fix: empty walletId must not be auto-filled');
-      expect(mgr.availableWalletIds, ['hemlock']);
-    });
+        expect(
+          mgr.walletId,
+          '',
+          reason: 'Bug 1 fix: empty walletId must not be auto-filled',
+        );
+        expect(mgr.availableWalletIds, ['hemlock']);
+      },
+    );
 
-    test('switchWallet after empty-walletId refresh returns needsLoad',
-        () async {
-      final storage = InMemoryStorageBackend();
-      await saveTestWallet(storage, walletId: 'hemlock');
+    test(
+      'switchWallet after empty-walletId refresh returns needsLoad',
+      () async {
+        final storage = InMemoryStorageBackend();
+        await saveTestWallet(storage, walletId: 'hemlock');
 
-      final mgr = createManager(storage: storage);
-      mgr.startNewWallet();
-      mgr.refreshAvailableWallets();
-      // walletId is still '' because of Bug 1 fix
+        final mgr = createManager(storage: storage);
+        mgr.startNewWallet();
+        mgr.refreshAvailableWallets();
+        // walletId is still '' because of Bug 1 fix
 
-      final result = mgr.switchWallet('hemlock');
+        final result = mgr.switchWallet('hemlock');
 
-      expect(result, SwitchResult.needsLoad,
-          reason: 'Should load, not return alreadyCurrent');
-    });
+        expect(
+          result,
+          SwitchResult.needsLoad,
+          reason: 'Should load, not return alreadyCurrent',
+        );
+      },
+    );
 
-    test('full delete→import→switch sequence loads correctly', () async {
+    test('full delete->import->switch sequence loads correctly', () async {
       final storage = InMemoryStorageBackend();
       await saveTestWallet(storage, walletId: 'hemlock');
 
@@ -565,14 +735,19 @@ void main() {
       mgr.restoreLoadedData(
         outputs: [
           TestHelpers.createMockOutput(
-            txHash: 'tx1', outputIndex: 0, amountXmr: '10.0',
+            txHash: 'tx1',
+            outputIndex: 0,
+            amountXmr: '10.0',
             blockHeight: 100,
           ),
         ],
         transactions: [
           WalletTransaction(
-            txHash: 'tx1', blockHeight: 100, blockTimestamp: 1700000000,
-            receivedOutputs: [], spentKeyImages: [],
+            txHash: 'tx1',
+            blockHeight: 100,
+            blockTimestamp: 1700000000,
+            receivedOutputs: [],
+            spentKeyImages: [],
           ),
         ],
         selectedOutputs: {'tx1:0'},
@@ -593,24 +768,41 @@ void main() {
       expect(result, SwitchResult.needsLoad);
 
       // 4. Simulate _loadWalletData: openWallet + restoreLoadedData
-      mgr.openWallet('hemlock', 'test seed for hemlock', 'stagenet', 'addr_hemlock');
+      mgr.openWallet(
+        'hemlock',
+        'test seed for hemlock',
+        'stagenet',
+        'addr_hemlock',
+      );
       mgr.restoreLoadedData(
         outputs: [
           TestHelpers.createMockOutput(
-            txHash: 'tx0', outputIndex: 0, amountXmr: '5.0', blockHeight: 100,
+            txHash: 'tx0',
+            outputIndex: 0,
+            amountXmr: '5.0',
+            blockHeight: 100,
           ),
           TestHelpers.createMockOutput(
-            txHash: 'tx1', outputIndex: 0, amountXmr: '10.0', blockHeight: 200,
+            txHash: 'tx1',
+            outputIndex: 0,
+            amountXmr: '10.0',
+            blockHeight: 200,
           ),
         ],
         transactions: [
           WalletTransaction(
-            txHash: 'tx0', blockHeight: 100, blockTimestamp: 1700000000,
-            receivedOutputs: [], spentKeyImages: [],
+            txHash: 'tx0',
+            blockHeight: 100,
+            blockTimestamp: 1700000000,
+            receivedOutputs: [],
+            spentKeyImages: [],
           ),
           WalletTransaction(
-            txHash: 'tx1', blockHeight: 200, blockTimestamp: 1700100000,
-            receivedOutputs: [], spentKeyImages: [],
+            txHash: 'tx1',
+            blockHeight: 200,
+            blockTimestamp: 1700100000,
+            receivedOutputs: [],
+            spentKeyImages: [],
           ),
         ],
         selectedOutputs: {'tx0:0'},
@@ -627,45 +819,58 @@ void main() {
   });
 
   group('Bug 2 regression: stale openWallets after delete', () {
-    test('after openWallet + startNewWallet, switchWallet returns needsLoad',
-        () async {
-      final storage = InMemoryStorageBackend();
-      await saveTestWallet(storage, walletId: 'hemlock');
+    test(
+      'after openWallet + startNewWallet, switchWallet returns needsLoad',
+      () async {
+        final storage = InMemoryStorageBackend();
+        await saveTestWallet(storage, walletId: 'hemlock');
 
-      final mgr = createManager(storage: storage);
+        final mgr = createManager(storage: storage);
 
-      // Open the wallet (simulating first load)
-      mgr.openWallet('hemlock', 'seed', 'stagenet', 'addr');
-      mgr.restoreLoadedData(
-        outputs: [
-          TestHelpers.createMockOutput(
-            txHash: 'tx1', outputIndex: 0, amountXmr: '10.0',
-            blockHeight: 100,
-          ),
-        ],
-        transactions: [
-          WalletTransaction(
-            txHash: 'tx1', blockHeight: 100, blockTimestamp: 1700000000,
-            receivedOutputs: [], spentKeyImages: [],
-          ),
-        ],
-        selectedOutputs: {},
-        scanHeight: 500,
-      );
-      expect(mgr.openWallets.containsKey('hemlock'), true);
+        // Open the wallet (simulating first load)
+        mgr.openWallet('hemlock', 'seed', 'stagenet', 'addr');
+        mgr.restoreLoadedData(
+          outputs: [
+            TestHelpers.createMockOutput(
+              txHash: 'tx1',
+              outputIndex: 0,
+              amountXmr: '10.0',
+              blockHeight: 100,
+            ),
+          ],
+          transactions: [
+            WalletTransaction(
+              txHash: 'tx1',
+              blockHeight: 100,
+              blockTimestamp: 1700000000,
+              receivedOutputs: [],
+              spentKeyImages: [],
+            ),
+          ],
+          selectedOutputs: {},
+          scanHeight: 500,
+        );
+        expect(mgr.openWallets.containsKey('hemlock'), true);
 
-      // Delete (startNewWallet clears openWallets)
-      mgr.startNewWallet();
-      expect(mgr.openWallets.containsKey('hemlock'), false,
-          reason: 'Bug 2 fix: startNewWallet must clear openWallets');
+        // Delete (startNewWallet clears openWallets)
+        mgr.startNewWallet();
+        expect(
+          mgr.openWallets.containsKey('hemlock'),
+          false,
+          reason: 'Bug 2 fix: startNewWallet must clear openWallets',
+        );
 
-      // Re-import and switch
-      final result = mgr.switchWallet('hemlock');
+        // Re-import and switch
+        final result = mgr.switchWallet('hemlock');
 
-      expect(result, SwitchResult.needsLoad,
+        expect(
+          result,
+          SwitchResult.needsLoad,
           reason:
-              'Must do full load, not switchToOpen with stale WalletInstance');
-    });
+              'Must do full load, not switchToOpen with stale WalletInstance',
+        );
+      },
+    );
 
     test('stale wallet would have caused switchedToOpen without fix', () {
       final mgr = createManager();
@@ -674,8 +879,11 @@ void main() {
       mgr.openWallet('w1', 'seed', 'stagenet', 'addr');
       mgr.allTransactions = [
         WalletTransaction(
-          txHash: 'tx1', blockHeight: 100, blockTimestamp: 1700000000,
-          receivedOutputs: [], spentKeyImages: [],
+          txHash: 'tx1',
+          blockHeight: 100,
+          blockTimestamp: 1700000000,
+          receivedOutputs: [],
+          spentKeyImages: [],
         ),
       ];
 
@@ -688,136 +896,162 @@ void main() {
       mgr.allOutputs = [];
       mgr.allTransactions = [];
 
-      // Switch back — this would hit switchedToOpen because w1 is still in openWallets
+      // Switch back; this would hit switchedToOpen because w1 is still in openWallets
       final result = mgr.switchWallet('w1');
       expect(result, SwitchResult.switchedToOpen);
       // Transactions would NOT be restored
-      expect(mgr.allTransactions, isEmpty,
-          reason: 'switchToWallet does not restore transactions');
+      expect(
+        mgr.allTransactions,
+        isEmpty,
+        reason: 'switchToWallet does not restore transactions',
+      );
     });
   });
 
   group('Full lifecycle integration', () {
     test(
-        'save→delete→reimport→switch→open→restore preserves outputs and transactions',
-        () async {
-      final storage = InMemoryStorageBackend();
-      final persistence = WalletPersistenceService(
-        storage: storage,
-        crypto: IdentityCryptoBackend(),
-      );
-      final mgr = WalletLifecycleManager(persistence: persistence);
+      'save->delete->reimport->switch->open->restore preserves outputs and transactions',
+      () async {
+        final storage = InMemoryStorageBackend();
+        final persistence = WalletPersistenceService(
+          storage: storage,
+          crypto: IdentityCryptoBackend(),
+        );
+        final mgr = WalletLifecycleManager(persistence: persistence);
 
-      // Create test data
-      final outputs = [
-        TestHelpers.createMockOutput(
-          txHash: 'tx1', outputIndex: 0, amountXmr: '10.0', blockHeight: 100,
-          subaddressIndex: (0, 0), keyImage: 'ki1',
-        ),
-        TestHelpers.createMockOutput(
-          txHash: 'tx2', outputIndex: 0, amountXmr: '5.0', blockHeight: 200,
-          spent: true, keyImage: 'ki2',
-        ),
-      ];
-      final transactions = [
-        WalletTransaction(
-          txHash: 'tx1', blockHeight: 100, blockTimestamp: 1700000000,
-          receivedOutputs: [outputs[0]], spentKeyImages: [],
-        ),
-        WalletTransaction(
-          txHash: 'tx2', blockHeight: 200, blockTimestamp: 1700100000,
-          receivedOutputs: [outputs[1]], spentKeyImages: [],
-        ),
-        WalletTransaction(
-          txHash: 'spend:ki2', blockHeight: 250, blockTimestamp: 1700150000,
-          receivedOutputs: [], spentKeyImages: ['ki2'],
-        ),
-      ];
+        // Create test data
+        final outputs = [
+          TestHelpers.createMockOutput(
+            txHash: 'tx1',
+            outputIndex: 0,
+            amountXmr: '10.0',
+            blockHeight: 100,
+            subaddressIndex: (0, 0),
+            keyImage: 'ki1',
+          ),
+          TestHelpers.createMockOutput(
+            txHash: 'tx2',
+            outputIndex: 0,
+            amountXmr: '5.0',
+            blockHeight: 200,
+            spent: true,
+            keyImage: 'ki2',
+          ),
+        ];
+        final transactions = [
+          WalletTransaction(
+            txHash: 'tx1',
+            blockHeight: 100,
+            blockTimestamp: 1700000000,
+            receivedOutputs: [outputs[0]],
+            spentKeyImages: [],
+          ),
+          WalletTransaction(
+            txHash: 'tx2',
+            blockHeight: 200,
+            blockTimestamp: 1700100000,
+            receivedOutputs: [outputs[1]],
+            spentKeyImages: [],
+          ),
+          WalletTransaction(
+            txHash: 'spend:ki2',
+            blockHeight: 250,
+            blockTimestamp: 1700150000,
+            receivedOutputs: [],
+            spentKeyImages: ['ki2'],
+          ),
+        ];
 
-      // 1. Save
-      final saveResult = await persistence.save(
-        walletId: 'hemlock',
-        password: 'pass',
-        seed: 'hemlock seed phrase',
-        network: 'stagenet',
-        address: 'hemlock_addr',
-        nodeUrl: 'http://node:38081',
-        outputs: outputs,
-        transactions: transactions,
-        continuousScanCurrentHeight: 500,
-        selectedOutputs: {'tx1:0'},
-        accounts: [0],
-        activeAccount: 0,
-        scanningAccounts: {0},
-      );
-      expect(saveResult.success, true);
+        // 1. Save
+        final saveResult = await persistence.save(
+          walletId: 'hemlock',
+          password: 'pass',
+          seed: 'hemlock seed phrase',
+          network: 'stagenet',
+          address: 'hemlock_addr',
+          nodeUrl: 'http://node:38081',
+          outputs: outputs,
+          transactions: transactions,
+          continuousScanCurrentHeight: 500,
+          selectedOutputs: {'tx1:0'},
+          accounts: [0],
+          activeAccount: 0,
+          scanningAccounts: {0},
+        );
+        expect(saveResult.success, true);
 
-      // Simulate wallet is open
-      mgr.walletId = 'hemlock';
-      mgr.openWallet('hemlock', 'hemlock seed phrase', 'stagenet', 'hemlock_addr');
-      mgr.restoreLoadedData(
-        outputs: outputs,
-        transactions: transactions,
-        selectedOutputs: {'tx1:0'},
-        scanHeight: 500,
-      );
+        // Simulate wallet is open
+        mgr.walletId = 'hemlock';
+        mgr.openWallet(
+          'hemlock',
+          'hemlock seed phrase',
+          'stagenet',
+          'hemlock_addr',
+        );
+        mgr.restoreLoadedData(
+          outputs: outputs,
+          transactions: transactions,
+          selectedOutputs: {'tx1:0'},
+          scanHeight: 500,
+        );
 
-      // 2. Export (grab raw blob)
-      final exportedBlob = persistence.getRawData('hemlock');
-      expect(exportedBlob, isNotNull);
+        // 2. Export (grab raw blob)
+        final exportedBlob = persistence.getRawData('hemlock');
+        expect(exportedBlob, isNotNull);
 
-      // 3. Delete
-      persistence.clear('hemlock');
-      mgr.startNewWallet();
-      expect(persistence.has('hemlock'), false);
-      expect(mgr.openWallets, isEmpty);
-      expect(mgr.allOutputs, isEmpty);
-      expect(mgr.allTransactions, isEmpty);
+        // 3. Delete
+        persistence.clear('hemlock');
+        mgr.startNewWallet();
+        expect(persistence.has('hemlock'), false);
+        expect(mgr.openWallets, isEmpty);
+        expect(mgr.allOutputs, isEmpty);
+        expect(mgr.allTransactions, isEmpty);
 
-      // 4. Reimport (store raw blob back)
-      persistence.setRawData('hemlock', exportedBlob!);
-      expect(persistence.has('hemlock'), true);
+        // 4. Reimport (store raw blob back)
+        persistence.setRawData('hemlock', exportedBlob!);
+        expect(persistence.has('hemlock'), true);
 
-      // 5. Switch to reimported wallet
-      mgr.refreshAvailableWallets();
-      expect(mgr.walletId, '', reason: 'Bug 1 fix');
+        // 5. Switch to reimported wallet
+        mgr.refreshAvailableWallets();
+        expect(mgr.walletId, '', reason: 'Bug 1 fix');
 
-      final result = mgr.switchWallet('hemlock');
-      expect(result, SwitchResult.needsLoad);
+        final result = mgr.switchWallet('hemlock');
+        expect(result, SwitchResult.needsLoad);
 
-      // 6. Load from persistence (simulating _loadWalletData)
-      final loadResult = await persistence.load(
-        walletId: 'hemlock',
-        password: 'pass',
-      );
-      expect(loadResult.success, true);
+        // 6. Load from persistence (simulating _loadWalletData)
+        final loadResult = await persistence.load(
+          walletId: 'hemlock',
+          password: 'pass',
+        );
+        expect(loadResult.success, true);
 
-      mgr.openWallet(
-        'hemlock',
-        loadResult.seed!,
-        loadResult.network!,
-        loadResult.address!,
-      );
-      mgr.restoreLoadedData(
-        outputs: loadResult.outputs!,
-        transactions: loadResult.transactions!,
-        selectedOutputs: loadResult.selectedOutputs!,
-        scanHeight: loadResult.continuousScanCurrentHeight!,
-      );
+        mgr.openWallet(
+          'hemlock',
+          loadResult.seed!,
+          loadResult.network!,
+          loadResult.address!,
+        );
+        mgr.restoreLoadedData(
+          outputs: loadResult.outputs!,
+          transactions: loadResult.transactions!,
+          selectedOutputs: loadResult.selectedOutputs!,
+          scanHeight: loadResult.continuousScanCurrentHeight!,
+        );
 
-      // 7. Verify EVERYTHING survived
-      expect(mgr.walletId, 'hemlock');
-      expect(mgr.allOutputs.length, 2);
-      expect(mgr.allOutputs[0].txHash, 'tx1');
-      expect(mgr.allOutputs[0].amountXmr, '10.0');
-      expect(mgr.allOutputs[1].spent, true);
-      expect(mgr.allTransactions.length, 3);
-      expect(mgr.allTransactions[0].txHash, 'tx1');
-      expect(mgr.allTransactions[2].spentKeyImages, ['ki2']);
-      expect(mgr.selectedOutputs, {'tx1:0'});
-      expect(mgr.continuousScanCurrentHeight, 500);
-      expect(mgr.activeWallet!.outputs.length, 2);
-    });
+        // 7. Verify EVERYTHING survived
+        expect(mgr.walletId, 'hemlock');
+        expect(mgr.allOutputs.length, 2);
+        expect(mgr.allOutputs[0].txHash, 'tx1');
+        expect(mgr.allOutputs[0].amountXmr, '10.0');
+        expect(mgr.allOutputs[1].spent, true);
+        expect(mgr.allTransactions.length, 3);
+        expect(mgr.allTransactions[0].txHash, 'tx1');
+        expect(mgr.allTransactions[2].spentKeyImages, ['ki2']);
+        expect(mgr.selectedOutputs, {'tx1:0'});
+        expect(mgr.continuousScanCurrentHeight, 500);
+        expect(mgr.activeWallet!.outputs.length, 2);
+      },
+    );
 
     test('multiple wallets: open, switch, delete one, reimport', () async {
       final storage = InMemoryStorageBackend();
@@ -831,13 +1065,19 @@ void main() {
       mgr.restoreLoadedData(
         outputs: [
           TestHelpers.createMockOutput(
-            txHash: 'a1', outputIndex: 0, amountXmr: '10.0', blockHeight: 100,
+            txHash: 'a1',
+            outputIndex: 0,
+            amountXmr: '10.0',
+            blockHeight: 100,
           ),
         ],
         transactions: [
           WalletTransaction(
-            txHash: 'a1', blockHeight: 100, blockTimestamp: 1700000000,
-            receivedOutputs: [], spentKeyImages: [],
+            txHash: 'a1',
+            blockHeight: 100,
+            blockTimestamp: 1700000000,
+            receivedOutputs: [],
+            spentKeyImages: [],
           ),
         ],
         selectedOutputs: {},
@@ -848,13 +1088,19 @@ void main() {
       mgr.restoreLoadedData(
         outputs: [
           TestHelpers.createMockOutput(
-            txHash: 'b1', outputIndex: 0, amountXmr: '20.0', blockHeight: 200,
+            txHash: 'b1',
+            outputIndex: 0,
+            amountXmr: '20.0',
+            blockHeight: 200,
           ),
         ],
         transactions: [
           WalletTransaction(
-            txHash: 'b1', blockHeight: 200, blockTimestamp: 1700100000,
-            receivedOutputs: [], spentKeyImages: [],
+            txHash: 'b1',
+            blockHeight: 200,
+            blockTimestamp: 1700100000,
+            receivedOutputs: [],
+            spentKeyImages: [],
           ),
         ],
         selectedOutputs: {},
@@ -876,8 +1122,11 @@ void main() {
 
       // Reimport alpha
       final reimportResult = mgr.switchWallet('alpha');
-      expect(reimportResult, SwitchResult.needsLoad,
-          reason: 'Alpha is no longer in openWallets after startNewWallet');
+      expect(
+        reimportResult,
+        SwitchResult.needsLoad,
+        reason: 'Alpha is no longer in openWallets after startNewWallet',
+      );
     });
   });
 
@@ -967,7 +1216,10 @@ void main() {
       mgr.openWallet('w1', 'seed1', 'stagenet', 'addr1');
       mgr.allOutputs = [
         TestHelpers.createMockOutput(
-          txHash: 'tx1', outputIndex: 0, amountXmr: '10.0', blockHeight: 100,
+          txHash: 'tx1',
+          outputIndex: 0,
+          amountXmr: '10.0',
+          blockHeight: 100,
         ),
       ];
 
@@ -1005,10 +1257,16 @@ void main() {
       mgr.openWallet('w2', 'seed2', 'stagenet', 'addr_w2');
 
       final output1 = TestHelpers.createMockOutput(
-        txHash: 'tx1', outputIndex: 0, amountXmr: '10.0', blockHeight: 100,
+        txHash: 'tx1',
+        outputIndex: 0,
+        amountXmr: '10.0',
+        blockHeight: 100,
       );
       final output2 = TestHelpers.createMockOutput(
-        txHash: 'tx2', outputIndex: 0, amountXmr: '5.0', blockHeight: 100,
+        txHash: 'tx2',
+        outputIndex: 0,
+        amountXmr: '5.0',
+        blockHeight: 100,
       );
 
       mgr.distributeMultiWalletScanResults(
@@ -1032,9 +1290,7 @@ void main() {
       mgr.openWallet('w1', 'seed1', 'stagenet', 'addr_w1');
 
       mgr.distributeMultiWalletScanResults(
-        walletResults: [
-          WalletScanResult(address: 'addr_w1', outputs: []),
-        ],
+        walletResults: [WalletScanResult(address: 'addr_w1', outputs: [])],
         blockHeight: 500,
         daemonHeight: 1000,
         spentKeyImages: [],
@@ -1050,16 +1306,17 @@ void main() {
       mgr.openWallets['w1']!.currentHeight = 800;
 
       mgr.distributeMultiWalletScanResults(
-        walletResults: [
-          WalletScanResult(address: 'addr_w1', outputs: []),
-        ],
+        walletResults: [WalletScanResult(address: 'addr_w1', outputs: [])],
         blockHeight: 500,
         daemonHeight: 1000,
         spentKeyImages: [],
       );
 
-      expect(mgr.openWallets['w1']!.currentHeight, 800,
-          reason: 'Should not decrease height');
+      expect(
+        mgr.openWallets['w1']!.currentHeight,
+        800,
+        reason: 'Should not decrease height',
+      );
     });
 
     test('marks spent outputs across all wallets', () {
@@ -1067,8 +1324,11 @@ void main() {
       mgr.openWallet('w1', 'seed1', 'stagenet', 'addr_w1');
       mgr.openWallets['w1']!.outputs = [
         TestHelpers.createMockOutput(
-          txHash: 'tx1', outputIndex: 0, amountXmr: '10.0',
-          blockHeight: 100, keyImage: 'ki_spent',
+          txHash: 'tx1',
+          outputIndex: 0,
+          amountXmr: '10.0',
+          blockHeight: 100,
+          keyImage: 'ki_spent',
         ),
       ];
       mgr.selectedOutputs = {'tx1:0'};
@@ -1090,7 +1350,10 @@ void main() {
       // activeWalletId is now 'w1'
 
       final output = TestHelpers.createMockOutput(
-        txHash: 'tx1', outputIndex: 0, amountXmr: '10.0', blockHeight: 100,
+        txHash: 'tx1',
+        outputIndex: 0,
+        amountXmr: '10.0',
+        blockHeight: 100,
       );
 
       mgr.distributeMultiWalletScanResults(
@@ -1111,7 +1374,10 @@ void main() {
       mgr.openWallet('w1', 'seed1', 'stagenet', 'addr_w1');
 
       final output = TestHelpers.createMockOutput(
-        txHash: 'tx1', outputIndex: 0, amountXmr: '10.0', blockHeight: 100,
+        txHash: 'tx1',
+        outputIndex: 0,
+        amountXmr: '10.0',
+        blockHeight: 100,
       );
 
       mgr.distributeMultiWalletScanResults(
@@ -1132,10 +1398,16 @@ void main() {
       mgr.openWallet('w2', 'seed2', 'stagenet', 'addr_w2');
 
       final output1 = TestHelpers.createMockOutput(
-        txHash: 'tx_multi_1', outputIndex: 0, amountXmr: '10.0', blockHeight: 100,
+        txHash: 'tx_multi_1',
+        outputIndex: 0,
+        amountXmr: '10.0',
+        blockHeight: 100,
       );
       final output2 = TestHelpers.createMockOutput(
-        txHash: 'tx_multi_2', outputIndex: 0, amountXmr: '5.0', blockHeight: 100,
+        txHash: 'tx_multi_2',
+        outputIndex: 0,
+        amountXmr: '5.0',
+        blockHeight: 100,
       );
 
       mgr.distributeMultiWalletScanResults(
@@ -1173,8 +1445,11 @@ void main() {
 
       // First add an output with a key image
       final output1 = TestHelpers.createMockOutput(
-        txHash: 'tx_received', outputIndex: 0, amountXmr: '10.0',
-        blockHeight: 100, keyImage: 'ki_spend_1',
+        txHash: 'tx_received',
+        outputIndex: 0,
+        amountXmr: '10.0',
+        blockHeight: 100,
+        keyImage: 'ki_spend_1',
       );
 
       mgr.distributeMultiWalletScanResults(
@@ -1198,7 +1473,9 @@ void main() {
 
       // Should create a synthetic spend transaction in w1
       expect(mgr.openWallets['w1']!.transactions.length, 2);
-      final spendTx = mgr.openWallets['w1']!.transactions.firstWhere((t) => t.txHash.startsWith('spend:'));
+      final spendTx = mgr.openWallets['w1']!.transactions.firstWhere(
+        (t) => t.txHash.startsWith('spend:'),
+      );
       expect(spendTx.spentKeyImages, contains('ki_spend_1'));
       expect(spendTx.blockHeight, 150);
     });
@@ -1211,12 +1488,18 @@ void main() {
       final wallet = mgr.activeWallet!;
       wallet.outputs = [
         TestHelpers.createMockOutput(
-          txHash: 'tx1', outputIndex: 0, amountXmr: '1.0',
-          blockHeight: 100, keyImage: 'ki_1',
+          txHash: 'tx1',
+          outputIndex: 0,
+          amountXmr: '1.0',
+          blockHeight: 100,
+          keyImage: 'ki_1',
         ),
         TestHelpers.createMockOutput(
-          txHash: 'tx2', outputIndex: 0, amountXmr: '2.0',
-          blockHeight: 200, keyImage: 'ki_2',
+          txHash: 'tx2',
+          outputIndex: 0,
+          amountXmr: '2.0',
+          blockHeight: 200,
+          keyImage: 'ki_2',
         ),
       ];
       wallet.currentHeight = 200;
@@ -1239,12 +1522,20 @@ void main() {
       final wallet = mgr.activeWallet!;
       wallet.outputs = [
         TestHelpers.createMockOutput(
-          txHash: 'tx1', outputIndex: 0, amountXmr: '1.0',
-          blockHeight: 100, keyImage: 'ki_1', spent: true,
+          txHash: 'tx1',
+          outputIndex: 0,
+          amountXmr: '1.0',
+          blockHeight: 100,
+          keyImage: 'ki_1',
+          spent: true,
         ),
         TestHelpers.createMockOutput(
-          txHash: 'tx2', outputIndex: 0, amountXmr: '2.0',
-          blockHeight: 100, keyImage: 'ki_2', spent: false,
+          txHash: 'tx2',
+          outputIndex: 0,
+          amountXmr: '2.0',
+          blockHeight: 100,
+          keyImage: 'ki_2',
+          spent: false,
         ),
       ];
       wallet.currentHeight = 200;
@@ -1266,16 +1557,25 @@ void main() {
       final wallet = mgr.activeWallet!;
       wallet.outputs = [
         TestHelpers.createMockOutput(
-          txHash: 'tx1', outputIndex: 0, amountXmr: '1.0',
-          blockHeight: 100, keyImage: 'ki_1',
+          txHash: 'tx1',
+          outputIndex: 0,
+          amountXmr: '1.0',
+          blockHeight: 100,
+          keyImage: 'ki_1',
         ),
         TestHelpers.createMockOutput(
-          txHash: 'tx1', outputIndex: 1, amountXmr: '0.5',
-          blockHeight: 100, keyImage: 'ki_1b',
+          txHash: 'tx1',
+          outputIndex: 1,
+          amountXmr: '0.5',
+          blockHeight: 100,
+          keyImage: 'ki_1b',
         ),
         TestHelpers.createMockOutput(
-          txHash: 'tx2', outputIndex: 0, amountXmr: '2.0',
-          blockHeight: 200, keyImage: 'ki_2',
+          txHash: 'tx2',
+          outputIndex: 0,
+          amountXmr: '2.0',
+          blockHeight: 200,
+          keyImage: 'ki_2',
         ),
       ];
       wallet.currentHeight = 200;

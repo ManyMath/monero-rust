@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import '../src/ffi/signal_types.dart';
 import '../services/extension_service.dart';
-import '../services/wallet_persistence_browser.dart';
 import '../utils/clipboard_utils.dart';
 import '../utils/balance_utils.dart';
 import '../utils/offline_signing_import_utils.dart';
@@ -194,7 +193,9 @@ class _DebugViewState extends State<DebugView> {
       builder: (context, _) {
         final isSidePanel = _extensionService.isSidePanel;
 
-        final hasData = WalletPersistenceBrowser.hasWalletData(ws.walletId);
+        final hasData =
+            ws.availableWalletIds.contains(ws.walletId) ||
+            fs.lastSaveTime != null;
         final totalBytes = os.calculateTotalStorageBytes();
         final fileManagementSubtitle = hasData
             ? 'Data stored: ${OutputState.formatBytes(totalBytes)}'

@@ -3,6 +3,7 @@ import 'dart:html' as html;
 import 'dart:js_util' as js_util;
 import '../src/ffi/signal_types.dart';
 import '../models/wallet_transaction.dart';
+import 'chrome_storage_backend.dart';
 import 'wallet_persistence_service.dart';
 import 'local_storage_backend.dart';
 import 'rust_crypto_backend.dart';
@@ -12,13 +13,23 @@ export 'wallet_persistence_service.dart';
 
 class WalletPersistenceBrowser {
   static WalletPersistenceService? _default;
-  static WalletPersistenceService get defaultPersistence =>
-      _defaultInstance;
+  static WalletPersistenceService get defaultPersistence => _defaultInstance;
   static WalletPersistenceService get _defaultInstance =>
-      _default ??= WalletPersistenceService(
-        storage: LocalStorageBackend(),
-        crypto: RustCryptoBackend(),
+      _default ??= _createDefaultPersistence();
+
+  static WalletPersistenceService _createDefaultPersistence() {
+    final crypto = RustCryptoBackend();
+    if (ChromeStorageBackend.isAvailable) {
+      return WalletPersistenceService.async(
+        storage: ChromeStorageBackend(),
+        crypto: crypto,
       );
+    }
+    return WalletPersistenceService(
+      storage: LocalStorageBackend(),
+      crypto: crypto,
+    );
+  }
 
   static String getStorageKey(String walletId) =>
       WalletPersistenceService.getStorageKey(walletId);
@@ -39,28 +50,27 @@ class WalletPersistenceBrowser {
     required Set<int> scanningAccounts,
     String? blockHashesJson,
     String? pendingStateJson,
-  }) =>
-      _defaultInstance.save(
-        walletId: walletId,
-        password: password,
-        seed: seed,
-        network: network,
-        address: address,
-        nodeUrl: nodeUrl,
-        outputs: outputs,
-        transactions: transactions,
-        continuousScanCurrentHeight: continuousScanCurrentHeight,
-        selectedOutputs: selectedOutputs,
-        accounts: accounts,
-        activeAccount: activeAccount,
-        scanningAccounts: scanningAccounts,
-        blockHashesJson: blockHashesJson,
-        pendingStateJson: pendingStateJson,
-      );
+  }) => _defaultInstance.save(
+    walletId: walletId,
+    password: password,
+    seed: seed,
+    network: network,
+    address: address,
+    nodeUrl: nodeUrl,
+    outputs: outputs,
+    transactions: transactions,
+    continuousScanCurrentHeight: continuousScanCurrentHeight,
+    selectedOutputs: selectedOutputs,
+    accounts: accounts,
+    activeAccount: activeAccount,
+    scanningAccounts: scanningAccounts,
+    blockHashesJson: blockHashesJson,
+    pendingStateJson: pendingStateJson,
+  );
 
   static Future<({String keyHex, String saltHex})?> deriveEncryptionKey(
-          String password) =>
-      _defaultInstance.deriveKey(password);
+    String password,
+  ) => _defaultInstance.deriveKey(password);
 
   static Future<SaveWalletResult> saveWithDerivedKey({
     required String walletId,
@@ -78,39 +88,37 @@ class WalletPersistenceBrowser {
     required int activeAccount,
     required Set<int> scanningAccounts,
     String? pendingStateJson,
-  }) =>
-      _defaultInstance.saveWithDerivedKey(
-        walletId: walletId,
-        keyHex: keyHex,
-        saltHex: saltHex,
-        seed: seed,
-        network: network,
-        address: address,
-        nodeUrl: nodeUrl,
-        outputs: outputs,
-        transactions: transactions,
-        continuousScanCurrentHeight: continuousScanCurrentHeight,
-        selectedOutputs: selectedOutputs,
-        accounts: accounts,
-        activeAccount: activeAccount,
-        scanningAccounts: scanningAccounts,
-        pendingStateJson: pendingStateJson,
-      );
+  }) => _defaultInstance.saveWithDerivedKey(
+    walletId: walletId,
+    keyHex: keyHex,
+    saltHex: saltHex,
+    seed: seed,
+    network: network,
+    address: address,
+    nodeUrl: nodeUrl,
+    outputs: outputs,
+    transactions: transactions,
+    continuousScanCurrentHeight: continuousScanCurrentHeight,
+    selectedOutputs: selectedOutputs,
+    accounts: accounts,
+    activeAccount: activeAccount,
+    scanningAccounts: scanningAccounts,
+    pendingStateJson: pendingStateJson,
+  );
 
   static Future<LoadWalletResult> loadWalletData({
     required String walletId,
     required String password,
-  }) =>
-      _defaultInstance.load(walletId: walletId, password: password);
+  }) => _defaultInstance.load(walletId: walletId, password: password);
 
-  static List<String> listAvailableWallets() =>
-      _defaultInstance.listWallets();
+  static Future<List<String>> listAvailableWallets() =>
+      _defaultInstance.listWalletsAsync();
 
-  static void clearWalletData(String walletId) =>
-      _defaultInstance.clear(walletId);
+  static Future<void> clearWalletData(String walletId) =>
+      _defaultInstance.clearAsync(walletId);
 
-  static bool hasWalletData(String walletId) =>
-      _defaultInstance.has(walletId);
+  static Future<bool> hasWalletData(String walletId) =>
+      _defaultInstance.hasAsync(walletId);
 
   static String extractWalletIdFromFilename(String filename) =>
       WalletSerializer.extractWalletIdFromFilename(filename);
@@ -119,7 +127,7 @@ class WalletPersistenceBrowser {
     required String walletId,
   }) async {
     try {
-      final rawData = _defaultInstance.getRawData(walletId);
+      final rawData = await _defaultInstance.getRawDataAsync(walletId);
       if (rawData == null || rawData.isEmpty) {
         return ExportWalletResult.error('No saved data found for this wallet');
       }
@@ -142,8 +150,9 @@ class WalletPersistenceBrowser {
           final types = js_util.newObject();
           js_util.setProperty(types, 'description', 'Monero Wallet Files');
           final accept = js_util.newObject();
-          js_util.setProperty(
-              accept, 'application/octet-stream', ['.monero-wallet']);
+          js_util.setProperty(accept, 'application/octet-stream', [
+            '.monero-wallet',
+          ]);
           js_util.setProperty(types, 'accept', accept);
           js_util.setProperty(options, 'types', [types]);
 
@@ -152,19 +161,19 @@ class WalletPersistenceBrowser {
             'showSaveFilePicker',
             [options],
           );
-          final fileHandle =
-              await js_util.promiseToFuture(fileHandlePromise);
+          final fileHandle = await js_util.promiseToFuture(fileHandlePromise);
 
-          final writablePromise =
-              js_util.callMethod(fileHandle, 'createWritable', []);
+          final writablePromise = js_util.callMethod(
+            fileHandle,
+            'createWritable',
+            [],
+          );
           final writable = await js_util.promiseToFuture(writablePromise);
 
-          final writePromise =
-              js_util.callMethod(writable, 'write', [blob]);
+          final writePromise = js_util.callMethod(writable, 'write', [blob]);
           await js_util.promiseToFuture(writePromise);
 
-          final closePromise =
-              js_util.callMethod(writable, 'close', []);
+          final closePromise = js_util.callMethod(writable, 'close', []);
           await js_util.promiseToFuture(closePromise);
 
           usedSaveAsDialog = true;
@@ -209,20 +218,22 @@ class WalletPersistenceBrowser {
 
       final encryptedData = reader.result as String?;
       if (encryptedData == null || encryptedData.isEmpty) {
-        return ImportWalletResult.error(
-            'File is empty or could not be read');
+        return ImportWalletResult.error('File is empty or could not be read');
       }
 
-      final jsonString =
-          await _defaultInstance.decryptRaw(password, encryptedData);
+      final jsonString = await _defaultInstance.decryptRaw(
+        password,
+        encryptedData,
+      );
       if (jsonString == null) {
         return ImportWalletResult.error(
-            'Failed to decrypt file (wrong password or corrupted file)');
+          'Failed to decrypt file (wrong password or corrupted file)',
+        );
       }
 
       jsonDecode(jsonString); // Validate JSON structure
 
-      _defaultInstance.setRawData(walletId, encryptedData);
+      await _defaultInstance.setRawDataAsync(walletId, encryptedData);
 
       return ImportWalletResult.success(
         walletId: walletId,

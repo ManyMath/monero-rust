@@ -84,6 +84,30 @@ describe('Persistence & Node-Query Tests', () => {
       outputs: [],
     });
 
+    it('has Promise-based chrome.storage.local for wallet persistence', async () => {
+      const result = await extPage.evaluate(async () => {
+        if (!chrome?.storage?.local) {
+          return { success: false, error: 'chrome.storage.local unavailable' };
+        }
+        const key = `monero_wallet_e2e_storage_${Date.now()}`;
+        await chrome.storage.local.set({ [key]: 'roundtrip' });
+        const stored = await chrome.storage.local.get(key);
+        await chrome.storage.local.remove(key);
+        const afterRemove = await chrome.storage.local.get(key);
+        return {
+          success: stored[key] === 'roundtrip' && afterRemove[key] === undefined,
+          stored: stored[key] ?? null,
+          removed: afterRemove[key] === undefined,
+        };
+      });
+
+      expect(result).toEqual({
+        success: true,
+        stored: 'roundtrip',
+        removed: true,
+      });
+    }, 10000);
+
     it('encrypts wallet data and roundtrips through save/load', async () => {
       const saveResp = await sendSignalAndWait(
         extPage,

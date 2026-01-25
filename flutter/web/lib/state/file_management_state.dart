@@ -191,7 +191,7 @@ class FileManagementState extends ChangeNotifier {
     }
 
     if (success) {
-      _walletState.refreshAvailableWallets();
+      await _walletState.refreshAvailableWalletsAsync();
 
       if (isRenamingFromTemp) {
         if (_walletState.lifecycle.openWallets.containsKey('temp_wallet')) {
@@ -223,7 +223,7 @@ class FileManagementState extends ChangeNotifier {
           _walletState.lifecycle.activeWalletId = walletId;
         }
 
-        WalletPersistenceBrowser.clearWalletData('temp_wallet');
+        await WalletPersistenceBrowser.clearWalletData('temp_wallet');
       }
     }
 
@@ -865,9 +865,9 @@ class FileManagementState extends ChangeNotifier {
     if (confirmed != true || !context.mounted) return;
 
     final deletedWalletId = _walletState.walletId;
-    WalletPersistenceBrowser.clearWalletData(deletedWalletId);
+    await WalletPersistenceBrowser.clearWalletData(deletedWalletId);
     _outputState.invalidateStorageBytesCache();
-    _walletState.refreshAvailableWallets();
+    await _walletState.refreshAvailableWalletsAsync();
     _walletState.startNewWallet();
     _walletState.showSnackBar?.call('Deleted wallet: $deletedWalletId');
   }
