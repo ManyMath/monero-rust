@@ -13,6 +13,7 @@ pub struct StoredOutput {
     pub received_output_bytes: String,
     pub block_height: u64,
     pub spent: bool,
+    pub key_image: String, // Hex-encoded key image for spent detection
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -147,4 +148,14 @@ pub struct UpdateScanState {
     pub node_url: String,
     pub seed: String,
     pub network: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct CheckSpentOutputs {
+    pub node_url: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct UpdateSpentStatus {
+    pub key_images: Vec<String>,
 }

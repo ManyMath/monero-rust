@@ -44,6 +44,7 @@ async fn test_store_outputs_message() {
             received_output_bytes: String::new(),
             block_height: 1000,
             spent: false,
+            key_image: "test_key_image".to_string(),
         },
     ];
 
@@ -133,6 +134,7 @@ async fn test_multiple_output_batches() {
             received_output_bytes: String::new(),
             block_height: 1000,
             spent: false,
+            key_image: "key_image_1".to_string(),
         },
     ];
 
@@ -157,6 +159,7 @@ async fn test_multiple_output_batches() {
             received_output_bytes: String::new(),
             block_height: 1050,
             spent: false,
+            key_image: "key_image_2".to_string(),
         },
     ];
 

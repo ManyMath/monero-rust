@@ -121,6 +121,7 @@ pub struct OwnedOutput {
     pub received_output_bytes: String,
     pub block_height: u64,
     pub spent: bool,
+    pub key_image: String, // Hex-encoded key image for spent detection
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, RustSignal)]

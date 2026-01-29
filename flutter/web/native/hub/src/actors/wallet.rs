@@ -209,6 +209,7 @@ impl WalletActor {
                             received_output_bytes: o.received_output_bytes.clone(),
                             block_height: o.block_height,
                             spent: o.spent,
+                            key_image: o.key_image.clone(),
                         })
                         .collect();
 
@@ -227,6 +228,7 @@ impl WalletActor {
                             received_output_bytes: o.received_output_bytes.clone(),
                             block_height: o.block_height,
                             spent: o.spent,
+                            key_image: o.key_image.clone(),
                         })
                         .collect();
 
@@ -565,6 +567,7 @@ impl Notifiable<ContinueScan> for WalletActor {
                             received_output_bytes: o.received_output_bytes.clone(),
                             block_height: o.block_height,
                             spent: o.spent,
+                            key_image: o.key_image.clone(),
                         })
                         .collect();
 
@@ -583,6 +586,7 @@ impl Notifiable<ContinueScan> for WalletActor {
                             received_output_bytes: o.received_output_bytes.clone(),
                             block_height: o.block_height,
                             spent: o.spent,
+                            key_image: o.key_image.clone(),
                         })
                         .collect();
 
@@ -645,5 +649,104 @@ impl Notifiable<ContinueScan> for WalletActor {
                 }
             }
         });
+
+        // Check for spent outputs after every block scan
+        if let Some(self_addr) = &self.self_addr {
+            let mut addr_clone = self_addr.clone();
+            let _ = addr_clone.notify(CheckSpentOutputs {
+                node_url: self.scan_node_url.clone(),
+            }).await;
+        }
+    }
+}
+
+#[async_trait]
+impl Notifiable<CheckSpentOutputs> for WalletActor {
+    async fn notify(&mut self, msg: CheckSpentOutputs, ctx: &Context<Self>) {
+        // Skip if no outputs to check
+        if self.state.outputs.is_empty() {
+            return;
+        }
+
+        // Collect all unspent key images
+        let key_images: Vec<String> = self
+            .state
+            .outputs
+            .iter()
+            .filter(|o| !o.spent)
+            .map(|o| o.key_image.clone())
+            .collect();
+
+        if key_images.is_empty() {
+            return;
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // Use batching for efficiency (100 key images per batch)
+            let batches = monero_wasm::spent_checker::batch_key_images(&key_images, 100);
+
+            for batch in batches {
+                match monero_wasm::spent_checker::check_key_images_spent_native(&msg.node_url, &batch).await {
+                    Ok(spent_statuses) => {
+                        // Collect key images that are spent and update directly
+                        let spent_key_images: Vec<String> = spent_statuses
+                            .iter()
+                            .filter(|s| s.spent)
+                            .map(|s| s.key_image.clone())
+                            .collect();
+
+                        if !spent_key_images.is_empty() {
+                            let mut updated_count = 0;
+                            for output in &mut self.state.outputs {
+                                if !output.spent && spent_key_images.contains(&output.key_image) {
+                                    output.spent = true;
+                                    updated_count += 1;
+                                }
+                            }
+                            if updated_count > 0 {
+                                self.recalculate_balances();
+
+                                // Send balance update to UI
+                                BalanceResponse {
+                                    confirmed: self.state.confirmed_balance,
+                                    unconfirmed: self.state.unconfirmed_balance,
+                                }
+                                .send_signal_to_dart();
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to check spent status: {}", e);
+                    }
+                }
+            }
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            // TODO: Spent checking is not yet supported in WASM due to Send trait requirements
+            // This will be implemented once the RPC adapter is made Send-safe
+            web_sys::console::log_1(&"Spent checking not yet implemented for WASM".into());
+        }
+    }
+}
+
+#[async_trait]
+impl Notifiable<UpdateSpentStatus> for WalletActor {
+    async fn notify(&mut self, msg: UpdateSpentStatus, _ctx: &Context<Self>) {
+        // Mark outputs with matching key images as spent
+        let mut updated_count = 0;
+        for output in &mut self.state.outputs {
+            if !output.spent && msg.key_images.contains(&output.key_image) {
+                output.spent = true;
+                updated_count += 1;
+            }
+        }
+
+        if updated_count > 0 {
+            // Recalculate balances after marking outputs as spent
+            self.recalculate_balances();
+        }
     }
 }
