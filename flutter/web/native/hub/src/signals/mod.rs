@@ -27,6 +27,8 @@ pub struct StartSyncRequest {}
 pub struct SyncProgressResponse {
     pub current_height: u64,
     pub daemon_height: u64,
+    pub is_synced: bool,
+    pub is_scanning: bool,
 }
 
 #[derive(Deserialize, DartSignal)]
@@ -158,3 +160,14 @@ pub struct DaemonHeightResponse {
     pub error: Option<String>,
     pub daemon_height: u64,
 }
+
+#[derive(Deserialize, DartSignal)]
+pub struct StartContinuousScanRequest {
+    pub node_url: String,
+    pub start_height: u64,
+    pub seed: String,
+    pub network: String,
+}
+
+#[derive(Deserialize, DartSignal)]
+pub struct StopScanRequest {}

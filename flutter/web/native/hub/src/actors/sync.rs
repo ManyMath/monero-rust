@@ -75,6 +75,8 @@ impl SyncActor {
                 SyncProgressResponse {
                     current_height: self.current_height,
                     daemon_height: self.daemon_height,
+                    is_synced: self.current_height >= self.daemon_height,
+                    is_scanning: self.is_syncing,
                 }
                 .send_signal_to_dart();
             }
