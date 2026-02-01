@@ -20,10 +20,26 @@ class InMemoryStorageBackend implements StorageBackend {
   List<String> get keys => _data.keys.toList();
 
   @override
-  void atomicSet(String key, String value) => set(key, value);
+  void atomicSet(String key, String value) {
+    _data['${key}_wip'] = '1';
+    _data['${key}_staging'] = value;
+    _data[key] = value;
+    _data.remove('${key}_wip');
+    _data.remove('${key}_staging');
+  }
 
   @override
-  void maybeRecover(String key) {}
+  void maybeRecover(String key) {
+    final tombstoneKey = '${key}_wip';
+    final stagingKey = '${key}_staging';
+    if (!_data.containsKey(tombstoneKey)) return;
+    final staging = _data[stagingKey];
+    if (staging != null) {
+      _data[key] = staging;
+    }
+    _data.remove(tombstoneKey);
+    _data.remove(stagingKey);
+  }
 }
 
 class AsyncInMemoryStorageBackend implements AsyncStorageBackend {

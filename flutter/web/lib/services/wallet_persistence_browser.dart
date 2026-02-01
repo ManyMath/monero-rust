@@ -6,6 +6,7 @@ import '../models/wallet_transaction.dart';
 import 'chrome_storage_backend.dart';
 import 'wallet_persistence_service.dart';
 import 'local_storage_backend.dart';
+import 'migrating_storage_backend.dart';
 import 'rust_crypto_backend.dart';
 import 'wallet_serializer.dart';
 
@@ -21,7 +22,10 @@ class WalletPersistenceBrowser {
     final crypto = RustCryptoBackend();
     if (ChromeStorageBackend.isAvailable) {
       return WalletPersistenceService.async(
-        storage: ChromeStorageBackend(),
+        storage: MigratingStorageBackend(
+          primary: ChromeStorageBackend(),
+          legacy: LocalStorageBackend(),
+        ),
         crypto: crypto,
       );
     }

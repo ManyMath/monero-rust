@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:monero_extension/models/wallet_transaction.dart';
+import 'package:monero_extension/services/migrating_storage_backend.dart';
 import 'package:monero_extension/services/wallet_persistence_service.dart';
 import '../test_helpers.dart';
 import 'test_backends.dart';
@@ -83,6 +84,157 @@ void main() {
       expect(() => svc.getRawData('async-wallet'), throwsStateError);
       expect(() => svc.setRawData('async-wallet', 'data'), throwsStateError);
     });
+  });
+
+  group('WalletPersistenceService - Legacy storage migration', () {
+    test(
+      'load migrates legacy wallet data into async primary storage',
+      () async {
+        final legacy = InMemoryStorageBackend();
+        final primary = AsyncInMemoryStorageBackend();
+        final legacySvc = createTestService(storage: legacy);
+        final saveResult = await legacySvc.save(
+          walletId: 'legacy-wallet',
+          password: 'pass123',
+          seed: 'legacy seed phrase',
+          network: 'stagenet',
+          address: '5legacy...',
+          nodeUrl: 'http://node:38081',
+          outputs: [],
+          transactions: [],
+          continuousScanCurrentHeight: 12,
+          selectedOutputs: {},
+          accounts: [0],
+          activeAccount: 0,
+          scanningAccounts: {0},
+        );
+        expect(saveResult.success, true);
+        expect(legacy.containsKey('monero_wallet_legacy-wallet'), true);
+
+        final svc = WalletPersistenceService.async(
+          storage: MigratingStorageBackend(primary: primary, legacy: legacy),
+          crypto: IdentityCryptoBackend(),
+        );
+
+        final loadResult = await svc.load(
+          walletId: 'legacy-wallet',
+          password: 'pass123',
+        );
+
+        expect(loadResult.success, true);
+        expect(loadResult.seed, 'legacy seed phrase');
+        expect(await primary.containsKey('monero_wallet_legacy-wallet'), true);
+        expect(legacy.containsKey('monero_wallet_legacy-wallet'), false);
+      },
+    );
+
+    test('listWalletsAsync includes legacy wallets before load', () async {
+      final legacy = InMemoryStorageBackend()
+        ..set('monero_wallet_legacy', 'legacy-data')
+        ..set('monero_wallet_legacy_wip', '1')
+        ..set('other_key', 'ignored');
+      final primary = AsyncInMemoryStorageBackend();
+      await primary.set('monero_wallet_primary', 'primary-data');
+      final svc = WalletPersistenceService.async(
+        storage: MigratingStorageBackend(primary: primary, legacy: legacy),
+        crypto: IdentityCryptoBackend(),
+      );
+
+      expect(await svc.listWalletsAsync(), ['legacy', 'primary']);
+    });
+
+    test('save overwrites primary storage and removes legacy copies', () async {
+      final legacy = InMemoryStorageBackend()
+        ..set('monero_wallet_shared', 'old-legacy-data')
+        ..set('monero_wallet_shared_staging', 'old-staging')
+        ..set('monero_wallet_shared_wip', '1');
+      final primary = AsyncInMemoryStorageBackend();
+      final svc = WalletPersistenceService.async(
+        storage: MigratingStorageBackend(primary: primary, legacy: legacy),
+        crypto: IdentityCryptoBackend(),
+      );
+
+      final result = await svc.save(
+        walletId: 'shared',
+        password: 'pass123',
+        seed: 'new seed phrase',
+        network: 'stagenet',
+        address: null,
+        nodeUrl: 'http://node:38081',
+        outputs: [],
+        transactions: [],
+        continuousScanCurrentHeight: 0,
+        selectedOutputs: {},
+        accounts: [0],
+        activeAccount: 0,
+        scanningAccounts: {0},
+      );
+
+      expect(result.success, true);
+      expect(await primary.containsKey('monero_wallet_shared'), true);
+      expect(legacy.containsKey('monero_wallet_shared'), false);
+      expect(legacy.containsKey('monero_wallet_shared_staging'), false);
+      expect(legacy.containsKey('monero_wallet_shared_wip'), false);
+    });
+
+    test('clear removes wallet data from primary and legacy storage', () async {
+      final legacy = InMemoryStorageBackend()
+        ..set('monero_wallet_delete_me', 'legacy-data');
+      final primary = AsyncInMemoryStorageBackend();
+      await primary.set('monero_wallet_delete_me', 'primary-data');
+      final svc = WalletPersistenceService.async(
+        storage: MigratingStorageBackend(primary: primary, legacy: legacy),
+        crypto: IdentityCryptoBackend(),
+      );
+
+      await svc.clearAsync('delete_me');
+
+      expect(await primary.containsKey('monero_wallet_delete_me'), false);
+      expect(legacy.containsKey('monero_wallet_delete_me'), false);
+    });
+
+    test(
+      'load recovers interrupted legacy atomic save into primary storage',
+      () async {
+        final legacy = InMemoryStorageBackend();
+        final stagingSvc = createTestService();
+        final stagingSave = await stagingSvc.save(
+          walletId: 'recover',
+          password: 'pass123',
+          seed: 'recover seed phrase',
+          network: 'stagenet',
+          address: null,
+          nodeUrl: 'http://node:38081',
+          outputs: [],
+          transactions: [],
+          continuousScanCurrentHeight: 7,
+          selectedOutputs: {},
+          accounts: [0],
+          activeAccount: 0,
+          scanningAccounts: {0},
+        );
+        expect(stagingSave.success, true);
+        final stagedData = stagingSvc.getRawData('recover');
+        expect(stagedData, isNotNull);
+        legacy
+          ..set('monero_wallet_recover_wip', '1')
+          ..set('monero_wallet_recover_staging', stagedData!);
+        final primary = AsyncInMemoryStorageBackend();
+        final svc = WalletPersistenceService.async(
+          storage: MigratingStorageBackend(primary: primary, legacy: legacy),
+          crypto: IdentityCryptoBackend(),
+        );
+
+        final result = await svc.load(walletId: 'recover', password: 'pass123');
+
+        expect(result.error, isNull);
+        expect(result.success, true);
+        expect(result.seed, 'recover seed phrase');
+        expect(await primary.get('monero_wallet_recover'), stagedData);
+        expect(legacy.containsKey('monero_wallet_recover_wip'), false);
+        expect(legacy.containsKey('monero_wallet_recover_staging'), false);
+      },
+    );
   });
 
   group('WalletPersistenceService - Save and Load', () {
