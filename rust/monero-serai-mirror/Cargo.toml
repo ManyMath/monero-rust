@@ -51,7 +51,7 @@ monero-epee-bin-serde = { path = "../monero-epee-bin-serde" }
 serde_bytes = "0.11"
 
 digest_auth = { version = "0.3", optional = true }
-reqwest = { version = "0.11", features = ["json"], optional = true }
+reqwest = { version = "0.12", features = ["json"], optional = true }
 
 polyseed = { path = "../monero-utils-mirror/polyseed", default-features = false }
 pbkdf2 = { version = "0.12", features = ["simple"] }

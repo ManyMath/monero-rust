@@ -60,11 +60,11 @@ hex = "0.4"
 rand_core = "0.6"
 rand = "0.8"
 tokio = { version = "1.29", features = ["rt", "macros"] }
-reqwest = { version = "0.11", features = ["json"] }
+reqwest = { version = "0.12", features = ["json"] }
 
 [dev-dependencies]
 monero-serai = { path = "../monero-serai-mirror", features = ["http-rpc", "test-helpers"] }
-reqwest = "0.11"
+reqwest = "0.12"
 criterion = { version = "0.5", features = ["html_reports"] }
 tempfile = "3"
 wasm-bindgen-test = "0.3"
