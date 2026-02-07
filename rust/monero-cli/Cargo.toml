@@ -11,7 +11,7 @@ tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rpassword = "7"
-indicatif = "0.17"
+indicatif = "0.18"
 dirs = "5"
 hex = "0.4"
 zeroize = "1"
