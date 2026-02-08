@@ -652,6 +652,40 @@ fn cold_signing_signed_txset_builder_rejects_sparse_key_image_vector() {
     );
 }
 
+#[test]
+fn cold_signing_signed_txset_builder_rejects_mismatched_selected_key_image() {
+    let hot = read_keys_file(&vector_path("hot_view_only.keys"), "")
+        .expect("hot view-only wallet keys should parse");
+    let unsigned = std::fs::read(vector_path("unsigned_monero_tx"))
+        .expect("unsigned txset should be readable");
+    let signed =
+        std::fs::read(vector_path("signed_monero_tx")).expect("signed txset should be readable");
+
+    let signed_summary =
+        epee_compat::parse_signed_monero_txset_summary(&signed, &hot.view_secret_key)
+            .expect("signed txset pending summary should parse");
+    let source_ptx = signed_summary
+        .ptxes
+        .first()
+        .expect("fixture should have one pending tx");
+    let mut mismatched_key_images = signed_summary.key_images.clone();
+    mismatched_key_images[0] = [0xff; 32];
+
+    let err = epee_compat::build_signed_monero_txset(epee_compat::BuildSignedTxSetRequest {
+        unsigned_txset: &unsigned,
+        view_secret_key: &hot.view_secret_key,
+        tx_blob: &source_ptx.tx_blob,
+        key_images: &mismatched_key_images,
+        tx_key_images: &signed_summary.tx_key_images,
+    })
+    .expect_err("mismatched selected key image should be rejected");
+
+    assert!(
+        err.contains("selected transfer index 0"),
+        "unexpected error: {err}"
+    );
+}
+
 fn summary_txset_sources_for_signed_fixture() -> Vec<epee_compat::TxSourceEntrySummary> {
     let hot = read_keys_file(&vector_path("hot_view_only.keys"), "")
         .expect("hot view-only wallet keys should parse");

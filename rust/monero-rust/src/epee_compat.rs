@@ -403,6 +403,33 @@ pub fn build_signed_monero_txset(request: BuildSignedTxSetRequest<'_>) -> Result
             Input::Gen(_) => Err("Signed wallet2 txset cannot contain miner inputs".to_string()),
         })
         .collect::<Result<Vec<_>, _>>()?;
+    if construction.selected_transfer_indices.len() != spent_key_images.len() {
+        return Err(format!(
+            "Wallet2 selected transfer count {} does not match signed transaction input count {}",
+            construction.selected_transfer_indices.len(),
+            spent_key_images.len()
+        ));
+    }
+    for (input_index, selected_transfer_index) in construction
+        .selected_transfer_indices
+        .iter()
+        .copied()
+        .enumerate()
+    {
+        let selected_transfer_index: usize = selected_transfer_index
+            .try_into()
+            .map_err(|_| "Wallet2 selected transfer index exceeds usize".to_string())?;
+        let Some(expected_key_image) = request.key_images.get(selected_transfer_index) else {
+            return Err(format!(
+                "Wallet2 signed txset key_images missing selected transfer index {selected_transfer_index}"
+            ));
+        };
+        if expected_key_image != &spent_key_images[input_index] {
+            return Err(format!(
+                "Wallet2 signed txset key image at selected transfer index {selected_transfer_index} does not match signed transaction input {input_index}"
+            ));
+        }
+    }
 
     let key_images_text = spent_key_images
         .iter()
