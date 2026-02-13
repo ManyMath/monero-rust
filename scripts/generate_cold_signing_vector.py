@@ -18,6 +18,10 @@ The script expects official Monero CLI binaries to already exist. A typical setu
     tar -xf monero-linux-x64-v0.18.5.0.tar.bz2
     scripts/generate_cold_signing_vector.py \
       --monero-bin-dir /tmp/monero-vector-tools/monero-x86_64-linux-gnu-v0.18.5.0
+
+Add `--verify-rust-rebuilt-submit` to sign the generated wallet2 unsigned txset
+through `monero-rust`, repackage it as `signed_monero_tx`, and verify Monero's
+own wallet RPC accepts that rebuilt container via `submit_transfer`.
 """
 
 from __future__ import annotations
@@ -113,6 +117,17 @@ def main() -> None:
         type=Path,
         default=Path("rust/monero-rust/tests/vectors/cold_signing_regtest_v0_18_5_0"),
     )
+    parser.add_argument(
+        "--verify-rust-rebuilt-submit",
+        action="store_true",
+        help=(
+            "Rebuild the signed_monero_tx with monero-rust and submit that "
+            "container through monero-wallet-rpc instead of the wallet-rpc "
+            "signed container."
+        ),
+    )
+    parser.add_argument("--cargo-bin", default="cargo")
+    parser.add_argument("--rust-toolchain", default="1.86")
     parser.add_argument("--keep-temp", action="store_true")
     args = parser.parse_args()
 
@@ -264,7 +279,41 @@ def main() -> None:
             cold_rpc, "describe_transfer", {"unsigned_txset": transfer["unsigned_txset"]}
         )
         signed = rpc(cold_rpc, "sign_transfer", {"unsigned_txset": transfer["unsigned_txset"]})
-        submitted = rpc(hot_rpc, "submit_transfer", {"tx_data_hex": signed["signed_txset"]})
+        signed_txset_for_submit = signed["signed_txset"]
+        rebuilt_signed_sha256 = None
+        if args.verify_rust_rebuilt_submit:
+            repo_root = Path(__file__).resolve().parents[1]
+            unsigned_path = work / "unsigned_monero_tx"
+            reference_signed_path = work / "monero_wallet_rpc_signed_monero_tx"
+            rebuilt_path = work / "monero_rust_rebuilt_signed_monero_tx"
+            write_hex_file(unsigned_path, transfer["unsigned_txset"])
+            write_hex_file(reference_signed_path, signed["signed_txset"])
+            cargo_cmd = [
+                args.cargo_bin,
+                f"+{args.rust_toolchain}",
+                "run",
+                "-p",
+                "monero-rust",
+                "--example",
+                "rebuild_wallet2_signed_txset",
+                "--",
+                "--unsigned-txset",
+                str(unsigned_path),
+                "--reference-signed-txset",
+                str(reference_signed_path),
+                "--spend-key-hex",
+                spend_key,
+                "--view-key-hex",
+                view_key,
+                "--network",
+                "mainnet",
+                "--out",
+                str(rebuilt_path),
+            ]
+            subprocess.run(cargo_cmd, cwd=repo_root / "rust", check=True)
+            signed_txset_for_submit = rebuilt_path.read_bytes().hex()
+            rebuilt_signed_sha256 = sha256_file(rebuilt_path)
+        submitted = rpc(hot_rpc, "submit_transfer", {"tx_data_hex": signed_txset_for_submit})
 
         out_dir = args.out_dir
         if out_dir.exists():
@@ -275,7 +324,9 @@ def main() -> None:
         shutil.copy2(work / "cold" / "cold.keys", out_dir / "cold_full.keys")
         write_hex_file(out_dir / "outputs", outputs_data_hex)
         write_hex_file(out_dir / "unsigned_monero_tx", transfer["unsigned_txset"])
-        write_hex_file(out_dir / "signed_monero_tx", signed["signed_txset"])
+        write_hex_file(out_dir / "signed_monero_tx", signed_txset_for_submit)
+        if args.verify_rust_rebuilt_submit:
+            write_hex_file(out_dir / "monero_wallet_rpc_signed_monero_tx", signed["signed_txset"])
         (out_dir / "key_images_rpc.json").write_text(
             json.dumps(key_images, indent=2, sort_keys=True) + "\n"
         )
@@ -319,6 +370,12 @@ def main() -> None:
                 "ring_size": RING_SIZE,
                 "unsigned_tx_hash": transfer["tx_hash"],
                 "signed_tx_hash_list": signed["tx_hash_list"],
+                "signed_txset_source": (
+                    "monero-rust rebuilt from app signer"
+                    if args.verify_rust_rebuilt_submit
+                    else "monero-wallet-rpc sign_transfer"
+                ),
+                "rebuilt_signed_txset_sha256": rebuilt_signed_sha256,
                 "submitted_tx_hash_list": submitted["tx_hash_list"],
             },
             "artifacts": {

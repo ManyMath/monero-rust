@@ -410,12 +410,8 @@ pub fn build_signed_monero_txset(request: BuildSignedTxSetRequest<'_>) -> Result
             spent_key_images.len()
         ));
     }
-    for (input_index, selected_transfer_index) in construction
-        .selected_transfer_indices
-        .iter()
-        .copied()
-        .enumerate()
-    {
+    let mut remaining_spent_key_images = spent_key_images.clone();
+    for selected_transfer_index in construction.selected_transfer_indices.iter().copied() {
         let selected_transfer_index: usize = selected_transfer_index
             .try_into()
             .map_err(|_| "Wallet2 selected transfer index exceeds usize".to_string())?;
@@ -424,11 +420,15 @@ pub fn build_signed_monero_txset(request: BuildSignedTxSetRequest<'_>) -> Result
                 "Wallet2 signed txset key_images missing selected transfer index {selected_transfer_index}"
             ));
         };
-        if expected_key_image != &spent_key_images[input_index] {
+        let Some(position) = remaining_spent_key_images
+            .iter()
+            .position(|spent_key_image| spent_key_image == expected_key_image)
+        else {
             return Err(format!(
-                "Wallet2 signed txset key image at selected transfer index {selected_transfer_index} does not match signed transaction input {input_index}"
+                "Wallet2 signed txset key image at selected transfer index {selected_transfer_index} was not spent by the signed transaction"
             ));
-        }
+        };
+        remaining_spent_key_images.remove(position);
     }
 
     let key_images_text = spent_key_images
