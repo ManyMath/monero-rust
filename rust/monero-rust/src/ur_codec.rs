@@ -218,6 +218,54 @@ mod tests {
         assert_eq!(decoded, data);
     }
 
+    fn assert_fixture_roundtrips_as_ur(data: &[u8], ur_type: &'static str) {
+        let mut encoder =
+            UrEncoder::new(data, ur_type, 250).expect("fixture encoder creation failed");
+        assert!(
+            encoder.fragment_count() > 1,
+            "fixture should exercise animated multi-frame UR encoding"
+        );
+
+        let mut decoder = UrDecoder::new();
+        for _ in 0..encoder.fragment_count() * 3 {
+            let frame = encoder.next_frame().expect("fixture next_frame failed");
+            assert!(frame.uri.starts_with(&format!("ur:{ur_type}/")));
+            assert_eq!(frame.modules.len(), frame.size * frame.size);
+
+            let progress = decoder.receive(&frame.uri).expect("fixture receive failed");
+            if progress.is_complete {
+                break;
+            }
+        }
+
+        assert!(decoder.is_complete(), "fixture UR stream did not complete");
+        let decoded = decoder
+            .message()
+            .expect("fixture message failed")
+            .expect("fixture UR message missing");
+        assert_eq!(decoded, data);
+    }
+
+    #[test]
+    fn monero_wallet2_unsigned_txset_roundtrips_as_xmr_unsigned_ur() {
+        let data =
+            include_bytes!("../tests/vectors/cold_signing_regtest_v0_18_5_0/unsigned_monero_tx");
+        assert_fixture_roundtrips_as_ur(data, UR_TYPE_UNSIGNED_TX);
+    }
+
+    #[test]
+    fn monero_wallet2_signed_txset_roundtrips_as_xmr_signed_ur() {
+        let data =
+            include_bytes!("../tests/vectors/cold_signing_regtest_v0_18_5_0/signed_monero_tx");
+        assert_fixture_roundtrips_as_ur(data, UR_TYPE_SIGNED_TX);
+    }
+
+    #[test]
+    fn monero_output_export_roundtrips_as_xmr_output_ur() {
+        let data = include_bytes!("../tests/vectors/cold_signing_regtest_v0_18_5_0/outputs");
+        assert_fixture_roundtrips_as_ur(data, UR_TYPE_OUTPUT);
+    }
+
     #[test]
     fn test_qr_frame_dimensions() {
         let data = b"test";
