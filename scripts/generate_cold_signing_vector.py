@@ -22,6 +22,9 @@ The script expects official Monero CLI binaries to already exist. A typical setu
 Add `--verify-rust-rebuilt-submit` to sign the generated wallet2 unsigned txset
 through `monero-rust`, repackage it as `signed_monero_tx`, and verify Monero's
 own wallet RPC accepts that rebuilt container via `submit_transfer`.
+
+Add `--verify-rust-rebuilt-cli-submit` to submit the rebuilt `signed_monero_tx`
+file through `monero-wallet-cli submit_transfer` instead of wallet RPC.
 """
 
 from __future__ import annotations
@@ -33,6 +36,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import socket
 import subprocess
@@ -126,6 +130,14 @@ def main() -> None:
             "signed container."
         ),
     )
+    parser.add_argument(
+        "--verify-rust-rebuilt-cli-submit",
+        action="store_true",
+        help=(
+            "Rebuild the signed_monero_tx with monero-rust and submit the "
+            "rebuilt file through monero-wallet-cli submit_transfer."
+        ),
+    )
     parser.add_argument("--cargo-bin", default="cargo")
     parser.add_argument("--rust-toolchain", default="1.86")
     parser.add_argument("--keep-temp", action="store_true")
@@ -133,8 +145,11 @@ def main() -> None:
 
     monerod = args.monero_bin_dir / "monerod"
     wallet_rpc = args.monero_bin_dir / "monero-wallet-rpc"
+    wallet_cli = args.monero_bin_dir / "monero-wallet-cli"
     if not monerod.exists() or not wallet_rpc.exists():
         raise SystemExit("monerod and monero-wallet-rpc are required")
+    if args.verify_rust_rebuilt_cli_submit and not wallet_cli.exists():
+        raise SystemExit("monero-wallet-cli is required for CLI submit verification")
 
     work = Path(tempfile.mkdtemp(prefix="monero-cold-signing-vector-"))
     processes: list[subprocess.Popen] = []
@@ -281,11 +296,11 @@ def main() -> None:
         signed = rpc(cold_rpc, "sign_transfer", {"unsigned_txset": transfer["unsigned_txset"]})
         signed_txset_for_submit = signed["signed_txset"]
         rebuilt_signed_sha256 = None
-        if args.verify_rust_rebuilt_submit:
+        rebuilt_path = work / "monero_rust_rebuilt_signed_monero_tx"
+        if args.verify_rust_rebuilt_submit or args.verify_rust_rebuilt_cli_submit:
             repo_root = Path(__file__).resolve().parents[1]
             unsigned_path = work / "unsigned_monero_tx"
             reference_signed_path = work / "monero_wallet_rpc_signed_monero_tx"
-            rebuilt_path = work / "monero_rust_rebuilt_signed_monero_tx"
             write_hex_file(unsigned_path, transfer["unsigned_txset"])
             write_hex_file(reference_signed_path, signed["signed_txset"])
             cargo_cmd = [
@@ -313,7 +328,41 @@ def main() -> None:
             subprocess.run(cargo_cmd, cwd=repo_root / "rust", check=True)
             signed_txset_for_submit = rebuilt_path.read_bytes().hex()
             rebuilt_signed_sha256 = sha256_file(rebuilt_path)
-        submitted = rpc(hot_rpc, "submit_transfer", {"tx_data_hex": signed_txset_for_submit})
+        cli_submit_stdout = None
+        if args.verify_rust_rebuilt_cli_submit:
+            rpc(hot_rpc, "close_wallet")
+            shutil.copy2(rebuilt_path, work / "signed_monero_tx")
+            cli_cmd = [
+                str(wallet_cli),
+                "--wallet-file",
+                str(work / "hot" / "hot"),
+                "--password",
+                "",
+                "--daemon-address",
+                f"127.0.0.1:{daemon_rpc}",
+                "--daemon-ssl",
+                "disabled",
+                "--allow-mismatched-daemon-version",
+                "--trusted-daemon",
+                "submit_transfer",
+            ]
+            completed = subprocess.run(
+                cli_cmd,
+                input="Y\n",
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                cwd=work,
+            )
+            submitted_hashes = sorted(set(re.findall(r"\b[0-9a-f]{64}\b", completed.stdout)))
+            if completed.returncode != 0 or "Error:" in completed.stdout or not submitted_hashes:
+                raise RuntimeError(
+                    "monero-wallet-cli submit_transfer failed:\n" + completed.stdout
+                )
+            cli_submit_stdout = completed.stdout
+            submitted = {"tx_hash_list": submitted_hashes}
+        else:
+            submitted = rpc(hot_rpc, "submit_transfer", {"tx_data_hex": signed_txset_for_submit})
 
         out_dir = args.out_dir
         if out_dir.exists():
@@ -325,7 +374,7 @@ def main() -> None:
         write_hex_file(out_dir / "outputs", outputs_data_hex)
         write_hex_file(out_dir / "unsigned_monero_tx", transfer["unsigned_txset"])
         write_hex_file(out_dir / "signed_monero_tx", signed_txset_for_submit)
-        if args.verify_rust_rebuilt_submit:
+        if args.verify_rust_rebuilt_submit or args.verify_rust_rebuilt_cli_submit:
             write_hex_file(out_dir / "monero_wallet_rpc_signed_monero_tx", signed["signed_txset"])
         (out_dir / "key_images_rpc.json").write_text(
             json.dumps(key_images, indent=2, sort_keys=True) + "\n"
@@ -372,9 +421,15 @@ def main() -> None:
                 "signed_tx_hash_list": signed["tx_hash_list"],
                 "signed_txset_source": (
                     "monero-rust rebuilt from app signer"
-                    if args.verify_rust_rebuilt_submit
+                    if args.verify_rust_rebuilt_submit or args.verify_rust_rebuilt_cli_submit
                     else "monero-wallet-rpc sign_transfer"
                 ),
+                "submit_method": (
+                    "monero-wallet-cli submit_transfer file"
+                    if args.verify_rust_rebuilt_cli_submit
+                    else "monero-wallet-rpc submit_transfer hex"
+                ),
+                "cli_submit_stdout": cli_submit_stdout,
                 "rebuilt_signed_txset_sha256": rebuilt_signed_sha256,
                 "submitted_tx_hash_list": submitted["tx_hash_list"],
             },
