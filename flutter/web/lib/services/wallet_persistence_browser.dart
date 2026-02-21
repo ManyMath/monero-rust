@@ -4,10 +4,12 @@ import 'dart:js_util' as js_util;
 import '../src/ffi/signal_types.dart';
 import '../models/wallet_transaction.dart';
 import 'chrome_storage_backend.dart';
+import 'indexed_db_storage_backend.dart';
 import 'wallet_persistence_service.dart';
 import 'local_storage_backend.dart';
 import 'migrating_storage_backend.dart';
 import 'rust_crypto_backend.dart';
+import 'tiered_storage_backend.dart';
 import 'wallet_serializer.dart';
 
 export 'wallet_persistence_service.dart';
@@ -21,9 +23,17 @@ class WalletPersistenceBrowser {
   static WalletPersistenceService _createDefaultPersistence() {
     final crypto = RustCryptoBackend();
     if (ChromeStorageBackend.isAvailable) {
+      final chromeStorage = ChromeStorageBackend();
+      final primary = IndexedDbStorageBackend.isAvailable
+          ? TieredStorageBackend(
+              primary: chromeStorage,
+              secondary: IndexedDbStorageBackend(),
+              maxPrimaryValueBytes: 512 * 1024,
+            )
+          : chromeStorage;
       return WalletPersistenceService.async(
         storage: MigratingStorageBackend(
-          primary: ChromeStorageBackend(),
+          primary: primary,
           legacy: LocalStorageBackend(),
         ),
         crypto: crypto,

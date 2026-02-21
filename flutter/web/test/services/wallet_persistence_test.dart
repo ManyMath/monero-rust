@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:monero_extension/models/wallet_transaction.dart';
 import 'package:monero_extension/services/migrating_storage_backend.dart';
+import 'package:monero_extension/services/tiered_storage_backend.dart';
 import 'package:monero_extension/services/wallet_persistence_service.dart';
 import '../test_helpers.dart';
 import 'test_backends.dart';
@@ -84,6 +85,177 @@ void main() {
       expect(() => svc.getRawData('async-wallet'), throwsStateError);
       expect(() => svc.setRawData('async-wallet', 'data'), throwsStateError);
     });
+  });
+
+  group('WalletPersistenceService - Tiered async storage backend', () {
+    test('small values stay in primary storage', () async {
+      final primary = AsyncInMemoryStorageBackend();
+      final secondary = AsyncInMemoryStorageBackend();
+      final storage = TieredStorageBackend(
+        primary: primary,
+        secondary: secondary,
+        maxPrimaryValueBytes: 64,
+      );
+
+      await storage.atomicSet('monero_wallet_small', 'small encrypted blob');
+
+      expect(await storage.get('monero_wallet_small'), 'small encrypted blob');
+      expect(await primary.get('monero_wallet_small'), 'small encrypted blob');
+      expect(await secondary.get('tiered:monero_wallet_small'), isNull);
+      expect(await storage.getKeys(), ['monero_wallet_small']);
+    });
+
+    test(
+      'large values are stored in secondary storage behind a primary marker',
+      () async {
+        final primary = AsyncInMemoryStorageBackend();
+        final secondary = AsyncInMemoryStorageBackend();
+        final storage = TieredStorageBackend(
+          primary: primary,
+          secondary: secondary,
+          maxPrimaryValueBytes: 8,
+        );
+        final largeValue = 'x' * 128;
+
+        await storage.atomicSet('monero_wallet_large', largeValue);
+
+        expect(await storage.get('monero_wallet_large'), largeValue);
+        expect(
+          await primary.get('monero_wallet_large'),
+          '${TieredStorageBackend.markerPrefix}tiered:monero_wallet_large',
+        );
+        expect(await secondary.get('tiered:monero_wallet_large'), largeValue);
+        expect(await storage.containsKey('monero_wallet_large'), true);
+        expect(await storage.getKeys(), ['monero_wallet_large']);
+      },
+    );
+
+    test(
+      'overwriting a large value with a small value removes secondary copy',
+      () async {
+        final primary = AsyncInMemoryStorageBackend();
+        final secondary = AsyncInMemoryStorageBackend();
+        final storage = TieredStorageBackend(
+          primary: primary,
+          secondary: secondary,
+          maxPrimaryValueBytes: 8,
+        );
+
+        await storage.atomicSet('monero_wallet_switch', 'x' * 128);
+        await storage.atomicSet('monero_wallet_switch', 'small');
+
+        expect(await storage.get('monero_wallet_switch'), 'small');
+        expect(await primary.get('monero_wallet_switch'), 'small');
+        expect(await secondary.get('tiered:monero_wallet_switch'), isNull);
+      },
+    );
+
+    test('remove deletes primary marker and secondary payload', () async {
+      final primary = AsyncInMemoryStorageBackend();
+      final secondary = AsyncInMemoryStorageBackend();
+      final storage = TieredStorageBackend(
+        primary: primary,
+        secondary: secondary,
+        maxPrimaryValueBytes: 8,
+      );
+
+      await storage.atomicSet('monero_wallet_delete_large', 'x' * 128);
+      await storage.remove('monero_wallet_delete_large');
+
+      expect(await storage.get('monero_wallet_delete_large'), isNull);
+      expect(await primary.get('monero_wallet_delete_large'), isNull);
+      expect(await secondary.get('tiered:monero_wallet_delete_large'), isNull);
+    });
+
+    test(
+      'maybeRecover restores interrupted primary marker and secondary payload',
+      () async {
+        final primary = AsyncInMemoryStorageBackend()
+          ..set(
+            'monero_wallet_recover_large_staging',
+            '${TieredStorageBackend.markerPrefix}tiered:monero_wallet_recover_large',
+          )
+          ..set('monero_wallet_recover_large_wip', '1');
+        final secondary = AsyncInMemoryStorageBackend()
+          ..set('tiered:monero_wallet_recover_large_staging', 'large-payload')
+          ..set('tiered:monero_wallet_recover_large_wip', '1');
+        final storage = TieredStorageBackend(
+          primary: primary,
+          secondary: secondary,
+          maxPrimaryValueBytes: 8,
+        );
+
+        await storage.maybeRecover('monero_wallet_recover_large');
+
+        expect(
+          await storage.get('monero_wallet_recover_large'),
+          'large-payload',
+        );
+        expect(await primary.get('monero_wallet_recover_large_wip'), isNull);
+        expect(
+          await secondary.get('tiered:monero_wallet_recover_large_wip'),
+          isNull,
+        );
+      },
+    );
+
+    test(
+      'save and load can use secondary storage for oversized wallet data',
+      () async {
+        final primary = AsyncInMemoryStorageBackend();
+        final secondary = AsyncInMemoryStorageBackend();
+        final svc = WalletPersistenceService.async(
+          storage: TieredStorageBackend(
+            primary: primary,
+            secondary: secondary,
+            maxPrimaryValueBytes: 128,
+          ),
+          crypto: IdentityCryptoBackend(),
+        );
+        final outputs = List.generate(
+          6,
+          (index) => TestHelpers.createMockOutput(
+            txHash: 'tx-large-$index',
+            outputIndex: index,
+            amountXmr: '1.0',
+            blockHeight: 100 + index,
+          ),
+        );
+
+        final saveResult = await svc.save(
+          walletId: 'large-wallet',
+          password: 'pass123',
+          seed: 'large seed phrase',
+          network: 'stagenet',
+          address: '5large...',
+          nodeUrl: 'http://node:38081',
+          outputs: outputs,
+          transactions: [],
+          continuousScanCurrentHeight: 120,
+          selectedOutputs: {},
+          accounts: [0],
+          activeAccount: 0,
+          scanningAccounts: {0},
+        );
+        expect(saveResult.success, true);
+        expect(
+          await primary.get('monero_wallet_large-wallet'),
+          startsWith(TieredStorageBackend.markerPrefix),
+        );
+        expect(
+          await secondary.get('tiered:monero_wallet_large-wallet'),
+          isNotNull,
+        );
+
+        final loadResult = await svc.load(
+          walletId: 'large-wallet',
+          password: 'pass123',
+        );
+        expect(loadResult.success, true);
+        expect(loadResult.seed, 'large seed phrase');
+        expect(loadResult.outputs, hasLength(6));
+      },
+    );
   });
 
   group('WalletPersistenceService - Legacy storage migration', () {
@@ -352,8 +524,8 @@ void main() {
     });
   });
 
-  group('WalletPersistenceService - Save→Delete→Import Roundtrip', () {
-    test('full save→export→delete→import cycle preserves data', () async {
+  group('WalletPersistenceService - Save->Delete->Import Roundtrip', () {
+    test('full save->export->delete->import cycle preserves data', () async {
       final storage = InMemoryStorageBackend();
       final svc = createTestService(storage: storage);
 

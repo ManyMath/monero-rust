@@ -65,10 +65,26 @@ class AsyncInMemoryStorageBackend implements AsyncStorageBackend {
   Future<List<String>> getKeys() async => _data.keys.toList();
 
   @override
-  Future<void> atomicSet(String key, String value) => set(key, value);
+  Future<void> atomicSet(String key, String value) async {
+    _data['${key}_wip'] = '1';
+    _data['${key}_staging'] = value;
+    _data[key] = value;
+    _data.remove('${key}_wip');
+    _data.remove('${key}_staging');
+  }
 
   @override
-  Future<void> maybeRecover(String key) async {}
+  Future<void> maybeRecover(String key) async {
+    final tombstoneKey = '${key}_wip';
+    final stagingKey = '${key}_staging';
+    if (!_data.containsKey(tombstoneKey)) return;
+    final staging = _data[stagingKey];
+    if (staging != null) {
+      _data[key] = staging;
+    }
+    _data.remove(tombstoneKey);
+    _data.remove(stagingKey);
+  }
 }
 
 /// No-op crypto backend: returns plaintext unchanged.
