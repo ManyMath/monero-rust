@@ -20,7 +20,7 @@ fn random_scalar(rng: &mut impl RngCore) -> Scalar {
 fn out_proof_serialization() {
   let spend_key = Zeroizing::new(random_scalar(&mut OsRng));
   let view_key = Zeroizing::new(random_scalar(&mut OsRng));
-  let view_pair = ViewPair::new(&ED25519_BASEPOINT_TABLE * &*spend_key, view_key);
+  let view_pair = ViewPair::new(ED25519_BASEPOINT_TABLE * &*spend_key, view_key);
 
   let ephemeral_key = Zeroizing::new(random_scalar(&mut OsRng));
 

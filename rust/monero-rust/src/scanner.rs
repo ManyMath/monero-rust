@@ -294,7 +294,7 @@ fn spend_key_from_seed(seed: &Seed, passphrase: &str) -> EdwardsPoint {
     // SEC-02: Use Zeroizing to ensure spend scalar is cleaned up on drop
     let key_bytes = seed.key_bytes_with_passphrase(passphrase);
     let spend_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(*key_bytes));
-    &*spend_scalar * &ED25519_BASEPOINT_TABLE
+    &*spend_scalar * ED25519_BASEPOINT_TABLE
 }
 
 /// Returns the compressed public spend key for `mnemonic`/`passphrase`.
@@ -545,7 +545,7 @@ pub fn parse_view_only_keys(seed: &str) -> Option<(Scalar, EdwardsPoint)> {
     }
     let view_bytes: [u8; 32] = hex::decode(view_hex).ok()?.try_into().ok()?;
     let spend_bytes: [u8; 32] = hex::decode(spend_hex).ok()?.try_into().ok()?;
-    let view_scalar = Scalar::from_canonical_bytes(view_bytes)?;
+    let view_scalar = Option::<Scalar>::from(Scalar::from_canonical_bytes(view_bytes))?;
     let spend_point = CompressedEdwardsY(spend_bytes).decompress()?;
     Some((view_scalar, spend_point))
 }
@@ -562,7 +562,7 @@ pub fn derive_keys_from_view_only(
         secret_view_key_hex, public_spend_key_hex
     ))
     .ok_or_else(|| "Invalid view-only key hex".to_string())?;
-    let view_point: EdwardsPoint = &view_scalar * &ED25519_BASEPOINT_TABLE;
+    let view_point: EdwardsPoint = &view_scalar * ED25519_BASEPOINT_TABLE;
     let address = MoneroAddress::new(
         AddressMeta::new(network, AddressType::Standard),
         spend_point,
@@ -589,7 +589,7 @@ pub fn derive_address_from_view_only(
         secret_view_key_hex, public_spend_key_hex
     ))
     .ok_or_else(|| "Invalid view-only key hex".to_string())?;
-    let view_point: EdwardsPoint = &view_scalar * &ED25519_BASEPOINT_TABLE;
+    let view_point: EdwardsPoint = &view_scalar * ED25519_BASEPOINT_TABLE;
     let address = MoneroAddress::new(
         AddressMeta::new(network, AddressType::Standard),
         spend_point,
@@ -634,7 +634,7 @@ pub fn validate_seed(mnemonic: &str) -> Result<(), String> {
 fn address_from_seed(seed: &Seed, network: Network, passphrase: &str) -> String {
     let spend_point = spend_key_from_seed(seed, passphrase);
     let view_scalar = view_key_from_seed(seed, passphrase);
-    let view_point: EdwardsPoint = &view_scalar * &ED25519_BASEPOINT_TABLE;
+    let view_point: EdwardsPoint = &view_scalar * ED25519_BASEPOINT_TABLE;
 
     MoneroAddress::new(
         AddressMeta::new(network, AddressType::Standard),
@@ -679,7 +679,7 @@ pub fn derive_subaddress(
         let seed = resolve_seed(mnemonic)?;
         let spend: [u8; 32] = *seed.key_bytes_with_passphrase(passphrase);
         let spend_scalar = Scalar::from_bytes_mod_order(spend);
-        let sp: EdwardsPoint = &spend_scalar * &ED25519_BASEPOINT_TABLE;
+        let sp: EdwardsPoint = &spend_scalar * ED25519_BASEPOINT_TABLE;
         let view: [u8; 32] = Keccak256::digest(spend_scalar.to_bytes()).into();
         let vs = Scalar::from_bytes_mod_order(view);
         (sp, vs)
@@ -721,11 +721,11 @@ pub fn derive_keys(
 
     let spend: [u8; 32] = *seed.key_bytes_with_passphrase(passphrase);
     let spend_scalar = Scalar::from_bytes_mod_order(spend);
-    let spend_point: EdwardsPoint = &spend_scalar * &ED25519_BASEPOINT_TABLE;
+    let spend_point: EdwardsPoint = &spend_scalar * ED25519_BASEPOINT_TABLE;
 
     let view: [u8; 32] = Keccak256::digest(spend_scalar.to_bytes()).into();
     let view_scalar = Scalar::from_bytes_mod_order(view);
-    let view_point: EdwardsPoint = &view_scalar * &ED25519_BASEPOINT_TABLE;
+    let view_point: EdwardsPoint = &view_scalar * ED25519_BASEPOINT_TABLE;
 
     let address = MoneroAddress::new(
         AddressMeta::new(network, AddressType::Standard),
@@ -920,7 +920,7 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
         .unwrap_or_else(|| view_key_from_seed(seed_opt.as_ref().unwrap(), passphrase));
     #[cfg(target_arch = "wasm32")]
     let spend_scalar = if view_only.is_some() {
-        Scalar::zero()
+        Scalar::ZERO
     } else {
         spend_key_scalar_from_seed(seed_opt.as_ref().unwrap(), passphrase)
     };
@@ -997,7 +997,7 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
             let received_output_bytes = hex::encode(output.serialize());
 
             #[cfg(target_arch = "wasm32")]
-            let key_image = if spend_scalar == Scalar::zero() {
+            let key_image = if spend_scalar == Scalar::ZERO {
                 String::new()
             } else {
                 let key_image_point = calculate_key_image(&spend_scalar, &output.data.key_offset);
@@ -1103,7 +1103,7 @@ pub async fn process_batch_response(
         .unwrap_or_else(|| view_key_from_seed(seed_opt.as_ref().unwrap(), passphrase));
     #[cfg(target_arch = "wasm32")]
     let spend_scalar_val = if view_only.is_some() {
-        Scalar::zero()
+        Scalar::ZERO
     } else {
         spend_key_scalar_from_seed(seed_opt.as_ref().unwrap(), passphrase)
     };
@@ -1284,7 +1284,7 @@ pub async fn process_batch_response(
                     let received_output_bytes = hex::encode(output.serialize());
 
                     #[cfg(target_arch = "wasm32")]
-                    let key_image = if scanner.spend_scalar == Scalar::zero() {
+                    let key_image = if scanner.spend_scalar == Scalar::ZERO {
                         String::new() // view-only: no spend key available
                     } else {
                         let key_image_point =
@@ -1473,7 +1473,7 @@ pub async fn process_batch_multi_wallet_response(
                 None
             };
             let (spend_point, view_scalar, address) = if let Some((vs, sp)) = view_only.as_ref() {
-                let vp: EdwardsPoint = vs * &ED25519_BASEPOINT_TABLE;
+                let vp: EdwardsPoint = vs * ED25519_BASEPOINT_TABLE;
                 let addr =
                     MoneroAddress::new(AddressMeta::new(network, AddressType::Standard), *sp, vp)
                         .to_string();
@@ -1489,7 +1489,7 @@ pub async fn process_batch_multi_wallet_response(
             };
             #[cfg(target_arch = "wasm32")]
             let spend_scalar_val = if view_only.is_some() {
-                Scalar::zero()
+                Scalar::ZERO
             } else {
                 spend_key_scalar_from_seed(seed_opt.as_ref().unwrap(), &config.passphrase)
             };
@@ -1669,7 +1669,7 @@ pub async fn process_batch_multi_wallet_response(
                         let received_output_bytes = hex::encode(output.serialize());
 
                         #[cfg(target_arch = "wasm32")]
-                        let key_image = if entry.spend_scalar == Scalar::zero() {
+                        let key_image = if entry.spend_scalar == Scalar::ZERO {
                             String::new() // view-only: no spend key available
                         } else {
                             let key_image_point =
@@ -2114,7 +2114,7 @@ pub async fn scan_block_multi_wallet<R: RpcConnection + Send + Sync + Clone + 's
             let (spend_point, view_scalar, address) = if let Some((vs, sp)) =
                 parse_view_only_keys(&wallet_config.mnemonic)
             {
-                let vp: EdwardsPoint = &vs * &ED25519_BASEPOINT_TABLE;
+                let vp: EdwardsPoint = &vs * ED25519_BASEPOINT_TABLE;
                 let addr =
                     MoneroAddress::new(AddressMeta::new(network, AddressType::Standard), sp, vp)
                         .to_string();
@@ -2160,7 +2160,7 @@ pub async fn scan_block_multi_wallet<R: RpcConnection + Send + Sync + Clone + 's
                     let received_output_bytes = hex::encode(output.serialize());
 
                     #[cfg(target_arch = "wasm32")]
-                    let key_image = if spend_scalar == Scalar::zero() {
+                    let key_image = if spend_scalar == Scalar::ZERO {
                         String::new()
                     } else {
                         let key_image_point =
@@ -2301,7 +2301,7 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
             None
         };
         let (spend_point, view_scalar, address) = if let Some((vs, sp)) = view_only.as_ref() {
-            let vp: EdwardsPoint = vs * &ED25519_BASEPOINT_TABLE;
+            let vp: EdwardsPoint = vs * ED25519_BASEPOINT_TABLE;
             let addr =
                 MoneroAddress::new(AddressMeta::new(network, AddressType::Standard), *sp, vp)
                     .to_string();
@@ -2316,7 +2316,7 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
             )
         };
         let spend_scalar = if view_only.is_some() {
-            Scalar::zero()
+            Scalar::ZERO
         } else {
             spend_key_scalar_from_seed(seed_opt.as_ref().unwrap(), passphrase)
         };
@@ -2354,7 +2354,7 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
                 let received_output_bytes = hex::encode(output.serialize());
 
                 #[cfg(target_arch = "wasm32")]
-                let key_image = if spend_scalar == Scalar::zero() {
+                let key_image = if spend_scalar == Scalar::ZERO {
                     String::new()
                 } else {
                     let key_image_point =
@@ -2503,7 +2503,7 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
         .unwrap_or_else(|| view_key_from_seed(seed_opt.as_ref().unwrap(), passphrase));
     #[cfg(target_arch = "wasm32")]
     let spend_scalar = if view_only.is_some() {
-        Scalar::zero()
+        Scalar::ZERO
     } else {
         spend_key_scalar_from_seed(seed_opt.as_ref().unwrap(), passphrase)
     };
@@ -2570,7 +2570,7 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
             let received_output_bytes = hex::encode(output.serialize());
 
             #[cfg(target_arch = "wasm32")]
-            let key_image = if spend_scalar == Scalar::zero() {
+            let key_image = if spend_scalar == Scalar::ZERO {
                 String::new()
             } else {
                 let key_image_point = calculate_key_image(&spend_scalar, &output.data.key_offset);
@@ -3170,7 +3170,7 @@ mod tests {
             subaddress: 5,
         };
         let spend = Scalar::from(42u64);
-        let spend_point = &spend * &ED25519_BASEPOINT_TABLE;
+        let spend_point = &spend * ED25519_BASEPOINT_TABLE;
         let view = Scalar::from(99u64);
         let view_pair = ViewPair::new(spend_point, Zeroizing::new(view));
         let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
@@ -3193,7 +3193,7 @@ mod tests {
             subaddress: 5,
         };
         let spend = Scalar::from(42u64);
-        let spend_point = &spend * &ED25519_BASEPOINT_TABLE;
+        let spend_point = &spend * ED25519_BASEPOINT_TABLE;
         let view = Scalar::from(99u64);
         let view_pair = ViewPair::new(spend_point, Zeroizing::new(view));
         let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
@@ -3215,7 +3215,7 @@ mod tests {
             subaddress: 0,
         };
         let spend = Scalar::from(42u64);
-        let spend_point = &spend * &ED25519_BASEPOINT_TABLE;
+        let spend_point = &spend * ED25519_BASEPOINT_TABLE;
         let view = Scalar::from(99u64);
         let view_pair = ViewPair::new(spend_point, Zeroizing::new(view));
         let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
@@ -3233,7 +3233,7 @@ mod tests {
             subaddress: 5,
         };
         let spend = Scalar::from(42u64);
-        let spend_point = &spend * &ED25519_BASEPOINT_TABLE;
+        let spend_point = &spend * ED25519_BASEPOINT_TABLE;
         let view = Scalar::from(99u64);
         let view_pair = ViewPair::new(spend_point, Zeroizing::new(view));
         let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
@@ -3267,7 +3267,7 @@ mod tests {
             subaddress: 5,
         };
         let spend = Scalar::from(42u64);
-        let spend_point = &spend * &ED25519_BASEPOINT_TABLE;
+        let spend_point = &spend * ED25519_BASEPOINT_TABLE;
         let view = Scalar::from(99u64);
         let view_pair = ViewPair::new(spend_point, Zeroizing::new(view));
         let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));

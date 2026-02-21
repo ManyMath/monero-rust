@@ -259,7 +259,7 @@ pub mod native {
         spend_bytes.copy_from_slice(&entropy[..]);
 
         let spend_scalar = Scalar::from_bytes_mod_order(spend_bytes);
-        let spend_point = &spend_scalar * &ED25519_BASEPOINT_TABLE;
+        let spend_point = &spend_scalar * ED25519_BASEPOINT_TABLE;
 
         let view: [u8; 32] = Keccak256::digest(spend_bytes).into();
         let view_scalar = Scalar::from_bytes_mod_order(view);
@@ -1032,7 +1032,7 @@ pub mod native {
 
     fn subaddress_key_offset(view_secret: [u8; 32], account: u32, minor: u32) -> Scalar {
         if account == 0 && minor == 0 {
-            return Scalar::zero();
+            return Scalar::ZERO;
         }
 
         let mut bytes = Vec::with_capacity(8 + 32 + 4 + 4);
@@ -1077,7 +1077,7 @@ pub mod native {
                 let subaddress_offset = subaddress_key_offset(view_secret, subaddr_account, *minor);
                 let key_offset = base_offset + subaddress_offset;
                 let output_secret = spend_secret + key_offset;
-                let output_public_key = (&output_secret * &ED25519_BASEPOINT_TABLE)
+                let output_public_key = (&output_secret * ED25519_BASEPOINT_TABLE)
                     .compress()
                     .to_bytes();
                 if output_public_key == real.output_public_key {
@@ -1522,7 +1522,7 @@ pub mod native {
         network_str: &str,
     ) -> Result<OfflineSignResult, String> {
         let spend_key = Zeroizing::new(Scalar::from_bytes_mod_order(spend_secret_key));
-        let spend_point = &*spend_key * &ED25519_BASEPOINT_TABLE;
+        let spend_point = &*spend_key * ED25519_BASEPOINT_TABLE;
         let view_scalar = Scalar::from_bytes_mod_order(view_secret_key);
         let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
         let mut unsigned_bytes = hex::decode(unsigned_tx_hex)
@@ -1697,7 +1697,7 @@ pub mod native {
             // Create mock ring data using a known scalar
             let one_bytes = [1u8; 32];
             let scalar_one = Scalar::from_bytes_mod_order(one_bytes);
-            let g: EdwardsPoint = &scalar_one * &ED25519_BASEPOINT_TABLE;
+            let g: EdwardsPoint = &scalar_one * ED25519_BASEPOINT_TABLE;
             let ring = vec![[g, g], [g, g]];
 
             let decoys = Decoys {

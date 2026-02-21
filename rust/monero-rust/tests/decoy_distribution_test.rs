@@ -161,7 +161,7 @@ fn output_keys_are_valid_curve_points() {
         assert_eq!(key_bytes.len(), 32);
 
         // The key must be a valid compressed Edwards Y point.
-        let compressed = CompressedEdwardsY::from_slice(&key_bytes);
+        let compressed = CompressedEdwardsY::from_slice(&key_bytes).unwrap();
         let point = compressed.decompress();
         assert!(
             point.is_some(),

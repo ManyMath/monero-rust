@@ -30,15 +30,15 @@ subtle = "^2.4"
 crc = "3"
 sha3 = "0.10"
 
-curve25519-dalek = { version = "^3.2", features = ["std"] }
+curve25519-dalek = { version = "4.1", default-features = false, features = ["alloc", "precomputed-tables", "zeroize"] }
 
 group = "0.13"
-dalek-ff-group = { package = "dalek-ff-group-mirror", version = "0.3" }
+dalek-ff-group = { package = "dalek-ff-group-mirror", version = "0.4.1" }
 multiexp = { package = "multiexp-mirror", version = "0.3", features = ["batch"] }
 
 transcript = { package = "flexible-transcript-mirror", version = "0.3", features = ["recommended"], optional = true }
-frost = { package = "modular-frost-mirror", version = "0.7", features = ["ed25519"], optional = true }
-dleq = { package = "dleq-mirror", version = "0.3", features = ["serialize"], optional = true }
+frost = { package = "modular-frost-mirror", version = "0.8.1", features = ["ed25519"], optional = true }
+dleq = { package = "dleq-mirror", version = "0.4.1", features = ["serialize"], optional = true }
 
 monero-generators = { path = "generators", version = "0.3" }
 
@@ -58,7 +58,7 @@ pbkdf2 = { version = "0.12", features = ["simple"] }
 cuprate-cryptonight = { path = "../cuprate-cryptonight" }
 
 [build-dependencies]
-dalek-ff-group = { package = "dalek-ff-group-mirror", version = "0.3" }
+dalek-ff-group = { package = "dalek-ff-group-mirror", version = "0.4.1" }
 monero-generators = { path = "generators", version = "0.3" }
 
 [dev-dependencies]
@@ -67,7 +67,7 @@ hex-literal = "0.4"
 tokio = { version = "1", features = ["full"] }
 # monero-rpc = "0.3"
 
-frost = { package = "modular-frost-mirror", version = "0.7", features = ["tests"] }
+frost = { package = "modular-frost-mirror", version = "0.8.1", features = ["tests"] }
 
 [features]
 default = ["http-rpc"]

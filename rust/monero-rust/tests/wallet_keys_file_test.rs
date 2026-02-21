@@ -144,7 +144,7 @@ fn independent_view_key_does_not_offer_incomplete_mnemonic_backup() {
     let mut wallet = read_keys_file(&vector_path("vocal.keys"), "").unwrap();
     let independent_view = Scalar::from(42u64);
     wallet.view_secret_key = independent_view.to_bytes();
-    wallet.view_public_key = (&independent_view * &ED25519_BASEPOINT_TABLE).compress().to_bytes();
+    wallet.view_public_key = (&independent_view * ED25519_BASEPOINT_TABLE).compress().to_bytes();
     let tmp = tempfile::NamedTempFile::new().unwrap();
     write_keys_file(tmp.path(), "", &wallet).unwrap();
     let imported = read_keys_file(tmp.path(), "").unwrap();

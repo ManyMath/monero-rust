@@ -113,7 +113,7 @@ fn ledger_app_speculos_crypto_vector_matches_local_primitives() {
         .decompress()
         .expect("Ledger test public key should decompress");
     assert_eq!(
-        (&scalar * &ED25519_BASEPOINT_TABLE).compress().to_bytes(),
+        (&scalar * ED25519_BASEPOINT_TABLE).compress().to_bytes(),
         supplied_public_key.compress().to_bytes()
     );
     assert_eq!(

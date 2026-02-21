@@ -40,7 +40,7 @@ fn synthetic_output_for_spend_key(
     let spend_scalar = Scalar::from_bytes_mod_order(spend_secret_key);
     let key_offset = Scalar::from_bytes_mod_order([key_offset_byte; 32]);
     let ephemeral_sec = Zeroizing::new(spend_scalar + key_offset);
-    let output_key = (&*ephemeral_sec * &ED25519_BASEPOINT_TABLE)
+    let output_key = (&*ephemeral_sec * ED25519_BASEPOINT_TABLE)
         .compress()
         .to_bytes();
     let key_image = generate_key_image(&ephemeral_sec).compress().to_bytes();

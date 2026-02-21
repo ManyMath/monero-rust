@@ -13,7 +13,7 @@ zeroize = { version = "^1.5", default-features = false, features = ["zeroize_der
 rand_core = { version = "0.6", default-features = false }
 
 sha3 = { version = "0.10", default-features = false }
-curve25519-dalek = { version = "^3.2", default-features = false, features = ["std"] }
+curve25519-dalek = { version = "4.1", default-features = false, features = ["alloc", "precomputed-tables", "zeroize"] }
 
 monero-serai = { path = "../../monero-serai-mirror", default-features = false }
 monero-generators = { path = "../../monero-serai-mirror/generators" }

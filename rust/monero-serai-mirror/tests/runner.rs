@@ -22,7 +22,7 @@ use monero_serai::{
 
 pub fn random_address() -> (Scalar, ViewPair, MoneroAddress) {
   let spend = random_scalar(&mut OsRng);
-  let spend_pub = &spend * &ED25519_BASEPOINT_TABLE;
+  let spend_pub = &spend * ED25519_BASEPOINT_TABLE;
   let view = Zeroizing::new(random_scalar(&mut OsRng));
   (
     spend,
@@ -30,7 +30,7 @@ pub fn random_address() -> (Scalar, ViewPair, MoneroAddress) {
     MoneroAddress {
       meta: AddressMeta::new(Network::Mainnet, AddressType::Standard),
       spend: spend_pub,
-      view: view.deref() * &ED25519_BASEPOINT_TABLE,
+      view: view.deref() * ED25519_BASEPOINT_TABLE,
     },
   )
 }
@@ -103,8 +103,8 @@ pub async fn rpc() -> Rpc<HttpRpc> {
 
   let addr = MoneroAddress {
     meta: AddressMeta::new(Network::Mainnet, AddressType::Standard),
-    spend: &random_scalar(&mut OsRng) * &ED25519_BASEPOINT_TABLE,
-    view: &random_scalar(&mut OsRng) * &ED25519_BASEPOINT_TABLE,
+    spend: &random_scalar(&mut OsRng) * ED25519_BASEPOINT_TABLE,
+    view: &random_scalar(&mut OsRng) * ED25519_BASEPOINT_TABLE,
   }
   .to_string();
 
@@ -203,7 +203,7 @@ macro_rules! test {
           let keys = key_gen::<_, Ed25519>(&mut OsRng);
 
           let spend_pub = if !multisig {
-            spend.deref() * &ED25519_BASEPOINT_TABLE
+            spend.deref() * ED25519_BASEPOINT_TABLE
           } else {
             #[cfg(not(feature = "multisig"))]
             panic!("Multisig branch called without the multisig feature");
@@ -223,7 +223,7 @@ macro_rules! test {
             rpc.get_fee_checked(monero_serai::rpc::DEFAULT_MAX_FEE_PER_BYTE).await.unwrap(),
             Some(Change::new(
               &ViewPair::new(
-                &random_scalar(&mut OsRng) * &ED25519_BASEPOINT_TABLE,
+                &random_scalar(&mut OsRng) * ED25519_BASEPOINT_TABLE,
                 Zeroizing::new(random_scalar(&mut OsRng))
               ),
               false

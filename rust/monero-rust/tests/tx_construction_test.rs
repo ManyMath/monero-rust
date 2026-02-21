@@ -118,7 +118,7 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
     let mut spend_bytes = [0u8; 32];
     spend_bytes.copy_from_slice(&entropy[..32]);
     let spend_scalar = Scalar::from_bytes_mod_order(spend_bytes);
-    let spend_point = &spend_scalar * &ED25519_BASEPOINT_TABLE;
+    let spend_point = &spend_scalar * ED25519_BASEPOINT_TABLE;
 
     let view_bytes = hex::decode(&keys.secret_view_key)?;
     let view_scalar = Scalar::from_bytes_mod_order(view_bytes[..32].try_into()?);
@@ -235,7 +235,7 @@ async fn test_address_derivation_consistency() -> Result<(), Box<dyn std::error:
     let mut spend_bytes = [0u8; 32];
     spend_bytes.copy_from_slice(&entropy[..32]);
     let spend_scalar = Scalar::from_bytes_mod_order(spend_bytes);
-    let spend_point = &spend_scalar * &ED25519_BASEPOINT_TABLE;
+    let spend_point = &spend_scalar * ED25519_BASEPOINT_TABLE;
 
     let keys = derive_keys(TEST_SEED, NETWORK_STR, "")?;
     let view_bytes = hex::decode(&keys.secret_view_key)?;
@@ -348,7 +348,7 @@ async fn test_transaction_with_multiple_inputs() -> Result<(), Box<dyn std::erro
             let mut spend_bytes = [0u8; 32];
             spend_bytes.copy_from_slice(&entropy[..32]);
             let spend_scalar = Scalar::from_bytes_mod_order(spend_bytes);
-            let spend_point = &spend_scalar * &ED25519_BASEPOINT_TABLE;
+            let spend_point = &spend_scalar * ED25519_BASEPOINT_TABLE;
 
             let keys = derive_keys(TEST_SEED, NETWORK_STR, "")?;
             let view_bytes = hex::decode(&keys.secret_view_key)?;

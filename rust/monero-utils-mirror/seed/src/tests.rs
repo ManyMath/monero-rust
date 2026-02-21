@@ -211,15 +211,15 @@ fn test_original_seed() {
       let spend: [u8; 32] = hex::decode(vector.spend).unwrap().try_into().unwrap();
       // For originalal seeds, Monero directly uses the entropy as a spend key
       assert_eq!(
-        Scalar::from_canonical_bytes(*seed.entropy()),
-        Scalar::from_canonical_bytes(spend),
+        Option::<Scalar>::from(Scalar::from_canonical_bytes(*seed.entropy())),
+        Option::<Scalar>::from(Scalar::from_canonical_bytes(spend)),
       );
 
       let view: [u8; 32] = hex::decode(vector.view).unwrap().try_into().unwrap();
       // Monero then derives the view key as H(spend)
       assert_eq!(
         Scalar::from_bytes_mod_order(keccak256(spend)),
-        Scalar::from_canonical_bytes(view).unwrap()
+        Option::<Scalar>::from(Scalar::from_canonical_bytes(view)).unwrap()
       );
 
       assert_eq!(Seed::from_entropy(vector.language, Zeroizing::new(spend)).unwrap(), seed);

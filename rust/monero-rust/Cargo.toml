@@ -37,7 +37,7 @@ bip39 = { version = "2", features = ["rand"] }
 bip32 = { version = "0.5", features = ["secp256k1"] }
 
 # Scanner
-curve25519-dalek = { version = "3.2", default-features = false }
+curve25519-dalek = { version = "4.1", default-features = false, features = ["alloc", "precomputed-tables", "zeroize"] }
 sha3 = { version = "0.10", default-features = false }
 hex = { version = "0.4", default-features = false, features = ["alloc"] }
 rand_core = { version = "0.6", default-features = false }
@@ -54,7 +54,7 @@ monero-serai = { path = "../monero-serai-mirror", default-features = false, feat
 # Native
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 monero-serai = { path = "../monero-serai-mirror", features = ["http-rpc", "test-helpers"] }
-curve25519-dalek = { version = "3.2", features = ["std"] }
+curve25519-dalek = { version = "4.1", default-features = false, features = ["alloc", "precomputed-tables", "zeroize"] }
 sha3 = "0.10"
 hex = "0.4"
 rand_core = "0.6"

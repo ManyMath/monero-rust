@@ -252,7 +252,7 @@ impl SignMachine<Transaction> for TransactionSignMachine {
     );
   }
 
-  fn from_cache(_: (), _: ThresholdKeys<Ed25519>, _: CachedPreprocess) -> Result<Self, FrostError> {
+  fn from_cache(_: (), _: ThresholdKeys<Ed25519>, _: CachedPreprocess) -> (Self, Self::Preprocess) {
     unimplemented!(
       "Monero transactions don't support caching their preprocesses due to {}",
       "being already bound to a specific transaction"
@@ -280,7 +280,7 @@ impl SignMachine<Transaction> for TransactionSignMachine {
     included.sort_unstable();
 
     // Convert the unified commitments to a Vec of the individual commitments
-    let mut images = vec![EdwardsPoint::identity(); self.clsags.len()];
+    let mut images = vec![<EdwardsPoint as Identity>::identity(); self.clsags.len()];
     let mut commitments = (0 .. self.clsags.len())
       .map(|c| {
         included
@@ -362,7 +362,7 @@ impl SignMachine<Transaction> for TransactionSignMachine {
     sorted.sort_by(|x, y| key_image_sort(&x.0, &y.0));
 
     let mut rng = ChaCha20Rng::from_seed(self.transcript.rng_seed(b"pseudo_out_masks"));
-    let mut sum_pseudo_outs = Scalar::zero();
+    let mut sum_pseudo_outs = Scalar::ZERO;
     while !sorted.is_empty() {
       let value = sorted.remove(0);
 

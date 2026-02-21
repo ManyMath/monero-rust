@@ -46,7 +46,7 @@ pub fn generate_key_image_ring_signature(
     let k = Zeroizing::new(Scalar::from_bytes_mod_order(k_bytes));
 
     // a = k * G
-    let a = (&*k * &ED25519_BASEPOINT_TABLE).compress().to_bytes();
+    let a = (&*k * ED25519_BASEPOINT_TABLE).compress().to_bytes();
 
     // Hp = hash_to_point(pub_key)
     let hp = monero_serai::ringct::hash_to_point(*pub_key);
@@ -117,7 +117,7 @@ fn generate_schnorr_signature(
     getrandom(&mut k_bytes).expect("RNG failed");
     let k = Zeroizing::new(Scalar::from_bytes_mod_order(k_bytes));
 
-    let tmp = (&*k * &ED25519_BASEPOINT_TABLE).compress().to_bytes();
+    let tmp = (&*k * ED25519_BASEPOINT_TABLE).compress().to_bytes();
 
     // Build buffer: [msg_hash || pub_key || tmp]
     let mut buf = [0u8; 96];
@@ -187,7 +187,7 @@ pub fn encrypt_with_view_key(plaintext: &[u8], view_secret_key: &[u8; 32]) -> Ve
 
     // Ed25519 Schnorr signature over hash using view key
     let view_scalar = Scalar::from_bytes_mod_order(*view_secret_key);
-    let view_pub = (&view_scalar * &ED25519_BASEPOINT_TABLE)
+    let view_pub = (&view_scalar * ED25519_BASEPOINT_TABLE)
         .compress()
         .to_bytes();
     let (sig_c, sig_r) = generate_schnorr_signature(&hash, &view_pub, &view_scalar);
@@ -226,7 +226,7 @@ pub fn decrypt_with_view_key(
     let iv_and_ciphertext = &encrypted[..sig_start];
     let hash: [u8; 32] = Keccak256::digest(iv_and_ciphertext).into();
     let view_scalar = Scalar::from_bytes_mod_order(*view_secret_key);
-    let view_pub_point = &view_scalar * &ED25519_BASEPOINT_TABLE;
+    let view_pub_point = &view_scalar * ED25519_BASEPOINT_TABLE;
     let view_pub_bytes = view_pub_point.compress().to_bytes();
 
     if !verify_schnorr_signature(&hash, &view_pub_point, &view_pub_bytes, &sig_c, &sig_r) {
@@ -357,12 +357,12 @@ pub fn export_key_images_from_outputs(
     let spend_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(*key_bytes));
 
     // Derive view key from spend scalar
-    let pub_spend_key = (&*spend_scalar * &ED25519_BASEPOINT_TABLE)
+    let pub_spend_key = (&*spend_scalar * ED25519_BASEPOINT_TABLE)
         .compress()
         .to_bytes();
     let view_bytes: [u8; 32] = Keccak256::digest(spend_scalar.to_bytes()).into();
     let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(view_bytes));
-    let pub_view_key = (&*view_scalar * &ED25519_BASEPOINT_TABLE)
+    let pub_view_key = (&*view_scalar * ED25519_BASEPOINT_TABLE)
         .compress()
         .to_bytes();
     let view_secret_key = view_scalar.to_bytes();
@@ -451,8 +451,8 @@ mod tests {
         let view_scalar = Scalar::from_bytes_mod_order(view_bytes);
 
         // Public keys
-        let pub_spend = &spend_scalar * &ED25519_BASEPOINT_TABLE;
-        let pub_view = &view_scalar * &ED25519_BASEPOINT_TABLE;
+        let pub_spend = &spend_scalar * ED25519_BASEPOINT_TABLE;
+        let pub_view = &view_scalar * ED25519_BASEPOINT_TABLE;
 
         let pub_spend_bytes = pub_spend.compress().to_bytes();
         let pub_view_bytes = pub_view.compress().to_bytes();
@@ -480,7 +480,7 @@ mod tests {
         let ephemeral_sec = Zeroizing::new(spend_scalar + &key_offset);
 
         // One-time output public key = ephemeral_sec * G
-        let pub_key = &*ephemeral_sec * &ED25519_BASEPOINT_TABLE;
+        let pub_key = &*ephemeral_sec * ED25519_BASEPOINT_TABLE;
 
         // Key image = ephemeral_sec * Hp(pub_key)
         let key_image_point = generate_key_image(&ephemeral_sec);
@@ -681,7 +681,7 @@ mod tests {
             let offset_bytes: [u8; 32] = Keccak256::digest(offset_seed.as_bytes()).into();
             let key_offset = Scalar::from_bytes_mod_order(offset_bytes);
             let ephemeral_sec = Zeroizing::new(&spend_scalar + &key_offset);
-            let pub_key = &*ephemeral_sec * &ED25519_BASEPOINT_TABLE;
+            let pub_key = &*ephemeral_sec * ED25519_BASEPOINT_TABLE;
             let key_image_point = generate_key_image(&ephemeral_sec);
             let key_image = key_image_point.compress().to_bytes();
 
@@ -727,7 +727,7 @@ mod tests {
             let offset_bytes: [u8; 32] = Keccak256::digest(offset_seed.as_bytes()).into();
             let key_offset = Scalar::from_bytes_mod_order(offset_bytes);
             let ephemeral_sec = Zeroizing::new(&spend_scalar + &key_offset);
-            let pub_key = &*ephemeral_sec * &ED25519_BASEPOINT_TABLE;
+            let pub_key = &*ephemeral_sec * ED25519_BASEPOINT_TABLE;
             let key_image_point = generate_key_image(&ephemeral_sec);
             let key_image = key_image_point.compress().to_bytes();
             entries.push(KeyImageExportEntry {

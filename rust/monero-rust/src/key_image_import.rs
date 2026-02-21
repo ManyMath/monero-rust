@@ -127,7 +127,7 @@ pub fn verify_key_image_signature(
     let r = Scalar::from_bytes_mod_order(r_bytes);
 
     // L = c*P + r*G
-    let l_point = (c * output_key) + (&r * &ED25519_BASEPOINT_TABLE);
+    let l_point = (c * output_key) + (&r * ED25519_BASEPOINT_TABLE);
 
     // R = r*Hp(P) + c*I
     let hp = hash_to_point(*output_key);
@@ -313,7 +313,7 @@ mod tests {
 
     #[test]
     fn test_verify_rejects_identity_key_image() {
-        let g = &Scalar::one() * &ED25519_BASEPOINT_TABLE;
+        let g = &Scalar::ONE * ED25519_BASEPOINT_TABLE;
         let identity = EdwardsPoint::default();
         let sig = [0u8; 64];
         assert!(!verify_key_image_signature(&g, &identity, &sig));

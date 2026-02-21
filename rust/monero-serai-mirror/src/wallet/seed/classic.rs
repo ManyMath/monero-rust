@@ -240,10 +240,10 @@ impl ClassicSeed {
     let (lang, entropy) = seed_to_bytes(&words)?;
 
     // Make sure this is a valid scalar
-    let mut scalar = Scalar::from_canonical_bytes(*entropy);
-    if scalar.is_none() {
+    let Some(mut scalar) = Option::<Scalar>::from(Scalar::from_canonical_bytes(*entropy)) else {
       Err(SeedError::InvalidSeed)?;
-    }
+      unreachable!()
+    };
     scalar.zeroize();
 
     // Call from_entropy so a trimmed seed becomes a full seed
@@ -251,7 +251,8 @@ impl ClassicSeed {
   }
 
   pub fn from_entropy(lang: Language, entropy: Zeroizing<[u8; 32]>) -> Option<ClassicSeed> {
-    Scalar::from_canonical_bytes(*entropy).map(|scalar| key_to_seed(lang, Zeroizing::new(scalar)))
+    Option::<Scalar>::from(Scalar::from_canonical_bytes(*entropy))
+      .map(|scalar| key_to_seed(lang, Zeroizing::new(scalar)))
   }
 
   pub(crate) fn to_string(&self) -> Zeroizing<String> {

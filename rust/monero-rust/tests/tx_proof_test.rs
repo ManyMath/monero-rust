@@ -183,7 +183,7 @@ fn test_out_proof_v2_generate_verify_roundtrip() {
     let mut r_bytes = [0u8; 32];
     r_bytes.copy_from_slice(&tx_key_bytes);
     let r = curve25519_dalek::scalar::Scalar::from_bytes_mod_order(r_bytes);
-    let r_point = &r * &curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
+    let r_point = &r * curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
     let r_pub_hex = hex::encode(r_point.compress().to_bytes());
 
     // Verify the generated proof
@@ -213,7 +213,7 @@ fn test_out_proof_v2_message_mismatch_fails() {
     let mut r_bytes = [0u8; 32];
     r_bytes.copy_from_slice(&tx_key_bytes);
     let r = curve25519_dalek::scalar::Scalar::from_bytes_mod_order(r_bytes);
-    let r_point = &r * &curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
+    let r_point = &r * curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
     let r_pub_hex = hex::encode(r_point.compress().to_bytes());
 
     // Verify with wrong message should fail

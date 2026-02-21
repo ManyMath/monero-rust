@@ -123,7 +123,7 @@ impl ClsagMultisig {
       transcript,
 
       H: hash_to_point(output_key),
-      image: EdwardsPoint::identity(),
+      image: <EdwardsPoint as Identity>::identity(),
 
       details,
 
@@ -149,7 +149,7 @@ pub(crate) fn add_key_image_share(
   participant: Participant,
   share: EdwardsPoint,
 ) {
-  if image.is_identity() {
+  if IsIdentity::is_identity(image) {
     *image = generator * offset;
   }
   *image += share * lagrange::<dfg::Scalar>(participant, included).0;
@@ -205,7 +205,7 @@ impl Algorithm<Ed25519> for ClsagMultisig {
     l: Participant,
     addendum: ClsagAddendum,
   ) -> Result<(), FrostError> {
-    if self.image.is_identity() {
+    if IsIdentity::is_identity(&self.image) {
       self.transcript.domain_separate(b"CLSAG");
       self.input().transcript(&mut self.transcript);
       self.transcript.append_message(b"mask", self.mask().to_bytes());

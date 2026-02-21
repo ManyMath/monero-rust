@@ -25,7 +25,7 @@ fn spend_key_from_seed(seed: &Seed) -> EdwardsPoint {
     let mut spend_bytes = [0u8; 32];
     spend_bytes.copy_from_slice(&entropy[..]);
     let spend_scalar = Scalar::from_bytes_mod_order(spend_bytes);
-    &spend_scalar * &ED25519_BASEPOINT_TABLE
+    &spend_scalar * ED25519_BASEPOINT_TABLE
 }
 
 fn view_key_from_seed(seed: &Seed) -> Scalar {
@@ -127,6 +127,6 @@ fn test_spend_key_derivation() {
     let spend_point = spend_key_from_seed(&seed);
     let spend_scalar = spend_key_scalar_from_seed(&seed);
 
-    let derived_point = &spend_scalar * &ED25519_BASEPOINT_TABLE;
+    let derived_point = &spend_scalar * ED25519_BASEPOINT_TABLE;
     assert_eq!(derived_point, spend_point);
 }

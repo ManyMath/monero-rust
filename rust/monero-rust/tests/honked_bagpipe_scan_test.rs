@@ -137,7 +137,7 @@ fn spend_key_from_seed(seed: &Seed) -> curve25519_dalek::edwards::EdwardsPoint {
     spend_bytes.copy_from_slice(&entropy[..]);
 
     let spend_scalar = Scalar::from_bytes_mod_order(spend_bytes);
-    &spend_scalar * &ED25519_BASEPOINT_TABLE
+    &spend_scalar * ED25519_BASEPOINT_TABLE
 }
 
 fn view_key_from_seed(seed: &Seed) -> curve25519_dalek::scalar::Scalar {

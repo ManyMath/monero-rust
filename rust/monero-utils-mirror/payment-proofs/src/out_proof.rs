@@ -29,7 +29,7 @@ fn keccak256(data: impl AsRef<[u8]>) -> [u8; 32] {
 fn read_scalar<R: Read>(r: &mut R) -> io::Result<Scalar> {
   let mut bytes = [0u8; 32];
   r.read_exact(&mut bytes)?;
-  Scalar::from_canonical_bytes(bytes)
+  Option::<Scalar>::from(Scalar::from_canonical_bytes(bytes))
     .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "unreduced scalar"))
 }
 
@@ -160,7 +160,7 @@ impl OutProof {
         }
 
         if output.key !=
-          (address.spend + (&shared_key_derivations.shared_key * &ED25519_BASEPOINT_TABLE))
+          (address.spend + (&shared_key_derivations.shared_key * ED25519_BASEPOINT_TABLE))
             .compress()
         {
           None?;

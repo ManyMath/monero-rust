@@ -11,7 +11,7 @@ use crate::{
 
 #[test]
 fn bulletproofs_vector() {
-  let scalar = |scalar| Scalar::from_canonical_bytes(scalar).unwrap();
+  let scalar = |scalar| Option::<Scalar>::from(Scalar::from_canonical_bytes(scalar)).unwrap();
   let point = |point| CompressedEdwardsY(point).decompress().unwrap();
 
   // Generated from Monero
@@ -81,7 +81,7 @@ macro_rules! bulletproofs_tests {
       // Check Bulletproofs errors if we try to prove for too many outputs
       let mut commitments = vec![];
       for _ in 0 .. 17 {
-        commitments.push(Commitment::new(Scalar::zero(), 0));
+        commitments.push(Commitment::new(Scalar::ZERO, 0));
       }
       assert!(Bulletproofs::prove(&mut OsRng, &commitments, $plus).is_err());
     }

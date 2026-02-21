@@ -56,7 +56,7 @@ fn test_sign_unsigned_transaction_synthetic() {
     let mut spend_bytes = [0u8; 32];
     spend_bytes.copy_from_slice(&entropy[..]);
     let spend_scalar = Scalar::from_bytes_mod_order(spend_bytes);
-    let spend_point = &spend_scalar * &ED25519_BASEPOINT_TABLE;
+    let spend_point = &spend_scalar * ED25519_BASEPOINT_TABLE;
 
     let view_bytes: [u8; 32] = Keccak256::digest(spend_bytes).into();
     let view_scalar = Scalar::from_bytes_mod_order(view_bytes);
@@ -65,7 +65,7 @@ fn test_sign_unsigned_transaction_synthetic() {
     // 2. Build OutputData with mathematically consistent key
     // key = (spend_scalar + key_offset) * G  -- this is checked by sign_offline
     let key_offset = Scalar::from_bytes_mod_order([0x01; 32]);
-    let output_key = &(spend_scalar + key_offset) * &ED25519_BASEPOINT_TABLE;
+    let output_key = &(spend_scalar + key_offset) * ED25519_BASEPOINT_TABLE;
 
     let mask_scalar = Scalar::from_bytes_mod_order([0x05; 32]);
     let input_amount: u64 = 1_000_000_000_000; // 1 XMR
@@ -97,9 +97,9 @@ fn test_sign_unsigned_transaction_synthetic() {
     // Positions 1..16 = deterministic decoys
     for i in 1..ring_len {
         let decoy_key =
-            &Scalar::from_bytes_mod_order([i as u8 + 0x10; 32]) * &ED25519_BASEPOINT_TABLE;
+            &Scalar::from_bytes_mod_order([i as u8 + 0x10; 32]) * ED25519_BASEPOINT_TABLE;
         let decoy_commitment =
-            &Scalar::from_bytes_mod_order([i as u8 + 0x80; 32]) * &ED25519_BASEPOINT_TABLE;
+            &Scalar::from_bytes_mod_order([i as u8 + 0x80; 32]) * ED25519_BASEPOINT_TABLE;
         ring.push([decoy_key, decoy_commitment]);
     }
 

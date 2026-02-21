@@ -22,13 +22,13 @@ fn test_keys() -> (Scalar, [u8; 32], [u8; 32], [u8; 32]) {
         hash
     };
     let spend_scalar = Scalar::from_bytes_mod_order(spend_bytes);
-    let pub_spend = (&spend_scalar * &ED25519_BASEPOINT_TABLE)
+    let pub_spend = (&spend_scalar * ED25519_BASEPOINT_TABLE)
         .compress()
         .to_bytes();
 
     let view_bytes: [u8; 32] = Keccak256::digest(spend_scalar.to_bytes()).into();
     let view_scalar = Scalar::from_bytes_mod_order(view_bytes);
-    let pub_view = (&view_scalar * &ED25519_BASEPOINT_TABLE)
+    let pub_view = (&view_scalar * ED25519_BASEPOINT_TABLE)
         .compress()
         .to_bytes();
     let view_secret = view_scalar.to_bytes();
@@ -44,7 +44,7 @@ fn test_entries(spend_scalar: &Scalar, count: usize) -> Vec<KeyImageExportEntry>
             let offset_bytes: [u8; 32] = Keccak256::digest(offset_seed.as_bytes()).into();
             let key_offset = Scalar::from_bytes_mod_order(offset_bytes);
             let ephemeral = Zeroizing::new(spend_scalar + &key_offset);
-            let pub_key = &*ephemeral * &ED25519_BASEPOINT_TABLE;
+            let pub_key = &*ephemeral * ED25519_BASEPOINT_TABLE;
             let ki_point = generate_key_image(&ephemeral);
             let key_image = ki_point.compress().to_bytes();
             KeyImageExportEntry {

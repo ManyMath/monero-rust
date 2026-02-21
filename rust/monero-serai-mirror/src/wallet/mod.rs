@@ -123,7 +123,7 @@ impl ViewPair {
   }
 
   pub fn view(&self) -> EdwardsPoint {
-    self.view.deref() * &ED25519_BASEPOINT_TABLE
+    self.view.deref() * ED25519_BASEPOINT_TABLE
   }
 
   fn subaddress_derivation(&self, index: SubaddressIndex) -> Scalar {
@@ -140,7 +140,7 @@ impl ViewPair {
 
   fn subaddress_keys(&self, index: SubaddressIndex) -> (EdwardsPoint, EdwardsPoint) {
     let scalar = self.subaddress_derivation(index);
-    let spend = self.spend + (&scalar * &ED25519_BASEPOINT_TABLE);
+    let spend = self.spend + (&scalar * ED25519_BASEPOINT_TABLE);
     let view = self.view.deref() * spend;
     (spend, view)
   }
@@ -148,7 +148,7 @@ impl ViewPair {
   /// Returns an address with the provided specification.
   pub fn address(&self, network: Network, spec: AddressSpec) -> MoneroAddress {
     let mut spend = self.spend;
-    let mut view: EdwardsPoint = self.view.deref() * &ED25519_BASEPOINT_TABLE;
+    let mut view: EdwardsPoint = self.view.deref() * ED25519_BASEPOINT_TABLE;
 
     // construct the address meta
     let meta = match spec {

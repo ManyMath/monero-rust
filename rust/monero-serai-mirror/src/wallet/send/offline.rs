@@ -166,7 +166,7 @@ pub fn sign_offline<R: RngCore + CryptoRng>(
 ) -> Result<(Transaction, Zeroizing<Scalar>, Vec<Zeroizing<Scalar>>), TransactionError> {
   for input in &unsigned.inputs {
     let offset = Zeroizing::new(spend.deref() + input.output.key_offset());
-    if (offset.deref() * &ED25519_BASEPOINT_TABLE) != input.output.key() {
+    if (offset.deref() * ED25519_BASEPOINT_TABLE) != input.output.key() {
       return Err(TransactionError::WrongPrivateKey);
     }
   }

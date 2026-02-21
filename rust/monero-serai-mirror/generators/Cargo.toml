@@ -20,10 +20,10 @@ subtle = { version = "^2.4", default-features = false }
 
 sha3 = { version = "0.10", default-features = false }
 
-curve25519-dalek = { version = "3", default-features = false }
+curve25519-dalek = { version = "4.1", default-features = false, features = ["alloc", "precomputed-tables", "zeroize"] }
 
 group = { version = "0.13", default-features = false }
-dalek-ff-group = { package = "dalek-ff-group-mirror", version = "0.3" }
+dalek-ff-group = { package = "dalek-ff-group-mirror", version = "0.4.1" }
 
 [features]
 alloc = ["lazy_static/spin_no_std"]

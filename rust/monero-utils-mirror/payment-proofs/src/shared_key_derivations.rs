@@ -55,7 +55,7 @@ impl Commitment {
   }
 
   pub(crate) fn calculate(&self) -> EdwardsPoint {
-    &self.mask * &ED25519_BASEPOINT_TABLE + Scalar::from(self.amount) * *monero_generators::H
+    &self.mask * ED25519_BASEPOINT_TABLE + Scalar::from(self.amount) * *monero_generators::H
   }
 }
 

@@ -57,7 +57,7 @@ pub fn generate_out_proof_v2(
         .map_err(|e| format!("Invalid address: {:?}", e))?;
 
     // R = r*G (public tx key)
-    let r_point: EdwardsPoint = r.deref() * &ED25519_BASEPOINT_TABLE;
+    let r_point: EdwardsPoint = r.deref() * ED25519_BASEPOINT_TABLE;
 
     // A = recipient's view public key
     let a_point = address.view;
@@ -80,7 +80,7 @@ pub fn generate_out_proof_v2(
     let k = Zeroizing::new(Scalar::from_bytes_mod_order(k_bytes));
 
     // X = k*G
-    let x_point: EdwardsPoint = k.deref() * &ED25519_BASEPOINT_TABLE;
+    let x_point: EdwardsPoint = k.deref() * ED25519_BASEPOINT_TABLE;
 
     // Y = k*A
     let y_point: EdwardsPoint = k.deref() * a_point;
@@ -234,7 +234,7 @@ pub fn verify_out_proof_v2(
     }
 
     // Reconstruct X' = s*G + c*R
-    let x_prime = &s * &ED25519_BASEPOINT_TABLE + c * r_point;
+    let x_prime = &s * ED25519_BASEPOINT_TABLE + c * r_point;
 
     // Reconstruct Y' = s*A + c*D
     let y_prime = s * a_point + c * d_point;
@@ -381,7 +381,7 @@ mod tests {
         let mut r_bytes = [0u8; 32];
         r_bytes.copy_from_slice(&tx_key_bytes);
         let r = Scalar::from_bytes_mod_order(r_bytes);
-        let r_point = &r * &ED25519_BASEPOINT_TABLE;
+        let r_point = &r * ED25519_BASEPOINT_TABLE;
         hex::encode(r_point.compress().to_bytes())
     }
 

@@ -156,15 +156,15 @@ fn test_classic_seed() {
       let spend: [u8; 32] = hex::decode(vector.spend).unwrap().try_into().unwrap();
       // For classical seeds, Monero directly uses the entropy as a spend key
       assert_eq!(
-        Scalar::from_canonical_bytes(*seed.entropy()),
-        Scalar::from_canonical_bytes(spend)
+        Option::<Scalar>::from(Scalar::from_canonical_bytes(*seed.entropy())),
+        Option::<Scalar>::from(Scalar::from_canonical_bytes(spend))
       );
 
       let view: [u8; 32] = hex::decode(vector.view).unwrap().try_into().unwrap();
       // Monero then derives the view key as H(spend)
       assert_eq!(
         Scalar::from_bytes_mod_order(hash(&spend)),
-        Scalar::from_canonical_bytes(view).unwrap()
+        Option::<Scalar>::from(Scalar::from_canonical_bytes(view)).unwrap()
       );
 
       assert_eq!(Seed::from_entropy(vector.language, Zeroizing::new(spend)).unwrap(), seed);
@@ -196,13 +196,13 @@ fn test_polyseed() {
   // Derive the spend key from polyseed
   let key = polyseed.key(Coin::Monero);
   let spend_scalar = Scalar::from_bytes_mod_order(*key);
-  assert_ne!(spend_scalar, Scalar::zero());
-  let spend_key = &spend_scalar * &ED25519_BASEPOINT_TABLE;
+  assert_ne!(spend_scalar, Scalar::ZERO);
+  let spend_key = &spend_scalar * ED25519_BASEPOINT_TABLE;
 
   // Derive view key as H(spend_scalar)
   let view_scalar = hash_to_scalar(&spend_scalar.to_bytes());
-  assert_ne!(view_scalar, Scalar::zero());
-  let view_key = &view_scalar * &ED25519_BASEPOINT_TABLE;
+  assert_ne!(view_scalar, Scalar::ZERO);
+  let view_key = &view_scalar * ED25519_BASEPOINT_TABLE;
 
   // Create ViewPair and generate address
   let view_pair = ViewPair::new(spend_key, Zeroizing::new(view_scalar));
@@ -279,7 +279,7 @@ fn test_polyseed_stagenet() {
 
   let key = polyseed.key(Coin::Monero);
   let spend_scalar = Scalar::from_bytes_mod_order(*key);
-  let spend_key = &spend_scalar * &ED25519_BASEPOINT_TABLE;
+  let spend_key = &spend_scalar * ED25519_BASEPOINT_TABLE;
 
   let view_scalar = hash_to_scalar(&spend_scalar.to_bytes());
 
@@ -329,9 +329,9 @@ fn test_polyseed_passphrase_feather_vector() {
   // With passphrase: must produce the Feather-validated keys
   let key_with = seed.key_bytes_with_passphrase(passphrase);
   let spend_scalar_with = Scalar::from_bytes_mod_order(*key_with);
-  let spend_point_with = &spend_scalar_with * &ED25519_BASEPOINT_TABLE;
+  let spend_point_with = &spend_scalar_with * ED25519_BASEPOINT_TABLE;
   let view_scalar_with = hash_to_scalar(&spend_scalar_with.to_bytes());
-  let view_point_with = &view_scalar_with * &ED25519_BASEPOINT_TABLE;
+  let view_point_with = &view_scalar_with * ED25519_BASEPOINT_TABLE;
 
   assert_eq!(
     hex::encode(spend_scalar_with.to_bytes()),
