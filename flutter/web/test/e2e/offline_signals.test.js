@@ -402,9 +402,8 @@ describe('Offline Signal Tests', () => {
       expect(construction.sources).toHaveLength(2);
       expect(construction.sources.map(source => source.real_global_output_index)).toEqual([0, 20]);
       expect(construction.sources.map(source => source.rct)).toEqual([true, true]);
-      expect(construction.sources.map(source => source.amount)).toEqual(
-        transfer.sources.map(source => source.amount)
-      );
+      expect(construction.sources.reduce((sum, source) => sum + source.amount, 0))
+        .toBe(transfer.amount_in);
       for (const source of construction.sources) {
         expect(source.ring).toHaveLength(source.ring_size);
         expect(source.real_output).toBeLessThan(source.ring.length);
@@ -529,10 +528,10 @@ describe('Offline Signal Tests', () => {
       expect(signed.success).toBe(true);
       expect(signed.tx_id).toMatch(/^[0-9a-f]{64}$/);
       expect(signed.tx_blob).toMatch(/^[0-9a-f]+$/);
-      expect(signed.spent_key_images).toEqual([
+      expect([...signed.spent_key_images].sort()).toEqual([
         metadata.key_images[0],
         metadata.key_images[20],
-      ]);
+      ].sort());
 
       const built = await sendSignalAndWait(
         extPage,

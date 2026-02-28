@@ -1,37 +1,42 @@
 {
   "artifacts": {
     "cold_full.keys": {
-      "bytes": 1714,
-      "sha256": "20bc33ce93b89b110b3904435c7b1956894589637823d72fb024063b883add32"
+      "bytes": 1709,
+      "sha256": "404bc380f7028007cdb182da4913b4631d877a8c60036ecd815b6454c39fe0da"
     },
     "hot_view_only.keys": {
-      "bytes": 1687,
-      "sha256": "25e9de7d94d868e859dac5ba19846f8fb1ba3f609873fc92d2faa51f9662c9cc"
+      "bytes": 1681,
+      "sha256": "006dbc2e60edac514d164077be57410b065a183fc5b65a04bc23c61bebbd6565"
     },
     "key_images_rpc.json": {
       "bytes": 20047,
-      "sha256": "2143a84dc2505b55699b2b3db6ebcd7d985ccddc67a7fcb4c4f909dc0ed5baf9"
+      "sha256": "0cc190a8ee3232c2f265ab662e55fe59dc8450c4d104b2f28bc9bed8307504bb"
+    },
+    "monero_wallet_rpc_signed_monero_tx": {
+      "bytes": 8522,
+      "sha256": "44801baad9542e9d1a0387b5bbc633532d4a04d381b63295f02797a630224f1c"
     },
     "outputs": {
       "bytes": 6401,
-      "sha256": "c1e7da30cc021356c7105bf6074d754d6f2ebac5aa3cf6e3c3e4b7ef74616df3"
+      "sha256": "1c1286f7475a5d356fa008e7f4deb5ec05910147eb48760e729869164c58b3e5"
     },
     "signed_monero_tx": {
-      "bytes": 8522,
-      "sha256": "7204016fad38e4ec5df50724630098b4553b1241ee457077736fa34360e1b163"
+      "bytes": 8518,
+      "sha256": "2499dc481a128dbd607607d18058c3c47e120eefbfd76f32163a51408869845c"
     },
     "transfer_description.json": {
-      "bytes": 1705,
-      "sha256": "db09a9defa94b58fec4b738493d446064680eb012366a177cc699b500957c5f8"
+      "bytes": 1158,
+      "sha256": "6ff16e513559c3cf985032c5e5dba17b2b31ba010285e536babc5dd1603cad3d"
     },
     "unsigned_monero_tx": {
       "bytes": 3204,
-      "sha256": "e5cc5c3d2acff878e28ad9f65476de142d40f8638b5a4083e922dd49dcab3745"
+      "sha256": "365fb760e24eec6423a1369b8f61cccb1269dbf02469ae6e3235a37f2d3d116f"
     }
   },
   "flow": {
     "blocks_mined": 80,
     "chain_height_after_mining": 80,
+    "cli_submit_stdout": "This is the command line monero wallet. It needs to connect to a monero\ndaemon to work correctly.\nWARNING: Do not reuse your Monero keys on another fork, UNLESS this fork has key reuse mitigations built in. Doing so will harm your privacy.\n\nMonero 'Fluorine Fermi' (v0.18.4.4-release)\nLogging to <monero-bin-dir>/monero-wallet-cli.log\nOpened watch-only wallet: 42ey1afDFnn4886T7196doS9GPMzexD9gXpsZJDwVjeRVdFCSoHnv7KPbBeGpzJBzHRCAs9UxqeoyFQMYbqSWYTfJJQAWDm\n**********************************************************************\nUse the \"help\" command to see a simplified list of available commands.\nUse \"help all\" to see the list of all available commands.\nUse \"help <command>\" to see a command's documentation.\n**********************************************************************\nLoaded 1 transactions, for 70.367334917119, fee 0.002599200000, sending 1.000000000000 to 42ey1afDFnn4886T7196doS9GPMzexD9gXpsZJDwVjeRVdFCSoHnv7KPbBeGpzJBzHRCAs9UxqeoyFQMYbqSWYTfJJQAWDm, 69.364735717119 change to 42ey1afDFnn4886T7196doS9GPMzexD9gXpsZJDwVjeRVdFCSoHnv7KPbBeGpzJBzHRCAs9UxqeoyFQMYbqSWYTfJJQAWDm, with min ring size 16, dummy encrypted payment ID. 80 key images to import. Is this okay?  (Y/Yes/N/No): Transaction successfully submitted, transaction <49aa1f8faba3d4637d42b71f5c40dc19ee1b8c51c0e6270b726e86274db22e22>\nYou can check its status by using the `show_transfers` command.\n",
     "hot_refresh_blocks_fetched": 80,
     "incoming_transfer_count": 80,
     "key_image_count": 80,
@@ -41,23 +46,29 @@
       "unspent": 2814535029460039
     },
     "key_image_offset": 0,
+    "monero_wallet_rpc_signed_tx_hash_list": [
+      "9f9c95746953826b8bbfb78fe4766184b1d682cb9f8e0e994eb8dcbd54783ee4"
+    ],
     "outputs_imported": 80,
+    "rebuilt_signed_txset_sha256": "2499dc481a128dbd607607d18058c3c47e120eefbfd76f32163a51408869845c",
     "ring_size": 16,
     "signed_tx_hash_list": [
-      "5e9095a1c6a8cc65833ba7f54778517892964042cc70c6e4b2c60055130a51c2"
+      "49aa1f8faba3d4637d42b71f5c40dc19ee1b8c51c0e6270b726e86274db22e22"
     ],
+    "signed_txset_source": "monero-rust rebuilt from app signer",
+    "submit_method": "monero-wallet-cli submit_transfer file",
     "submitted_tx_hash_list": [
-      "5e9095a1c6a8cc65833ba7f54778517892964042cc70c6e4b2c60055130a51c2"
+      "49aa1f8faba3d4637d42b71f5c40dc19ee1b8c51c0e6270b726e86274db22e22"
     ],
     "transfer_amount_atomic": 1000000000000,
-    "unsigned_tx_hash": "c0a656f01c8ef5ca0fe5b8684def39fbce8b468c6f18c76491afdefc74318cc3"
+    "unsigned_tx_hash": "c585c5e0217d9e6677811a3ae01fc85a8ecbc904db84bbf6e6a4b091853e6bf9"
   },
-  "generated_at_utc": "2026-06-14T16:52:38+00:00",
+  "generated_at_utc": "2026-06-15T22:47:19+00:00",
   "monero": {
-    "monerod_sha256": "a1af52fd93b323ad6942950a2bd4ab9b461dde34a7b1ddb702a11abb24f10ea9",
-    "monerod_version": "Monero 'Fluorine Fermi' (v0.18.5.0-release)",
-    "wallet_rpc_sha256": "973bb4a2557c298dfc1c397ba05c099fe92ea5519dcd1c1f5becb1883eee26ac",
-    "wallet_rpc_version": "Monero 'Fluorine Fermi' (v0.18.5.0-release)"
+    "monerod_sha256": "3d95169200e1d6da1a111c8dc93f5f73fdffd4dd93465e7623cad1bb3f90e31b",
+    "monerod_version": "Monero 'Fluorine Fermi' (v0.18.4.4-release)",
+    "wallet_rpc_sha256": "b204c7b844b429f23853be32fb1f630f56aa64a2e27e5b2e1fb753ecbc28b0f7",
+    "wallet_rpc_version": "Monero 'Fluorine Fermi' (v0.18.4.4-release)"
   },
   "network": "regtest",
   "schema": "monero-rust cold signing vector v1",

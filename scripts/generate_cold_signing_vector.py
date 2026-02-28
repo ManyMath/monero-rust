@@ -108,6 +108,62 @@ def write_hex_file(path: Path, hex_value: str) -> None:
     path.write_bytes(bytes.fromhex(hex_value))
 
 
+def sanitize_cli_stdout(stdout: str, monero_bin_dir: Path, work: Path) -> str:
+    return stdout.replace(str(monero_bin_dir), "<monero-bin-dir>").replace(
+        str(work), "<work-dir>"
+    )
+
+
+def write_readme(path: Path, monero_version: str, rebuilt: bool) -> None:
+    signed_source = (
+        "rebuilt by monero-rust's app signer and accepted by "
+        "`monero-wallet-cli submit_transfer`"
+        if rebuilt
+        else "created and submitted by `monero-wallet-rpc sign_transfer`"
+    )
+    reference_artifact = (
+        "- `monero_wallet_rpc_signed_monero_tx`: reference signed txset from "
+        "Monero wallet-rpc before the app rebuild.\n"
+        if rebuilt
+        else ""
+    )
+    path.write_text(
+        f"""# Monero Cold-Signing Regtest Vector
+
+Generated with `scripts/generate_cold_signing_vector.py` from official Monero
+CLI `{monero_version}` binaries.
+
+The bundle follows the core `tests/functional_tests/cold_signing.py` flow from
+Monero:
+
+1. Restore the full offline wallet from Monero's deterministic test seed.
+2. Create a hot view-only wallet from the address and private view key.
+3. Mine 80 regtest outputs.
+4. Export outputs from the hot wallet and import them into the cold wallet.
+5. Export key images from the cold wallet and import them into the hot wallet.
+6. Create an unsigned txset with the hot wallet.
+7. Describe and sign the txset with the cold wallet.
+8. Submit the signed txset with the hot wallet.
+
+For this fixture, `signed_monero_tx` was {signed_source}.
+
+Artifacts:
+
+- `cold_full.keys`: full offline wallet `.keys` file, empty password.
+- `hot_view_only.keys`: online view-only wallet `.keys` file, empty password.
+- `outputs`: binary output-export artifact, starts with `Monero output export\\x04`.
+- `key_images_rpc.json`: `export_key_images` RPC response.
+- `unsigned_monero_tx`: binary unsigned txset, starts with `Monero unsigned tx set\\x05`.
+- `signed_monero_tx`: binary signed txset, starts with `Monero signed tx set\\x05`.
+{reference_artifact}- `transfer_description.json`: `describe_transfer` RPC response.
+- `metadata.json`: tool versions, wallet seed/keys, flow summary, artifact hashes.
+
+This is a regtest compatibility vector, not a mainnet transaction.
+""",
+        encoding="utf-8",
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -359,7 +415,9 @@ def main() -> None:
                 raise RuntimeError(
                     "monero-wallet-cli submit_transfer failed:\n" + completed.stdout
                 )
-            cli_submit_stdout = completed.stdout
+            cli_submit_stdout = sanitize_cli_stdout(
+                completed.stdout, args.monero_bin_dir, work
+            )
             submitted = {"tx_hash_list": submitted_hashes}
         else:
             submitted = rpc(hot_rpc, "submit_transfer", {"tx_data_hex": signed_txset_for_submit})
@@ -386,6 +444,11 @@ def main() -> None:
         files = sorted(
             p.name for p in out_dir.iterdir() if p.is_file() and p.name != "metadata.json"
         )
+        rebuilt_with_monero_rust = (
+            args.verify_rust_rebuilt_submit or args.verify_rust_rebuilt_cli_submit
+        )
+        monerod_version = run_version(monerod)
+        wallet_rpc_version = run_version(wallet_rpc)
         metadata = {
             "schema": "monero-rust cold signing vector v1",
             "generated_at_utc": dt.datetime.now(dt.timezone.utc)
@@ -394,8 +457,8 @@ def main() -> None:
             "source_flow": "monero-project/monero tests/functional_tests/cold_signing.py",
             "network": "regtest",
             "monero": {
-                "monerod_version": run_version(monerod),
-                "wallet_rpc_version": run_version(wallet_rpc),
+                "monerod_version": monerod_version,
+                "wallet_rpc_version": wallet_rpc_version,
                 "monerod_sha256": sha256_file(monerod),
                 "wallet_rpc_sha256": sha256_file(wallet_rpc),
             },
@@ -418,10 +481,17 @@ def main() -> None:
                 "transfer_amount_atomic": TRANSFER_AMOUNT_ATOMIC,
                 "ring_size": RING_SIZE,
                 "unsigned_tx_hash": transfer["tx_hash"],
-                "signed_tx_hash_list": signed["tx_hash_list"],
+                "signed_tx_hash_list": (
+                    submitted["tx_hash_list"]
+                    if rebuilt_with_monero_rust
+                    else signed["tx_hash_list"]
+                ),
+                "monero_wallet_rpc_signed_tx_hash_list": (
+                    signed["tx_hash_list"] if rebuilt_with_monero_rust else None
+                ),
                 "signed_txset_source": (
                     "monero-rust rebuilt from app signer"
-                    if args.verify_rust_rebuilt_submit or args.verify_rust_rebuilt_cli_submit
+                    if rebuilt_with_monero_rust
                     else "monero-wallet-rpc sign_transfer"
                 ),
                 "submit_method": (
@@ -441,6 +511,7 @@ def main() -> None:
         (out_dir / "metadata.json").write_text(
             json.dumps(metadata, indent=2, sort_keys=True) + "\n"
         )
+        write_readme(out_dir / "README.md", wallet_rpc_version, rebuilt_with_monero_rust)
 
         print(f"wrote {out_dir}")
         print(json.dumps(metadata["flow"], indent=2, sort_keys=True))

@@ -6,7 +6,7 @@
       "change_address": "42ey1afDFnn4886T7196doS9GPMzexD9gXpsZJDwVjeRVdFCSoHnv7KPbBeGpzJBzHRCAs9UxqeoyFQMYbqSWYTfJJQAWDm",
       "change_amount": 69364735717119,
       "dummy_outputs": 0,
-      "extra": "01f2a21e7a84a76c4bdfc2db03ab76e896a960e0f3fd7ae9d1577fe836be9f9fbf0209010000000000000000",
+      "extra": "0193e5de85edbd91596eaa60271526da0a284d95974d5c1369c13c74aca7b0492c0209010000000000000000",
       "fee": 2599200000,
       "payment_id": "",
       "recipients": [
@@ -16,20 +16,6 @@
         }
       ],
       "ring_size": 16,
-      "sources": [
-        {
-          "amount": 35184338534400,
-          "global_index": 0,
-          "pubkey": "c6f77006ef10753eae14f1203bb0f788f7fa917bdc6a7e1121d0c6650a8819f1a1a7a42155f0abff0353a6008eda2a9b16d9ffcf7584a38933cce3e3976987cd",
-          "rct": true
-        },
-        {
-          "amount": 35182996382719,
-          "global_index": 0,
-          "pubkey": "c6f77006ef10753eae14f1203bb0f788f7fa917bdc6a7e1121d0c6650a8819f1a1a7a42155f0abff0353a6008eda2a9b16d9ffcf7584a38933cce3e3976987cd",
-          "rct": true
-        }
-      ],
       "unlock_time": 0
     }
   ],

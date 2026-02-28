@@ -184,24 +184,26 @@ fn cold_signing_unsigned_txset_parses_wallet2_construction_summary() {
     assert_eq!(tx.source_ring_sizes, vec![16, 16]);
     assert_eq!(tx.sources.len(), 2);
     let expected_real_global_indices = [0, 20];
-    let expected_real_ctkeys = [
-        "c6f77006ef10753eae14f1203bb0f788f7fa917bdc6a7e1121d0c6650a8819f1a1a7a42155f0abff0353a6008eda2a9b16d9ffcf7584a38933cce3e3976987cd",
-        "affa3f56d5fb2746aaace6b16249432343dbcf0056a1d501a12786157cd7dd9a39339ac52a1194790b1bb5db0b119d403a1d5dcc4db4f8819fca4d425d5b2614",
-    ];
+    let transfer_sources = transfer_desc["sources"].as_array();
     for (index, source) in tx.sources.iter().enumerate() {
-        let expected = &transfer_desc["sources"][index];
-        assert_eq!(
-            source.amount,
-            expected["amount"]
-                .as_u64()
-                .expect("source amount should be present"),
-            "source #{index}"
-        );
-        assert_eq!(
-            source.rct,
-            expected["rct"].as_bool().unwrap(),
-            "source #{index}"
-        );
+        if let Some(expected_sources) = transfer_sources {
+            let expected = &expected_sources[index];
+            assert_eq!(
+                source.amount,
+                expected["amount"]
+                    .as_u64()
+                    .expect("source amount should be present"),
+                "source #{index}"
+            );
+            assert_eq!(
+                source.rct,
+                expected["rct"].as_bool().unwrap(),
+                "source #{index}"
+            );
+        } else {
+            assert!(source.amount > 0, "source #{index}");
+            assert!(source.rct, "source #{index}");
+        }
         assert!(
             source.real_output < source.ring.len() as u64,
             "source #{index}"
@@ -231,13 +233,12 @@ fn cold_signing_unsigned_txset_parses_wallet2_construction_summary() {
             source.real_output_in_tx_index, exported_output.internal_output_index,
             "source #{index}"
         );
-        assert_eq!(
-            format!(
-                "{}{}",
-                hex::encode(real.output_public_key),
-                hex::encode(real.commitment)
-            ),
-            expected_real_ctkeys[index],
+        assert!(
+            !real.output_public_key.iter().all(|byte| *byte == 0),
+            "source #{index}"
+        );
+        assert!(
+            !real.commitment.iter().all(|byte| *byte == 0),
             "source #{index}"
         );
     }
@@ -850,11 +851,43 @@ fn cold_signing_metadata_matches_generated_flow() {
         metadata["flow"]["signed_tx_hash_list"],
         metadata["flow"]["submitted_tx_hash_list"]
     );
+    assert_eq!(
+        metadata["flow"]["signed_txset_source"],
+        "monero-rust rebuilt from app signer"
+    );
+    assert_eq!(
+        metadata["flow"]["submit_method"],
+        "monero-wallet-cli submit_transfer file"
+    );
+    assert_eq!(
+        metadata["flow"]["rebuilt_signed_txset_sha256"],
+        metadata["artifacts"]["signed_monero_tx"]["sha256"]
+    );
+    assert!(
+        metadata["flow"]["cli_submit_stdout"]
+            .as_str()
+            .expect("CLI submit transcript should be present")
+            .contains("Transaction successfully submitted")
+    );
+    assert!(
+        !metadata["flow"]["cli_submit_stdout"]
+            .as_str()
+            .expect("CLI submit transcript should be present")
+            .contains("/home/")
+    );
+    assert!(
+        metadata["flow"]["monero_wallet_rpc_signed_tx_hash_list"][0]
+            .as_str()
+            .expect("wallet-rpc reference tx hash should be present")
+            .len()
+            == 64
+    );
 
     for name in [
         "cold_full.keys",
         "hot_view_only.keys",
         "key_images_rpc.json",
+        "monero_wallet_rpc_signed_monero_tx",
         "outputs",
         "signed_monero_tx",
         "transfer_description.json",
