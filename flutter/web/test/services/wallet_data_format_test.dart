@@ -71,7 +71,7 @@ void main() {
       final spentOutput = TestHelpers.createMockOutput(
         txHash: 'tx1', outputIndex: 0, amountXmr: '5.0',
         blockHeight: 100, spent: true,
-      );
+      ).copyWith(spentHeight: 123);
       final unspentOutput = TestHelpers.createMockOutput(
         txHash: 'tx2', outputIndex: 0, amountXmr: '3.0',
         blockHeight: 200, spent: false,
@@ -87,7 +87,9 @@ void main() {
       final loaded = WalletSerializer.deserialize(jsonDecode(jsonEncode(saved)));
 
       expect(loaded.outputs[0].spent, true);
+      expect(loaded.outputs[0].spentHeight, 123);
       expect(loaded.outputs[1].spent, false);
+      expect(loaded.outputs[1].spentHeight, isNull);
     });
 
     test('handles large amounts (piconero precision)', () {

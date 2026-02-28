@@ -252,6 +252,7 @@ class WalletInstance {
             'receivedOutputBytes': o.receivedOutputBytes,
             'blockHeight': o.blockHeight.toString(),
             'spent': o.spent,
+            if (o.spentHeight != null) 'spentHeight': o.spentHeight.toString(),
             'keyImage': o.keyImage,
             'isCoinbase': o.isCoinbase,
             'frozen': o.frozen,
@@ -286,6 +287,8 @@ class WalletInstance {
                 'receivedOutputBytes': o.receivedOutputBytes,
                 'blockHeight': o.blockHeight.toString(),
                 'spent': o.spent,
+                if (o.spentHeight != null)
+                  'spentHeight': o.spentHeight.toString(),
                 'keyImage': o.keyImage,
                 'isCoinbase': o.isCoinbase,
                 'frozen': o.frozen,
@@ -325,6 +328,9 @@ class WalletInstance {
           spent: outputData.containsKey('spent') && outputData['spent'] != null
               ? outputData['spent'] as bool
               : false, // Default to unspent for backward compatibility
+          spentHeight: outputData['spentHeight'] != null
+              ? int.parse(outputData['spentHeight'].toString())
+              : null,
           keyImage: outputData['keyImage'] as String,
           isCoinbase:
               outputData.containsKey('isCoinbase') &&
@@ -378,6 +384,9 @@ class WalletInstance {
                 outputData.containsKey('spent') && outputData['spent'] != null
                 ? outputData['spent'] as bool
                 : false, // Default to unspent for backward compatibility
+            spentHeight: outputData['spentHeight'] != null
+                ? int.parse(outputData['spentHeight'].toString())
+                : null,
             keyImage: outputData['keyImage'] as String,
             isCoinbase:
                 outputData.containsKey('isCoinbase') &&

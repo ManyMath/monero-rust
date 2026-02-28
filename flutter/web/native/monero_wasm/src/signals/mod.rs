@@ -251,8 +251,11 @@ pub struct OwnedOutput {
     pub received_output_bytes: String,
     pub block_height: u64,
     pub spent: bool,
+    #[serde(default)]
+    pub spent_height: Option<u64>,
     pub key_image: String,
     pub is_coinbase: bool,
+    #[serde(default)]
     pub frozen: bool,
 }
 
@@ -271,6 +274,7 @@ impl From<monero_rust::WalletOutput> for OwnedOutput {
             received_output_bytes: o.received_output_bytes,
             block_height: o.block_height,
             spent: o.spent,
+            spent_height: o.spent_height,
             key_image: o.key_image,
             is_coinbase: o.is_coinbase,
             frozen: o.frozen,
@@ -293,6 +297,7 @@ impl From<&monero_rust::WalletOutput> for OwnedOutput {
             received_output_bytes: o.received_output_bytes.clone(),
             block_height: o.block_height,
             spent: o.spent,
+            spent_height: o.spent_height,
             key_image: o.key_image.clone(),
             is_coinbase: o.is_coinbase,
             frozen: o.frozen,
@@ -315,7 +320,7 @@ impl From<OwnedOutput> for monero_rust::WalletOutput {
             received_output_bytes: o.received_output_bytes,
             block_height: o.block_height,
             spent: o.spent,
-            spent_height: None,
+            spent_height: o.spent_height,
             key_image: o.key_image,
             is_coinbase: o.is_coinbase,
             frozen: o.frozen,
@@ -1058,6 +1063,7 @@ mod tests {
             received_output_bytes: "received_bytes".into(),
             block_height: 1_384_526,
             spent: false,
+            spent_height: None,
             key_image: "ki_hex".into(),
             is_coinbase: false,
             frozen: false,
@@ -1073,6 +1079,7 @@ mod tests {
         assert_eq!(restored.payment_id, None);
         assert_eq!(restored.block_height, 1_384_526);
         assert!(!restored.spent);
+        assert_eq!(restored.spent_height, None);
         assert!(!restored.is_coinbase);
         assert!(!restored.frozen);
     }
@@ -1092,6 +1099,7 @@ mod tests {
             received_output_bytes: "b".into(),
             block_height: 999,
             spent: true,
+            spent_height: Some(1_000),
             key_image: "ki".into(),
             is_coinbase: true,
             frozen: true,
@@ -1166,6 +1174,7 @@ mod tests {
             received_output_bytes: "b".into(),
             block_height: 1_384_526,
             spent: false,
+            spent_height: None,
             key_image: "ki".into(),
             is_coinbase: false,
             frozen: false,
@@ -1310,6 +1319,7 @@ mod tests {
             received_output_bytes: "b".into(),
             block_height: 5_000,
             spent: false,
+            spent_height: None,
             key_image: "ki".into(),
             is_coinbase: false,
             frozen: false,
@@ -1872,7 +1882,8 @@ mod tests {
                 "subaddress_index": [1, 3],
                 "received_output_bytes": "b",
                 "block_height": 50,
-                "spent": false,
+                "spent": true,
+                "spent_height": 45,
                 "key_image": "ki",
                 "is_coinbase": false,
                 "frozen": false
@@ -1887,6 +1898,7 @@ mod tests {
 
         assert_eq!(req.outputs.len(), 1);
         assert_eq!(req.outputs[0].subaddress_index, Some((1, 3)));
+        assert_eq!(req.outputs[0].spent_height, Some(45));
         assert_eq!(req.daemon_height, 2000);
         assert_eq!(req.current_height, 1500);
         assert!(req.block_hashes_json.is_some());
@@ -1908,6 +1920,7 @@ mod tests {
             received_output_bytes: String::new(),
             block_height: 0,
             spent: false,
+            spent_height: None,
             key_image: String::new(),
             is_coinbase: false,
             frozen: false,
@@ -1936,6 +1949,7 @@ mod tests {
             received_output_bytes: "b".into(),
             block_height: u64::MAX,
             spent: false,
+            spent_height: Some(u64::MAX),
             key_image: "ki".into(),
             is_coinbase: false,
             frozen: false,
@@ -1947,6 +1961,7 @@ mod tests {
         assert_eq!(restored.amount, u64::MAX);
         assert_eq!(restored.output_index, 255);
         assert_eq!(restored.block_height, u64::MAX);
+        assert_eq!(restored.spent_height, Some(u64::MAX));
         assert_eq!(restored.subaddress_index, Some((u32::MAX, u32::MAX)));
     }
 }

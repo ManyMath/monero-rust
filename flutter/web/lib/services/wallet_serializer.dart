@@ -2,7 +2,7 @@ import '../src/ffi/signal_types.dart';
 import '../models/wallet_transaction.dart';
 
 /// Pure serialization/deserialization for wallet data.
-/// No dart:html dependency — safe to import in tests.
+/// No dart:html dependency, safe to import in tests.
 class WalletSerializer {
   /// Current wallet data format version.
   /// - 1: Initial version with accounts, scanningAccounts, and all fields required
@@ -32,39 +32,45 @@ class WalletSerializer {
       'address': address,
       'nodeUrl': nodeUrl,
       'outputs': outputs
-          .map((o) => {
-                'txHash': o.txHash,
-                'outputIndex': o.outputIndex,
-                'amount': o.amount.toString(),
-                'amountXmr': o.amountXmr,
-                'key': o.key,
-                'keyOffset': o.keyOffset,
-                'commitmentMask': o.commitmentMask,
-                'subaddressIndex': o.subaddressIndex != null
-                    ? [o.subaddressIndex!.$1, o.subaddressIndex!.$2]
-                    : null,
-                'paymentId': o.paymentId,
-                'receivedOutputBytes': o.receivedOutputBytes,
-                'blockHeight': o.blockHeight.toString(),
-                'spent': o.spent,
-                'keyImage': o.keyImage,
-                'isCoinbase': o.isCoinbase,
-                'frozen': o.frozen,
-              })
+          .map(
+            (o) => {
+              'txHash': o.txHash,
+              'outputIndex': o.outputIndex,
+              'amount': o.amount.toString(),
+              'amountXmr': o.amountXmr,
+              'key': o.key,
+              'keyOffset': o.keyOffset,
+              'commitmentMask': o.commitmentMask,
+              'subaddressIndex': o.subaddressIndex != null
+                  ? [o.subaddressIndex!.$1, o.subaddressIndex!.$2]
+                  : null,
+              'paymentId': o.paymentId,
+              'receivedOutputBytes': o.receivedOutputBytes,
+              'blockHeight': o.blockHeight.toString(),
+              'spent': o.spent,
+              if (o.spentHeight != null)
+                'spentHeight': o.spentHeight.toString(),
+              'keyImage': o.keyImage,
+              'isCoinbase': o.isCoinbase,
+              'frozen': o.frozen,
+            },
+          )
           .toList(),
-      'transactions': transactions.map((t) => {
-            'txHash': t.txHash,
-            'blockHeight': t.blockHeight,
-            'blockTimestamp': t.blockTimestamp,
-            'receivedOutputRefs': t.receivedOutputs
-                .map((o) => '${o.txHash}:${o.outputIndex}')
-                .toList(),
-            'spentKeyImages': t.spentKeyImages,
-            if (t.description != null) 'description': t.description,
-          }).toList(),
-      'scanState': {
-        'continuousScanCurrentHeight': continuousScanCurrentHeight,
-      },
+      'transactions': transactions
+          .map(
+            (t) => {
+              'txHash': t.txHash,
+              'blockHeight': t.blockHeight,
+              'blockTimestamp': t.blockTimestamp,
+              'receivedOutputRefs': t.receivedOutputs
+                  .map((o) => '${o.txHash}:${o.outputIndex}')
+                  .toList(),
+              'spentKeyImages': t.spentKeyImages,
+              if (t.description != null) 'description': t.description,
+            },
+          )
+          .toList(),
+      'scanState': {'continuousScanCurrentHeight': continuousScanCurrentHeight},
       'selectedOutputs': selectedOutputs.toList(),
       'accounts': accounts,
       'activeAccount': activeAccount,
@@ -105,19 +111,24 @@ class WalletSerializer {
     Set<int> scanningAccounts,
     String? blockHashesJson,
     String? pendingStateJson,
-  }) deserialize(Map<String, dynamic> walletData) {
+  })
+  deserialize(Map<String, dynamic> walletData) {
     // Check version compatibility
     final version = walletData['version'] as int?;
     if (version == null) {
       throw FormatException('Wallet data missing version field');
     }
     if (version > currentVersion) {
-      throw FormatException('Wallet data version $version is newer than supported version $currentVersion. Please update the application.');
+      throw FormatException(
+        'Wallet data version $version is newer than supported version $currentVersion. Please update the application.',
+      );
     }
     // In the future, add migration logic here for older versions if needed
     // For now, we only support version 1
     if (version < currentVersion) {
-      throw FormatException('Wallet data version $version is no longer supported. Please re-export your wallet.');
+      throw FormatException(
+        'Wallet data version $version is no longer supported. Please re-export your wallet.',
+      );
     }
 
     final outputs = (walletData['outputs'] as List).map((o) {
@@ -128,10 +139,11 @@ class WalletSerializer {
       // Also handle cases where the field exists but has a null value
       final bool spentValue = d.containsKey('spent') && d['spent'] != null
           ? d['spent'] as bool
-          : false;  // Assume unspent if field is missing or null
-      final bool isCoinbaseValue = d.containsKey('isCoinbase') && d['isCoinbase'] != null
+          : false; // Assume unspent if field is missing or null
+      final bool isCoinbaseValue =
+          d.containsKey('isCoinbase') && d['isCoinbase'] != null
           ? d['isCoinbase'] as bool
-          : false;  // Assume not coinbase if field is missing or null
+          : false; // Assume not coinbase if field is missing or null
 
       return OwnedOutput(
         txHash: d['txHash'] as String,
@@ -142,15 +154,15 @@ class WalletSerializer {
         keyOffset: d['keyOffset'] as String,
         commitmentMask: d['commitmentMask'] as String,
         subaddressIndex: d['subaddressIndex'] != null
-            ? (
-                d['subaddressIndex'][0] as int,
-                d['subaddressIndex'][1] as int,
-              )
+            ? (d['subaddressIndex'][0] as int, d['subaddressIndex'][1] as int)
             : null,
         paymentId: d['paymentId'] as String?,
         receivedOutputBytes: d['receivedOutputBytes'] as String,
         blockHeight: int.parse(d['blockHeight'] as String),
         spent: spentValue,
+        spentHeight: d['spentHeight'] != null
+            ? int.parse(d['spentHeight'].toString())
+            : null,
         keyImage: d['keyImage'] as String,
         isCoinbase: isCoinbaseValue,
         frozen: d.containsKey('frozen') && d['frozen'] != null
@@ -160,7 +172,7 @@ class WalletSerializer {
     }).toList();
 
     final Map<String, OwnedOutput> outputLookup = {
-      for (var o in outputs) '${o.txHash}:${o.outputIndex}': o
+      for (var o in outputs) '${o.txHash}:${o.outputIndex}': o,
     };
 
     final transactions = walletData['transactions'] != null
@@ -174,13 +186,18 @@ class WalletSerializer {
         : <WalletTransaction>[];
 
     final scanState = walletData['scanState'] as Map<String, dynamic>;
-    final selectedOutputs =
-        Set<String>.from(walletData['selectedOutputs'] as List);
+    final selectedOutputs = Set<String>.from(
+      walletData['selectedOutputs'] as List,
+    );
 
     // Parse account-related fields
-    final accounts = (walletData['accounts'] as List).map((e) => e as int).toList();
+    final accounts = (walletData['accounts'] as List)
+        .map((e) => e as int)
+        .toList();
     final activeAccount = walletData['activeAccount'] as int;
-    final scanningAccounts = Set<int>.from((walletData['scanningAccounts'] as List).map((e) => e as int));
+    final scanningAccounts = Set<int>.from(
+      (walletData['scanningAccounts'] as List).map((e) => e as int),
+    );
 
     // Derive outputsByAccount from the flat outputs list (no longer stored separately)
     final Map<int, List<OwnedOutput>> outputsByAccount = {};

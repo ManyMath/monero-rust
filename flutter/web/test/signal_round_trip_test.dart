@@ -81,6 +81,7 @@ void main() {
         receivedOutputBytes: 'b',
         blockHeight: 999,
         spent: true,
+        spentHeight: 1_001,
         keyImage: 'ki',
         isCoinbase: true,
         frozen: true,
@@ -89,10 +90,12 @@ void main() {
       final json = original.toJson();
       // Verify the tuple serializes as a two-element list
       expect(json['subaddress_index'], [2, 5]);
+      expect(json['spent_height'], 1001);
 
       final restored = OwnedOutput.fromJson(json);
       expect(restored.subaddressIndex, (2, 5));
       expect(restored.spent, true);
+      expect(restored.spentHeight, 1001);
       expect(restored.isCoinbase, true);
       expect(restored.frozen, true);
     });
@@ -142,6 +145,7 @@ void main() {
       final json = original.toJson();
       expect(json.containsKey('subaddress_index'), false);
       expect(json.containsKey('payment_id'), false);
+      expect(json.containsKey('spent_height'), false);
     });
 
     test('JSON string encode/decode survives', () {
@@ -393,7 +397,8 @@ void main() {
         subaddressIndex: (1, 3),
         receivedOutputBytes: 'b',
         blockHeight: 50,
-        spent: false,
+        spent: true,
+        spentHeight: 45,
         keyImage: 'ki',
         isCoinbase: false,
         frozen: false,
@@ -428,6 +433,7 @@ void main() {
       expect((json['outputs'] as List).length, 1);
       final outputJson = (json['outputs'] as List)[0] as Map<String, dynamic>;
       expect(outputJson['subaddress_index'], [1, 3]);
+      expect(outputJson['spent_height'], 45);
       expect(json['block_hashes_json'], '{"hashes":["abc"]}');
       expect(json['pending_state_json'], '{"pending":[]}');
     });
@@ -1259,6 +1265,7 @@ void main() {
         receivedOutputBytes: 'b',
         blockHeight: 999,
         spent: false,
+        spentHeight: 123,
         keyImage: 'ki',
         isCoinbase: false,
         frozen: false,
@@ -1268,10 +1275,12 @@ void main() {
         spent: true,
         frozen: true,
         keyImage: 'new_ki',
+        spentHeight: 456,
       );
       expect(modified.spent, true);
       expect(modified.frozen, true);
       expect(modified.keyImage, 'new_ki');
+      expect(modified.spentHeight, 456);
       expect(modified.txHash, 'copy_tx');
       expect(modified.subaddressIndex, (1, 7));
       expect(modified.paymentId, 'pid');

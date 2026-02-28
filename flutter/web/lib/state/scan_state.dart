@@ -343,6 +343,7 @@ class ScanState extends ChangeNotifier {
             receivedOutputBytes: o.receivedOutputBytes,
             blockHeight: confirmedHeight,
             spent: o.spent,
+            spentHeight: o.spentHeight,
             keyImage: o.keyImage,
             isCoinbase: o.isCoinbase,
             frozen: o.frozen,

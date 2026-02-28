@@ -282,9 +282,23 @@ describe('Async Events & State Monitoring', () => {
     });
   }, 40000);
 
-  it('documents EVT-04 graceful degradation when prior confirmed spend state cannot be seeded', async () => {
+  it('fires DoubleSpendDetectedResponse when a restored confirmed spend is replayed at a new height', async () => {
     await runIfNodeAvailable(nodeAvailable, 'EVT-04', async () => {
-      const blockReplay = await sendSignalAndWait(
+      await restoreWallet(extPage, {
+        seed: HONKED_SEED,
+        network: 'stagenet',
+        outputs: [
+          makeSyntheticOutput(DOUBLE_SPEND_FIXTURE.spentKeyImage, {
+            spent: true,
+            spent_height: DOUBLE_SPEND_FIXTURE.previousSpentHeight,
+            block_height: DOUBLE_SPEND_FIXTURE.previousSpentHeight - 10,
+          }),
+        ],
+        daemon_height: DOUBLE_SPEND_FIXTURE.blockHeight + 20,
+        current_height: DOUBLE_SPEND_FIXTURE.previousSpentHeight,
+      });
+
+      const events = await sendSignalAndCollect(
         extPage,
         'send_scan_block_request',
         JSON.stringify({
@@ -295,19 +309,20 @@ describe('Async Events & State Monitoring', () => {
           passphrase: '',
           bip39_account_index: 0,
         }),
-        'BlockScanResponse',
+        ['BlockScanResponse', 'DoubleSpendDetectedResponse'],
         30000
       );
 
-      expect(blockReplay.success).toBe(true);
-      expect(blockReplay.spent_key_images).toContain(DOUBLE_SPEND_FIXTURE.spentKeyImage);
-      expect(blockReplay.spent_key_image_tx_hashes).toContain(
+      expect(events.BlockScanResponse.success).toBe(true);
+      expect(events.BlockScanResponse.spent_key_images).toContain(DOUBLE_SPEND_FIXTURE.spentKeyImage);
+      expect(events.BlockScanResponse.spent_key_image_tx_hashes).toContain(
         DOUBLE_SPEND_FIXTURE.spendingTxHash
       );
-
-      console.log(
-        'EVT-04 skipped: deterministic DoubleSpendDetectedResponse replay still needs a previously confirmed spend height, and RestoreWalletDataRequest cannot seed spent_height; use regtest or another chain-controlled fixture to validate the live conflict signal path.'
-      );
+      expect(events.DoubleSpendDetectedResponse.conflicts).toContainEqual({
+        key_image: DOUBLE_SPEND_FIXTURE.spentKeyImage,
+        previous_spent_height: DOUBLE_SPEND_FIXTURE.previousSpentHeight,
+        new_height: DOUBLE_SPEND_FIXTURE.blockHeight,
+      });
     });
   }, 30000);
 

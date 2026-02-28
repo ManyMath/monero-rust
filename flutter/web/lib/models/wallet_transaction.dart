@@ -32,30 +32,36 @@ class WalletTransaction {
     return (receivedAtomic - spentAtomic) / 1e12;
   }
 
-  bool isIncoming(Map<String, OwnedOutput> keyImageMap) => balanceChange(keyImageMap) > 0;
+  bool isIncoming(Map<String, OwnedOutput> keyImageMap) =>
+      balanceChange(keyImageMap) > 0;
 
   Map<String, dynamic> toJson() => {
     'txHash': txHash,
     'blockHeight': blockHeight,
     'blockTimestamp': blockTimestamp,
-    'receivedOutputs': receivedOutputs.map((o) => {
-      'txHash': o.txHash,
-      'outputIndex': o.outputIndex,
-      'amount': o.amount.toString(),
-      'amountXmr': o.amountXmr,
-      'key': o.key,
-      'keyOffset': o.keyOffset,
-      'commitmentMask': o.commitmentMask,
-      'subaddressIndex': o.subaddressIndex != null
-          ? [o.subaddressIndex!.$1, o.subaddressIndex!.$2]
-          : null,
-      'paymentId': o.paymentId,
-      'receivedOutputBytes': o.receivedOutputBytes,
-      'blockHeight': o.blockHeight.toString(),
-      'spent': o.spent,
-      'keyImage': o.keyImage,
-      'frozen': o.frozen,
-    }).toList(),
+    'receivedOutputs': receivedOutputs
+        .map(
+          (o) => {
+            'txHash': o.txHash,
+            'outputIndex': o.outputIndex,
+            'amount': o.amount.toString(),
+            'amountXmr': o.amountXmr,
+            'key': o.key,
+            'keyOffset': o.keyOffset,
+            'commitmentMask': o.commitmentMask,
+            'subaddressIndex': o.subaddressIndex != null
+                ? [o.subaddressIndex!.$1, o.subaddressIndex!.$2]
+                : null,
+            'paymentId': o.paymentId,
+            'receivedOutputBytes': o.receivedOutputBytes,
+            'blockHeight': o.blockHeight.toString(),
+            'spent': o.spent,
+            if (o.spentHeight != null) 'spentHeight': o.spentHeight.toString(),
+            'keyImage': o.keyImage,
+            'frozen': o.frozen,
+          },
+        )
+        .toList(),
     'spentKeyImages': spentKeyImages,
     if (description != null) 'description': description,
   };
@@ -126,12 +132,18 @@ class WalletTransaction {
           // Handle backward compatibility: these fields were added later
           spent: outputData.containsKey('spent') && outputData['spent'] != null
               ? outputData['spent'] as bool
-              : false,  // Default to unspent for backward compatibility
+              : false, // Default to unspent for backward compatibility
+          spentHeight: outputData['spentHeight'] != null
+              ? int.parse(outputData['spentHeight'].toString())
+              : null,
           keyImage: outputData['keyImage'] as String,
-          isCoinbase: outputData.containsKey('isCoinbase') && outputData['isCoinbase'] != null
+          isCoinbase:
+              outputData.containsKey('isCoinbase') &&
+                  outputData['isCoinbase'] != null
               ? outputData['isCoinbase'] as bool
-              : false,  // Default to non-coinbase for backward compatibility
-          frozen: outputData.containsKey('frozen') && outputData['frozen'] != null
+              : false, // Default to non-coinbase for backward compatibility
+          frozen:
+              outputData.containsKey('frozen') && outputData['frozen'] != null
               ? outputData['frozen'] as bool
               : false,
         );

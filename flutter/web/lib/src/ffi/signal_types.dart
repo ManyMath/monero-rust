@@ -93,6 +93,7 @@ class OwnedOutput {
   final String receivedOutputBytes;
   final int blockHeight;
   final bool spent;
+  final int? spentHeight;
   final String keyImage;
   final bool isCoinbase;
   final bool frozen;
@@ -110,6 +111,7 @@ class OwnedOutput {
     required this.receivedOutputBytes,
     required this.blockHeight,
     required this.spent,
+    this.spentHeight,
     required this.keyImage,
     required this.isCoinbase,
     required this.frozen,
@@ -129,6 +131,7 @@ class OwnedOutput {
     'received_output_bytes': receivedOutputBytes,
     'block_height': blockHeight,
     'spent': spent,
+    if (spentHeight != null) 'spent_height': spentHeight,
     'key_image': keyImage,
     'is_coinbase': isCoinbase,
     'frozen': frozen,
@@ -151,30 +154,36 @@ class OwnedOutput {
       receivedOutputBytes: json['received_output_bytes'] as String,
       blockHeight: json['block_height'] as int,
       spent: json['spent'] as bool,
+      spentHeight: json['spent_height'] as int?,
       keyImage: json['key_image'] as String,
       isCoinbase: json['is_coinbase'] as bool,
       frozen: json['frozen'] as bool,
     );
   }
 
-  OwnedOutput copyWith({bool? spent, bool? frozen, String? keyImage}) =>
-      OwnedOutput(
-        txHash: txHash,
-        outputIndex: outputIndex,
-        amount: amount,
-        amountXmr: amountXmr,
-        key: key,
-        keyOffset: keyOffset,
-        commitmentMask: commitmentMask,
-        subaddressIndex: subaddressIndex,
-        paymentId: paymentId,
-        receivedOutputBytes: receivedOutputBytes,
-        blockHeight: blockHeight,
-        spent: spent ?? this.spent,
-        keyImage: keyImage ?? this.keyImage,
-        isCoinbase: isCoinbase,
-        frozen: frozen ?? this.frozen,
-      );
+  OwnedOutput copyWith({
+    bool? spent,
+    bool? frozen,
+    String? keyImage,
+    int? spentHeight,
+  }) => OwnedOutput(
+    txHash: txHash,
+    outputIndex: outputIndex,
+    amount: amount,
+    amountXmr: amountXmr,
+    key: key,
+    keyOffset: keyOffset,
+    commitmentMask: commitmentMask,
+    subaddressIndex: subaddressIndex,
+    paymentId: paymentId,
+    receivedOutputBytes: receivedOutputBytes,
+    blockHeight: blockHeight,
+    spent: spent ?? this.spent,
+    spentHeight: spentHeight ?? this.spentHeight,
+    keyImage: keyImage ?? this.keyImage,
+    isCoinbase: isCoinbase,
+    frozen: frozen ?? this.frozen,
+  );
 }
 
 class WalletConfig {
