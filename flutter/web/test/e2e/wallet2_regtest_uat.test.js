@@ -13,6 +13,7 @@ const STANDARD_ADDRESS = '42ey1afDFnn4886T7196doS9GPMzexD9gXpsZJDwVjeRVdFCSoHnv7
 const TRANSFER_AMOUNT_ATOMIC = 1_000_000_000_000;
 const BLOCKS_TO_MINE = 80;
 const RING_SIZE = 16;
+const MULTI_TX_DESTINATION_COUNT = 20;
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -255,12 +256,24 @@ async function prepareWallet2UnsignedTxset(harness) {
     ring_size: RING_SIZE,
     get_tx_key: false,
   });
+  const splitTransfer = await rpc(harness.hotRpc, 'transfer_split', {
+    destinations: Array.from({ length: MULTI_TX_DESTINATION_COUNT }, () => ({
+      address: STANDARD_ADDRESS,
+      amount: TRANSFER_AMOUNT_ATOMIC,
+    })),
+    ring_size: RING_SIZE,
+    get_tx_key: false,
+  });
+  expect(splitTransfer.tx_hash_list).toHaveLength(2);
+  expect(splitTransfer.unsigned_txset).toMatch(/^[0-9a-f]+$/);
+
   const referenceSigned = await rpc(harness.coldRpc, 'sign_transfer', {
     unsigned_txset: transfer.unsigned_txset,
   });
 
   return {
     unsignedTxsetHex: transfer.unsigned_txset,
+    multiUnsignedTxsetHex: splitTransfer.unsigned_txset,
     referenceSignedTxsetHex: referenceSigned.signed_txset,
     coldKeysHex: fs
       .readFileSync(path.join(harness.workDir, 'cold', 'cold.keys'))
@@ -359,6 +372,40 @@ describe('Wallet2 Regtest Browser UAT', () => {
     expect(metadata.success).toBe(true);
     expect(metadata.transactions).toHaveLength(1);
     expect(metadata.key_images).toHaveLength(BLOCKS_TO_MINE);
+
+    const multiInspection = await sendSignalAndWait(
+      extPage,
+      'send_inspect_unsigned_txset_request',
+      JSON.stringify({
+        data_hex: fixture.multiUnsignedTxsetHex,
+        view_key_hex: importedCold.view_secret_key,
+      }),
+      'UnsignedTxSetInspectedResponse',
+      10000
+    );
+    expect(multiInspection.success).toBe(true);
+    expect(multiInspection.transaction_count).toBe(2);
+    expect(multiInspection.constructions).toHaveLength(2);
+    expect(multiInspection.constructions[0].destination_count).toBe(15);
+    expect(multiInspection.constructions[1].destination_count).toBe(5);
+
+    const rejectedMulti = await sendSignalAndWait(
+      extPage,
+      'send_sign_unsigned_transaction_request',
+      JSON.stringify({
+        seed: importedCold.mnemonic ?? '',
+        unsigned_tx_hex: fixture.multiUnsignedTxsetHex,
+        network: 'mainnet',
+        spend_secret_key_hex: importedCold.spend_secret_key,
+        view_secret_key_hex: importedCold.view_secret_key,
+      }),
+      'TransactionSignedOfflineResponse',
+      60000
+    );
+    expect(rejectedMulti.success).toBe(false);
+    expect(rejectedMulti.error).toContain('Only single-transaction wallet2 unsigned txsets are supported');
+    expect(rejectedMulti.tx_id).toBeNull();
+    expect(rejectedMulti.tx_blob).toBeNull();
 
     const signed = await sendSignalAndWait(
       extPage,
