@@ -204,6 +204,7 @@ pub struct CreateUnsignedTx {
     pub network: String,
     pub recipients: Vec<(String, u64)>,
     pub selected_outputs: Option<Vec<String>>,
+    pub max_fee_per_weight: Option<u64>,
 }
 
 #[derive(Debug, Clone)]

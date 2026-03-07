@@ -474,6 +474,7 @@ void main() {
         network: 'stagenet',
         recipients: [Recipient(address: '5dest', amount: 5000000000000)],
         selectedOutputs: ['out1:0'],
+        maxFeePerWeight: 2000000,
       );
 
       final json = {
@@ -484,10 +485,13 @@ void main() {
         'recipients': req.recipients.map((e) => e.toJson()).toList(),
         if (req.selectedOutputs != null)
           'selected_outputs': req.selectedOutputs,
+        if (req.maxFeePerWeight != null)
+          'max_fee_per_weight': req.maxFeePerWeight,
       };
 
       expect(json['view_key_hex'], 'aabb' * 16);
       expect(json['selected_outputs'], ['out1:0']);
+      expect(json['max_fee_per_weight'], 2000000);
     });
   });
 

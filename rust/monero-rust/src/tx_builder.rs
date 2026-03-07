@@ -1362,6 +1362,7 @@ pub mod native {
         network_str: &str,
         stored_outputs: Vec<StoredOutputData>,
         recipients: &[(String, u64)],
+        max_fee_per_weight: Option<u64>,
     ) -> Result<UnsignedTransactionResult, String> {
         if stored_outputs.is_empty() {
             return Err("No outputs provided".to_string());
@@ -1408,7 +1409,7 @@ pub mod native {
             .await
             .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
         let fee_rate: Fee = rpc
-            .get_fee_checked(DEFAULT_MAX_FEE_PER_BYTE)
+            .get_fee_checked(max_fee_per_weight.unwrap_or(DEFAULT_MAX_FEE_PER_BYTE))
             .await
             .map_err(|e| format!("Failed to get fee: {:?}", e))?;
 

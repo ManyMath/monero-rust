@@ -233,6 +233,7 @@ impl TxBuilderActor {
                     network: request.network,
                     recipients,
                     selected_outputs: request.selected_outputs,
+                    max_fee_per_weight: request.max_fee_per_weight,
                 })
                 .await;
         }
@@ -934,6 +935,7 @@ impl Notifiable<CreateUnsignedTx> for TxBuilderActor {
                     let network = msg.network;
                     let recipients = msg.recipients;
                     let selected_outputs = msg.selected_outputs;
+                    let max_fee_per_weight = msg.max_fee_per_weight;
                     let daemon_height = wallet_height.daemon_height;
 
                     spawn_local(async move {
@@ -1001,6 +1003,7 @@ impl Notifiable<CreateUnsignedTx> for TxBuilderActor {
                             &network,
                             stored_outputs,
                             &recipients,
+                            max_fee_per_weight,
                         )
                         .await
                         {

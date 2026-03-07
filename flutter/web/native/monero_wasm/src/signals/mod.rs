@@ -696,6 +696,8 @@ pub struct CreateUnsignedTransactionRequest {
     pub network: String,
     pub recipients: Vec<Recipient>,
     pub selected_outputs: Option<Vec<String>>,
+    #[serde(default)]
+    pub max_fee_per_weight: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -1844,6 +1846,27 @@ mod tests {
         assert_eq!(req.passphrase, "");
         assert_eq!(req.bip39_account_index, 0);
         assert!(!req.subtract_fee);
+    }
+
+    #[test]
+    fn create_unsigned_transaction_request_fee_override_deserialize() {
+        let json = r#"{
+            "node_url": "http://localhost:18081",
+            "view_key_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "pub_spend_key_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "network": "mainnet",
+            "recipients": [{"address": "4dest", "amount": 1000000000000}],
+            "selected_outputs": ["txhash1:0"],
+            "max_fee_per_weight": 2000000
+        }"#;
+
+        let req: CreateUnsignedTransactionRequest =
+            serde_json::from_str(json).expect("deserialize");
+
+        assert_eq!(req.node_url, "http://localhost:18081");
+        assert_eq!(req.recipients.len(), 1);
+        assert_eq!(req.selected_outputs, Some(vec!["txhash1:0".into()]));
+        assert_eq!(req.max_fee_per_weight, Some(2_000_000));
     }
 
     #[test]

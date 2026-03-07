@@ -6,7 +6,7 @@ const os = require('os');
 const path = require('path');
 const puppeteer = require('puppeteer');
 
-const { sendSignalAndWait } = require('./fixtures');
+const { sendSignalAndWait, waitForScanCompletion } = require('./fixtures');
 
 const SEED = 'velvet lymph giddy number token physics poetry unquoted nibs useful sabotage limits benches lifestyle eden nitrogen anvil fewest avoid batch vials washing fences goat unquoted';
 const STANDARD_ADDRESS = '42ey1afDFnn4886T7196doS9GPMzexD9gXpsZJDwVjeRVdFCSoHnv7KPbBeGpzJBzHRCAs9UxqeoyFQMYbqSWYTfJJQAWDm';
@@ -398,6 +398,108 @@ describe('Wallet2 Regtest Browser UAT', () => {
       tx_data_hex: built.signed_txset_hex,
     });
     expect(submitted.tx_hash_list).toEqual([signed.tx_id]);
+    await rpc(harness.daemonRpc, 'flush_txpool', { txids: [signed.tx_id] });
+  }, 240000);
+
+  it('scans fresh regtest outputs in browser and validates app-native do-not-relay broadcast', async () => {
+    if (skipReason) {
+      console.log(`REGTEST-UAT-02 skipped: ${skipReason}`);
+      return;
+    }
+
+    const keys = await sendSignalAndWait(
+      extPage,
+      'send_derive_keys_request',
+      JSON.stringify({ seed: SEED, network: 'mainnet' }),
+      'KeysDerivedResponse',
+      10000
+    );
+    expect(keys.success).toBe(true);
+    expect(keys.secret_view_key).toMatch(/^[0-9a-f]{64}$/);
+    expect(keys.public_spend_key).toMatch(/^[0-9a-f]{64}$/);
+
+    const viewOnlySeed = `viewonly:${keys.secret_view_key}:${keys.public_spend_key}`;
+    const scanResp = await waitForScanCompletion(
+      extPage,
+      JSON.stringify({
+        node_url: `http://127.0.0.1:${harness.daemonRpc}`,
+        start_height: 0,
+        seed: viewOnlySeed,
+        network: 'mainnet',
+        account_lookahead: 1,
+        subaddress_lookahead: 0,
+        passphrase: '',
+        bip39_account_index: 0,
+        allow_insecure_http: true,
+      }),
+      120000
+    );
+    expect(scanResp.is_scanning).toBe(false);
+    expect(scanResp.daemon_height).toBeGreaterThanOrEqual(BLOCKS_TO_MINE);
+
+    const balance = await sendSignalAndWait(
+      extPage,
+      'send_get_balance_request',
+      '{}',
+      'BalanceResponse',
+      10000
+    );
+    expect(balance.confirmed).toBeGreaterThan(TRANSFER_AMOUNT_ATOMIC);
+
+    const unsigned = await sendSignalAndWait(
+      extPage,
+      'send_create_unsigned_transaction_request',
+      JSON.stringify({
+        node_url: `http://127.0.0.1:${harness.daemonRpc}`,
+        view_key_hex: keys.secret_view_key,
+        pub_spend_key_hex: keys.public_spend_key,
+        network: 'mainnet',
+        recipients: [{ address: STANDARD_ADDRESS, amount: TRANSFER_AMOUNT_ATOMIC }],
+        max_fee_per_weight: 2_000_000,
+      }),
+      'UnsignedTransactionCreatedResponse',
+      60000
+    );
+    expect(unsigned.success).toBe(true);
+    expect(unsigned.unsigned_tx_hex).toMatch(/^[0-9a-f]+$/);
+    expect(unsigned.fee).toBeGreaterThan(0);
+
+    const signed = await sendSignalAndWait(
+      extPage,
+      'send_sign_unsigned_transaction_request',
+      JSON.stringify({
+        seed: SEED,
+        unsigned_tx_hex: unsigned.unsigned_tx_hex,
+        network: 'mainnet',
+      }),
+      'TransactionSignedOfflineResponse',
+      60000
+    );
+    expect(signed.success).toBe(true);
+    expect(signed.tx_id).toMatch(/^[0-9a-f]{64}$/);
+    expect(signed.tx_blob).toMatch(/^[0-9a-f]+$/);
+    expect(signed.fee).toBe(unsigned.fee);
+    expect(signed.spent_key_images.length).toBeGreaterThan(0);
+
+    const broadcast = await sendSignalAndWait(
+      extPage,
+      'send_broadcast_transaction_request',
+      JSON.stringify({
+        node_url: `http://127.0.0.1:${harness.daemonRpc}`,
+        tx_blob: signed.tx_blob,
+        spent_output_hashes: [],
+        tx_id: signed.tx_id,
+        spent_key_images: signed.spent_key_images,
+        do_not_relay: true,
+      }),
+      'TransactionBroadcastResponse',
+      30000
+    );
+    expect(broadcast.success).toBe(true);
+    expect(broadcast.tx_id).toBe(signed.tx_id);
+    expect(broadcast.is_retryable).toBe(false);
+    expect(broadcast.is_double_spend).toBe(false);
+
     await rpc(harness.daemonRpc, 'flush_txpool', { txids: [signed.tx_id] });
   }, 240000);
 

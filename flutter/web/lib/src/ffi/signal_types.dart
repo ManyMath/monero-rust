@@ -799,6 +799,7 @@ class CreateUnsignedTransactionRequest {
   final String network;
   final List<Recipient> recipients;
   final List<String>? selectedOutputs;
+  final int? maxFeePerWeight;
   const CreateUnsignedTransactionRequest({
     required this.nodeUrl,
     required this.viewKeyHex,
@@ -806,6 +807,7 @@ class CreateUnsignedTransactionRequest {
     required this.network,
     required this.recipients,
     this.selectedOutputs,
+    this.maxFeePerWeight,
   });
 
   void sendSignalToRust() => _send('send_create_unsigned_transaction_request', {
@@ -815,6 +817,7 @@ class CreateUnsignedTransactionRequest {
     'network': network,
     'recipients': recipients.map((e) => e.toJson()).toList(),
     if (selectedOutputs != null) 'selected_outputs': selectedOutputs,
+    if (maxFeePerWeight != null) 'max_fee_per_weight': maxFeePerWeight,
   });
 }
 
