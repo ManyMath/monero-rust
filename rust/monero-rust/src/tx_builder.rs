@@ -967,6 +967,17 @@ pub mod native {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct OfflineSignedTransaction {
+        pub tx_id: String,
+        pub fee: u64,
+        pub tx_blob: String,
+        pub tx_key: String,
+        pub tx_key_additional: Vec<String>,
+        pub spent_key_images: Vec<String>,
+        pub change_outputs: Vec<ChangeOutputInfo>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct OfflineSignResult {
         pub tx_id: String,
         pub fee: u64,
@@ -975,6 +986,7 @@ pub mod native {
         pub tx_key_additional: Vec<String>,
         pub spent_key_images: Vec<String>,
         pub change_outputs: Vec<ChangeOutputInfo>,
+        pub transactions: Vec<OfflineSignedTransaction>,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1270,30 +1282,30 @@ pub mod native {
             .map_err(|e| format!("Failed to build wallet2 spendable output: {e:?}"))
     }
 
-    fn wallet2_r_seed(unsigned_txset: &[u8]) -> Zeroizing<[u8; 32]> {
-        Zeroizing::new(Keccak256::digest(unsigned_txset).into())
+    fn wallet2_r_seed(
+        unsigned_txset: &[u8],
+        tx_count: usize,
+        construction_index: usize,
+    ) -> Zeroizing<[u8; 32]> {
+        if tx_count == 1 && construction_index == 0 {
+            return Zeroizing::new(Keccak256::digest(unsigned_txset).into());
+        }
+
+        let mut material = Vec::with_capacity(unsigned_txset.len() + 8);
+        material.extend_from_slice(unsigned_txset);
+        material.extend_from_slice(&(construction_index as u64).to_le_bytes());
+        Zeroizing::new(Keccak256::digest(material).into())
     }
 
-    pub fn create_unsigned_transaction_from_wallet2_txset_keys(
-        spend_secret_key: [u8; 32],
+    fn create_unsigned_transaction_from_wallet2_construction(
+        spend_secret: Scalar,
         view_secret_key: [u8; 32],
         unsigned_txset: &[u8],
-        network_str: &str,
+        tx_count: usize,
+        construction_index: usize,
+        construction: &crate::epee_compat::TxConstructionDataSummary,
+        network: Network,
     ) -> Result<UnsignedTransactionResult, String> {
-        let network = parse_network(network_str)?;
-        let spend_secret = Scalar::from_bytes_mod_order(spend_secret_key);
-        let summary = crate::epee_compat::parse_unsigned_monero_txset_summary(
-            unsigned_txset,
-            &view_secret_key,
-        )?;
-        if summary.txes.len() != 1 {
-            return Err(format!(
-                "Only single-transaction wallet2 unsigned txsets are supported, got {}",
-                summary.txes.len()
-            ));
-        }
-        let construction = &summary.txes[0];
-
         let mut inputs = Vec::with_capacity(construction.sources.len());
         for source in &construction.sources {
             let (key_offset, _, subaddress_index) = derive_source_key_offset(
@@ -1342,7 +1354,7 @@ pub mod native {
 
         let unsigned = UnsignedTransaction {
             protocol: Protocol::v16,
-            r_seed: wallet2_r_seed(unsigned_txset),
+            r_seed: wallet2_r_seed(unsigned_txset, tx_count, construction_index),
             fee,
             payments,
             data: vec![],
@@ -1353,6 +1365,58 @@ pub mod native {
             fee,
             recipients,
         })
+    }
+
+    pub fn create_unsigned_transactions_from_wallet2_txset_keys(
+        spend_secret_key: [u8; 32],
+        view_secret_key: [u8; 32],
+        unsigned_txset: &[u8],
+        network_str: &str,
+    ) -> Result<Vec<UnsignedTransactionResult>, String> {
+        let network = parse_network(network_str)?;
+        let spend_secret = Scalar::from_bytes_mod_order(spend_secret_key);
+        let summary = crate::epee_compat::parse_unsigned_monero_txset_summary(
+            unsigned_txset,
+            &view_secret_key,
+        )?;
+        let tx_count = summary.txes.len();
+        summary
+            .txes
+            .iter()
+            .enumerate()
+            .map(|(construction_index, construction)| {
+                create_unsigned_transaction_from_wallet2_construction(
+                    spend_secret,
+                    view_secret_key,
+                    unsigned_txset,
+                    tx_count,
+                    construction_index,
+                    construction,
+                    network,
+                )
+            })
+            .collect()
+    }
+
+    pub fn create_unsigned_transaction_from_wallet2_txset_keys(
+        spend_secret_key: [u8; 32],
+        view_secret_key: [u8; 32],
+        unsigned_txset: &[u8],
+        network_str: &str,
+    ) -> Result<UnsignedTransactionResult, String> {
+        let mut unsigned = create_unsigned_transactions_from_wallet2_txset_keys(
+            spend_secret_key,
+            view_secret_key,
+            unsigned_txset,
+            network_str,
+        )?;
+        if unsigned.len() != 1 {
+            return Err(format!(
+                "Only single-transaction wallet2 unsigned txsets are supported, got {}",
+                unsigned.len()
+            ));
+        }
+        Ok(unsigned.remove(0))
     }
 
     pub async fn create_unsigned_transaction(
@@ -1522,24 +1586,30 @@ pub mod native {
         unsigned_tx_hex: &str,
         network_str: &str,
     ) -> Result<OfflineSignResult, String> {
-        let spend_key = Zeroizing::new(Scalar::from_bytes_mod_order(spend_secret_key));
-        let spend_point = &*spend_key * ED25519_BASEPOINT_TABLE;
-        let view_scalar = Scalar::from_bytes_mod_order(view_secret_key);
-        let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
-        let mut unsigned_bytes = hex::decode(unsigned_tx_hex)
+        let unsigned_bytes = hex::decode(unsigned_tx_hex)
             .map_err(|e| format!("Invalid unsigned tx hex: {:?}", e))?;
         if let Some(kind) = crate::epee_compat::detect_monero_txset(&unsigned_bytes) {
             match kind {
                 crate::epee_compat::MoneroTxSetKind::Unsigned => {
-                    let converted = create_unsigned_transaction_from_wallet2_txset_keys(
+                    let converted = create_unsigned_transactions_from_wallet2_txset_keys(
                         spend_secret_key,
                         view_secret_key,
                         &unsigned_bytes,
                         network_str,
                     )
                     .map_err(|e| format!("Failed to convert wallet2 unsigned txset: {e}"))?;
-                    unsigned_bytes = hex::decode(converted.unsigned_tx_hex)
-                        .map_err(|e| format!("Invalid converted unsigned tx hex: {:?}", e))?;
+                    let mut signed = Vec::with_capacity(converted.len());
+                    for unsigned in converted {
+                        let unsigned_bytes = hex::decode(unsigned.unsigned_tx_hex)
+                            .map_err(|e| format!("Invalid converted unsigned tx hex: {:?}", e))?;
+                        signed.push(sign_app_unsigned_transaction_with_private_keys(
+                            spend_secret_key,
+                            view_secret_key,
+                            unsigned_bytes,
+                            network_str,
+                        )?);
+                    }
+                    return offline_sign_result_from_transactions(signed);
                 }
                 _ => {
                     return Err(format!(
@@ -1549,6 +1619,25 @@ pub mod native {
                 }
             }
         }
+        let signed = sign_app_unsigned_transaction_with_private_keys(
+            spend_secret_key,
+            view_secret_key,
+            unsigned_bytes,
+            network_str,
+        )?;
+        offline_sign_result_from_transactions(vec![signed])
+    }
+
+    fn sign_app_unsigned_transaction_with_private_keys(
+        spend_secret_key: [u8; 32],
+        view_secret_key: [u8; 32],
+        unsigned_bytes: Vec<u8>,
+        network_str: &str,
+    ) -> Result<OfflineSignedTransaction, String> {
+        let spend_key = Zeroizing::new(Scalar::from_bytes_mod_order(spend_secret_key));
+        let spend_point = &*spend_key * ED25519_BASEPOINT_TABLE;
+        let view_scalar = Scalar::from_bytes_mod_order(view_secret_key);
+        let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
         let unsigned = UnsignedTransaction::read(&mut std::io::Cursor::new(unsigned_bytes))
             .map_err(|e| format!("Failed to parse unsigned tx: {:?}", e))?;
 
@@ -1572,7 +1661,7 @@ pub mod native {
 
         let _ = parse_network(network_str)?;
 
-        Ok(OfflineSignResult {
+        Ok(OfflineSignedTransaction {
             tx_id,
             fee,
             tx_blob,
@@ -1583,6 +1672,37 @@ pub mod native {
                 .collect(),
             spent_key_images,
             change_outputs,
+        })
+    }
+
+    fn offline_sign_result_from_transactions(
+        transactions: Vec<OfflineSignedTransaction>,
+    ) -> Result<OfflineSignResult, String> {
+        let first = transactions
+            .first()
+            .ok_or_else(|| "No signed transactions were produced".to_string())?;
+        let fee = transactions
+            .iter()
+            .try_fold(0u64, |acc, tx| acc.checked_add(tx.fee))
+            .ok_or_else(|| "Signed transaction fee overflow".to_string())?;
+        let spent_key_images = transactions
+            .iter()
+            .flat_map(|tx| tx.spent_key_images.iter().cloned())
+            .collect();
+        let change_outputs = transactions
+            .iter()
+            .flat_map(|tx| tx.change_outputs.iter().cloned())
+            .collect();
+
+        Ok(OfflineSignResult {
+            tx_id: first.tx_id.clone(),
+            fee,
+            tx_blob: first.tx_blob.clone(),
+            tx_key: first.tx_key.clone(),
+            tx_key_additional: first.tx_key_additional.clone(),
+            spent_key_images,
+            change_outputs,
+            transactions,
         })
     }
 

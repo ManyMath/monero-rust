@@ -884,6 +884,7 @@ class BuildSignedTxSetRequest {
   final String unsignedTxSetHex;
   final String viewKeyHex;
   final String txBlobHex;
+  final List<String> txBlobsHex;
   final List<String> keyImages;
   final List<SignedTxSetKeyImageEntry> txKeyImages;
 
@@ -891,6 +892,7 @@ class BuildSignedTxSetRequest {
     required this.unsignedTxSetHex,
     required this.viewKeyHex,
     required this.txBlobHex,
+    this.txBlobsHex = const [],
     required this.keyImages,
     required this.txKeyImages,
   });
@@ -899,6 +901,7 @@ class BuildSignedTxSetRequest {
     'unsigned_txset_hex': unsignedTxSetHex,
     'view_key_hex': viewKeyHex,
     'tx_blob_hex': txBlobHex,
+    'tx_blobs_hex': txBlobsHex,
     'key_images': keyImages,
     'tx_key_images': txKeyImages.map((entry) => entry.toJson()).toList(),
   });
@@ -1961,6 +1964,40 @@ class UnsignedTransactionCreatedResponse {
       .map(UnsignedTransactionCreatedResponse.fromJson);
 }
 
+class SignedOfflineTransaction {
+  final String txId;
+  final String txBlob;
+  final int fee;
+  final String txKey;
+  final List<String> txKeyAdditional;
+  final List<String> spentKeyImages;
+  final List<ChangeOutput> changeOutputs;
+
+  const SignedOfflineTransaction({
+    required this.txId,
+    required this.txBlob,
+    required this.fee,
+    required this.txKey,
+    required this.txKeyAdditional,
+    required this.spentKeyImages,
+    required this.changeOutputs,
+  });
+
+  factory SignedOfflineTransaction.fromJson(Map<String, dynamic> json) =>
+      SignedOfflineTransaction(
+        txId: json['tx_id'] as String,
+        txBlob: json['tx_blob'] as String,
+        fee: json['fee'] as int,
+        txKey: json['tx_key'] as String,
+        txKeyAdditional: (json['tx_key_additional'] as List).cast<String>(),
+        spentKeyImages: ((json['spent_key_images'] as List?) ?? const [])
+            .cast<String>(),
+        changeOutputs: ((json['change_outputs'] as List?) ?? const [])
+            .map((e) => ChangeOutput.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
 class TransactionSignedOfflineResponse {
   final bool success;
   final String? error;
@@ -1975,6 +2012,7 @@ class TransactionSignedOfflineResponse {
   final List<String> txKeyAdditional;
   final List<ChangeOutput> changeOutputs;
   final List<String> spentKeyImages;
+  final List<SignedOfflineTransaction> transactions;
 
   const TransactionSignedOfflineResponse({
     required this.success,
@@ -1990,6 +2028,7 @@ class TransactionSignedOfflineResponse {
     required this.txKeyAdditional,
     required this.changeOutputs,
     this.spentKeyImages = const [],
+    this.transactions = const [],
   });
 
   factory TransactionSignedOfflineResponse.fromJson(
@@ -2011,6 +2050,11 @@ class TransactionSignedOfflineResponse {
         .toList(),
     spentKeyImages: ((json['spent_key_images'] as List?) ?? const [])
         .cast<String>(),
+    transactions: ((json['transactions'] as List?) ?? const [])
+        .map(
+          (e) => SignedOfflineTransaction.fromJson(e as Map<String, dynamic>),
+        )
+        .toList(),
   );
 
   static Stream<TransactionSignedOfflineResponse> get stream => signalSender

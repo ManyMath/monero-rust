@@ -579,7 +579,7 @@ fn cold_signing_signed_txset_builder_roundtrips_wallet2_summary() {
     let rebuilt = epee_compat::build_signed_monero_txset(epee_compat::BuildSignedTxSetRequest {
         unsigned_txset: &unsigned,
         view_secret_key: &hot.view_secret_key,
-        tx_blob: &source_ptx.tx_blob,
+        tx_blobs: vec![&source_ptx.tx_blob],
         key_images: &signed_summary.key_images,
         tx_key_images: &signed_summary.tx_key_images,
     })
@@ -641,7 +641,7 @@ fn cold_signing_signed_txset_builder_rejects_sparse_key_image_vector() {
     let err = epee_compat::build_signed_monero_txset(epee_compat::BuildSignedTxSetRequest {
         unsigned_txset: &unsigned,
         view_secret_key: &hot.view_secret_key,
-        tx_blob: &source_ptx.tx_blob,
+        tx_blobs: vec![&source_ptx.tx_blob],
         key_images: sparse_key_images,
         tx_key_images: &signed_summary.tx_key_images,
     })
@@ -675,7 +675,7 @@ fn cold_signing_signed_txset_builder_rejects_mismatched_selected_key_image() {
     let err = epee_compat::build_signed_monero_txset(epee_compat::BuildSignedTxSetRequest {
         unsigned_txset: &unsigned,
         view_secret_key: &hot.view_secret_key,
-        tx_blob: &source_ptx.tx_blob,
+        tx_blobs: vec![&source_ptx.tx_blob],
         key_images: &mismatched_key_images,
         tx_key_images: &signed_summary.tx_key_images,
     })
@@ -863,18 +863,14 @@ fn cold_signing_metadata_matches_generated_flow() {
         metadata["flow"]["rebuilt_signed_txset_sha256"],
         metadata["artifacts"]["signed_monero_tx"]["sha256"]
     );
-    assert!(
-        metadata["flow"]["cli_submit_stdout"]
-            .as_str()
-            .expect("CLI submit transcript should be present")
-            .contains("Transaction successfully submitted")
-    );
-    assert!(
-        !metadata["flow"]["cli_submit_stdout"]
-            .as_str()
-            .expect("CLI submit transcript should be present")
-            .contains("/home/")
-    );
+    assert!(metadata["flow"]["cli_submit_stdout"]
+        .as_str()
+        .expect("CLI submit transcript should be present")
+        .contains("Transaction successfully submitted"));
+    assert!(!metadata["flow"]["cli_submit_stdout"]
+        .as_str()
+        .expect("CLI submit transcript should be present")
+        .contains("/home/"));
     assert!(
         metadata["flow"]["monero_wallet_rpc_signed_tx_hash_list"][0]
             .as_str()

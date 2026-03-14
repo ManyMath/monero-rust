@@ -275,6 +275,7 @@ impl TxBuilderActor {
                             tx_key_additional: vec![],
                             change_outputs: vec![],
                             spent_key_images: vec![],
+                            transactions: vec![],
                         }
                         .send_signal_to_dart();
                         continue;
@@ -315,6 +316,7 @@ impl TxBuilderActor {
                     unsigned_txset_hex: request.unsigned_txset_hex,
                     view_key_hex: request.view_key_hex,
                     tx_blob_hex: request.tx_blob_hex,
+                    tx_blobs_hex: request.tx_blobs_hex,
                     key_images: request.key_images,
                     tx_key_images: request.tx_key_images,
                 })
@@ -1205,8 +1207,23 @@ fn decode_txset_request(
 fn build_signed_txset_response(msg: BuildSignedTxSet) -> Result<SignedTxSetBuiltResponse, String> {
     let (unsigned_txset, view_key) =
         decode_txset_request(&msg.unsigned_txset_hex, &msg.view_key_hex, "unsigned txset")?;
-    let tx_blob = hex::decode(msg.tx_blob_hex.trim())
-        .map_err(|e| format!("Invalid signed transaction blob hex: {e}"))?;
+    let tx_blobs = if msg.tx_blobs_hex.is_empty() {
+        vec![
+            hex::decode(msg.tx_blob_hex.trim())
+                .map_err(|e| format!("Invalid signed transaction blob hex: {e}"))?,
+        ]
+    } else {
+        msg.tx_blobs_hex
+            .into_iter()
+            .enumerate()
+            .map(|(index, tx_blob_hex)| {
+                hex::decode(tx_blob_hex.trim()).map_err(|e| {
+                    format!("Invalid signed transaction blob hex at index {index}: {e}")
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?
+    };
+    let tx_blob_refs = tx_blobs.iter().map(Vec::as_slice).collect::<Vec<&[u8]>>();
     let key_images = decode_fixed_hex_list(msg.key_images, "key image")?;
     let tx_key_images = msg
         .tx_key_images
@@ -1223,7 +1240,7 @@ fn build_signed_txset_response(msg: BuildSignedTxSet) -> Result<SignedTxSetBuilt
         monero_rust::epee_compat::BuildSignedTxSetRequest {
             unsigned_txset: &unsigned_txset,
             view_secret_key: &view_key,
-            tx_blob: &tx_blob,
+            tx_blobs: tx_blob_refs,
             key_images: &key_images,
             tx_key_images: &tx_key_images,
         },
@@ -1519,6 +1536,34 @@ impl Notifiable<SignUnsignedTx> for TxBuilderActor {
                                 key_image: co.key_image,
                             })
                             .collect(),
+                        transactions: result
+                            .transactions
+                            .into_iter()
+                            .map(|tx| SignedOfflineTransaction {
+                                tx_id: tx.tx_id,
+                                tx_blob: tx.tx_blob,
+                                fee: tx.fee,
+                                tx_key: tx.tx_key,
+                                tx_key_additional: tx.tx_key_additional,
+                                spent_key_images: tx.spent_key_images,
+                                change_outputs: tx
+                                    .change_outputs
+                                    .into_iter()
+                                    .map(|co| ChangeOutput {
+                                        tx_hash: co.tx_hash,
+                                        output_index: co.output_index,
+                                        amount: co.amount,
+                                        amount_xmr: co.amount_xmr,
+                                        key: co.key,
+                                        key_offset: co.key_offset,
+                                        commitment_mask: co.commitment_mask,
+                                        subaddress_index: co.subaddress_index,
+                                        received_output_bytes: co.received_output_bytes,
+                                        key_image: co.key_image,
+                                    })
+                                    .collect(),
+                            })
+                            .collect(),
                     }
                     .send_signal_to_dart();
                 }
@@ -1537,6 +1582,7 @@ impl Notifiable<SignUnsignedTx> for TxBuilderActor {
                         tx_key_additional: vec![],
                         change_outputs: vec![],
                         spent_key_images: vec![],
+                        transactions: vec![],
                     }
                     .send_signal_to_dart();
                 }
@@ -1714,11 +1760,7 @@ impl Notifiable<ImportKeyImages> for TxBuilderActor {
                             .zip(statuses.iter())
                             .filter_map(
                                 |(ki, &status)| {
-                                    if status > 0 {
-                                        Some(ki.clone())
-                                    } else {
-                                        None
-                                    }
+                                    if status > 0 { Some(ki.clone()) } else { None }
                                 },
                             )
                             .collect::<Vec<_>>(),

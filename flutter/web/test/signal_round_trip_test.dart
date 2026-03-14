@@ -562,6 +562,7 @@ void main() {
         viewKeyHex:
             '49774391fa5e8d249fc2c5b45dadef13534bf2483dede880dac88f061e809100',
         txBlobHex: '010203',
+        txBlobsHex: const ['010203', '040506'],
         keyImages: ['a' * 64, 'b' * 64],
         txKeyImages: [
           SignedTxSetKeyImageEntry(publicKey: 'c' * 64, keyImage: 'd' * 64),
@@ -572,6 +573,7 @@ void main() {
         'unsigned_txset_hex': req.unsignedTxSetHex,
         'view_key_hex': req.viewKeyHex,
         'tx_blob_hex': req.txBlobHex,
+        'tx_blobs_hex': req.txBlobsHex,
         'key_images': req.keyImages,
         'tx_key_images': req.txKeyImages
             .map((entry) => entry.toJson())
@@ -581,6 +583,7 @@ void main() {
       expect(json['unsigned_txset_hex'], startsWith('4d6f6e65726f'));
       expect(json['view_key_hex'], hasLength(64));
       expect(json['tx_blob_hex'], '010203');
+      expect(json['tx_blobs_hex'], ['010203', '040506']);
       expect(json['key_images'], ['a' * 64, 'b' * 64]);
       expect(json['tx_key_images'], [
         {'public_key': 'c' * 64, 'key_image': 'd' * 64},
@@ -941,6 +944,17 @@ void main() {
           },
         ],
         'spent_key_images': ['spent_ki'],
+        'transactions': [
+          {
+            'tx_id': 'signed_txid',
+            'tx_blob': 'signed_blob',
+            'fee': 44000000,
+            'tx_key': 'signed_key',
+            'tx_key_additional': [],
+            'spent_key_images': ['spent_ki'],
+            'change_outputs': [],
+          },
+        ],
       };
 
       final response = TransactionSignedOfflineResponse.fromJson(json);
@@ -950,6 +964,8 @@ void main() {
       expect(response.changeOutputs.length, 1);
       expect(response.changeOutputs[0].subaddressIndex, isNull);
       expect(response.spentKeyImages, ['spent_ki']);
+      expect(response.transactions.length, 1);
+      expect(response.transactions[0].txId, 'signed_txid');
     });
   });
 

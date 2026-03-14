@@ -267,6 +267,9 @@ async function prepareWallet2UnsignedTxset(harness) {
   expect(splitTransfer.tx_hash_list).toHaveLength(2);
   expect(splitTransfer.unsigned_txset).toMatch(/^[0-9a-f]+$/);
 
+  const referenceMultiSigned = await rpc(harness.coldRpc, 'sign_transfer', {
+    unsigned_txset: splitTransfer.unsigned_txset,
+  });
   const referenceSigned = await rpc(harness.coldRpc, 'sign_transfer', {
     unsigned_txset: transfer.unsigned_txset,
   });
@@ -275,6 +278,7 @@ async function prepareWallet2UnsignedTxset(harness) {
     unsignedTxsetHex: transfer.unsigned_txset,
     multiUnsignedTxsetHex: splitTransfer.unsigned_txset,
     referenceSignedTxsetHex: referenceSigned.signed_txset,
+    referenceMultiSignedTxsetHex: referenceMultiSigned.signed_txset,
     coldKeysHex: fs
       .readFileSync(path.join(harness.workDir, 'cold', 'cold.keys'))
       .toString('hex'),
@@ -389,7 +393,21 @@ describe('Wallet2 Regtest Browser UAT', () => {
     expect(multiInspection.constructions[0].destination_count).toBe(15);
     expect(multiInspection.constructions[1].destination_count).toBe(5);
 
-    const rejectedMulti = await sendSignalAndWait(
+    const multiMetadata = await sendSignalAndWait(
+      extPage,
+      'send_extract_signed_txset_request',
+      JSON.stringify({
+        data_hex: fixture.referenceMultiSignedTxsetHex,
+        view_key_hex: importedCold.view_secret_key,
+      }),
+      'SignedTxSetExtractedResponse',
+      10000
+    );
+    expect(multiMetadata.success).toBe(true);
+    expect(multiMetadata.transactions).toHaveLength(2);
+    expect(multiMetadata.key_images).toHaveLength(BLOCKS_TO_MINE);
+
+    const signedMulti = await sendSignalAndWait(
       extPage,
       'send_sign_unsigned_transaction_request',
       JSON.stringify({
@@ -402,10 +420,37 @@ describe('Wallet2 Regtest Browser UAT', () => {
       'TransactionSignedOfflineResponse',
       60000
     );
-    expect(rejectedMulti.success).toBe(false);
-    expect(rejectedMulti.error).toContain('Only single-transaction wallet2 unsigned txsets are supported');
-    expect(rejectedMulti.tx_id).toBeNull();
-    expect(rejectedMulti.tx_blob).toBeNull();
+    expect(signedMulti.success).toBe(true);
+    expect(signedMulti.transactions).toHaveLength(2);
+    expect(signedMulti.transactions[0].tx_id).toMatch(/^[0-9a-f]{64}$/);
+    expect(signedMulti.transactions[0].tx_blob).toMatch(/^[0-9a-f]+$/);
+    expect(signedMulti.transactions[1].tx_id).toMatch(/^[0-9a-f]{64}$/);
+    expect(signedMulti.transactions[1].tx_blob).toMatch(/^[0-9a-f]+$/);
+    expect(signedMulti.spent_key_images.length).toBeGreaterThan(0);
+
+    const builtMulti = await sendSignalAndWait(
+      extPage,
+      'send_build_signed_txset_request',
+      JSON.stringify({
+        unsigned_txset_hex: fixture.multiUnsignedTxsetHex,
+        view_key_hex: importedCold.view_secret_key,
+        tx_blob_hex: signedMulti.tx_blob,
+        tx_blobs_hex: signedMulti.transactions.map(tx => tx.tx_blob),
+        key_images: multiMetadata.key_images,
+        tx_key_images: multiMetadata.tx_key_images,
+      }),
+      'SignedTxSetBuiltResponse',
+      10000
+    );
+    expect(builtMulti.success).toBe(true);
+    expect(builtMulti.signed_txset_hex).toMatch(/^4d6f6e65726f207369676e65642074782073657405/);
+
+    const submittedMulti = await rpc(harness.hotRpc, 'submit_transfer', {
+      tx_data_hex: builtMulti.signed_txset_hex,
+    });
+    const signedMultiTxIds = signedMulti.transactions.map(tx => tx.tx_id).sort();
+    expect([...submittedMulti.tx_hash_list].sort()).toEqual(signedMultiTxIds);
+    await rpc(harness.daemonRpc, 'flush_txpool', { txids: submittedMulti.tx_hash_list });
 
     const signed = await sendSignalAndWait(
       extPage,

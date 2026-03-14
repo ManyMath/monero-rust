@@ -732,6 +732,8 @@ pub struct BuildSignedTxSetRequest {
     pub unsigned_txset_hex: String,
     pub view_key_hex: String,
     pub tx_blob_hex: String,
+    #[serde(default)]
+    pub tx_blobs_hex: Vec<String>,
     pub key_images: Vec<String>,
     pub tx_key_images: Vec<SignedTxSetKeyImageEntry>,
 }
@@ -770,6 +772,17 @@ pub struct UnsignedTransactionCreatedResponse {
 }
 
 #[derive(Serialize)]
+pub struct SignedOfflineTransaction {
+    pub tx_id: String,
+    pub tx_blob: String,
+    pub fee: u64,
+    pub tx_key: String,
+    pub tx_key_additional: Vec<String>,
+    pub spent_key_images: Vec<String>,
+    pub change_outputs: Vec<ChangeOutput>,
+}
+
+#[derive(Serialize)]
 pub struct TransactionSignedOfflineResponse {
     pub success: bool,
     pub error: Option<String>,
@@ -784,6 +797,7 @@ pub struct TransactionSignedOfflineResponse {
     pub tx_key_additional: Vec<String>,
     pub change_outputs: Vec<ChangeOutput>,
     pub spent_key_images: Vec<String>,
+    pub transactions: Vec<SignedOfflineTransaction>,
 }
 
 #[derive(Serialize)]
@@ -1564,6 +1578,15 @@ mod tests {
             tx_key_additional: vec![],
             change_outputs: vec![change],
             spent_key_images: vec!["spent_ki".into()],
+            transactions: vec![SignedOfflineTransaction {
+                tx_id: "signed_txid".into(),
+                tx_blob: "signed_blob".into(),
+                fee: 44_000_000,
+                tx_key: "signed_key".into(),
+                tx_key_additional: vec![],
+                spent_key_images: vec!["spent_ki".into()],
+                change_outputs: vec![],
+            }],
         };
 
         let v = round_trip(&response);
@@ -1574,6 +1597,7 @@ mod tests {
             serde_json::Value::Null
         );
         assert_eq!(v["spent_key_images"][0], "spent_ki");
+        assert_eq!(v["transactions"][0]["tx_id"], "signed_txid");
     }
 
     #[test]

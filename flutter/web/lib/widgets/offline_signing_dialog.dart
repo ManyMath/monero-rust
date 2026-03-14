@@ -228,10 +228,12 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
       );
     });
 
+    final txBlobsHex = msg.transactions.map((tx) => tx.txBlob).toList();
     BuildSignedTxSetRequest(
       unsignedTxSetHex: unsignedHex,
       viewKeyHex: viewKeyHex,
       txBlobHex: msg.txBlob!,
+      txBlobsHex: txBlobsHex.length > 1 ? txBlobsHex : const [],
       keyImages: widget.wallet2KeyImages,
       txKeyImages: widget.wallet2TxKeyImages,
     ).sendSignalToRust();
@@ -255,6 +257,7 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
       txKeyAdditional: msg.txKeyAdditional,
       changeOutputs: msg.changeOutputs,
       spentKeyImages: msg.spentKeyImages,
+      transactions: msg.transactions,
     );
   }
 

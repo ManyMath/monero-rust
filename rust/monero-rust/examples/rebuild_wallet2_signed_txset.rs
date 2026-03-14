@@ -38,8 +38,7 @@ fn parse_args() -> Result<Args, String> {
     }
 
     Ok(Args {
-        unsigned_txset: unsigned_txset
-            .ok_or_else(|| "--unsigned-txset is required".to_string())?,
+        unsigned_txset: unsigned_txset.ok_or_else(|| "--unsigned-txset is required".to_string())?,
         reference_signed_txset: reference_signed_txset
             .ok_or_else(|| "--reference-signed-txset is required".to_string())?,
         spend_key_hex: spend_key_hex.ok_or_else(|| "--spend-key-hex is required".to_string())?,
@@ -77,7 +76,7 @@ fn run() -> Result<(), String> {
     let rebuilt = epee_compat::build_signed_monero_txset(epee_compat::BuildSignedTxSetRequest {
         unsigned_txset: &unsigned_txset,
         view_secret_key: &view_key,
-        tx_blob: &tx_blob,
+        tx_blobs: vec![&tx_blob],
         key_images: &reference_summary.key_images,
         tx_key_images: &reference_summary.tx_key_images,
     })?;

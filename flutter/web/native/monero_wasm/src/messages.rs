@@ -233,6 +233,7 @@ pub struct BuildSignedTxSet {
     pub unsigned_txset_hex: String,
     pub view_key_hex: String,
     pub tx_blob_hex: String,
+    pub tx_blobs_hex: Vec<String>,
     pub key_images: Vec<String>,
     pub tx_key_images: Vec<crate::signals::SignedTxSetKeyImageEntry>,
 }

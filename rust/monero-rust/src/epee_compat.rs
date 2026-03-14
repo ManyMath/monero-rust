@@ -69,7 +69,7 @@ pub struct SignedTxSetKeyImagePair {
 pub struct BuildSignedTxSetRequest<'a> {
     pub unsigned_txset: &'a [u8],
     pub view_secret_key: &'a [u8; 32],
-    pub tx_blob: &'a [u8],
+    pub tx_blobs: Vec<&'a [u8]>,
     pub key_images: &'a [[u8; 32]],
     pub tx_key_images: &'a [SignedTxSetKeyImagePair],
 }
@@ -345,112 +345,139 @@ pub fn extract_signed_monero_txset_transactions(
 pub fn build_signed_monero_txset(request: BuildSignedTxSetRequest<'_>) -> Result<Vec<u8>, String> {
     let unsigned =
         parse_unsigned_monero_txset_summary(request.unsigned_txset, request.view_secret_key)?;
-    if unsigned.txes.len() != 1 {
+    if request.tx_blobs.len() != unsigned.txes.len() {
         return Err(format!(
-            "Only single-transaction wallet2 unsigned txsets are supported, got {}",
-            unsigned.txes.len()
+            "Wallet2 signed txset builder expected {} signed transaction blobs, got {}",
+            unsigned.txes.len(),
+            request.tx_blobs.len()
         ));
     }
 
-    let mut cursor = Cursor::new(request.tx_blob);
-    let tx = Transaction::read(&mut cursor)
-        .map_err(|e| format!("Signed transaction blob is not valid: {e:?}"))?;
-    let mut trailing = [0u8; 1];
-    if cursor
-        .read(&mut trailing)
-        .map_err(|e| format!("Failed to validate signed transaction cursor: {e:?}"))?
-        != 0
-    {
-        return Err("Signed transaction blob has trailing bytes".to_string());
-    }
-    if tx.serialize() != request.tx_blob {
-        return Err("Signed transaction blob is not canonical".to_string());
+    struct Pending<'a> {
+        tx_blob: &'a [u8],
+        fee: u64,
+        construction: &'a TxConstructionDataSummary,
+        key_images_text: String,
     }
 
-    let construction = &unsigned.txes[0];
-    if let Some(max_selected) = construction.selected_transfer_indices.iter().max() {
-        let required_len = max_selected
-            .checked_add(1)
-            .ok_or_else(|| "Wallet2 selected transfer index overflow".to_string())?;
-        let actual_len: u64 = request
-            .key_images
-            .len()
-            .try_into()
-            .map_err(|_| "Wallet2 key image vector length exceeds u64".to_string())?;
-        if actual_len < required_len {
+    let mut pending = Vec::with_capacity(unsigned.txes.len());
+    for (index, (construction, tx_blob)) in unsigned
+        .txes
+        .iter()
+        .zip(request.tx_blobs.iter())
+        .enumerate()
+    {
+        let mut cursor = Cursor::new(*tx_blob);
+        let tx = Transaction::read(&mut cursor)
+            .map_err(|e| format!("Signed transaction blob #{index} is not valid: {e:?}"))?;
+        let mut trailing = [0u8; 1];
+        if cursor
+            .read(&mut trailing)
+            .map_err(|e| format!("Failed to validate signed transaction cursor #{index}: {e:?}"))?
+            != 0
+        {
             return Err(format!(
-                "Wallet2 signed txset key_images must include entries through selected transfer index {max_selected}, got {actual_len}"
+                "Signed transaction blob #{index} has trailing bytes"
             ));
         }
-    }
+        if tx.serialize() != *tx_blob {
+            return Err(format!("Signed transaction blob #{index} is not canonical"));
+        }
 
-    let total_input = construction
-        .sources
-        .iter()
-        .try_fold(0u64, |acc, source| acc.checked_add(source.amount))
-        .ok_or_else(|| "Wallet2 source amount overflow".to_string())?;
-    let total_output = construction.split_destination_total_amount;
-    let fee = total_input
-        .checked_sub(total_output)
-        .ok_or_else(|| "Wallet2 outputs exceed inputs".to_string())?;
+        if let Some(max_selected) = construction.selected_transfer_indices.iter().max() {
+            let required_len = max_selected
+                .checked_add(1)
+                .ok_or_else(|| "Wallet2 selected transfer index overflow".to_string())?;
+            let actual_len: u64 = request
+                .key_images
+                .len()
+                .try_into()
+                .map_err(|_| "Wallet2 key image vector length exceeds u64".to_string())?;
+            if actual_len < required_len {
+                return Err(format!(
+                    "Wallet2 signed txset key_images must include entries through selected transfer index {max_selected}, got {actual_len}"
+                ));
+            }
+        }
 
-    let spent_key_images = tx
-        .prefix
-        .inputs
-        .iter()
-        .map(|input| match input {
-            Input::ToKey { key_image, .. } => Ok(key_image.compress().to_bytes()),
-            Input::Gen(_) => Err("Signed wallet2 txset cannot contain miner inputs".to_string()),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    if construction.selected_transfer_indices.len() != spent_key_images.len() {
-        return Err(format!(
-            "Wallet2 selected transfer count {} does not match signed transaction input count {}",
-            construction.selected_transfer_indices.len(),
-            spent_key_images.len()
-        ));
-    }
-    let mut remaining_spent_key_images = spent_key_images.clone();
-    for selected_transfer_index in construction.selected_transfer_indices.iter().copied() {
-        let selected_transfer_index: usize = selected_transfer_index
-            .try_into()
-            .map_err(|_| "Wallet2 selected transfer index exceeds usize".to_string())?;
-        let Some(expected_key_image) = request.key_images.get(selected_transfer_index) else {
-            return Err(format!(
-                "Wallet2 signed txset key_images missing selected transfer index {selected_transfer_index}"
-            ));
-        };
-        let Some(position) = remaining_spent_key_images
+        let total_input = construction
+            .sources
             .iter()
-            .position(|spent_key_image| spent_key_image == expected_key_image)
-        else {
-            return Err(format!(
-                "Wallet2 signed txset key image at selected transfer index {selected_transfer_index} was not spent by the signed transaction"
-            ));
-        };
-        remaining_spent_key_images.remove(position);
-    }
+            .try_fold(0u64, |acc, source| acc.checked_add(source.amount))
+            .ok_or_else(|| "Wallet2 source amount overflow".to_string())?;
+        let total_output = construction.split_destination_total_amount;
+        let fee = total_input
+            .checked_sub(total_output)
+            .ok_or_else(|| "Wallet2 outputs exceed inputs".to_string())?;
 
-    let key_images_text = spent_key_images
-        .iter()
-        .map(hex::encode)
-        .collect::<Vec<_>>()
-        .join(" ");
-    let key_images_text = if key_images_text.is_empty() {
-        key_images_text
-    } else {
-        format!("{key_images_text} ")
-    };
+        let spent_key_images = tx
+            .prefix
+            .inputs
+            .iter()
+            .map(|input| match input {
+                Input::ToKey { key_image, .. } => Ok(key_image.compress().to_bytes()),
+                Input::Gen(_) => {
+                    Err("Signed wallet2 txset cannot contain miner inputs".to_string())
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if construction.selected_transfer_indices.len() != spent_key_images.len() {
+            return Err(format!(
+                "Wallet2 selected transfer count {} does not match signed transaction #{index} input count {}",
+                construction.selected_transfer_indices.len(),
+                spent_key_images.len()
+            ));
+        }
+        let mut remaining_spent_key_images = spent_key_images.clone();
+        for selected_transfer_index in construction.selected_transfer_indices.iter().copied() {
+            let selected_transfer_index: usize = selected_transfer_index
+                .try_into()
+                .map_err(|_| "Wallet2 selected transfer index exceeds usize".to_string())?;
+            let Some(expected_key_image) = request.key_images.get(selected_transfer_index) else {
+                return Err(format!(
+                    "Wallet2 signed txset key_images missing selected transfer index {selected_transfer_index}"
+                ));
+            };
+            let Some(position) = remaining_spent_key_images
+                .iter()
+                .position(|spent_key_image| spent_key_image == expected_key_image)
+            else {
+                return Err(format!(
+                    "Wallet2 signed txset key image at selected transfer index {selected_transfer_index} was not spent by signed transaction #{index}"
+                ));
+            };
+            remaining_spent_key_images.remove(position);
+        }
+
+        let key_images_text = spent_key_images
+            .iter()
+            .map(hex::encode)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let key_images_text = if key_images_text.is_empty() {
+            key_images_text
+        } else {
+            format!("{key_images_text} ")
+        };
+        pending.push(Pending {
+            tx_blob,
+            fee,
+            construction,
+            key_images_text,
+        });
+    }
 
     let mut archive = BinaryArchiveWriter::new();
     archive.write_varint(0); // signed_tx_set version
-    archive.write_varint(1); // ptx count
-    archive.write_pending_tx(
-        request.tx_blob,
-        fee,
-        construction,
-        key_images_text.as_bytes(),
-    )?;
+    archive.write_varint(pending.len() as u64); // ptx count
+    for ptx in pending {
+        archive.write_pending_tx(
+            ptx.tx_blob,
+            ptx.fee,
+            ptx.construction,
+            ptx.key_images_text.as_bytes(),
+        )?;
+    }
     archive.write_varint(request.key_images.len() as u64);
     for key_image in request.key_images {
         archive.write_fixed(key_image);
