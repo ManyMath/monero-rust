@@ -25,6 +25,11 @@ own wallet RPC accepts that rebuilt container via `submit_transfer`.
 
 Add `--verify-rust-rebuilt-cli-submit` to submit the rebuilt `signed_monero_tx`
 file through `monero-wallet-cli submit_transfer` instead of wallet RPC.
+
+Add `--include-multi-tx-unsigned` to also persist a deterministic
+`multi_unsigned_monero_tx` generated with `transfer_split`. This captures a real
+wallet2 multi-transaction unsigned container for parser/signing boundary work
+without changing the single-transaction submit flow.
 """
 
 from __future__ import annotations
@@ -56,6 +61,7 @@ STANDARD_ADDRESS = (
 TRANSFER_AMOUNT_ATOMIC = 1_000_000_000_000
 BLOCKS_TO_MINE = 80
 RING_SIZE = 16
+MULTI_TX_DESTINATION_COUNT = 20
 
 
 def sha256_file(path: Path) -> str:
@@ -114,7 +120,9 @@ def sanitize_cli_stdout(stdout: str, monero_bin_dir: Path, work: Path) -> str:
     )
 
 
-def write_readme(path: Path, monero_version: str, rebuilt: bool) -> None:
+def write_readme(
+    path: Path, monero_version: str, rebuilt: bool, include_multi_tx_unsigned: bool
+) -> None:
     signed_source = (
         "rebuilt by monero-rust's app signer and accepted by "
         "`monero-wallet-cli submit_transfer`"
@@ -125,6 +133,12 @@ def write_readme(path: Path, monero_version: str, rebuilt: bool) -> None:
         "- `monero_wallet_rpc_signed_monero_tx`: reference signed txset from "
         "Monero wallet-rpc before the app rebuild.\n"
         if rebuilt
+        else ""
+    )
+    multi_tx_artifact = (
+        "- `multi_unsigned_monero_tx`: binary unsigned txset generated with "
+        "`transfer_split`; intentionally unsigned and not submitted.\n"
+        if include_multi_tx_unsigned
         else ""
     )
     path.write_text(
@@ -154,7 +168,7 @@ Artifacts:
 - `outputs`: binary output-export artifact, starts with `Monero output export\\x04`.
 - `key_images_rpc.json`: `export_key_images` RPC response.
 - `unsigned_monero_tx`: binary unsigned txset, starts with `Monero unsigned tx set\\x05`.
-- `signed_monero_tx`: binary signed txset, starts with `Monero signed tx set\\x05`.
+{multi_tx_artifact}- `signed_monero_tx`: binary signed txset, starts with `Monero signed tx set\\x05`.
 {reference_artifact}- `transfer_description.json`: `describe_transfer` RPC response.
 - `metadata.json`: tool versions, wallet seed/keys, flow summary, artifact hashes.
 
@@ -192,6 +206,15 @@ def main() -> None:
         help=(
             "Rebuild the signed_monero_tx with monero-rust and submit the "
             "rebuilt file through monero-wallet-cli submit_transfer."
+        ),
+    )
+    parser.add_argument(
+        "--include-multi-tx-unsigned",
+        action="store_true",
+        help=(
+            "Also write multi_unsigned_monero_tx from wallet-rpc transfer_split "
+            "for multi-transaction wallet2 parser/signing boundary coverage. "
+            "The multi-transaction txset is not signed or submitted."
         ),
     )
     parser.add_argument("--cargo-bin", default="cargo")
@@ -346,6 +369,20 @@ def main() -> None:
                 "get_tx_key": False,
             },
         )
+        multi_tx_transfer = None
+        if args.include_multi_tx_unsigned:
+            multi_tx_transfer = rpc(
+                hot_rpc,
+                "transfer_split",
+                {
+                    "destinations": [
+                        {"address": STANDARD_ADDRESS, "amount": TRANSFER_AMOUNT_ATOMIC}
+                        for _ in range(MULTI_TX_DESTINATION_COUNT)
+                    ],
+                    "ring_size": RING_SIZE,
+                    "get_tx_key": False,
+                },
+            )
         description = rpc(
             cold_rpc, "describe_transfer", {"unsigned_txset": transfer["unsigned_txset"]}
         )
@@ -431,6 +468,11 @@ def main() -> None:
         shutil.copy2(work / "cold" / "cold.keys", out_dir / "cold_full.keys")
         write_hex_file(out_dir / "outputs", outputs_data_hex)
         write_hex_file(out_dir / "unsigned_monero_tx", transfer["unsigned_txset"])
+        if multi_tx_transfer is not None:
+            write_hex_file(
+                out_dir / "multi_unsigned_monero_tx",
+                multi_tx_transfer["unsigned_txset"],
+            )
         write_hex_file(out_dir / "signed_monero_tx", signed_txset_for_submit)
         if args.verify_rust_rebuilt_submit or args.verify_rust_rebuilt_cli_submit:
             write_hex_file(out_dir / "monero_wallet_rpc_signed_monero_tx", signed["signed_txset"])
@@ -481,6 +523,16 @@ def main() -> None:
                 "transfer_amount_atomic": TRANSFER_AMOUNT_ATOMIC,
                 "ring_size": RING_SIZE,
                 "unsigned_tx_hash": transfer["tx_hash"],
+                "multi_tx_unsigned": (
+                    {
+                        "destination_count": MULTI_TX_DESTINATION_COUNT,
+                        "tx_hash_list": multi_tx_transfer["tx_hash_list"],
+                        "amount_list": multi_tx_transfer.get("amount_list"),
+                        "weight_list": multi_tx_transfer.get("weight_list"),
+                    }
+                    if multi_tx_transfer is not None
+                    else None
+                ),
                 "signed_tx_hash_list": (
                     submitted["tx_hash_list"]
                     if rebuilt_with_monero_rust
@@ -504,14 +556,22 @@ def main() -> None:
                 "submitted_tx_hash_list": submitted["tx_hash_list"],
             },
             "artifacts": {
-                name: {"bytes": (out_dir / name).stat().st_size, "sha256": sha256_file(out_dir / name)}
+                name: {
+                    "bytes": (out_dir / name).stat().st_size,
+                    "sha256": sha256_file(out_dir / name),
+                }
                 for name in files
             },
         }
         (out_dir / "metadata.json").write_text(
             json.dumps(metadata, indent=2, sort_keys=True) + "\n"
         )
-        write_readme(out_dir / "README.md", wallet_rpc_version, rebuilt_with_monero_rust)
+        write_readme(
+            out_dir / "README.md",
+            wallet_rpc_version,
+            rebuilt_with_monero_rust,
+            args.include_multi_tx_unsigned,
+        )
 
         print(f"wrote {out_dir}")
         print(json.dumps(metadata["flow"], indent=2, sort_keys=True))
