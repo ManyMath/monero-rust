@@ -108,6 +108,142 @@ describe('Persistence & Node-Query Tests', () => {
       });
     }, 10000);
 
+    it('keeps oversized wallet histories in IndexedDB behind chrome.storage markers', async () => {
+      const result = await extPage.evaluate(async () => {
+        if (!chrome?.storage?.local) {
+          return { success: false, error: 'chrome.storage.local unavailable' };
+        }
+        if (!window.indexedDB) {
+          return { success: false, error: 'IndexedDB unavailable' };
+        }
+
+        const markerPrefix = '__monero_tiered_storage_ref_v1__:';
+        const databaseName = 'monero_wallet_storage';
+        const storeName = 'wallets';
+        const runId = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+        const walletCount = 4;
+        const primaryKeys = Array.from(
+          { length: walletCount },
+          (_, index) => `monero_wallet_quota_${runId}_${index}`,
+        );
+        const secondaryKeys = primaryKeys.map((key) => `tiered:${key}`);
+
+        const openDb = () => new Promise((resolve, reject) => {
+          const request = window.indexedDB.open(databaseName, 1);
+          request.onupgradeneeded = () => {
+            const db = request.result;
+            if (!db.objectStoreNames.contains(storeName)) {
+              db.createObjectStore(storeName);
+            }
+          };
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error || new Error('IndexedDB open failed'));
+        });
+
+        const withStore = (db, mode, fn) => new Promise((resolve, reject) => {
+          const tx = db.transaction(storeName, mode);
+          const store = tx.objectStore(storeName);
+          const request = fn(store);
+          tx.oncomplete = () => resolve(request ? request.result : undefined);
+          tx.onerror = () => reject(tx.error || new Error('IndexedDB transaction failed'));
+          tx.onabort = () => reject(tx.error || new Error('IndexedDB transaction aborted'));
+        });
+
+        const makePayload = (walletIndex) => {
+          const outputs = Array.from({ length: 3200 }, (_, index) => ({
+            tx_hash: `quota_${walletIndex}_${index.toString().padStart(4, '0')}`,
+            output_index: index % 8,
+            amount: 1000000000000 + index,
+            amount_xmr: '1.000000000000',
+            key: `key_${walletIndex}_${index}`.padEnd(72, 'k'),
+            key_offset: `offset_${walletIndex}_${index}`.padEnd(72, 'o'),
+            commitment_mask: `mask_${walletIndex}_${index}`.padEnd(72, 'm'),
+            subaddress_index: [walletIndex % 3, index % 17],
+            block_height: 200000 + index,
+            spent: index % 11 === 0,
+            key_image: `ki_${walletIndex}_${index}`.padEnd(72, 'i'),
+            frozen: index % 29 === 0,
+          }));
+          const transactions = Array.from({ length: 180 }, (_, index) => ({
+            tx_hash: `history_${walletIndex}_${index}`,
+            block_height: 200000 + index,
+            amount: `${index}.${walletIndex}`,
+            fee: '0.000010000000',
+            received_outputs: outputs.slice(index, index + 3).map(
+              (output) => `${output.tx_hash}:${output.output_index}`,
+            ),
+            spent_key_images: outputs.slice(index + 3, index + 6).map(
+              (output) => output.key_image,
+            ),
+          }));
+          return JSON.stringify({
+            seed: `quota seed ${walletIndex}`,
+            network: 'stagenet',
+            address: '5quota'.padEnd(95, String(walletIndex)),
+            node_url: 'http://127.0.0.1:38081',
+            outputs,
+            transactions,
+            continuous_scan_current_height: 203200,
+            selected_outputs: outputs.slice(0, 25).map(
+              (output) => `${output.tx_hash}:${output.output_index}`,
+            ),
+            accounts: [0, 1, 2],
+            active_account: walletIndex % 3,
+            scanning_accounts: [walletIndex % 3],
+          });
+        };
+
+        const db = await openDb();
+        try {
+          const payloads = primaryKeys.map((_, index) => makePayload(index));
+          for (let index = 0; index < payloads.length; index += 1) {
+            await withStore(db, 'readwrite', (store) =>
+              store.put(payloads[index], secondaryKeys[index])
+            );
+            await chrome.storage.local.set({
+              [primaryKeys[index]]: `${markerPrefix}${secondaryKeys[index]}`,
+            });
+          }
+
+          const primaryValues = await chrome.storage.local.get(primaryKeys);
+          const primaryBytes = new Blob([JSON.stringify(primaryValues)]).size;
+          const roundtripLengths = [];
+          const roundtripMatches = [];
+          for (let index = 0; index < payloads.length; index += 1) {
+            const stored = await withStore(db, 'readonly', (store) =>
+              store.get(secondaryKeys[index])
+            );
+            roundtripLengths.push(stored.length);
+            roundtripMatches.push(stored === payloads[index]);
+          }
+
+          return {
+            success: true,
+            walletCount,
+            markerCount: Object.values(primaryValues).filter(
+              (value) => typeof value === 'string' && value.startsWith(markerPrefix),
+            ).length,
+            primaryBytes,
+            minPayloadBytes: Math.min(...roundtripLengths),
+            allRoundtripped: roundtripMatches.every(Boolean),
+          };
+        } finally {
+          await chrome.storage.local.remove(primaryKeys);
+          for (const key of secondaryKeys) {
+            await withStore(db, 'readwrite', (store) => store.delete(key));
+          }
+          db.close();
+        }
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.walletCount).toBe(4);
+      expect(result.markerCount).toBe(4);
+      expect(result.primaryBytes).toBeLessThan(10 * 1024);
+      expect(result.minPayloadBytes).toBeGreaterThan(512 * 1024);
+      expect(result.allRoundtripped).toBe(true);
+    }, 30000);
+
     it('encrypts wallet data and roundtrips through save/load', async () => {
       const saveResp = await sendSignalAndWait(
         extPage,
