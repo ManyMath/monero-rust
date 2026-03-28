@@ -232,6 +232,12 @@ pub struct ScanBlockRequest {
     pub seed: String,
     pub network: String,
     #[serde(default)]
+    pub accounts_to_scan: Option<Vec<u32>>,
+    #[serde(default)]
+    pub account_lookahead: u32,
+    #[serde(default)]
+    pub subaddress_lookahead: u32,
+    #[serde(default)]
     pub passphrase: String,
     #[serde(default)]
     pub bip39_account_index: u32,
@@ -1891,6 +1897,26 @@ mod tests {
         assert_eq!(req.recipients.len(), 1);
         assert_eq!(req.selected_outputs, Some(vec!["txhash1:0".into()]));
         assert_eq!(req.max_fee_per_weight, Some(2_000_000));
+    }
+
+    #[test]
+    fn scan_block_request_accounts_deserialize() {
+        let json = r#"{
+            "node_url": "http://localhost:38081",
+            "block_height": 1384526,
+            "seed": "seed words",
+            "network": "stagenet",
+            "account_lookahead": 1,
+            "subaddress_lookahead": 20,
+            "accounts_to_scan": [1]
+        }"#;
+
+        let req: ScanBlockRequest = serde_json::from_str(json).expect("deserialize");
+
+        assert_eq!(req.block_height, 1_384_526);
+        assert_eq!(req.account_lookahead, 1);
+        assert_eq!(req.subaddress_lookahead, 20);
+        assert_eq!(req.accounts_to_scan, Some(vec![1]));
     }
 
     #[test]

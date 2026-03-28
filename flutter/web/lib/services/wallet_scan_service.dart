@@ -46,6 +46,9 @@ class WalletScanService {
     required int blockHeight,
     required String nodeUrl,
     required String network,
+    List<int>? accountsToScan,
+    int accountLookahead = 0,
+    int subaddressLookahead = 0,
     String passphrase = '',
     int bip39AccountIndex = 0,
   }) {
@@ -54,6 +57,9 @@ class WalletScanService {
       blockHeight: blockHeight,
       seed: seed,
       network: network,
+      accountsToScan: accountsToScan,
+      accountLookahead: accountLookahead,
+      subaddressLookahead: subaddressLookahead,
       passphrase: passphrase,
       bip39AccountIndex: bip39AccountIndex,
     ).sendSignalToRust();

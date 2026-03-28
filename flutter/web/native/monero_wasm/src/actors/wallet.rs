@@ -773,24 +773,39 @@ impl WalletActor {
             };
             let network = request.network.clone();
 
-            match monero_rust::scan_block_for_outputs_with_url(
+            let lookahead = monero_rust::compute_lookahead(
+                request.account_lookahead,
+                request.subaddress_lookahead,
+                request.accounts_to_scan.as_deref(),
+            );
+
+            match monero_rust::scan_block_for_outputs_with_url_and_lookahead(
                 &request.node_url,
                 request.block_height,
                 &seed,
                 &request.network,
+                lookahead,
                 &request.passphrase,
             )
             .await
             {
                 Ok(result) => {
+                    let accounts_filter = request
+                        .accounts_to_scan
+                        .as_ref()
+                        .map(|accounts| accounts.iter().copied().collect::<HashSet<u32>>());
+                    let filtered_outputs = monero_rust::filter_outputs_by_accounts(
+                        result.outputs.iter(),
+                        accounts_filter.as_ref(),
+                    );
                     let outputs: Vec<OwnedOutput> =
-                        result.outputs.iter().map(|o| o.into()).collect();
+                        filtered_outputs.iter().map(|o| o.into()).collect();
 
                     let _ = self_addr
                         .notify(StoreOutputs {
                             seed,
                             network,
-                            outputs: result.outputs.clone(),
+                            outputs: filtered_outputs.clone(),
                             daemon_height: result.daemon_height,
                             block_hashes: vec![(result.block_height, result.block_hash.clone())],
                         })

@@ -474,6 +474,9 @@ class ScanBlockRequest {
   final int blockHeight;
   final String seed;
   final String network;
+  final List<int>? accountsToScan;
+  final int accountLookahead;
+  final int subaddressLookahead;
   final String passphrase;
   final int bip39AccountIndex;
   const ScanBlockRequest({
@@ -481,6 +484,9 @@ class ScanBlockRequest {
     required this.blockHeight,
     required this.seed,
     required this.network,
+    this.accountsToScan,
+    this.accountLookahead = 0,
+    this.subaddressLookahead = 0,
     this.passphrase = '',
     this.bip39AccountIndex = 0,
   });
@@ -490,6 +496,9 @@ class ScanBlockRequest {
     'block_height': blockHeight,
     'seed': seed,
     'network': network,
+    if (accountsToScan != null) 'accounts_to_scan': accountsToScan,
+    'account_lookahead': accountLookahead,
+    'subaddress_lookahead': subaddressLookahead,
     'passphrase': passphrase,
     'bip39_account_index': bip39AccountIndex,
   });

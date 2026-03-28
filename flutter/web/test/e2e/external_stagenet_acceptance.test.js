@@ -9,6 +9,8 @@ const {
 } = require('./fixtures');
 
 const NODE_URL = (process.env.EXTERNAL_STAGENET_NODE_URL || '').replace(/\/+$/, '');
+const KNOWN_ACCOUNT_SCAN_HEIGHT = 1384526;
+const KNOWN_ACCOUNT0_OUTPUT_TX = '07a561e60118c0a485b20bbfac787fd8efead96a9f422d9dff4a86f2985db7c5';
 
 describe('External Stagenet Acceptance', () => {
   let browser;
@@ -131,6 +133,75 @@ describe('External Stagenet Acceptance', () => {
     expect(scanResp.is_scanning).toBe(false);
     expect(scanResp.daemon_height).toBeGreaterThanOrEqual(daemonHeight);
   }, 140000);
+
+  it('filters a known external stagenet block by selected account', async () => {
+    if (skipReason) {
+      console.log(`EXTERNAL-STAGENET-04 skipped: ${skipReason}`);
+      return;
+    }
+    if (!daemonHeight) {
+      const height = await sendSignalAndWait(
+        extPage,
+        'send_query_daemon_height_request',
+        JSON.stringify({ node_url: NODE_URL }),
+        'DaemonHeightResponse',
+        15000
+      );
+      daemonHeight = height.daemon_height;
+    }
+    if (daemonHeight <= KNOWN_ACCOUNT_SCAN_HEIGHT) {
+      console.log(
+        `EXTERNAL-STAGENET-04 skipped: daemon height ${daemonHeight} <= known block ${KNOWN_ACCOUNT_SCAN_HEIGHT}`
+      );
+      return;
+    }
+
+    const account0 = await sendSignalAndWait(
+      extPage,
+      'send_scan_block_request',
+      JSON.stringify({
+        node_url: NODE_URL,
+        block_height: KNOWN_ACCOUNT_SCAN_HEIGHT,
+        seed: HONKED_SEED,
+        network: 'stagenet',
+        account_lookahead: 1,
+        subaddress_lookahead: 20,
+        accounts_to_scan: [0],
+        passphrase: '',
+        bip39_account_index: 0,
+      }),
+      'BlockScanResponse',
+      60000
+    );
+
+    expect(account0.success).toBe(true);
+    expect(account0.block_height).toBe(KNOWN_ACCOUNT_SCAN_HEIGHT);
+    expect(account0.outputs.some((output) => output.tx_hash === KNOWN_ACCOUNT0_OUTPUT_TX)).toBe(true);
+    expect(account0.outputs.every((output) => !output.subaddress_index || output.subaddress_index[0] === 0)).toBe(true);
+
+    const account1 = await sendSignalAndWait(
+      extPage,
+      'send_scan_block_request',
+      JSON.stringify({
+        node_url: NODE_URL,
+        block_height: KNOWN_ACCOUNT_SCAN_HEIGHT,
+        seed: HONKED_SEED,
+        network: 'stagenet',
+        account_lookahead: 1,
+        subaddress_lookahead: 20,
+        accounts_to_scan: [1],
+        passphrase: '',
+        bip39_account_index: 0,
+      }),
+      'BlockScanResponse',
+      60000
+    );
+
+    expect(account1.success).toBe(true);
+    expect(account1.block_height).toBe(KNOWN_ACCOUNT_SCAN_HEIGHT);
+    expect(account1.outputs.some((output) => output.tx_hash === KNOWN_ACCOUNT0_OUTPUT_TX)).toBe(false);
+    expect(account1.outputs.every((output) => output.subaddress_index?.[0] === 1)).toBe(true);
+  }, 90000);
 
   it('scans external stagenet mempool read-only', async () => {
     if (skipReason) {

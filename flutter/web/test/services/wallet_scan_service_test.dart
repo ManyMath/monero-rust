@@ -185,6 +185,29 @@ void main() {
     });
   });
 
+  group('WalletScanService.scanBlock', () {
+    test('sends selected accounts and lookahead to Rust', () {
+      final sender = _RecordingSignalSender();
+      setSignalSender(sender);
+
+      WalletScanService.scanBlock(
+        seed: _validSeed,
+        blockHeight: 1384526,
+        nodeUrl: 'http://node:38081',
+        network: 'stagenet',
+        accountsToScan: [1],
+        accountLookahead: 1,
+        subaddressLookahead: 20,
+      );
+
+      expect(sender.sent, hasLength(1));
+      expect(sender.sent.single.name, 'send_scan_block_request');
+      expect(sender.sent.single.data['accounts_to_scan'], [1]);
+      expect(sender.sent.single.data['account_lookahead'], 1);
+      expect(sender.sent.single.data['subaddress_lookahead'], 20);
+    });
+  });
+
   group('WalletScanService.validateContinuousScan', () {
     test('no active wallets and empty seed returns error', () {
       final result = WalletScanService.validateContinuousScan(
