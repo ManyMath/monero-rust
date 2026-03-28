@@ -1,8 +1,6 @@
 use crate::ffi_web::SendToDart;
 use crate::messages::{ResetUrDecoder, StartUrEncoder, StopUrEncoder, UrDecodeFrame};
-use crate::signals::{
-    QrFrameResponse, UrDecodeCompleteResponse, UrDecodeProgressResponse,
-};
+use crate::signals::{QrFrameResponse, UrDecodeCompleteResponse, UrDecodeProgressResponse};
 use async_trait::async_trait;
 use messages::prelude::{Actor, Address, Context, Notifiable};
 use monero_rust::ur_codec::{UrDecoder, UrEncoder};

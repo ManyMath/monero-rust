@@ -12,10 +12,9 @@ fn main() {
         .join("bridge");
     std::fs::create_dir_all(&out_dir).ok();
 
-    let config = cbindgen::Config::from_file(
-        std::path::Path::new(&crate_dir).join("cbindgen.toml"),
-    )
-    .unwrap_or_default();
+    let config =
+        cbindgen::Config::from_file(std::path::Path::new(&crate_dir).join("cbindgen.toml"))
+            .unwrap_or_default();
 
     if let Ok(bindings) = cbindgen::Builder::new()
         .with_crate(&crate_dir)

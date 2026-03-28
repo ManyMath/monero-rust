@@ -1,5 +1,4 @@
-use monero_rust::encryption;
-use monero_rust::error_codes::{ErrorResponse, ERR_ENCRYPTION, ERR_DECRYPTION, ERR_INVALID_KEY};
+use crate::ffi_web::SendToDart;
 use crate::signals::{
     DeriveEncryptionKeyRequest, EncryptionKeyDerivedResponse, LoadWalletDataRequest,
     SaveWalletDataRequest, SaveWithDerivedKeyRequest, WalletDataLoadedResponse,
@@ -7,7 +6,8 @@ use crate::signals::{
 };
 use async_trait::async_trait;
 use messages::prelude::{Actor, Address, Context, Notifiable};
-use crate::ffi_web::SendToDart;
+use monero_rust::encryption;
+use monero_rust::error_codes::{ERR_DECRYPTION, ERR_ENCRYPTION, ERR_INVALID_KEY, ErrorResponse};
 
 pub struct StorageActor {}
 
@@ -100,7 +100,10 @@ impl Notifiable<SaveWalletData> for StorageActor {
                     &encrypted_bytes,
                 );
 
-                log::info!("Wallet data encrypted successfully ({} bytes)", encrypted_bytes.len());
+                log::info!(
+                    "Wallet data encrypted successfully ({} bytes)",
+                    encrypted_bytes.len()
+                );
 
                 WalletDataSavedResponse {
                     success: true,
@@ -144,8 +147,9 @@ impl Notifiable<LoadWalletData> for StorageActor {
             Err(e) => {
                 log::error!("Base64 decode failed: {}", e);
 
-                let err = ErrorResponse::new(ERR_DECRYPTION, format!("Invalid encrypted data: {}", e))
-                    .with_hint("The stored data may be corrupted");
+                let err =
+                    ErrorResponse::new(ERR_DECRYPTION, format!("Invalid encrypted data: {}", e))
+                        .with_hint("The stored data may be corrupted");
                 WalletDataLoadedResponse {
                     success: false,
                     error: Some(err.message.clone()),
@@ -161,38 +165,39 @@ impl Notifiable<LoadWalletData> for StorageActor {
 
         // Decrypt the wallet data
         match encryption::decrypt(&encrypted_bytes, &msg.password) {
-            Ok(decrypted_bytes) => {
-                match String::from_utf8(decrypted_bytes) {
-                    Ok(wallet_data_json) => {
-                        log::info!("Wallet data decrypted successfully");
+            Ok(decrypted_bytes) => match String::from_utf8(decrypted_bytes) {
+                Ok(wallet_data_json) => {
+                    log::info!("Wallet data decrypted successfully");
 
-                        WalletDataLoadedResponse {
-                            success: true,
-                            error: None,
-                    error_code: None,
-                    error_hint: None,
-                    error_transient: None,
-                            wallet_data_json: Some(wallet_data_json),
-                        }
-                        .send_signal_to_dart();
+                    WalletDataLoadedResponse {
+                        success: true,
+                        error: None,
+                        error_code: None,
+                        error_hint: None,
+                        error_transient: None,
+                        wallet_data_json: Some(wallet_data_json),
                     }
-                    Err(e) => {
-                        log::error!("UTF-8 decode failed: {}", e);
-
-                        let err = ErrorResponse::new(ERR_DECRYPTION, format!("Invalid decrypted data: {}", e))
-                            .with_hint("Wrong password or corrupted data");
-                        WalletDataLoadedResponse {
-                            success: false,
-                            error: Some(err.message.clone()),
-                            error_code: Some(err.code),
-                            error_hint: err.hint,
-                            error_transient: Some(err.transient),
-                            wallet_data_json: None,
-                        }
-                        .send_signal_to_dart();
-                    }
+                    .send_signal_to_dart();
                 }
-            }
+                Err(e) => {
+                    log::error!("UTF-8 decode failed: {}", e);
+
+                    let err = ErrorResponse::new(
+                        ERR_DECRYPTION,
+                        format!("Invalid decrypted data: {}", e),
+                    )
+                    .with_hint("Wrong password or corrupted data");
+                    WalletDataLoadedResponse {
+                        success: false,
+                        error: Some(err.message.clone()),
+                        error_code: Some(err.code),
+                        error_hint: err.hint,
+                        error_transient: Some(err.transient),
+                        wallet_data_json: None,
+                    }
+                    .send_signal_to_dart();
+                }
+            },
             Err(e) => {
                 log::error!("Decryption failed: {}", e);
 
@@ -234,7 +239,8 @@ impl Notifiable<DeriveKey> for StorageActor {
                 .send_signal_to_dart();
             }
             Err(e) => {
-                let err = ErrorResponse::new(ERR_ENCRYPTION, format!("Key derivation failed: {}", e));
+                let err =
+                    ErrorResponse::new(ERR_ENCRYPTION, format!("Key derivation failed: {}", e));
                 EncryptionKeyDerivedResponse {
                     success: false,
                     error: Some(err.message.clone()),

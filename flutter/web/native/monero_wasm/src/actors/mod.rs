@@ -1,18 +1,18 @@
-pub mod wallet;
-pub mod tx_builder;
 pub mod storage;
+pub mod tx_builder;
 pub mod ur;
+pub mod wallet;
 
 #[cfg(test)]
 mod wallet_test;
 
 use messages::prelude::Context;
-use wallet::WalletActor;
-use tx_builder::TxBuilderActor;
 use storage::StorageActor;
-use ur::UrActor;
 use tokio::spawn;
 use tokio_with_wasm::alias as tokio;
+use tx_builder::TxBuilderActor;
+use ur::UrActor;
+use wallet::WalletActor;
 
 pub async fn create_actors() {
     let wallet_context = Context::new();

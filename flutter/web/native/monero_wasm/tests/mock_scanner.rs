@@ -22,13 +22,16 @@ impl MockRpc {
 
         // Populate with mock blocks
         for height in 0..=daemon_height {
-            blocks.insert(height, MockBlock {
+            blocks.insert(
                 height,
-                hash: format!("blockhash_{}", height),
-                timestamp: 1600000000 + (height * 120), // 2 min per block
-                tx_count: if height % 10 == 0 { 5 } else { 2 },
-                has_output: height % 15 == 0, // Output every 15 blocks
-            });
+                MockBlock {
+                    height,
+                    hash: format!("blockhash_{}", height),
+                    timestamp: 1600000000 + (height * 120), // 2 min per block
+                    tx_count: if height % 10 == 0 { 5 } else { 2 },
+                    has_output: height % 15 == 0, // Output every 15 blocks
+                },
+            );
         }
 
         Self {
@@ -55,7 +58,10 @@ impl MockRpc {
     pub fn get_block(&self, height: u64) -> Result<MockBlock, String> {
         if let Some(fail_height) = self.fail_at_height {
             if height == fail_height {
-                return Err(format!("Mock RPC: Failed to get block at height {}", height));
+                return Err(format!(
+                    "Mock RPC: Failed to get block at height {}",
+                    height
+                ));
             }
         }
 

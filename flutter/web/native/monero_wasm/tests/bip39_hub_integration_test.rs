@@ -7,8 +7,7 @@
 
 const BIP39_SEED: &str =
     "color ranch color remove subway public water embrace before begin liberty fault";
-const BIP39_EXPECTED_ADDRESS: &str =
-    "49MggvPosJugF8Zq7WAKbsSchz6vbyL6YiUxM4ryfGQDXphs6wiWiXLFWCSshnLPcceGTWUaKfWWMHQAAKESV3TQJVQsL9a";
+const BIP39_EXPECTED_ADDRESS: &str = "49MggvPosJugF8Zq7WAKbsSchz6vbyL6YiUxM4ryfGQDXphs6wiWiXLFWCSshnLPcceGTWUaKfWWMHQAAKESV3TQJVQsL9a";
 
 #[test]
 fn test_wasm_seed_birthday_with_bip39() {
@@ -126,7 +125,7 @@ fn test_wasm_full_bip39_restore_pipeline() {
 
     // 2. Get seed birthday (for restore height)
     let birthday = monero_rust::seed_birthday(BIP39_SEED);
-    // BIP39→legacy has no birthday, so restore will use user-provided height
+    // BIP39->legacy has no birthday, so restore will use user-provided height
     assert_eq!(birthday, None);
 
     // 3. Derive keys (wallet initialization)

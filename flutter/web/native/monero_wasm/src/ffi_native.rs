@@ -38,12 +38,8 @@ unsafe impl Sync for CallbackState {}
 ///
 /// * `callback` must be safe to invoke from any thread
 /// * `user_data` must remain valid until [`hub_shutdown`] is called
-pub type RustSignalCallback = extern "C" fn(
-    signal_id: u32,
-    data_ptr: *const u8,
-    data_len: usize,
-    user_data: *mut c_void,
-);
+pub type RustSignalCallback =
+    extern "C" fn(signal_id: u32, data_ptr: *const u8, data_len: usize, user_data: *mut c_void);
 
 /// Global callback stored after `hub_init` so that actor code can send
 /// RustSignals back to Dart.
@@ -57,7 +53,9 @@ static GLOBAL_CALLBACK: Mutex<Option<CallbackState>> = Mutex::new(None);
 #[allow(dead_code)]
 pub(crate) fn send_rust_signal(signal_id: u32, data: &[u8]) {
     let cb = {
-        let Ok(guard) = GLOBAL_CALLBACK.lock() else { return };
+        let Ok(guard) = GLOBAL_CALLBACK.lock() else {
+            return;
+        };
         guard.as_ref().map(|s| (s.callback, s.user_data))
     };
     if let Some((callback, user_data)) = cb {
@@ -76,12 +74,12 @@ pub(crate) fn send_rust_signal(signal_id: u32, data: &[u8]) {
 /// [`hub_send_dart_signal`] and eventually freed with [`hub_shutdown`].
 /// Returns null on failure.
 #[unsafe(no_mangle)]
-pub extern "C" fn hub_init(
-    callback: RustSignalCallback,
-    user_data: *mut c_void,
-) -> *mut HubHandle {
+pub extern "C" fn hub_init(callback: RustSignalCallback, user_data: *mut c_void) -> *mut HubHandle {
     if let Ok(mut guard) = GLOBAL_CALLBACK.lock() {
-        *guard = Some(CallbackState { callback, user_data });
+        *guard = Some(CallbackState {
+            callback,
+            user_data,
+        });
     }
 
     let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -99,7 +97,7 @@ pub extern "C" fn hub_init(
     // immediately and the actors can process signals asynchronously.
     let runtime_thread = std::thread::spawn(move || {
         runtime.block_on(async {
-            // Spawn actors — they run as independent tasks listening on channels.
+            // Spawn actors; they run as independent tasks listening on channels.
             crate::actors::create_actors().await;
             // Block until hub_shutdown sends the shutdown signal.
             let _ = shutdown_rx.await;

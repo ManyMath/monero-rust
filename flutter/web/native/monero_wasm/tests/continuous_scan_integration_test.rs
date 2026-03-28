@@ -1,6 +1,6 @@
 mod mock_scanner;
 
-use mock_scanner::{MockRpc, MockOutput};
+use mock_scanner::{MockOutput, MockRpc};
 
 /// Simulates a full continuous scan workflow
 #[tokio::test]
@@ -22,9 +22,15 @@ async fn test_continuous_scan_complete_workflow() {
         current_height += 1;
 
         // Simulate progress tracking
-        let progress = (current_height - start_height) as f64 / (target_height - start_height) as f64;
+        let progress =
+            (current_height - start_height) as f64 / (target_height - start_height) as f64;
         if scan_count % 20 == 0 {
-            println!("Progress: {:.1}% ({}/{})", progress * 100.0, current_height, target_height);
+            println!(
+                "Progress: {:.1}% ({}/{})",
+                progress * 100.0,
+                current_height,
+                target_height
+            );
         }
     }
 
@@ -152,7 +158,11 @@ async fn test_continuous_scan_output_accumulation() {
 
     // Verify outputs were found at expected heights
     for (height, outputs) in &outputs_by_height {
-        assert_eq!(height % 15, 0, "Outputs should only be at heights divisible by 15");
+        assert_eq!(
+            height % 15,
+            0,
+            "Outputs should only be at heights divisible by 15"
+        );
         assert!(!outputs.is_empty());
     }
 
@@ -246,6 +256,10 @@ async fn test_scan_performance_timing() {
     let duration = start_time.elapsed();
 
     // Mock scanning should be very fast (< 100ms for 21 blocks)
-    assert!(duration.as_millis() < 100, "Scanning took too long: {:?}", duration);
+    assert!(
+        duration.as_millis() < 100,
+        "Scanning took too long: {:?}",
+        duration
+    );
     assert_eq!(current_height, target_height + 1);
 }
