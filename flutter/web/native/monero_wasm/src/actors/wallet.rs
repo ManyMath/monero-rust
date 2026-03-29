@@ -537,6 +537,15 @@ impl WalletActor {
             .ok_or_else(|| "No 'result' in JSON-RPC response".to_string())
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn json_rpc_call(
+        _url: &str,
+        _method: &str,
+        _params: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        Err("JSON-RPC fetch is only available in the wasm build".to_string())
+    }
+
     async fn listen_to_derive_address(_self_addr: Address<Self>) {
         use monero_rust::error_codes::ErrorResponse;
 
@@ -1639,7 +1648,7 @@ impl Notifiable<UpdateOutputKeyImages> for WalletActor {
         let out_count = outputs.len();
         if ki_count != out_count {
             log::warn!(
-                "[UpdateOutputKeyImages] count mismatch: {} key images vs {} outputs — \
+                "[UpdateOutputKeyImages] count mismatch: {} key images vs {} outputs, \
                  positional assignment may pair key images with wrong outputs",
                 ki_count,
                 out_count
@@ -2679,7 +2688,7 @@ impl Notifiable<HandleReorg> for WalletActor {
                 }
             }
             Ok(monero_rust::ScanBatchOutcome::Normal(_)) => {
-                // False alarm — hash comparison in spawn_local was wrong.
+                // False alarm; hash comparison in spawn_local was wrong.
                 // Continue scanning normally.
                 let mut self_addr = ctx.address();
                 let _ = self_addr.notify(ContinueScan).await;
