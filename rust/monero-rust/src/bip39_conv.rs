@@ -1,14 +1,14 @@
+use crate::monero_backend::wallet::seed::{Language, Seed};
 use curve25519_dalek::scalar::Scalar;
-use monero_serai::wallet::seed::{Language, Seed};
 use zeroize::Zeroizing;
 
 /// Convert a 12-word BIP39 mnemonic into a 25-word Monero legacy mnemonic.
 ///
 /// Algorithm (matches Cake Wallet's "Exodus-style" BIP39 implementation):
-/// 1. BIP39 mnemonic + passphrase → PBKDF2-HMAC-SHA512 (2048 rounds) → 64-byte seed
-/// 2. BIP32 derivation m/44'/128'/<account_index>'/0/0 → 32-byte secp256k1 private key
-/// 3. Scalar::from_bytes_mod_order(key_bytes) → reduce mod Ed25519 curve order
-/// 4. Seed::from_entropy(English, scalar_bytes) → 25-word Monero legacy mnemonic
+/// 1. BIP39 mnemonic + passphrase -> PBKDF2-HMAC-SHA512 (2048 rounds) -> 64-byte seed
+/// 2. BIP32 derivation m/44'/128'/<account_index>'/0/0 -> 32-byte secp256k1 private key
+/// 3. Scalar::from_bytes_mod_order(key_bytes) -> reduce mod Ed25519 curve order
+/// 4. Seed::from_entropy(English, scalar_bytes) -> 25-word Monero legacy mnemonic
 pub fn bip39_to_legacy_mnemonic(
     mnemonic: &str,
     passphrase: &str,

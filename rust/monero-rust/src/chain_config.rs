@@ -8,13 +8,13 @@
 //   ChainConfig.genesis_hash is the known-correct hash for height 0, enabling future
 //   anchor verification independent of the daemon.
 //
-// Network: monero_serai::wallet::address::Network, variants Mainnet / Testnet / Stagenet.
+// Network: backend wallet address network, variants Mainnet / Testnet / Stagenet.
 //   Used in scanner.rs via parse_network() for address derivation.
 //
 // monero-serai Scanner: does not take a network parameter directly; network is
 //   embedded in the ViewPair / address derivation step.
 
-use monero_serai::wallet::address::Network;
+use crate::monero_backend::wallet::address::Network;
 
 /// Configuration for a specific Monero-compatible chain.
 /// Passed to WalletActor at startup to support both Monero and child chains.

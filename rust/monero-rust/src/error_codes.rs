@@ -1,6 +1,6 @@
 //! Structured error codes and ErrorResponse type for the Monero wallet.
 
-use monero_serai::{
+use crate::monero_backend::{
     rpc::RpcError,
     wallet::{
         address::{AddressError, Network as SeraiNetwork},
@@ -218,7 +218,7 @@ impl std::fmt::Display for ErrorResponse {
 
 impl std::error::Error for ErrorResponse {}
 
-// Validation (1000–1099)
+// Validation (1000-1099)
 pub const ERR_EMPTY_FIELD: u32 = 1000;
 pub const ERR_INVALID_NETWORK: u32 = 1001;
 pub const ERR_INVALID_ADDRESS: u32 = 1002;
@@ -226,19 +226,19 @@ pub const ERR_ADDRESS_WRONG_NETWORK: u32 = 1003;
 pub const ERR_INVALID_URL: u32 = 1004;
 pub const ERR_TOO_MANY_RECIPIENTS: u32 = 1005;
 
-// Wallet state (1100–1199)
+// Wallet state (1100-1199)
 pub const ERR_WALLET_NOT_READY: u32 = 1100;
 pub const ERR_NO_OUTPUTS: u32 = 1101;
 pub const ERR_INSUFFICIENT_FUNDS: u32 = 1102;
 pub const ERR_ENCRYPTION: u32 = 1103;
 pub const ERR_DECRYPTION: u32 = 1104;
 
-// Transaction (1200–1299)
+// Transaction (1200-1299)
 pub const ERR_TX_BUILD_FAILED: u32 = 1200;
 pub const ERR_TX_BROADCAST_REJECTED: u32 = 1201;
 pub const ERR_TX_DOUBLE_SPEND: u32 = 1202;
 
-// RPC / network (2000–2099)
+// RPC / network (2000-2099)
 pub const ERR_RPC_CONNECTION: u32 = 2000;
 pub const ERR_RPC_INVALID_NODE: u32 = 2001;
 pub const ERR_RPC_UNSUPPORTED_PROTOCOL: u32 = 2002;
@@ -249,7 +249,7 @@ pub const ERR_RPC_INTERNAL: u32 = 2006;
 pub const ERR_RPC_INVALID_POINT: u32 = 2007;
 pub const ERR_RPC_MAINNET_HTTP_NOT_ALLOWED: u32 = 2008;
 
-// Cryptographic (3000–3099)
+// Cryptographic (3000-3099)
 pub const ERR_SEED_INVALID_LENGTH: u32 = 3000;
 pub const ERR_SEED_INVALID_CHECKSUM: u32 = 3001;
 pub const ERR_SEED_UNKNOWN_LANGUAGE: u32 = 3002;
@@ -257,7 +257,7 @@ pub const ERR_SEED_INVALID: u32 = 3003;
 pub const ERR_SEED_ENGLISH_OLD_CHECKSUM: u32 = 3004;
 pub const ERR_INVALID_KEY: u32 = 3005;
 
-// Internal (9000–9099)
+// Internal (9000-9099)
 pub const ERR_INTERNAL: u32 = 9000;
 pub const ERR_SERIALIZATION: u32 = 9001;
 

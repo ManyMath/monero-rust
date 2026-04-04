@@ -9,10 +9,10 @@
 //! Secret keys within the epee blob may be encrypted with a second
 //! ("inner") ChaCha20 layer derived from the outer key.
 
+use crate::monero_backend::wallet::seed::{Language, Seed};
 use chacha20::ChaCha20Legacy;
 use cipher::{KeyIvInit, StreamCipher};
 use cuprate_cryptonight::cryptonight_hash_v0;
-use monero_serai::wallet::seed::{Language, Seed};
 use serde::{Deserialize, Serialize};
 use curve25519_dalek::scalar::Scalar;
 use sha3::{Digest, Keccak256};

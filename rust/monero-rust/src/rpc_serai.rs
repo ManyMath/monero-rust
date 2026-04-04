@@ -1,8 +1,8 @@
+use crate::monero_backend::rpc::{RpcConnection, RpcError};
 use async_trait::async_trait;
-use monero_serai::rpc::{RpcConnection, RpcError};
 
 #[cfg(any(test, feature = "test-helpers"))]
-use monero_serai::rpc::Rpc;
+use crate::monero_backend::rpc::Rpc;
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsValue;

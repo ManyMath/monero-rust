@@ -3,14 +3,9 @@
 //! This module provides wallet scanning functionality that works across
 //! both native and WASM targets through generic RpcConnection support.
 
-use curve25519_dalek::{
-    constants::ED25519_BASEPOINT_TABLE,
-    edwards::{CompressedEdwardsY, EdwardsPoint},
-    scalar::Scalar,
-};
 #[cfg(target_arch = "wasm32")]
-use monero_serai::ringct::generate_key_image;
-use monero_serai::{
+use crate::monero_backend::ringct::generate_key_image;
+use crate::monero_backend::{
     block::Block,
     rpc::{GetBlocksFastResponse, Rpc, RpcConnection},
     transaction::{Input, Transaction},
@@ -19,6 +14,11 @@ use monero_serai::{
         seed::{Language, Seed},
         Scanner, ViewPair,
     },
+};
+use curve25519_dalek::{
+    constants::ED25519_BASEPOINT_TABLE,
+    edwards::{CompressedEdwardsY, EdwardsPoint},
+    scalar::Scalar,
 };
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
@@ -387,7 +387,7 @@ impl SubaddressWatermark {
 ///
 /// Holds the pre-registered scanner plus a fingerprint (compressed public spend key)
 /// and the lookahead used to build it. On each batch the caller validates these
-/// against the current wallet parameters — a match means we skip the expensive
+/// against the current wallet parameters; a match means we skip the expensive
 /// `register_subaddresses` step entirely.
 pub struct CachedScanner {
     scanner: Scanner,
@@ -668,7 +668,7 @@ pub fn derive_subaddress(
     address_index: u32,
     passphrase: &str,
 ) -> Result<String, String> {
-    use monero_serai::wallet::address::AddressSpec;
+    use crate::monero_backend::wallet::address::AddressSpec;
 
     crate::error_codes::validate_network(network_str).map_err(|e| e.message.clone())?;
     let network = parse_network(network_str)?;
@@ -760,7 +760,7 @@ pub async fn is_key_image_spent(node_url: &str, key_images: &[String]) -> Result
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        use monero_serai::rpc::HttpRpc;
+        use crate::monero_backend::rpc::HttpRpc;
         let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
         let resp: Resp = rpc
@@ -786,7 +786,7 @@ pub async fn get_daemon_height(node_url: &str) -> Result<u64, String> {
     crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
     #[cfg(not(target_arch = "wasm32"))]
     {
-        use monero_serai::rpc::HttpRpc;
+        use crate::monero_backend::rpc::HttpRpc;
         let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
         let height = rpc
@@ -842,7 +842,7 @@ pub async fn scan_block_for_outputs_with_url_and_lookahead(
 ) -> Result<BlockScanResult, String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        use monero_serai::rpc::HttpRpc;
+        use crate::monero_backend::rpc::HttpRpc;
         let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
         scan_block_for_outputs_with_lookahead(
@@ -1154,7 +1154,7 @@ pub async fn process_batch_response(
         if major_version < 4 {
             // Pre-RingCT block: monero-serai can't parse it, so we can't
             // compute the proper block ID. Use raw blob hash as a
-            // placeholder — these blocks are deep in history and won't
+            // placeholder; these blocks are deep in history and won't
             // appear in reorg detection.
             let block_hash = hex::encode(Keccak256::digest(&block_entry.block));
             results.push(BlockScanResult {
@@ -1352,7 +1352,7 @@ pub async fn scan_blocks_batch_with_url(
 ) -> Result<Vec<BlockScanResult>, String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        use monero_serai::rpc::HttpRpc;
+        use crate::monero_backend::rpc::HttpRpc;
         let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
         scan_blocks_batch(
@@ -1524,7 +1524,7 @@ pub async fn process_batch_multi_wallet_response(
         if major_version < 4 {
             // Pre-RingCT block: monero-serai can't parse it, so we can't
             // compute the proper block ID. Use raw blob hash as a
-            // placeholder — these blocks are deep in history and won't
+            // placeholder; these blocks are deep in history and won't
             // appear in reorg detection.
             let block_hash = hex::encode(Keccak256::digest(&block_entry.block));
             let mut wallet_results = HashMap::new();
@@ -1742,7 +1742,7 @@ pub async fn scan_blocks_batch_multi_wallet_with_url(
 ) -> Result<Vec<MultiWalletScanResult>, String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        use monero_serai::rpc::HttpRpc;
+        use crate::monero_backend::rpc::HttpRpc;
         let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
         scan_blocks_batch_multi_wallet(&rpc, start_height, wallet_configs, prune).await
@@ -1785,7 +1785,7 @@ pub async fn fetch_blocks_batch_with_url(
 ) -> Result<FetchedBlocks, String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        use monero_serai::rpc::HttpRpc;
+        use crate::monero_backend::rpc::HttpRpc;
         let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
         let known_hash = rpc
@@ -1872,7 +1872,7 @@ fn hex_to_hash(hex_str: &str) -> Result<[u8; 32], String> {
 /// exponential history of hashes (matching wallet2's algorithm) so the daemon
 /// can detect forks further back in the chain.
 ///
-/// Returns `(results, actual_start_height)` — the daemon may return blocks
+/// Returns `(results, actual_start_height)`; the daemon may return blocks
 /// starting earlier than `start_height` if a fork was detected.
 pub async fn scan_blocks_batch_with_history<R: RpcConnection>(
     rpc: &Rpc<R>,
@@ -1923,7 +1923,7 @@ pub async fn scan_blocks_batch_with_history_url(
 ) -> Result<(Vec<BlockScanResult>, u64), String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        use monero_serai::rpc::HttpRpc;
+        use crate::monero_backend::rpc::HttpRpc;
         let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
         scan_blocks_batch_with_history(
@@ -1968,7 +1968,7 @@ pub async fn fetch_blocks_batch_with_history_url(
 ) -> Result<(FetchedBlocks, u64), String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        use monero_serai::rpc::HttpRpc;
+        use crate::monero_backend::rpc::HttpRpc;
         let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
         let block_ids: Vec<[u8; 32]> = if known_hashes.is_empty() {
@@ -2226,7 +2226,7 @@ pub async fn scan_block_multi_wallet_with_url(
     block_height: u64,
     wallet_configs: Vec<WalletScanConfig>,
 ) -> Result<MultiWalletScanResult, String> {
-    use monero_serai::rpc::HttpRpc;
+    use crate::monero_backend::rpc::HttpRpc;
     let rpc =
         HttpRpc::new(node_url.to_string()).map_err(|e| format!("Failed to create RPC: {:?}", e))?;
     scan_block_multi_wallet(&rpc, block_height, wallet_configs).await
@@ -2280,7 +2280,7 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
     for tx in all_transactions.iter() {
         let tx_hash = hex::encode(tx.hash());
         for input in &tx.prefix.inputs {
-            if let monero_serai::transaction::Input::ToKey { key_image, .. } = input {
+            if let Input::ToKey { key_image, .. } = input {
                 let ki_hex = hex::encode(key_image.compress().to_bytes());
                 spent_key_images.push(ki_hex);
                 spent_key_image_tx_hashes.push(tx_hash.clone());
@@ -2514,7 +2514,7 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
 
     #[cfg(not(target_arch = "wasm32"))]
     let rpc = {
-        use monero_serai::rpc::HttpRpc;
+        use crate::monero_backend::rpc::HttpRpc;
         HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC client: {:?}", e))?
     };
@@ -3164,7 +3164,7 @@ mod tests {
 
     #[test]
     fn test_expand_subaddress_within_account() {
-        // Lookahead (2,5), discovery at (0,4) → should expand minor to 9
+        // Lookahead (2,5), discovery at (0,4) -> should expand minor to 9
         let la = Lookahead {
             account: 2,
             subaddress: 5,
@@ -3186,7 +3186,7 @@ mod tests {
 
     #[test]
     fn test_expand_account_and_subaddress() {
-        // Lookahead (2,5), discovery at (1,3) → accounts should expand to 3,
+        // Lookahead (2,5), discovery at (1,3) -> accounts should expand to 3,
         // and account 1's minor should expand to 8
         let la = Lookahead {
             account: 2,
@@ -3259,9 +3259,9 @@ mod tests {
 
     #[test]
     fn test_expand_no_expansion_within_window() {
-        // Discovery at (0,2) with lookahead (2,5) → already covered (max=5, 2+5=7>5 → expands)
+        // Discovery at (0,2) with lookahead (2,5) -> already covered (max=5, 2+5=7>5 -> expands)
         // Actually 2+5=7 > 5, so it does expand.
-        // Discovery at (0,0) with lookahead (2,5) → 0+5=5 == current max 5, no expansion
+        // Discovery at (0,0) with lookahead (2,5) -> 0+5=5 == current max 5, no expansion
         let la = Lookahead {
             account: 2,
             subaddress: 5,
@@ -3276,12 +3276,12 @@ mod tests {
 
         // SubaddressIndex::new(0, 0) returns None (primary), use (0, 1)
         // Discovery at (0,0) would be None. Use (1,0):
-        // needed_account = 0+2 = 2, current_max = 2 → no account expansion
-        // needed_address = 0+5 = 5, current_max = 5 → no subaddress expansion
+        // needed_account = 0+2 = 2, current_max = 2 -> no account expansion
+        // needed_address = 0+5 = 5, current_max = 5 -> no subaddress expansion
         // But SubaddressIndex::new(1,0) returns Some since it's not (0,0)
         let found = SubaddressIndex::new(1, 0).unwrap();
         let expanded = expand_subaddresses_if_needed(&mut scanner, &mut wm, la, found);
-        // needed_account = 1+2 = 3 > 2 → account expansion
+        // needed_account = 1+2 = 3 > 2 -> account expansion
         assert!(expanded);
     }
 

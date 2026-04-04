@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{Request, RequestInit, RequestMode, Response};
 
-use monero_serai::rpc::RpcError;
+use crate::monero_backend::rpc::{RpcConnection, RpcError};
 
 #[derive(Clone, Debug)]
 pub struct WasmRpcAdapter {
@@ -18,7 +18,7 @@ impl WasmRpcAdapter {
 }
 
 #[async_trait(?Send)]
-impl monero_serai::rpc::RpcConnection for WasmRpcAdapter {
+impl RpcConnection for WasmRpcAdapter {
     async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
         use web_sys::console;
 

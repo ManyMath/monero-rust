@@ -11,6 +11,7 @@ pub mod coin_selection;
 pub mod encryption;
 pub mod error_codes;
 pub mod key_image_import;
+pub mod monero_backend;
 pub mod scan_coordinator;
 pub mod scanner;
 pub mod wallet_output;

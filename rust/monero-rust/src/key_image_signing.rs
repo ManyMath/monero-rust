@@ -19,6 +19,7 @@ use sha3::{Digest, Keccak256};
 use zeroize::Zeroizing;
 
 use crate::epee_compat::KEY_IMAGES_MAGIC;
+use crate::monero_backend::ringct::hash_to_point;
 use crate::wallet_output::WalletOutput;
 
 /// A single key image entry for v3 export.
@@ -49,7 +50,7 @@ pub fn generate_key_image_ring_signature(
     let a = (&*k * ED25519_BASEPOINT_TABLE).compress().to_bytes();
 
     // Hp = hash_to_point(pub_key)
-    let hp = monero_serai::ringct::hash_to_point(*pub_key);
+    let hp = hash_to_point(*pub_key);
 
     // b = k * Hp
     let b = (&*k * hp).compress().to_bytes();
@@ -88,7 +89,7 @@ pub fn verify_key_image_ring_signature(
     let a_prime = EdwardsPoint::vartime_double_scalar_mul_basepoint(&c_scalar, pub_key, &r_scalar);
 
     // Hp = hash_to_point(pub_key)
-    let hp = monero_serai::ringct::hash_to_point(*pub_key);
+    let hp = hash_to_point(*pub_key);
 
     // b' = r * Hp + c * key_image_point
     let b_prime =
@@ -428,7 +429,7 @@ pub fn import_key_images_from_seed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use monero_serai::ringct::generate_key_image;
+    use crate::monero_backend::ringct::generate_key_image;
 
     /// Create deterministic test keys for reproducible tests.
     fn test_keys() -> (

@@ -12,13 +12,13 @@
 //! Schnorr-like) that it was computed correctly from the output's one-time
 //! public key.  We verify that proof before accepting the import.
 
+use crate::monero_backend::ringct::hash_to_point;
 use curve25519_dalek::{
     constants::ED25519_BASEPOINT_TABLE,
     edwards::{CompressedEdwardsY, EdwardsPoint},
     scalar::Scalar,
     traits::IsIdentity,
 };
-use monero_serai::ringct::hash_to_point;
 use sha3::{Digest, Keccak256};
 
 /// A single key image with its signature, as returned by monero-wallet-rpc.

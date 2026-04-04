@@ -1,10 +1,8 @@
 //! Transaction building.
 
 pub mod native {
-    use curve25519_dalek::{
-        constants::ED25519_BASEPOINT_TABLE, edwards::CompressedEdwardsY, scalar::Scalar,
-    };
-    use monero_serai::{
+    use crate::monero_backend::{
+        ringct::generate_key_image,
         rpc::{Rpc, RpcConnection, DEFAULT_MAX_FEE_PER_BYTE},
         transaction::Transaction,
         wallet::{
@@ -16,10 +14,13 @@ pub mod native {
         },
         Protocol,
     };
+    use curve25519_dalek::{
+        constants::ED25519_BASEPOINT_TABLE, edwards::CompressedEdwardsY, scalar::Scalar,
+    };
     use rand_core::RngCore;
 
     #[cfg(not(target_arch = "wasm32"))]
-    use monero_serai::rpc::HttpRpc;
+    use crate::monero_backend::rpc::HttpRpc;
 
     #[cfg(target_arch = "wasm32")]
     use crate::rpc_serai::WasmRpcConnection;
@@ -199,8 +200,6 @@ pub mod native {
         register_subaddresses(&mut scanner, lookahead);
         let scan_result = scanner.scan_transaction(tx);
         let our_outputs = scan_result.ignore_timelock();
-
-        use monero_serai::ringct::generate_key_image;
 
         our_outputs
             .into_iter()
@@ -459,7 +458,7 @@ pub mod native {
         IncludeChange,
         /// Absorb small change into miner fee (multi-recipient only).
         AbsorbDust,
-        /// Change is dust and only 1 recipient — caller should use sweep_all.
+        /// Change is dust and only 1 recipient; caller should use sweep_all.
         DustError,
     }
 
@@ -467,10 +466,10 @@ pub mod native {
     /// amount and number of recipients.
     ///
     /// Rules:
-    /// - Single-recipient: always include change (monero-serai requires ≥2 outputs,
+    /// - Single-recipient: always include change (monero-serai requires >=2 outputs,
     ///   so we need either change or a second payment). If the change is dust,
     ///   return DustError so the caller can redirect to sweep_all.
-    /// - Multi-recipient (≥2 payments): if change is dust, absorb into miner fee
+    /// - Multi-recipient (>=2 payments): if change is dust, absorb into miner fee
     ///   by omitting the change output. Otherwise include change.
     pub fn decide_change(expected_change: u64, num_recipients: usize) -> ChangeDecision {
         let is_dust =
@@ -483,7 +482,7 @@ pub mod native {
                 ChangeDecision::AbsorbDust
             }
         } else {
-            // Always include change for single-recipient (monero-serai needs ≥2
+            // Always include change for single-recipient (monero-serai needs >=2
             // outputs). For expected_change == 0, monero-serai computes the real
             // fee and handles any residual automatically.
             ChangeDecision::IncludeChange
@@ -751,7 +750,7 @@ pub mod native {
             )
         })?;
 
-        // Monero requires ≥2 outputs for RingCT. Create the real output
+        // Monero requires >=2 outputs for RingCT. Create the real output
         // with the full sweep amount and a 0-value dummy, matching wallet2.
 
         // Build transaction with NO change address (None)
@@ -1134,9 +1133,7 @@ pub mod native {
                     &construction.subaddr_indices,
                 )?;
                 let output_secret = Zeroizing::new(spend_secret + key_offset);
-                let key_image = monero_serai::ringct::generate_key_image(&output_secret)
-                    .compress()
-                    .to_bytes();
+                let key_image = generate_key_image(&output_secret).compress().to_bytes();
                 source_key_offsets.push(Wallet2SourceKeyOffset {
                     construction_index,
                     source_index,
@@ -1893,7 +1890,7 @@ pub mod native {
 
         #[test]
         fn test_decide_change_normal_change_single_recipient() {
-            // Change well above dust → include change
+            // Change well above dust -> include change
             let result = decide_change(1_000_000_000, 1);
             assert_eq!(result, ChangeDecision::IncludeChange);
         }
@@ -1906,8 +1903,8 @@ pub mod native {
 
         #[test]
         fn test_decide_change_zero_change_single_recipient() {
-            // Zero change, single recipient → must include change
-            // (monero-serai requires ≥2 outputs for RingCT)
+            // Zero change, single recipient -> must include change
+            // (monero-serai requires >=2 outputs for RingCT)
             let result = decide_change(0, 1);
             assert_eq!(result, ChangeDecision::IncludeChange);
         }
@@ -1920,14 +1917,14 @@ pub mod native {
 
         #[test]
         fn test_decide_change_dust_single_recipient() {
-            // Dust change, single recipient → error (use sweep_all)
+            // Dust change, single recipient -> error (use sweep_all)
             let result = decide_change(1_000_000, 1);
             assert_eq!(result, ChangeDecision::DustError);
         }
 
         #[test]
         fn test_decide_change_dust_multi_recipient() {
-            // Dust change, multi-recipient → absorb into miner fee
+            // Dust change, multi-recipient -> absorb into miner fee
             let result = decide_change(1_000_000, 2);
             assert_eq!(result, ChangeDecision::AbsorbDust);
         }
@@ -1936,14 +1933,14 @@ pub mod native {
         fn test_decide_change_at_dust_threshold_boundary() {
             use crate::coin_selection::DUST_THRESHOLD;
 
-            // Just below threshold → dust
+            // Just below threshold -> dust
             let result = decide_change(DUST_THRESHOLD - 1, 1);
             assert_eq!(result, ChangeDecision::DustError);
 
             let result = decide_change(DUST_THRESHOLD - 1, 2);
             assert_eq!(result, ChangeDecision::AbsorbDust);
 
-            // At threshold → not dust, include change
+            // At threshold -> not dust, include change
             let result = decide_change(DUST_THRESHOLD, 1);
             assert_eq!(result, ChangeDecision::IncludeChange);
 
@@ -1963,7 +1960,7 @@ pub mod native {
 
         #[test]
         fn test_decide_change_large_change() {
-            // 1 XMR change → always include
+            // 1 XMR change -> always include
             let result = decide_change(1_000_000_000_000, 1);
             assert_eq!(result, ChangeDecision::IncludeChange);
         }

@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 use std::io::{Cursor, Read};
 
-use monero_serai::transaction::{Input, Transaction};
+use crate::monero_backend::transaction::{Input, Transaction};
 
 pub const UNSIGNED_TX_MAGIC: &[u8] = b"Monero unsigned tx set\x05";
 pub const SIGNED_TX_MAGIC: &[u8] = b"Monero signed tx set\x05";

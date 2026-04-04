@@ -1,6 +1,6 @@
+use crate::monero_backend::wallet::address::{MoneroAddress, Network};
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, edwards::EdwardsPoint, scalar::Scalar};
 use getrandom::getrandom;
-use monero_serai::wallet::address::{MoneroAddress, Network};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use std::ops::Deref;
