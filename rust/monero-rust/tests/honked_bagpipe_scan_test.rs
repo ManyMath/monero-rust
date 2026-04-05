@@ -1,6 +1,6 @@
 //! Output scanning test using the honked bagpipe stagenet wallet.
 
-use monero_serai::{
+use monero_rust::monero_backend::{
     transaction::Transaction,
     wallet::{
         address::{AddressSpec, Network},
@@ -141,7 +141,7 @@ fn spend_key_from_seed(seed: &Seed) -> curve25519_dalek::edwards::EdwardsPoint {
 }
 
 fn view_key_from_seed(seed: &Seed) -> curve25519_dalek::scalar::Scalar {
-    use monero_serai::hash_to_scalar;
+    use monero_rust::monero_backend::hash_to_scalar;
 
     let entropy = seed.entropy();
     let mut spend_bytes = [0u8; 32];
@@ -154,7 +154,7 @@ fn parse_pruned_transaction<R: std::io::Read>(
     r: &mut R,
     _prunable_hash: [u8; 32],
 ) -> std::io::Result<Transaction> {
-    use monero_serai::{
+    use monero_rust::monero_backend::{
         ringct::{RctBase, RctPrunable, RctSignatures},
         transaction::TransactionPrefix,
     };

@@ -4,21 +4,21 @@ mod common;
 mod mock_rpc;
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
-use monero_rust::scanner::{
-    derive_address, derive_keys, scan_block_for_outputs_with_lookahead, Lookahead,
-};
-use monero_serai::transaction::Transaction;
-use monero_serai::wallet::{
+use monero_rust::monero_backend::transaction::Transaction;
+use monero_rust::monero_backend::wallet::{
     address::{MoneroAddress, Network},
     seed::Seed,
     Change, ReceivedOutput, SignableTransactionBuilder, SpendableOutput, ViewPair,
+};
+use monero_rust::scanner::{
+    derive_address, derive_keys, scan_block_for_outputs_with_lookahead, Lookahead,
 };
 use rand::SeedableRng;
 use std::io::Cursor;
 use zeroize::Zeroizing;
 
 #[cfg(not(feature = "mock-rpc"))]
-use monero_serai::rpc::HttpRpc;
+use monero_rust::monero_backend::rpc::HttpRpc;
 
 #[cfg(feature = "mock-rpc")]
 use mock_rpc::MockRpc;
@@ -30,7 +30,7 @@ const START_BLOCK: u64 = 1386863;
 const END_BLOCK: u64 = 1386874;
 const TEST_VECTORS_PATH: &str = "tests/vectors/tx_construction_test_vectors.json";
 
-/// Full unsigned TX roundtrip: build → serialize → sign offline → verify structure.
+/// Full unsigned TX roundtrip: build -> serialize -> sign offline -> verify structure.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(not(feature = "mock-rpc"))]
@@ -141,8 +141,9 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
     let unsigned_tx_hex = hex::encode(&unsigned_bytes);
 
     // Verify the unsigned bytes can be deserialized back
-    let unsigned_roundtrip =
-        monero_serai::wallet::UnsignedTransaction::read(&mut Cursor::new(&unsigned_bytes))?;
+    let unsigned_roundtrip = monero_rust::monero_backend::wallet::UnsignedTransaction::read(
+        &mut Cursor::new(&unsigned_bytes),
+    )?;
     assert_eq!(
         unsigned_roundtrip.fee, expected_fee,
         "Fee must survive unsigned TX serialize/deserialize roundtrip"
@@ -213,7 +214,7 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
     // Verify ring signature inputs have proper key offsets
     for input in &deserialized_tx.prefix.inputs {
         match input {
-            monero_serai::transaction::Input::ToKey {
+            monero_rust::monero_backend::transaction::Input::ToKey {
                 key_offsets,
                 key_image,
                 ..

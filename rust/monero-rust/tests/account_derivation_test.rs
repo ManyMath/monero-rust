@@ -4,7 +4,7 @@
 //! Specifically, it tests that account 1 (index 1), subaddress 0 produces the expected address.
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
-use monero_serai::{
+use monero_rust::monero_backend::{
     hash_to_scalar,
     wallet::{
         address::{AddressSpec, Network, SubaddressIndex},

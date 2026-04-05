@@ -1,4 +1,4 @@
-use monero_serai::transaction::{Input, Transaction};
+use monero_rust::monero_backend::transaction::{Input, Transaction};
 use sha3::{Digest, Keccak256};
 
 #[derive(serde::Deserialize)]
@@ -35,7 +35,7 @@ fn test_key_images_extractable_from_pruned() {
 
     // Parse just the prefix + RctBase from pruned data
     let mut cursor = std::io::Cursor::new(&pruned_bytes);
-    let prefix = monero_serai::transaction::TransactionPrefix::read(&mut cursor)
+    let prefix = monero_rust::monero_backend::transaction::TransactionPrefix::read(&mut cursor)
         .expect("prefix should parse from pruned data");
 
     // Extract key images from the parsed prefix

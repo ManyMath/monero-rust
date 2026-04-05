@@ -9,7 +9,7 @@ use monero_rust::key_image_signing::{
     decrypt_with_view_key, export_key_images_v3, import_key_images_v3,
     verify_key_image_ring_signature, KeyImageExportEntry,
 };
-use monero_serai::ringct::generate_key_image;
+use monero_rust::monero_backend::ringct::generate_key_image;
 
 /// Magic bytes for Monero key image export v3 format.
 const KEY_IMAGES_MAGIC: &[u8] = b"Monero key image export\x03";

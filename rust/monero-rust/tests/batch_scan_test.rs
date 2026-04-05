@@ -2,11 +2,11 @@
 
 mod common;
 
+use monero_rust::monero_backend::block::Block;
+use monero_rust::monero_backend::rpc::{BlockCompleteEntry, GetBlocksFastResponse};
 use monero_rust::scanner::{
     process_batch_multi_wallet_response, process_batch_response, Lookahead, WalletScanConfig,
 };
-use monero_serai::block::Block;
-use monero_serai::rpc::{BlockCompleteEntry, GetBlocksFastResponse};
 
 const STAGENET_SEED: &str = "vocal either anvil films dolphin zeal bacon cuisine quote syndrome rejoices envy okay pancakes tulips lair greater petals organs enmity dedicated oust thwart tomorrow tomorrow";
 const HONKED_BAGPIPE_SEED: &str = "honked bagpipe alpine juicy faked afoot jostle claim cowl tunnel orphans negative pheasants feast jetting quote frown teeming cycling tribal womanly hills cottage daytime daytime";
@@ -15,11 +15,11 @@ const STAGENET_NODE: &str = "http://127.0.0.1:38081";
 
 fn make_coinbase_block(height: u64) -> Block {
     use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
-    use monero_serai::ringct::*;
-    use monero_serai::transaction::*;
+    use monero_rust::monero_backend::ringct::*;
+    use monero_rust::monero_backend::transaction::*;
 
     Block {
-        header: monero_serai::block::BlockHeader {
+        header: monero_rust::monero_backend::block::BlockHeader {
             major_version: 16,
             minor_version: 16,
             timestamp: 1600000000 + height * 120,
@@ -86,7 +86,7 @@ fn lookahead() -> Lookahead {
     }
 }
 
-// ── Error handling ──
+// -- Error handling --
 
 #[tokio::test]
 async fn test_invalid_seed_rejected() {
@@ -137,7 +137,7 @@ async fn test_one_bad_seed_fails_multi_wallet_batch() {
         .is_err());
 }
 
-// ── Edge cases ──
+// -- Edge cases --
 
 #[tokio::test]
 async fn test_empty_batch_returns_empty() {
@@ -176,7 +176,7 @@ async fn test_height_mismatch_detected() {
     assert!(err.contains("mismatch"), "{err}");
 }
 
-// ── Multi-wallet structure ──
+// -- Multi-wallet structure --
 
 #[tokio::test]
 async fn test_multi_wallet_produces_entry_per_wallet() {
@@ -205,7 +205,7 @@ async fn test_multi_wallet_produces_entry_per_wallet() {
     }
 }
 
-// ── Live node tests ──
+// -- Live node tests --
 
 #[tokio::test]
 async fn test_batch_scan_early_blocks() {
@@ -213,8 +213,8 @@ async fn test_batch_scan_early_blocks() {
         eprintln!("Skipped: no stagenet node at 127.0.0.1:38081");
         return;
     }
+    use monero_rust::monero_backend::rpc::HttpRpc;
     use monero_rust::scanner::scan_blocks_batch;
-    use monero_serai::rpc::HttpRpc;
 
     let rpc = HttpRpc::new(STAGENET_NODE.to_string()).unwrap();
     let results = scan_blocks_batch(
@@ -253,8 +253,8 @@ async fn test_batch_scan_later_blocks() {
         eprintln!("Skipped: no stagenet node at 127.0.0.1:38081");
         return;
     }
+    use monero_rust::monero_backend::rpc::HttpRpc;
     use monero_rust::scanner::scan_blocks_batch;
-    use monero_serai::rpc::HttpRpc;
 
     let rpc = HttpRpc::new(STAGENET_NODE.to_string()).unwrap();
     let results = scan_blocks_batch(
@@ -287,7 +287,7 @@ async fn test_batch_scan_later_blocks() {
     );
 }
 
-// ── Multi-wallet batch safety-net tests ──
+// -- Multi-wallet batch safety-net tests --
 
 #[tokio::test]
 async fn test_multi_wallet_batch_metadata_matches_single_wallet() {

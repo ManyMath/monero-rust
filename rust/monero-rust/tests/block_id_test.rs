@@ -3,8 +3,8 @@
 // so the miner tx hash must use Monero's three-part transaction hash, not a
 // plain keccak of the serialization.
 
+use monero_rust::monero_backend::block::Block;
 use monero_rust::scanner::compute_block_id;
-use monero_serai::block::Block;
 
 #[test]
 fn compute_block_id_matches_daemon_hash() {

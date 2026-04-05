@@ -1,7 +1,7 @@
 //! Transaction building tests using stagenet data.
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, edwards::EdwardsPoint, scalar::Scalar};
-use monero_serai::{
+use monero_rust::monero_backend::{
     ringct::{RctBase, RctPrunable, RctSignatures},
     transaction::{Transaction, TransactionPrefix},
     wallet::{
@@ -29,7 +29,7 @@ fn spend_key_from_seed(seed: &Seed) -> EdwardsPoint {
 }
 
 fn view_key_from_seed(seed: &Seed) -> Scalar {
-    use monero_serai::hash_to_scalar;
+    use monero_rust::monero_backend::hash_to_scalar;
     let entropy = seed.entropy();
     let mut spend_bytes = [0u8; 32];
     spend_bytes.copy_from_slice(&entropy[..]);

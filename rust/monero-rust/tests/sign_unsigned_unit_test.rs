@@ -1,12 +1,12 @@
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
-use monero_serai::transaction::Transaction;
+use monero_rust::monero_backend::transaction::Transaction;
 /// Unit tests for the offline signing pipeline without RPC or mock-rpc.
-use monero_serai::wallet::{
+use monero_rust::monero_backend::wallet::{
     address::{AddressSpec, Network},
     seed::Seed,
     Change, Decoys, InternalPayment, SpendableOutput, UnsignedInput, UnsignedTransaction, ViewPair,
 };
-use monero_serai::{Commitment, Protocol};
+use monero_rust::monero_backend::{Commitment, Protocol};
 use sha3::{Digest, Keccak256};
 use std::io::Cursor;
 use zeroize::Zeroizing;
@@ -230,7 +230,7 @@ fn test_sign_unsigned_transaction_synthetic() {
     let mut expected_spent_key_images = Vec::new();
     for input in &deserialized_tx.prefix.inputs {
         match input {
-            monero_serai::transaction::Input::ToKey {
+            monero_rust::monero_backend::transaction::Input::ToKey {
                 key_offsets,
                 key_image,
                 ..

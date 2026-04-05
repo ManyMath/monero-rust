@@ -5,42 +5,31 @@
 //! boundary instead of through scattered direct imports.
 
 pub mod block {
-    pub use monero_serai::block::Block;
+    pub use monero_serai::block::*;
 }
 
 pub mod ringct {
-    pub use monero_serai::ringct::{generate_key_image, hash_to_point};
+    pub use monero_serai::ringct::*;
 }
 
 pub mod rpc {
-    pub use monero_serai::rpc::{
-        GetBlocksFastResponse, Rpc, RpcConnection, RpcError, DEFAULT_MAX_FEE_PER_BYTE,
-    };
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub use monero_serai::rpc::HttpRpc;
+    pub use monero_serai::rpc::*;
 }
 
 pub mod transaction {
-    pub use monero_serai::transaction::{Input, Timelock, Transaction};
+    pub use monero_serai::transaction::*;
 }
 
 pub mod wallet {
-    pub use monero_serai::wallet::{
-        sign_offline, Change, Decoys, Fee, InternalPayment, ReceivedOutput, Scanner,
-        SignableTransactionBuilder, SpendableOutput, UnsignedInput, UnsignedTransaction, ViewPair,
-    };
+    pub use monero_serai::wallet::*;
 
     pub mod address {
-        pub use monero_serai::wallet::address::{
-            AddressError, AddressMeta, AddressSpec, AddressType, MoneroAddress, Network,
-            SubaddressIndex,
-        };
+        pub use monero_serai::wallet::address::*;
     }
 
     pub mod seed {
-        pub use monero_serai::wallet::seed::{Language, Seed, SeedError};
+        pub use monero_serai::wallet::seed::*;
     }
 }
 
-pub use monero_serai::{hash_to_scalar, Commitment, Protocol};
+pub use monero_serai::*;

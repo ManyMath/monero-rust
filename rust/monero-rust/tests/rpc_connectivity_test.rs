@@ -3,7 +3,7 @@ mod common;
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod rpc_tests {
-    use monero_serai::rpc::{HttpRpc, Rpc};
+    use monero_rust::monero_backend::rpc::{HttpRpc, Rpc};
 
     const STAGENET_NODES: &[&str] = &[
         "http://127.0.0.1:38081",

@@ -1,21 +1,21 @@
 mod common;
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
-use monero_rust::scanner::{
-    derive_address, derive_keys, scan_block_for_outputs_with_lookahead, Lookahead,
-};
-use monero_serai::transaction::Transaction;
-use monero_serai::wallet::{
+use monero_rust::monero_backend::transaction::Transaction;
+use monero_rust::monero_backend::wallet::{
     address::{AddressSpec, MoneroAddress, Network},
     seed::Seed,
     Change, ReceivedOutput, SignableTransactionBuilder, SpendableOutput, ViewPair,
+};
+use monero_rust::scanner::{
+    derive_address, derive_keys, scan_block_for_outputs_with_lookahead, Lookahead,
 };
 use rand::SeedableRng;
 use std::io::Cursor;
 use zeroize::Zeroizing;
 
 #[cfg(not(feature = "mock-rpc"))]
-use monero_serai::rpc::HttpRpc;
+use monero_rust::monero_backend::rpc::HttpRpc;
 
 #[cfg(feature = "mock-rpc")]
 mod mock_rpc;
@@ -179,7 +179,7 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
 
     for input in &deserialized_tx.prefix.inputs {
         match input {
-            monero_serai::transaction::Input::ToKey {
+            monero_rust::monero_backend::transaction::Input::ToKey {
                 key_offsets,
                 key_image,
                 ..
@@ -201,7 +201,7 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(deserialized_tx.rct_signatures.base.commitments.len(), 2);
     assert_eq!(deserialized_tx.rct_signatures.base.fee, fee);
 
-    use monero_serai::wallet::Scanner;
+    use monero_rust::monero_backend::wallet::Scanner;
     use std::collections::HashSet;
 
     let mut scanner = Scanner::from_view(view_pair.clone(), Some(HashSet::new()));

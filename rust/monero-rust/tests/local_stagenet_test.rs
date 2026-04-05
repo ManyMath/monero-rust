@@ -1,8 +1,8 @@
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod local_stagenet_tests {
+    use monero_rust::monero_backend::rpc::HttpRpc;
     use monero_rust::scanner::{derive_address, scan_block_for_outputs};
-    use monero_serai::rpc::HttpRpc;
 
     const LOCAL_NODE: &str = "http://127.0.0.1:38081";
     const TEST_BLOCK: u64 = 1384526;
@@ -12,7 +12,7 @@ mod local_stagenet_tests {
 
     /// Soft-skip when no local stagenet node is reachable, matching the
     /// describeIfNode convention used by the E2E suite.
-    async fn node_height(rpc: &monero_serai::rpc::Rpc<HttpRpc>) -> Option<usize> {
+    async fn node_height(rpc: &monero_rust::monero_backend::rpc::Rpc<HttpRpc>) -> Option<usize> {
         match rpc.get_height().await {
             Ok(height) => Some(height),
             Err(e) => {

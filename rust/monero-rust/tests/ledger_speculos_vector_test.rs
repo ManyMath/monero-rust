@@ -3,7 +3,7 @@ use std::path::Path;
 use curve25519_dalek::{
     constants::ED25519_BASEPOINT_TABLE, edwards::CompressedEdwardsY, scalar::Scalar,
 };
-use monero_serai::{
+use monero_rust::monero_backend::{
     ringct::generate_key_image,
     wallet::address::{MoneroAddress, Network},
 };
