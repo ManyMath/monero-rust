@@ -32,4 +32,4 @@ pub mod wallet {
     }
 }
 
-pub use monero_serai::*;
+pub use monero_serai::{hash_to_scalar, Commitment, Protocol};
