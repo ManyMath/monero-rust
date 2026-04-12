@@ -3,7 +3,7 @@ use rand_core::{OsRng, RngCore};
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 
-use monero_serai::wallet::{
+use crate::monero_backend::wallet::{
   ViewPair,
   address::{Network, AddressSpec},
 };

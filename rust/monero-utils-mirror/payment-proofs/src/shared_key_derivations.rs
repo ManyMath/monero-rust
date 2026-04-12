@@ -13,7 +13,7 @@ use curve25519_dalek::{
   edwards::EdwardsPoint,
 };
 
-use monero_serai::transaction::Input;
+use crate::monero_backend::{transaction::Input, H};
 
 // --- inlined helpers ---
 
@@ -55,7 +55,7 @@ impl Commitment {
   }
 
   pub(crate) fn calculate(&self) -> EdwardsPoint {
-    &self.mask * ED25519_BASEPOINT_TABLE + Scalar::from(self.amount) * *monero_generators::H
+    &self.mask * ED25519_BASEPOINT_TABLE + Scalar::from(self.amount) * *H
   }
 }
 

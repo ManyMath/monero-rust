@@ -12,7 +12,7 @@ use curve25519_dalek::{
   edwards::{EdwardsPoint, CompressedEdwardsY},
 };
 
-use monero_serai::{
+use crate::monero_backend::{
   transaction::Transaction,
   wallet::address::{AddressBytes, Address},
   wallet::extra::{PaymentId, Extra},

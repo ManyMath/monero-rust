@@ -4,8 +4,9 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 mod base58;
-mod shared_key_derivations;
+mod monero_backend;
 mod out_proof;
+mod shared_key_derivations;
 pub use out_proof::OutProof;
 
 #[cfg(test)]
