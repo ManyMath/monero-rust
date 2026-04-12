@@ -5,7 +5,6 @@ edition = "2021"
 
 [dependencies]
 monero-rust = { path = "../monero-rust" }
-monero-serai = { path = "../monero-serai-mirror", features = ["http-rpc"] }
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
