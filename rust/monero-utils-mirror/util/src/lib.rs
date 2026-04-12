@@ -3,7 +3,8 @@
 #![deny(missing_docs)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
-pub use monero_serai::*;
+mod monero_backend;
+pub use monero_backend::*;
 
 /// Seed creation and parsing functionality.
 pub mod seed;
