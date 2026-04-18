@@ -8,6 +8,7 @@ default = []
 test-helpers = []
 mock-rpc = []
 oxide-adapter-spike = ["dep:monero-oxide"]
+oxide-wallet-adapter-spike = ["oxide-adapter-spike", "dep:monero-wallet"]
 
 [dependencies]
 serde = { version = "1.0.219", features = ["derive"] }
@@ -33,6 +34,7 @@ serde_bytes = "0.11"
 cuprate-cryptonight = { path = "../cuprate-cryptonight" }
 monero-epee-bin-serde = { path = "../monero-epee-bin-serde" }
 monero-oxide = { git = "https://github.com/monero-oxide/monero-oxide", rev = "946ec5f00ff071b129758ee8cba5528539fccfe4", package = "monero-oxide", default-features = false, features = ["std"], optional = true }
+monero-wallet = { git = "https://github.com/monero-oxide/monero-oxide", rev = "946ec5f00ff071b129758ee8cba5528539fccfe4", package = "monero-wallet", default-features = false, features = ["std"], optional = true }
 
 # BIP39/BIP32
 bip39 = { version = "2", features = ["rand"] }
