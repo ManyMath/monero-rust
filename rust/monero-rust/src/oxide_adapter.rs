@@ -6,12 +6,12 @@
 
 use std::io::{self, Cursor};
 
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+use monero_oxide::transaction::{NotPruned, Pruned};
 use monero_oxide::{
     block::Block,
     transaction::{Input, Timelock, Transaction},
 };
-#[cfg(feature = "oxide-wallet-adapter-spike")]
-use monero_oxide::transaction::Pruned;
 
 #[cfg(feature = "oxide-wallet-adapter-spike")]
 use monero_wallet::{
@@ -116,6 +116,24 @@ pub struct OxideWalletScanSummary {
     pub block_height: usize,
     /// Number of outputs returned by `monero-wallet` after timelock filtering.
     pub scanned_output_count: usize,
+    /// Stable summaries of outputs returned by `monero-wallet`.
+    pub outputs: Vec<OxideWalletOutputSummary>,
+}
+
+/// Stable read-only summary of a wallet output returned by `monero-wallet`.
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OxideWalletOutputSummary {
+    /// Hash of the transaction that created the output.
+    pub transaction: [u8; 32],
+    /// Output index within the transaction.
+    pub index_in_transaction: u64,
+    /// RingCT output index on the blockchain.
+    pub index_on_blockchain: u64,
+    /// Decrypted output amount.
+    pub amount: u64,
+    /// Subaddress account/address pair, if this output was sent to a registered subaddress.
+    pub subaddress: Option<(u32, u32)>,
 }
 
 /// Parse a full transaction blob with `monero-oxide` and return a stable summary.
@@ -168,7 +186,7 @@ pub fn scan_block_with_wallet(
     private_view_key: [u8; 32],
     network: OxideNetwork,
     block_bytes: &[u8],
-    pruned_transaction_bytes: &[&[u8]],
+    transaction_bytes: &[&[u8]],
     output_index_for_first_ringct_output: Option<u64>,
     subaddresses: &[(u32, u32)],
 ) -> Result<OxideWalletScanSummary, OxideAdapterError> {
@@ -195,12 +213,9 @@ pub fn scan_block_with_wallet(
     ensure_fully_consumed(&block_cursor, block_bytes.len())?;
     let block_height = block.number();
 
-    let mut transactions = Vec::with_capacity(pruned_transaction_bytes.len());
-    for bytes in pruned_transaction_bytes {
-        let mut cursor = std::io::Cursor::new(*bytes);
-        let transaction = Transaction::<Pruned>::read(&mut cursor)?;
-        ensure_fully_consumed(&cursor, bytes.len())?;
-        transactions.push(transaction);
+    let mut transactions = Vec::with_capacity(transaction_bytes.len());
+    for bytes in transaction_bytes {
+        transactions.push(parse_scannable_transaction(bytes)?);
     }
 
     let scannable_block = ScannableBlock {
@@ -212,6 +227,18 @@ pub fn scan_block_with_wallet(
         .scan(scannable_block)
         .map_err(|error| OxideAdapterError::Parse(error.to_string()))?
         .not_additionally_locked();
+    let output_summaries = outputs
+        .iter()
+        .map(|output| OxideWalletOutputSummary {
+            transaction: output.transaction(),
+            index_in_transaction: output.index_in_transaction(),
+            index_on_blockchain: output.index_on_blockchain(),
+            amount: output.commitment().amount,
+            subaddress: output
+                .subaddress()
+                .map(|subaddress| (subaddress.account(), subaddress.address())),
+        })
+        .collect::<Vec<_>>();
 
     Ok(OxideWalletScanSummary {
         legacy_address,
@@ -221,7 +248,24 @@ pub fn scan_block_with_wallet(
             .count(),
         block_height,
         scanned_output_count: outputs.len(),
+        outputs: output_summaries,
     })
+}
+
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+fn parse_scannable_transaction(bytes: &[u8]) -> Result<Transaction<Pruned>, OxideAdapterError> {
+    let mut pruned_cursor = Cursor::new(bytes);
+    match Transaction::<Pruned>::read(&mut pruned_cursor) {
+        Ok(transaction) if pruned_cursor.position() as usize == bytes.len() => {
+            return Ok(transaction);
+        }
+        Ok(_) | Err(_) => {}
+    }
+
+    let mut full_cursor = Cursor::new(bytes);
+    let transaction = Transaction::<NotPruned>::read(&mut full_cursor)?;
+    ensure_fully_consumed(&full_cursor, bytes.len())?;
+    Ok(Transaction::<Pruned>::from(transaction))
 }
 
 fn summarize_timelock(timelock: Timelock) -> OxideTimelockSummary {
