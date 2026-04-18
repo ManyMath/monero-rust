@@ -12,6 +12,8 @@ pub mod encryption;
 pub mod error_codes;
 pub mod key_image_import;
 pub mod monero_backend;
+#[cfg(feature = "oxide-adapter-spike")]
+pub mod oxide_adapter;
 pub mod scan_coordinator;
 pub mod scanner;
 pub mod wallet_output;
