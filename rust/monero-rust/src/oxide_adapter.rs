@@ -7,6 +7,8 @@
 use std::io::{self, Cursor};
 
 #[cfg(feature = "oxide-wallet-adapter-spike")]
+use crate::monero_backend::rpc::{BlockCompleteEntry, BlockOutputIndices};
+#[cfg(feature = "oxide-wallet-adapter-spike")]
 use monero_oxide::transaction::{NotPruned, Pruned};
 use monero_oxide::{
     block::Block,
@@ -333,6 +335,54 @@ pub fn scan_block_with_wallet(
         scanned_output_count: outputs.len(),
         outputs: output_summaries,
     })
+}
+
+/// Expand one `/getblocks.bin` block entry into the `monero-wallet` scanner shape.
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+pub fn scan_rpc_block_with_wallet(
+    public_spend_key: [u8; 32],
+    private_view_key: [u8; 32],
+    network: OxideNetwork,
+    block_entry: &BlockCompleteEntry,
+    output_indices: Option<&BlockOutputIndices>,
+    subaddresses: &[(u32, u32)],
+) -> Result<OxideWalletScanSummary, OxideAdapterError> {
+    let mut block_cursor = Cursor::new(block_entry.block.as_slice());
+    let block = Block::read(&mut block_cursor)?;
+    ensure_fully_consumed(&block_cursor, block_entry.block.len())?;
+    if block.transactions.len() != block_entry.txs.len() {
+        return Err(OxideAdapterError::Parse(format!(
+            "expected {} expanded transaction blobs, got {}",
+            block.transactions.len(),
+            block_entry.txs.len()
+        )));
+    }
+
+    let transaction_bytes = block_entry
+        .txs
+        .iter()
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+    let output_index_for_first_ringct_output = if let Some(output_indices) = output_indices {
+        let transaction_output_indices = output_indices
+            .indices
+            .iter()
+            .map(|tx| tx.indices.as_slice())
+            .collect::<Vec<_>>();
+        infer_first_ringct_output_index(&block_entry.block, &transaction_output_indices)?
+    } else {
+        None
+    };
+
+    scan_block_with_wallet(
+        public_spend_key,
+        private_view_key,
+        network,
+        &block_entry.block,
+        &transaction_bytes,
+        output_index_for_first_ringct_output,
+        subaddresses,
+    )
 }
 
 #[cfg(feature = "oxide-wallet-adapter-spike")]
