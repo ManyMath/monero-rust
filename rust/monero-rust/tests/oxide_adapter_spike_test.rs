@@ -19,7 +19,7 @@ use monero_rust::monero_backend::wallet::{
 use monero_rust::{
     oxide_adapter::{
         infer_first_ringct_output_index, scan_block_with_wallet, scan_rpc_block_with_wallet,
-        OxideNetwork,
+        scan_rpc_blocks_with_wallet, OxideNetwork,
     },
     scanner::derive_keys,
 };
@@ -184,6 +184,36 @@ fn honked_rpc_block_entry_and_indices() -> (BlockCompleteEntry, BlockOutputIndic
                 .collect(),
         },
     )
+}
+
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+fn miner_only_rpc_block_entry_and_indices() -> (BlockCompleteEntry, BlockOutputIndices) {
+    let result = tx_construction_miner_only_block_result();
+    (
+        BlockCompleteEntry {
+            block: hex::decode(result["blob"].as_str().expect("blob should be present"))
+                .expect("block blob should decode"),
+            txs: vec![],
+            pruned: false,
+            block_weight: 0,
+        },
+        BlockOutputIndices { indices: vec![] },
+    )
+}
+
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+fn honked_wallet_key_bytes() -> ([u8; 32], [u8; 32], String) {
+    let keys = derive_keys(HONKED_BAGPIPE_MNEMONIC, "stagenet", "")
+        .expect("current backend should derive fixture wallet keys");
+    let public_spend_key: [u8; 32] = hex::decode(&keys.public_spend_key)
+        .expect("public spend key should decode")
+        .try_into()
+        .expect("public spend key should be 32 bytes");
+    let private_view_key: [u8; 32] = hex::decode(&keys.secret_view_key)
+        .expect("secret view key should decode")
+        .try_into()
+        .expect("secret view key should be 32 bytes");
+    (public_spend_key, private_view_key, keys.address.clone())
 }
 
 #[test]
@@ -377,16 +407,7 @@ fn oxide_wallet_rpc_block_expansion_matches_current_backend_output() {
     const TARGET_TX_ID: &str = "07a561e60118c0a485b20bbfac787fd8efead96a9f422d9dff4a86f2985db7c5";
     const EXPECTED_AMOUNT: u64 = 10_000_000_000_000;
 
-    let keys = derive_keys(HONKED_BAGPIPE_MNEMONIC, "stagenet", "")
-        .expect("current backend should derive fixture wallet keys");
-    let public_spend_key: [u8; 32] = hex::decode(&keys.public_spend_key)
-        .expect("public spend key should decode")
-        .try_into()
-        .expect("public spend key should be 32 bytes");
-    let private_view_key: [u8; 32] = hex::decode(&keys.secret_view_key)
-        .expect("secret view key should decode")
-        .try_into()
-        .expect("secret view key should be 32 bytes");
+    let (public_spend_key, private_view_key, address) = honked_wallet_key_bytes();
     let (block_entry, output_indices) = honked_rpc_block_entry_and_indices();
 
     let summary = scan_rpc_block_with_wallet(
@@ -399,7 +420,7 @@ fn oxide_wallet_rpc_block_expansion_matches_current_backend_output() {
     )
     .expect("monero-wallet scanner should scan RPC-expanded block");
 
-    assert_eq!(summary.legacy_address, keys.address);
+    assert_eq!(summary.legacy_address, address);
     assert_eq!(summary.block_height, 1_384_526);
     assert_eq!(summary.scanned_output_count, 1);
     assert_eq!(summary.outputs.len(), 1);
@@ -413,16 +434,7 @@ fn oxide_wallet_rpc_block_expansion_matches_current_backend_output() {
 #[cfg(feature = "oxide-wallet-adapter-spike")]
 #[test]
 fn oxide_wallet_rpc_block_expansion_rejects_missing_transaction_blob() {
-    let keys = derive_keys(HONKED_BAGPIPE_MNEMONIC, "stagenet", "")
-        .expect("current backend should derive fixture wallet keys");
-    let public_spend_key: [u8; 32] = hex::decode(&keys.public_spend_key)
-        .expect("public spend key should decode")
-        .try_into()
-        .expect("public spend key should be 32 bytes");
-    let private_view_key: [u8; 32] = hex::decode(&keys.secret_view_key)
-        .expect("secret view key should decode")
-        .try_into()
-        .expect("secret view key should be 32 bytes");
+    let (public_spend_key, private_view_key, _) = honked_wallet_key_bytes();
     let (mut block_entry, output_indices) = honked_rpc_block_entry_and_indices();
     block_entry.txs.pop();
 
@@ -435,6 +447,50 @@ fn oxide_wallet_rpc_block_expansion_rejects_missing_transaction_blob() {
         &[(0, 1), (1, 0)],
     )
     .expect_err("RPC expansion should reject an incomplete transaction list");
+
+    assert!(matches!(err, OxideAdapterError::Parse(_)));
+}
+
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+#[test]
+fn oxide_wallet_rpc_batch_scans_miner_and_matching_blocks() {
+    let (public_spend_key, private_view_key, _) = honked_wallet_key_bytes();
+    let (miner_entry, miner_indices) = miner_only_rpc_block_entry_and_indices();
+    let (honked_entry, honked_indices) = honked_rpc_block_entry_and_indices();
+
+    let summaries = scan_rpc_blocks_with_wallet(
+        public_spend_key,
+        private_view_key,
+        OxideNetwork::Stagenet,
+        &[miner_entry, honked_entry],
+        &[miner_indices, honked_indices],
+        &[(0, 1), (1, 0)],
+    )
+    .expect("monero-wallet scanner should scan RPC block sequence");
+
+    assert_eq!(summaries.len(), 2);
+    assert_eq!(summaries[0].scanned_output_count, 0);
+    assert!(summaries[0].outputs.is_empty());
+    assert_eq!(summaries[1].block_height, 1_384_526);
+    assert_eq!(summaries[1].scanned_output_count, 1);
+}
+
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+#[test]
+fn oxide_wallet_rpc_batch_rejects_mismatched_output_index_blocks() {
+    let (public_spend_key, private_view_key, _) = honked_wallet_key_bytes();
+    let (miner_entry, _) = miner_only_rpc_block_entry_and_indices();
+    let (honked_entry, honked_indices) = honked_rpc_block_entry_and_indices();
+
+    let err = scan_rpc_blocks_with_wallet(
+        public_spend_key,
+        private_view_key,
+        OxideNetwork::Stagenet,
+        &[miner_entry, honked_entry],
+        &[honked_indices],
+        &[(0, 1), (1, 0)],
+    )
+    .expect_err("block/output-index metadata should be parallel");
 
     assert!(matches!(err, OxideAdapterError::Parse(_)));
 }

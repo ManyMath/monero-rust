@@ -385,6 +385,44 @@ pub fn scan_rpc_block_with_wallet(
     )
 }
 
+/// Expand and scan a sequence of `/getblocks.bin` block entries.
+///
+/// When daemon output indices are supplied, they must be parallel to
+/// `block_entries`. An empty output-index slice means no index metadata is
+/// available for any block.
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+pub fn scan_rpc_blocks_with_wallet(
+    public_spend_key: [u8; 32],
+    private_view_key: [u8; 32],
+    network: OxideNetwork,
+    block_entries: &[BlockCompleteEntry],
+    output_indices: &[BlockOutputIndices],
+    subaddresses: &[(u32, u32)],
+) -> Result<Vec<OxideWalletScanSummary>, OxideAdapterError> {
+    if !output_indices.is_empty() && output_indices.len() != block_entries.len() {
+        return Err(OxideAdapterError::Parse(format!(
+            "expected {} block output-index entries, got {}",
+            block_entries.len(),
+            output_indices.len()
+        )));
+    }
+
+    block_entries
+        .iter()
+        .enumerate()
+        .map(|(index, block_entry)| {
+            scan_rpc_block_with_wallet(
+                public_spend_key,
+                private_view_key,
+                network,
+                block_entry,
+                output_indices.get(index),
+                subaddresses,
+            )
+        })
+        .collect()
+}
+
 #[cfg(feature = "oxide-wallet-adapter-spike")]
 fn parse_scannable_transaction(bytes: &[u8]) -> Result<Transaction<Pruned>, OxideAdapterError> {
     let mut pruned_cursor = Cursor::new(bytes);
