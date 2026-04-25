@@ -179,6 +179,89 @@ pub fn summarize_block(bytes: &[u8]) -> Result<OxideBlockSummary, OxideAdapterEr
     })
 }
 
+/// Infer the first RingCT output index in a block from daemon transaction output indexes.
+///
+/// The `transaction_output_indices` slices must be in the same order as the
+/// non-miner transaction hashes embedded in the block.
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+pub fn infer_first_ringct_output_index(
+    block_bytes: &[u8],
+    transaction_output_indices: &[&[u64]],
+) -> Result<Option<u64>, OxideAdapterError> {
+    let mut block_cursor = Cursor::new(block_bytes);
+    let block = Block::read(&mut block_cursor)?;
+    ensure_fully_consumed(&block_cursor, block_bytes.len())?;
+
+    if block.transactions.len() != transaction_output_indices.len() {
+        return Err(OxideAdapterError::Parse(format!(
+            "expected {} transaction output-index lists, got {}",
+            block.transactions.len(),
+            transaction_output_indices.len()
+        )));
+    }
+
+    let mut seen_outputs_before_tx = if block.miner_transaction().version() == 2 {
+        u64::try_from(block.miner_transaction().prefix().outputs.len())
+            .expect("miner output count should fit in u64")
+    } else {
+        0
+    };
+    let mut first_ringct_output_index = None;
+
+    for output_indices in transaction_output_indices {
+        if let Some(first_output_index_in_tx) = output_indices.first().copied() {
+            let inferred_first = match first_ringct_output_index {
+                Some(first_ringct_output_index) => first_ringct_output_index,
+                None => {
+                    let inferred = first_output_index_in_tx
+                        .checked_sub(seen_outputs_before_tx)
+                        .ok_or_else(|| {
+                            OxideAdapterError::Parse(
+                                "transaction output index precedes prior block outputs".to_string(),
+                            )
+                        })?;
+                    first_ringct_output_index = Some(inferred);
+                    inferred
+                }
+            };
+
+            let expected_first_output_index = inferred_first
+                .checked_add(seen_outputs_before_tx)
+                .ok_or_else(|| {
+                    OxideAdapterError::Parse("RingCT output index overflow".to_string())
+                })?;
+            if first_output_index_in_tx != expected_first_output_index {
+                return Err(OxideAdapterError::Parse(format!(
+                    "expected first transaction output index {}, got {}",
+                    expected_first_output_index, first_output_index_in_tx
+                )));
+            }
+
+            for (offset, output_index) in output_indices.iter().copied().enumerate() {
+                let expected_output_index = expected_first_output_index
+                    .checked_add(u64::try_from(offset).expect("output offset should fit in u64"))
+                    .ok_or_else(|| {
+                        OxideAdapterError::Parse("RingCT output index overflow".to_string())
+                    })?;
+                if output_index != expected_output_index {
+                    return Err(OxideAdapterError::Parse(format!(
+                        "expected transaction output index {}, got {}",
+                        expected_output_index, output_index
+                    )));
+                }
+            }
+        }
+
+        seen_outputs_before_tx = seen_outputs_before_tx
+            .checked_add(
+                u64::try_from(output_indices.len()).expect("output count should fit in u64"),
+            )
+            .ok_or_else(|| OxideAdapterError::Parse("RingCT output index overflow".to_string()))?;
+    }
+
+    Ok(first_ringct_output_index)
+}
+
 /// Build a `monero-wallet` scanner and scan a block with the supplied view keys.
 #[cfg(feature = "oxide-wallet-adapter-spike")]
 pub fn scan_block_with_wallet(

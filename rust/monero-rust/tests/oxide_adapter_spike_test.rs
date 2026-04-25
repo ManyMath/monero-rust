@@ -15,7 +15,7 @@ use monero_rust::monero_backend::wallet::{
 };
 #[cfg(feature = "oxide-wallet-adapter-spike")]
 use monero_rust::{
-    oxide_adapter::{scan_block_with_wallet, OxideNetwork},
+    oxide_adapter::{infer_first_ringct_output_index, scan_block_with_wallet, OxideNetwork},
     scanner::derive_keys,
 };
 
@@ -258,7 +258,6 @@ fn oxide_wallet_scanner_runs_on_current_block_vector() {
 fn oxide_wallet_scanner_matches_current_backend_output() {
     const TARGET_TX_ID: &str = "07a561e60118c0a485b20bbfac787fd8efead96a9f422d9dff4a86f2985db7c5";
     const EXPECTED_AMOUNT: u64 = 10_000_000_000_000;
-    const FIRST_RINGCT_OUTPUT_INDEX: u64 = 6_693_928;
 
     let keys = derive_keys(HONKED_BAGPIPE_MNEMONIC, "stagenet", "")
         .expect("current backend should derive fixture wallet keys");
@@ -283,6 +282,16 @@ fn oxide_wallet_scanner_matches_current_backend_output() {
         .iter()
         .map(Vec::as_slice)
         .collect::<Vec<_>>();
+    let transaction_output_index_refs = transactions
+        .iter()
+        .map(|tx| tx.output_indices.as_slice())
+        .collect::<Vec<_>>();
+    let first_ringct_output_index =
+        infer_first_ringct_output_index(&blob, &transaction_output_index_refs)
+            .expect("first RingCT output index should be inferred")
+            .expect("block should contain RingCT output indices");
+
+    assert_eq!(first_ringct_output_index, 6_693_928);
 
     let summary = scan_block_with_wallet(
         public_spend_key,
@@ -290,7 +299,7 @@ fn oxide_wallet_scanner_matches_current_backend_output() {
         OxideNetwork::Stagenet,
         &blob,
         &transaction_blob_refs,
-        Some(FIRST_RINGCT_OUTPUT_INDEX),
+        Some(first_ringct_output_index),
         &[(0, 1), (1, 0)],
     )
     .expect("monero-wallet scanner should scan block transactions");
@@ -329,4 +338,23 @@ fn oxide_wallet_scanner_matches_current_backend_output() {
         oxide_output.subaddress,
         current_subaddress_tuple(current_output.metadata.subaddress)
     );
+}
+
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+#[test]
+fn oxide_first_ringct_output_index_rejects_inconsistent_rpc_indices() {
+    let result = honked_bagpipe_block_result();
+    let blob = hex::decode(result["blob"].as_str().expect("blob should be present"))
+        .expect("block blob should decode");
+    let mut transactions = honked_bagpipe_transactions_for_block(&result);
+    transactions[0].output_indices[1] += 1;
+    let transaction_output_index_refs = transactions
+        .iter()
+        .map(|tx| tx.output_indices.as_slice())
+        .collect::<Vec<_>>();
+
+    let err = infer_first_ringct_output_index(&blob, &transaction_output_index_refs)
+        .expect_err("non-contiguous output indices should be rejected");
+
+    assert!(matches!(err, OxideAdapterError::Parse(_)));
 }
