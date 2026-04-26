@@ -116,6 +116,10 @@ pub struct OxideWalletScanSummary {
     pub registered_subaddresses: usize,
     /// Block height from the parsed block.
     pub block_height: usize,
+    /// Block hash reported by `monero-oxide`.
+    pub block_hash: [u8; 32],
+    /// Previous block hash from the parsed block header.
+    pub previous_block_hash: [u8; 32],
     /// Number of outputs returned by `monero-wallet` after timelock filtering.
     pub scanned_output_count: usize,
     /// Stable summaries of outputs returned by `monero-wallet`.
@@ -297,6 +301,8 @@ pub fn scan_block_with_wallet(
     let block = Block::read(&mut block_cursor)?;
     ensure_fully_consumed(&block_cursor, block_bytes.len())?;
     let block_height = block.number();
+    let block_hash = block.hash();
+    let previous_block_hash = block.header.previous;
 
     let mut transactions = Vec::with_capacity(transaction_bytes.len());
     for bytes in transaction_bytes {
@@ -332,6 +338,8 @@ pub fn scan_block_with_wallet(
             .filter(|(account, address)| SubaddressIndex::new(*account, *address).is_some())
             .count(),
         block_height,
+        block_hash,
+        previous_block_hash,
         scanned_output_count: outputs.len(),
         outputs: output_summaries,
     })

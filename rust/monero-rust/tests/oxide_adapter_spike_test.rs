@@ -310,6 +310,18 @@ fn oxide_wallet_scanner_runs_on_current_block_vector() {
             .as_u64()
             .expect("block height should be present") as usize
     );
+    assert_eq!(
+        hex::encode(summary.block_hash),
+        result["block_header"]["hash"]
+            .as_str()
+            .expect("block hash should be present")
+    );
+    assert_eq!(
+        hex::encode(summary.previous_block_hash),
+        result["block_header"]["prev_hash"]
+            .as_str()
+            .expect("previous block hash should be present")
+    );
     assert_eq!(summary.scanned_output_count, 0);
     assert!(summary.outputs.is_empty());
 }
@@ -379,6 +391,10 @@ fn oxide_wallet_scanner_matches_current_backend_output() {
         .ignore_timelock();
 
     assert_eq!(current_outputs.len(), 1);
+    let current_block =
+        Block::read::<&[u8]>(&mut blob.as_ref()).expect("current backend should parse block");
+    assert_eq!(summary.block_hash, compute_block_id(&current_block));
+    assert_eq!(summary.previous_block_hash, current_block.header.previous);
     assert_eq!(summary.scanned_output_count, current_outputs.len());
     assert_eq!(summary.outputs.len(), current_outputs.len());
 
@@ -409,6 +425,7 @@ fn oxide_wallet_rpc_block_expansion_matches_current_backend_output() {
 
     let (public_spend_key, private_view_key, address) = honked_wallet_key_bytes();
     let (block_entry, output_indices) = honked_rpc_block_entry_and_indices();
+    let result = honked_bagpipe_block_result();
 
     let summary = scan_rpc_block_with_wallet(
         public_spend_key,
@@ -422,6 +439,18 @@ fn oxide_wallet_rpc_block_expansion_matches_current_backend_output() {
 
     assert_eq!(summary.legacy_address, address);
     assert_eq!(summary.block_height, 1_384_526);
+    assert_eq!(
+        hex::encode(summary.block_hash),
+        result["block_header"]["hash"]
+            .as_str()
+            .expect("block hash should be present")
+    );
+    assert_eq!(
+        hex::encode(summary.previous_block_hash),
+        result["block_header"]["prev_hash"]
+            .as_str()
+            .expect("previous block hash should be present")
+    );
     assert_eq!(summary.scanned_output_count, 1);
     assert_eq!(summary.outputs.len(), 1);
     assert_eq!(hex::encode(summary.outputs[0].transaction), TARGET_TX_ID);
@@ -457,6 +486,7 @@ fn oxide_wallet_rpc_batch_scans_miner_and_matching_blocks() {
     let (public_spend_key, private_view_key, _) = honked_wallet_key_bytes();
     let (miner_entry, miner_indices) = miner_only_rpc_block_entry_and_indices();
     let (honked_entry, honked_indices) = honked_rpc_block_entry_and_indices();
+    let honked_result = honked_bagpipe_block_result();
 
     let summaries = scan_rpc_blocks_with_wallet(
         public_spend_key,
@@ -472,6 +502,12 @@ fn oxide_wallet_rpc_batch_scans_miner_and_matching_blocks() {
     assert_eq!(summaries[0].scanned_output_count, 0);
     assert!(summaries[0].outputs.is_empty());
     assert_eq!(summaries[1].block_height, 1_384_526);
+    assert_eq!(
+        hex::encode(summaries[1].previous_block_hash),
+        honked_result["block_header"]["prev_hash"]
+            .as_str()
+            .expect("previous block hash should be present")
+    );
     assert_eq!(summaries[1].scanned_output_count, 1);
 }
 
