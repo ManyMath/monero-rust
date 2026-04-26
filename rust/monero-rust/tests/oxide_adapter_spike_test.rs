@@ -19,7 +19,7 @@ use monero_rust::monero_backend::wallet::{
 use monero_rust::{
     oxide_adapter::{
         infer_first_ringct_output_index, scan_block_with_wallet, scan_rpc_block_with_wallet,
-        scan_rpc_blocks_with_wallet, OxideNetwork,
+        scan_rpc_blocks_with_wallet, validate_scan_summary_chain, OxideNetwork,
     },
     scanner::derive_keys,
 };
@@ -509,6 +509,64 @@ fn oxide_wallet_rpc_batch_scans_miner_and_matching_blocks() {
             .expect("previous block hash should be present")
     );
     assert_eq!(summaries[1].scanned_output_count, 1);
+}
+
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+#[test]
+fn oxide_wallet_scan_summary_chain_validates_single_parent_boundary() {
+    let (public_spend_key, private_view_key, _) = honked_wallet_key_bytes();
+    let (block_entry, output_indices) = honked_rpc_block_entry_and_indices();
+    let honked_result = honked_bagpipe_block_result();
+    let expected_parent_hash: [u8; 32] = hex::decode(
+        honked_result["block_header"]["prev_hash"]
+            .as_str()
+            .expect("previous block hash should be present"),
+    )
+    .expect("previous block hash should decode")
+    .try_into()
+    .expect("previous block hash should be 32 bytes");
+
+    let summary = scan_rpc_block_with_wallet(
+        public_spend_key,
+        private_view_key,
+        OxideNetwork::Stagenet,
+        &block_entry,
+        Some(&output_indices),
+        &[(0, 1), (1, 0)],
+    )
+    .expect("monero-wallet scanner should scan RPC-expanded block");
+
+    validate_scan_summary_chain(None, &[]).expect("empty scan summary chains are valid");
+    validate_scan_summary_chain(Some(expected_parent_hash), std::slice::from_ref(&summary))
+        .expect("single scan summary should match expected parent hash");
+
+    let mut wrong_parent_hash = expected_parent_hash;
+    wrong_parent_hash[0] ^= 1;
+    let err = validate_scan_summary_chain(Some(wrong_parent_hash), std::slice::from_ref(&summary))
+        .expect_err("wrong expected parent hash should be rejected");
+    assert!(matches!(err, OxideAdapterError::Parse(_)));
+}
+
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+#[test]
+fn oxide_wallet_scan_summary_chain_rejects_unrelated_fixture_batch() {
+    let (public_spend_key, private_view_key, _) = honked_wallet_key_bytes();
+    let (miner_entry, miner_indices) = miner_only_rpc_block_entry_and_indices();
+    let (honked_entry, honked_indices) = honked_rpc_block_entry_and_indices();
+
+    let summaries = scan_rpc_blocks_with_wallet(
+        public_spend_key,
+        private_view_key,
+        OxideNetwork::Stagenet,
+        &[miner_entry, honked_entry],
+        &[miner_indices, honked_indices],
+        &[(0, 1), (1, 0)],
+    )
+    .expect("monero-wallet scanner should scan RPC block sequence");
+
+    let err = validate_scan_summary_chain(None, &summaries)
+        .expect_err("unrelated block fixtures should not validate as one chain");
+    assert!(matches!(err, OxideAdapterError::Parse(_)));
 }
 
 #[cfg(feature = "oxide-wallet-adapter-spike")]

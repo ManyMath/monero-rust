@@ -431,6 +431,42 @@ pub fn scan_rpc_blocks_with_wallet(
         .collect()
 }
 
+/// Validate that scan summaries form a contiguous parent-hash chain.
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+pub fn validate_scan_summary_chain(
+    expected_previous_block_hash: Option<[u8; 32]>,
+    summaries: &[OxideWalletScanSummary],
+) -> Result<(), OxideAdapterError> {
+    let Some(first_summary) = summaries.first() else {
+        return Ok(());
+    };
+
+    if let Some(expected_previous_block_hash) = expected_previous_block_hash {
+        if first_summary.previous_block_hash != expected_previous_block_hash {
+            return Err(OxideAdapterError::Parse(format!(
+                "expected first scan summary parent hash {}, got {}",
+                hex::encode(expected_previous_block_hash),
+                hex::encode(first_summary.previous_block_hash)
+            )));
+        }
+    }
+
+    for window in summaries.windows(2) {
+        let previous = &window[0];
+        let current = &window[1];
+        if current.previous_block_hash != previous.block_hash {
+            return Err(OxideAdapterError::Parse(format!(
+                "expected scan summary at height {} to build on {}, got {}",
+                current.block_height,
+                hex::encode(previous.block_hash),
+                hex::encode(current.previous_block_hash)
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(feature = "oxide-wallet-adapter-spike")]
 fn parse_scannable_transaction(bytes: &[u8]) -> Result<Transaction<Pruned>, OxideAdapterError> {
     let mut pruned_cursor = Cursor::new(bytes);
