@@ -413,8 +413,25 @@ fn oxide_wallet_scanner_matches_current_backend_output() {
     assert_eq!(oxide_output.amount, EXPECTED_AMOUNT);
     assert_eq!(oxide_output.amount, current_output.data.commitment.amount);
     assert_eq!(
+        oxide_output.key,
+        current_output.data.key.compress().to_bytes()
+    );
+    assert_eq!(
+        oxide_output.key_offset,
+        current_output.data.key_offset.to_bytes()
+    );
+    assert_eq!(
+        oxide_output.commitment_mask,
+        current_output.data.commitment.mask.to_bytes()
+    );
+    assert_eq!(
         oxide_output.subaddress,
         current_subaddress_tuple(current_output.metadata.subaddress)
+    );
+    assert!(!oxide_output.oxide_received_output_bytes.is_empty());
+    assert_ne!(
+        oxide_output.oxide_received_output_bytes,
+        current_output.serialize()
     );
 }
 
@@ -459,6 +476,10 @@ fn oxide_wallet_rpc_block_expansion_matches_current_backend_output() {
     assert_eq!(summary.outputs[0].index_on_blockchain, 6_693_930);
     assert_eq!(summary.outputs[0].amount, EXPECTED_AMOUNT);
     assert_eq!(summary.outputs[0].subaddress, None);
+    assert_eq!(summary.outputs[0].key.len(), 32);
+    assert_eq!(summary.outputs[0].key_offset.len(), 32);
+    assert_eq!(summary.outputs[0].commitment_mask.len(), 32);
+    assert!(!summary.outputs[0].oxide_received_output_bytes.is_empty());
 }
 
 #[cfg(feature = "oxide-wallet-adapter-spike")]

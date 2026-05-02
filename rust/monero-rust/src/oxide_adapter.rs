@@ -136,10 +136,18 @@ pub struct OxideWalletOutputSummary {
     pub index_in_transaction: u64,
     /// RingCT output index on the blockchain.
     pub index_on_blockchain: u64,
+    /// One-time output public key.
+    pub key: [u8; 32],
+    /// Scalar added to the wallet spend key to derive the one-time output secret.
+    pub key_offset: [u8; 32],
+    /// Pedersen commitment mask for the output.
+    pub commitment_mask: [u8; 32],
     /// Decrypted output amount.
     pub amount: u64,
     /// Subaddress account/address pair, if this output was sent to a registered subaddress.
     pub subaddress: Option<(u32, u32)>,
+    /// Native `monero-wallet` output serialization for fixture checks.
+    pub oxide_received_output_bytes: Vec<u8>,
 }
 
 /// Parse a full transaction blob with `monero-oxide` and return a stable summary.
@@ -324,10 +332,14 @@ pub fn scan_block_with_wallet(
             transaction: output.transaction(),
             index_in_transaction: output.index_in_transaction(),
             index_on_blockchain: output.index_on_blockchain(),
+            key: output.key().compress().to_bytes(),
+            key_offset: oxide_scalar_bytes(output.key_offset()),
+            commitment_mask: oxide_scalar_bytes(output.commitment().mask),
             amount: output.commitment().amount,
             subaddress: output
                 .subaddress()
                 .map(|subaddress| (subaddress.account(), subaddress.address())),
+            oxide_received_output_bytes: output.serialize(),
         })
         .collect::<Vec<_>>();
 
@@ -530,4 +542,15 @@ fn convert_network(network: OxideNetwork) -> Network {
         OxideNetwork::Testnet => Network::Testnet,
         OxideNetwork::Stagenet => Network::Stagenet,
     }
+}
+
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+fn oxide_scalar_bytes(scalar: Scalar) -> [u8; 32] {
+    let mut bytes = Vec::with_capacity(32);
+    scalar
+        .write(&mut bytes)
+        .expect("writing scalar into Vec should not fail");
+    bytes
+        .try_into()
+        .expect("monero-oxide scalar serialization should be 32 bytes")
 }
