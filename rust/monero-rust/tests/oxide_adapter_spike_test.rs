@@ -18,9 +18,9 @@ use monero_rust::monero_backend::wallet::{
 #[cfg(feature = "oxide-wallet-adapter-spike")]
 use monero_rust::{
     oxide_adapter::{
-        infer_first_ringct_output_index, scan_block_with_wallet, scan_rpc_block_with_wallet,
-        scan_rpc_blocks_with_wallet, scan_validated_rpc_blocks_with_wallet,
-        validate_scan_summary_chain, OxideNetwork,
+        derive_oxide_wallet_output_key_image, infer_first_ringct_output_index,
+        scan_block_with_wallet, scan_rpc_block_with_wallet, scan_rpc_blocks_with_wallet,
+        scan_validated_rpc_blocks_with_wallet, validate_scan_summary_chain, OxideNetwork,
     },
     scanner::derive_keys,
 };
@@ -343,6 +343,10 @@ fn oxide_wallet_scanner_matches_current_backend_output() {
         .expect("secret view key should decode")
         .try_into()
         .expect("secret view key should be 32 bytes");
+    let private_spend_key: [u8; 32] = hex::decode(&keys.secret_spend_key)
+        .expect("secret spend key should decode")
+        .try_into()
+        .expect("secret spend key should be 32 bytes");
 
     let result = honked_bagpipe_block_result();
     let blob = hex::decode(result["blob"].as_str().expect("blob should be present"))
@@ -433,6 +437,22 @@ fn oxide_wallet_scanner_matches_current_backend_output() {
         oxide_output.oxide_received_output_bytes,
         current_output.serialize()
     );
+
+    let current_spend = CurrentScalar::from_bytes_mod_order(private_spend_key);
+    let current_key_image = monero_rust::monero_backend::ringct::generate_key_image(
+        &Zeroizing::new(current_spend + current_output.data.key_offset),
+    )
+    .compress()
+    .to_bytes();
+    let oxide_key_image = derive_oxide_wallet_output_key_image(private_spend_key, oxide_output)
+        .expect("correct spend key should derive oxide output key image");
+    assert_eq!(oxide_key_image, current_key_image);
+
+    let mut wrong_spend_key = private_spend_key;
+    wrong_spend_key[0] ^= 1;
+    let err = derive_oxide_wallet_output_key_image(wrong_spend_key, oxide_output)
+        .expect_err("wrong spend key should not own oxide output");
+    assert!(matches!(err, OxideAdapterError::Parse(_)));
 }
 
 #[cfg(feature = "oxide-wallet-adapter-spike")]

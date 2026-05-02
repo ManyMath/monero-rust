@@ -18,7 +18,7 @@ use monero_oxide::{
 #[cfg(feature = "oxide-wallet-adapter-spike")]
 use monero_wallet::{
     address::{Network, SubaddressIndex},
-    ed25519::{CompressedPoint, Scalar},
+    ed25519::{CompressedPoint, Point, Scalar},
     interface::ScannableBlock,
     Scanner, ViewPair,
 };
@@ -464,6 +464,32 @@ pub fn scan_validated_rpc_blocks_with_wallet(
     )?;
     validate_scan_summary_chain(expected_previous_block_hash, &summaries)?;
     Ok(summaries)
+}
+
+/// Derive a key image for a scanned `monero-wallet` output with a private spend key.
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+pub fn derive_oxide_wallet_output_key_image(
+    private_spend_key: [u8; 32],
+    output: &OxideWalletOutputSummary,
+) -> Result<[u8; 32], OxideAdapterError> {
+    let spend = Scalar::read(&mut private_spend_key.as_slice())?;
+    let key_offset = Scalar::read(&mut output.key_offset.as_slice())?;
+    let output_key = CompressedPoint::from(output.key)
+        .decompress()
+        .ok_or_else(|| OxideAdapterError::Parse("invalid output key".to_string()))?;
+
+    let input_key: curve25519_dalek::Scalar = spend.into();
+    let input_key = input_key + key_offset.into();
+    let expected_output_key =
+        Point::from(&input_key * curve25519_dalek::constants::ED25519_BASEPOINT_TABLE);
+    if output_key != expected_output_key {
+        return Err(OxideAdapterError::Parse(
+            "private spend key does not own oxide wallet output".to_string(),
+        ));
+    }
+
+    let key_image = Point::from(input_key * Point::biased_hash(output.key).into());
+    Ok(key_image.compress().to_bytes())
 }
 
 /// Validate that scan summaries form a contiguous parent-hash chain.
