@@ -431,6 +431,29 @@ pub fn scan_rpc_blocks_with_wallet(
         .collect()
 }
 
+/// Scan a sequence of RPC-expanded blocks and validate the returned parent chain.
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+pub fn scan_validated_rpc_blocks_with_wallet(
+    public_spend_key: [u8; 32],
+    private_view_key: [u8; 32],
+    network: OxideNetwork,
+    block_entries: &[BlockCompleteEntry],
+    output_indices: &[BlockOutputIndices],
+    subaddresses: &[(u32, u32)],
+    expected_previous_block_hash: Option<[u8; 32]>,
+) -> Result<Vec<OxideWalletScanSummary>, OxideAdapterError> {
+    let summaries = scan_rpc_blocks_with_wallet(
+        public_spend_key,
+        private_view_key,
+        network,
+        block_entries,
+        output_indices,
+        subaddresses,
+    )?;
+    validate_scan_summary_chain(expected_previous_block_hash, &summaries)?;
+    Ok(summaries)
+}
+
 /// Validate that scan summaries form a contiguous parent-hash chain.
 #[cfg(feature = "oxide-wallet-adapter-spike")]
 pub fn validate_scan_summary_chain(

@@ -19,7 +19,8 @@ use monero_rust::monero_backend::wallet::{
 use monero_rust::{
     oxide_adapter::{
         infer_first_ringct_output_index, scan_block_with_wallet, scan_rpc_block_with_wallet,
-        scan_rpc_blocks_with_wallet, validate_scan_summary_chain, OxideNetwork,
+        scan_rpc_blocks_with_wallet, scan_validated_rpc_blocks_with_wallet,
+        validate_scan_summary_chain, OxideNetwork,
     },
     scanner::derive_keys,
 };
@@ -566,6 +567,58 @@ fn oxide_wallet_scan_summary_chain_rejects_unrelated_fixture_batch() {
 
     let err = validate_scan_summary_chain(None, &summaries)
         .expect_err("unrelated block fixtures should not validate as one chain");
+    assert!(matches!(err, OxideAdapterError::Parse(_)));
+}
+
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+#[test]
+fn oxide_wallet_validated_rpc_batch_accepts_expected_single_parent() {
+    let (public_spend_key, private_view_key, _) = honked_wallet_key_bytes();
+    let (block_entry, output_indices) = honked_rpc_block_entry_and_indices();
+    let honked_result = honked_bagpipe_block_result();
+    let expected_parent_hash: [u8; 32] = hex::decode(
+        honked_result["block_header"]["prev_hash"]
+            .as_str()
+            .expect("previous block hash should be present"),
+    )
+    .expect("previous block hash should decode")
+    .try_into()
+    .expect("previous block hash should be 32 bytes");
+
+    let summaries = scan_validated_rpc_blocks_with_wallet(
+        public_spend_key,
+        private_view_key,
+        OxideNetwork::Stagenet,
+        &[block_entry],
+        &[output_indices],
+        &[(0, 1), (1, 0)],
+        Some(expected_parent_hash),
+    )
+    .expect("validated RPC scan should accept matching starting parent");
+
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].block_height, 1_384_526);
+    assert_eq!(summaries[0].scanned_output_count, 1);
+}
+
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+#[test]
+fn oxide_wallet_validated_rpc_batch_rejects_unrelated_fixture_chain() {
+    let (public_spend_key, private_view_key, _) = honked_wallet_key_bytes();
+    let (miner_entry, miner_indices) = miner_only_rpc_block_entry_and_indices();
+    let (honked_entry, honked_indices) = honked_rpc_block_entry_and_indices();
+
+    let err = scan_validated_rpc_blocks_with_wallet(
+        public_spend_key,
+        private_view_key,
+        OxideNetwork::Stagenet,
+        &[miner_entry, honked_entry],
+        &[miner_indices, honked_indices],
+        &[(0, 1), (1, 0)],
+        None,
+    )
+    .expect_err("validated RPC scan should reject non-contiguous fixture blocks");
+
     assert!(matches!(err, OxideAdapterError::Parse(_)));
 }
 
