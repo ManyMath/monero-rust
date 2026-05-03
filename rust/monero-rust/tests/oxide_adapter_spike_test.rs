@@ -1,7 +1,7 @@
 #![cfg(feature = "oxide-adapter-spike")]
 
 use monero_rust::{
-    monero_backend::{block::Block, transaction::Transaction},
+    monero_backend::{block::Block, transaction::Input as CurrentInput, transaction::Transaction},
     oxide_adapter::{
         summarize_block, summarize_transaction, OxideAdapterError, OxideTimelockSummary,
     },
@@ -400,6 +400,27 @@ fn oxide_wallet_scanner_matches_current_backend_output() {
         Block::read::<&[u8]>(&mut blob.as_ref()).expect("current backend should parse block");
     assert_eq!(summary.block_hash, compute_block_id(&current_block));
     assert_eq!(summary.previous_block_hash, current_block.header.previous);
+    assert_eq!(summary.transaction_count, transactions.len() + 1);
+    let mut expected_spent_key_images = Vec::new();
+    for tx in &transactions {
+        let tx_bytes = hex::decode(&tx.as_hex).expect("transaction should decode");
+        let current_tx = Transaction::read::<&[u8]>(&mut tx_bytes.as_ref())
+            .expect("current backend should parse transaction");
+        for input in &current_tx.prefix.inputs {
+            if let CurrentInput::ToKey { key_image, .. } = input {
+                expected_spent_key_images.push((
+                    tx.tx_hash.clone(),
+                    hex::encode(key_image.compress().to_bytes()),
+                ));
+            }
+        }
+    }
+    let oxide_spent_key_images = summary
+        .spent_key_images
+        .iter()
+        .map(|spent| (hex::encode(spent.transaction), hex::encode(spent.key_image)))
+        .collect::<Vec<_>>();
+    assert_eq!(oxide_spent_key_images, expected_spent_key_images);
     assert_eq!(summary.scanned_output_count, current_outputs.len());
     assert_eq!(summary.outputs.len(), current_outputs.len());
 
@@ -477,6 +498,8 @@ fn oxide_wallet_rpc_block_expansion_matches_current_backend_output() {
 
     assert_eq!(summary.legacy_address, address);
     assert_eq!(summary.block_height, 1_384_526);
+    assert_eq!(summary.transaction_count, 3);
+    assert!(!summary.spent_key_images.is_empty());
     assert_eq!(
         hex::encode(summary.block_hash),
         result["block_header"]["hash"]

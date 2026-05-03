@@ -120,10 +120,24 @@ pub struct OxideWalletScanSummary {
     pub block_hash: [u8; 32],
     /// Previous block hash from the parsed block header.
     pub previous_block_hash: [u8; 32],
+    /// Number of transactions scanned, including the miner transaction.
+    pub transaction_count: usize,
+    /// Key images spent by non-miner transactions in the scanned block.
+    pub spent_key_images: Vec<OxideSpentKeyImageSummary>,
     /// Number of outputs returned by `monero-wallet` after timelock filtering.
     pub scanned_output_count: usize,
     /// Stable summaries of outputs returned by `monero-wallet`.
     pub outputs: Vec<OxideWalletOutputSummary>,
+}
+
+/// Stable summary of a spent key image observed while scanning a block.
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OxideSpentKeyImageSummary {
+    /// Hash of the transaction containing the input.
+    pub transaction: [u8; 32],
+    /// Spent key image bytes.
+    pub key_image: [u8; 32],
 }
 
 /// Stable read-only summary of a wallet output returned by `monero-wallet`.
@@ -316,6 +330,22 @@ pub fn scan_block_with_wallet(
     for bytes in transaction_bytes {
         transactions.push(parse_scannable_transaction(bytes)?);
     }
+    let spent_key_images = transactions
+        .iter()
+        .zip(block.transactions.iter())
+        .flat_map(|(transaction, transaction_hash)| {
+            transaction.prefix().inputs.iter().filter_map(move |input| {
+                if let Input::ToKey { key_image, .. } = input {
+                    Some(OxideSpentKeyImageSummary {
+                        transaction: *transaction_hash,
+                        key_image: key_image.to_bytes(),
+                    })
+                } else {
+                    None
+                }
+            })
+        })
+        .collect::<Vec<_>>();
 
     let scannable_block = ScannableBlock {
         block,
@@ -352,6 +382,8 @@ pub fn scan_block_with_wallet(
         block_height,
         block_hash,
         previous_block_hash,
+        transaction_count: 1 + transaction_bytes.len(),
+        spent_key_images,
         scanned_output_count: outputs.len(),
         outputs: output_summaries,
     })
