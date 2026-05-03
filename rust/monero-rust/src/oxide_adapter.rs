@@ -19,6 +19,7 @@ use monero_oxide::{
 use monero_wallet::{
     address::{Network, SubaddressIndex},
     ed25519::{CompressedPoint, Point, Scalar},
+    extra::PaymentId,
     interface::ScannableBlock,
     Scanner, ViewPair,
 };
@@ -116,6 +117,8 @@ pub struct OxideWalletScanSummary {
     pub registered_subaddresses: usize,
     /// Block height from the parsed block.
     pub block_height: usize,
+    /// Block timestamp from the parsed block header.
+    pub block_timestamp: u64,
     /// Block hash reported by `monero-oxide`.
     pub block_hash: [u8; 32],
     /// Previous block hash from the parsed block header.
@@ -160,6 +163,8 @@ pub struct OxideWalletOutputSummary {
     pub amount: u64,
     /// Subaddress account/address pair, if this output was sent to a registered subaddress.
     pub subaddress: Option<(u32, u32)>,
+    /// Payment ID, when `monero-wallet` exposes one for this output.
+    pub payment_id: Option<String>,
     /// Native `monero-wallet` output serialization for fixture checks.
     pub oxide_received_output_bytes: Vec<u8>,
 }
@@ -323,6 +328,7 @@ pub fn scan_block_with_wallet(
     let block = Block::read(&mut block_cursor)?;
     ensure_fully_consumed(&block_cursor, block_bytes.len())?;
     let block_height = block.number();
+    let block_timestamp = block.header.timestamp;
     let block_hash = block.hash();
     let previous_block_hash = block.header.previous;
 
@@ -369,6 +375,7 @@ pub fn scan_block_with_wallet(
             subaddress: output
                 .subaddress()
                 .map(|subaddress| (subaddress.account(), subaddress.address())),
+            payment_id: output.payment_id().and_then(oxide_payment_id_hex),
             oxide_received_output_bytes: output.serialize(),
         })
         .collect::<Vec<_>>();
@@ -380,6 +387,7 @@ pub fn scan_block_with_wallet(
             .filter(|(account, address)| SubaddressIndex::new(*account, *address).is_some())
             .count(),
         block_height,
+        block_timestamp,
         block_hash,
         previous_block_hash,
         transaction_count: 1 + transaction_bytes.len(),
@@ -611,4 +619,13 @@ fn oxide_scalar_bytes(scalar: Scalar) -> [u8; 32] {
     bytes
         .try_into()
         .expect("monero-oxide scalar serialization should be 32 bytes")
+}
+
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+fn oxide_payment_id_hex(payment_id: PaymentId) -> Option<String> {
+    match payment_id {
+        PaymentId::Unencrypted(id) => Some(hex::encode(id)),
+        PaymentId::Encrypted(id) if id == [0; 8] => None,
+        PaymentId::Encrypted(id) => Some(hex::encode(id)),
+    }
 }

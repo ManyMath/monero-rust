@@ -312,6 +312,12 @@ fn oxide_wallet_scanner_runs_on_current_block_vector() {
             .expect("block height should be present") as usize
     );
     assert_eq!(
+        summary.block_timestamp,
+        result["block_header"]["timestamp"]
+            .as_u64()
+            .expect("block timestamp should be present")
+    );
+    assert_eq!(
         hex::encode(summary.block_hash),
         result["block_header"]["hash"]
             .as_str()
@@ -400,6 +406,12 @@ fn oxide_wallet_scanner_matches_current_backend_output() {
         Block::read::<&[u8]>(&mut blob.as_ref()).expect("current backend should parse block");
     assert_eq!(summary.block_hash, compute_block_id(&current_block));
     assert_eq!(summary.previous_block_hash, current_block.header.previous);
+    assert_eq!(
+        summary.block_timestamp,
+        result["block_header"]["timestamp"]
+            .as_u64()
+            .expect("block timestamp should be present")
+    );
     assert_eq!(summary.transaction_count, transactions.len() + 1);
     let mut expected_spent_key_images = Vec::new();
     for tx in &transactions {
@@ -453,6 +465,7 @@ fn oxide_wallet_scanner_matches_current_backend_output() {
         oxide_output.subaddress,
         current_subaddress_tuple(current_output.metadata.subaddress)
     );
+    assert_eq!(oxide_output.payment_id, None);
     assert!(!oxide_output.oxide_received_output_bytes.is_empty());
     assert_ne!(
         oxide_output.oxide_received_output_bytes,
@@ -519,6 +532,7 @@ fn oxide_wallet_rpc_block_expansion_matches_current_backend_output() {
     assert_eq!(summary.outputs[0].index_on_blockchain, 6_693_930);
     assert_eq!(summary.outputs[0].amount, EXPECTED_AMOUNT);
     assert_eq!(summary.outputs[0].subaddress, None);
+    assert_eq!(summary.outputs[0].payment_id, None);
     assert_eq!(summary.outputs[0].key.len(), 32);
     assert_eq!(summary.outputs[0].key_offset.len(), 32);
     assert_eq!(summary.outputs[0].commitment_mask.len(), 32);
