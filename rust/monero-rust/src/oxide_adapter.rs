@@ -125,6 +125,8 @@ pub struct OxideWalletScanSummary {
     pub previous_block_hash: [u8; 32],
     /// Number of transactions scanned, including the miner transaction.
     pub transaction_count: usize,
+    /// Non-miner transaction hashes embedded in the scanned block.
+    pub transaction_hashes: Vec<[u8; 32]>,
     /// Key images spent by non-miner transactions in the scanned block.
     pub spent_key_images: Vec<OxideSpentKeyImageSummary>,
     /// Number of outputs returned by `monero-wallet` after timelock filtering.
@@ -331,6 +333,7 @@ pub fn scan_block_with_wallet(
     let block_timestamp = block.header.timestamp;
     let block_hash = block.hash();
     let previous_block_hash = block.header.previous;
+    let transaction_hashes = block.transactions.clone();
 
     let mut transactions = Vec::with_capacity(transaction_bytes.len());
     for bytes in transaction_bytes {
@@ -338,7 +341,7 @@ pub fn scan_block_with_wallet(
     }
     let spent_key_images = transactions
         .iter()
-        .zip(block.transactions.iter())
+        .zip(transaction_hashes.iter())
         .flat_map(|(transaction, transaction_hash)| {
             transaction.prefix().inputs.iter().filter_map(move |input| {
                 if let Input::ToKey { key_image, .. } = input {
@@ -391,6 +394,7 @@ pub fn scan_block_with_wallet(
         block_hash,
         previous_block_hash,
         transaction_count: 1 + transaction_bytes.len(),
+        transaction_hashes,
         spent_key_images,
         scanned_output_count: outputs.len(),
         outputs: output_summaries,

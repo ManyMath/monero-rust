@@ -329,6 +329,7 @@ fn oxide_wallet_scanner_runs_on_current_block_vector() {
             .as_str()
             .expect("previous block hash should be present")
     );
+    assert!(summary.transaction_hashes.is_empty());
     assert_eq!(summary.scanned_output_count, 0);
     assert!(summary.outputs.is_empty());
 }
@@ -413,6 +414,22 @@ fn oxide_wallet_scanner_matches_current_backend_output() {
             .expect("block timestamp should be present")
     );
     assert_eq!(summary.transaction_count, transactions.len() + 1);
+    assert_eq!(
+        summary
+            .transaction_hashes
+            .iter()
+            .map(hex::encode)
+            .collect::<Vec<_>>(),
+        result["tx_hashes"]
+            .as_array()
+            .expect("block tx hashes should be present")
+            .iter()
+            .map(|hash| hash
+                .as_str()
+                .expect("tx hash should be a string")
+                .to_string())
+            .collect::<Vec<_>>()
+    );
     let mut expected_spent_key_images = Vec::new();
     for tx in &transactions {
         let tx_bytes = hex::decode(&tx.as_hex).expect("transaction should decode");
@@ -512,6 +529,22 @@ fn oxide_wallet_rpc_block_expansion_matches_current_backend_output() {
     assert_eq!(summary.legacy_address, address);
     assert_eq!(summary.block_height, 1_384_526);
     assert_eq!(summary.transaction_count, 3);
+    assert_eq!(
+        summary
+            .transaction_hashes
+            .iter()
+            .map(hex::encode)
+            .collect::<Vec<_>>(),
+        result["tx_hashes"]
+            .as_array()
+            .expect("block tx hashes should be present")
+            .iter()
+            .map(|hash| hash
+                .as_str()
+                .expect("tx hash should be a string")
+                .to_string())
+            .collect::<Vec<_>>()
+    );
     assert!(!summary.spent_key_images.is_empty());
     assert_eq!(
         hex::encode(summary.block_hash),
