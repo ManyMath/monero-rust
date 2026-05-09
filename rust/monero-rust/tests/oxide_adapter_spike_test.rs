@@ -736,6 +736,30 @@ fn oxide_wallet_scan_summary_chain_rejects_unrelated_fixture_batch() {
 
 #[cfg(feature = "oxide-wallet-adapter-spike")]
 #[test]
+fn oxide_wallet_scan_summary_chain_rejects_height_gap() {
+    let (public_spend_key, private_view_key, _) = honked_wallet_key_bytes();
+    let (block_entry, output_indices) = honked_rpc_block_entry_and_indices();
+
+    let first = scan_rpc_block_with_wallet(
+        public_spend_key,
+        private_view_key,
+        OxideNetwork::Stagenet,
+        &block_entry,
+        Some(&output_indices),
+        &[(0, 1), (1, 0)],
+    )
+    .expect("monero-wallet scanner should scan RPC-expanded block");
+    let mut second = first.clone();
+    second.block_height = first.block_height + 2;
+    second.previous_block_hash = first.block_hash;
+
+    let err = validate_scan_summary_chain(None, &[first, second])
+        .expect_err("hash-linked summaries with a height gap should be rejected");
+    assert!(matches!(err, OxideAdapterError::Parse(_)));
+}
+
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+#[test]
 fn oxide_wallet_validated_rpc_batch_accepts_expected_single_parent() {
     let (public_spend_key, private_view_key, _) = honked_wallet_key_bytes();
     let (block_entry, output_indices) = honked_rpc_block_entry_and_indices();

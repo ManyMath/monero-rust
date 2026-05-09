@@ -562,6 +562,17 @@ pub fn validate_scan_summary_chain(
     for window in summaries.windows(2) {
         let previous = &window[0];
         let current = &window[1];
+        let expected_height = previous
+            .block_height
+            .checked_add(1)
+            .ok_or_else(|| OxideAdapterError::Parse("scan summary height overflow".to_string()))?;
+        if current.block_height != expected_height {
+            return Err(OxideAdapterError::Parse(format!(
+                "expected scan summary height {}, got {}",
+                expected_height, current.block_height
+            )));
+        }
+
         if current.previous_block_hash != previous.block_hash {
             return Err(OxideAdapterError::Parse(format!(
                 "expected scan summary at height {} to build on {}, got {}",
