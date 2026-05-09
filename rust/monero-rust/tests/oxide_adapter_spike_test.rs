@@ -95,6 +95,29 @@ fn tx_construction_miner_only_block_result() -> serde_json::Value {
 }
 
 #[cfg(feature = "oxide-wallet-adapter-spike")]
+fn tx_construction_miner_output_index() -> u64 {
+    let vectors: serde_json::Value =
+        serde_json::from_str(include_str!("vectors/tx_construction_test_vectors.json"))
+            .expect("tx construction fixture should parse");
+
+    let recorded = vectors
+        .as_array()
+        .expect("fixture should be an array")
+        .iter()
+        .find(|entry| entry["route"] == "get_transactions")
+        .expect("get_transactions vector should be present");
+    let response: serde_json::Value = serde_json::from_str(
+        recorded["response"]
+            .as_str()
+            .expect("response should be a string"),
+    )
+    .expect("get_transactions response should parse");
+    response["txs"][0]["output_indices"][0]
+        .as_u64()
+        .expect("miner output index should be present")
+}
+
+#[cfg(feature = "oxide-wallet-adapter-spike")]
 #[derive(serde::Deserialize)]
 struct RpcCall {
     route: String,
@@ -291,6 +314,7 @@ fn oxide_wallet_scanner_runs_on_current_block_vector() {
     let result = tx_construction_miner_only_block_result();
     let blob = hex::decode(result["blob"].as_str().expect("blob should be present"))
         .expect("block blob should decode");
+    let miner_output_index = tx_construction_miner_output_index();
 
     let summary = scan_block_with_wallet(
         public_spend_key,
@@ -298,7 +322,7 @@ fn oxide_wallet_scanner_runs_on_current_block_vector() {
         OxideNetwork::Stagenet,
         &blob,
         &[],
-        Some(0),
+        Some(miner_output_index),
         &[(0, 1), (1, 0)],
     )
     .expect("monero-wallet scanner should scan miner-only block");
@@ -330,8 +354,32 @@ fn oxide_wallet_scanner_runs_on_current_block_vector() {
             .expect("previous block hash should be present")
     );
     assert!(summary.transaction_hashes.is_empty());
-    assert_eq!(summary.scanned_output_count, 0);
-    assert!(summary.outputs.is_empty());
+    assert!(summary.spent_key_images.is_empty());
+    assert_eq!(summary.scanned_output_count, 1);
+    assert_eq!(summary.outputs.len(), 1);
+
+    let output = &summary.outputs[0];
+    assert_eq!(
+        hex::encode(output.transaction),
+        result["miner_tx_hash"]
+            .as_str()
+            .expect("miner tx hash should be present")
+    );
+    assert_eq!(output.index_in_transaction, 0);
+    assert_eq!(output.index_on_blockchain, miner_output_index);
+    assert_eq!(
+        output.amount,
+        result["block_header"]["reward"]
+            .as_u64()
+            .expect("block reward should be present")
+    );
+    assert_eq!(
+        output.additional_timelock,
+        OxideTimelockSummary::Block(1_386_923)
+    );
+    assert_eq!(output.subaddress, None);
+    assert_eq!(output.payment_id, None);
+    assert!(!output.oxide_received_output_bytes.is_empty());
 }
 
 #[cfg(feature = "oxide-wallet-adapter-spike")]
@@ -465,6 +513,7 @@ fn oxide_wallet_scanner_matches_current_backend_output() {
         target_tx.output_indices[oxide_output.index_in_transaction as usize]
     );
     assert_eq!(oxide_output.amount, EXPECTED_AMOUNT);
+    assert_eq!(oxide_output.additional_timelock, OxideTimelockSummary::None);
     assert_eq!(oxide_output.amount, current_output.data.commitment.amount);
     assert_eq!(
         oxide_output.key,
@@ -564,6 +613,10 @@ fn oxide_wallet_rpc_block_expansion_matches_current_backend_output() {
     assert_eq!(summary.outputs[0].index_in_transaction, 1);
     assert_eq!(summary.outputs[0].index_on_blockchain, 6_693_930);
     assert_eq!(summary.outputs[0].amount, EXPECTED_AMOUNT);
+    assert_eq!(
+        summary.outputs[0].additional_timelock,
+        OxideTimelockSummary::None
+    );
     assert_eq!(summary.outputs[0].subaddress, None);
     assert_eq!(summary.outputs[0].payment_id, None);
     assert_eq!(summary.outputs[0].key.len(), 32);

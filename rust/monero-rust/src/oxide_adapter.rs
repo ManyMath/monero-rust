@@ -129,7 +129,7 @@ pub struct OxideWalletScanSummary {
     pub transaction_hashes: Vec<[u8; 32]>,
     /// Key images spent by non-miner transactions in the scanned block.
     pub spent_key_images: Vec<OxideSpentKeyImageSummary>,
-    /// Number of outputs returned by `monero-wallet` after timelock filtering.
+    /// Number of outputs returned by `monero-wallet` before additional timelock filtering.
     pub scanned_output_count: usize,
     /// Stable summaries of outputs returned by `monero-wallet`.
     pub outputs: Vec<OxideWalletOutputSummary>,
@@ -163,6 +163,8 @@ pub struct OxideWalletOutputSummary {
     pub commitment_mask: [u8; 32],
     /// Decrypted output amount.
     pub amount: u64,
+    /// Additional transaction timelock attached to this output.
+    pub additional_timelock: OxideTimelockSummary,
     /// Subaddress account/address pair, if this output was sent to a registered subaddress.
     pub subaddress: Option<(u32, u32)>,
     /// Payment ID, when `monero-wallet` exposes one for this output.
@@ -364,7 +366,7 @@ pub fn scan_block_with_wallet(
     let outputs = scanner
         .scan(scannable_block)
         .map_err(|error| OxideAdapterError::Parse(error.to_string()))?
-        .not_additionally_locked();
+        .ignore_additional_timelock();
     let output_summaries = outputs
         .iter()
         .map(|output| OxideWalletOutputSummary {
@@ -375,6 +377,7 @@ pub fn scan_block_with_wallet(
             key_offset: oxide_scalar_bytes(output.key_offset()),
             commitment_mask: oxide_scalar_bytes(output.commitment().mask),
             amount: output.commitment().amount,
+            additional_timelock: summarize_timelock(output.additional_timelock()),
             subaddress: output
                 .subaddress()
                 .map(|subaddress| (subaddress.account(), subaddress.address())),
