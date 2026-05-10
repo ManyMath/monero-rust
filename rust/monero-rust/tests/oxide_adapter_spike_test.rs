@@ -365,6 +365,7 @@ fn oxide_wallet_scanner_runs_on_current_block_vector() {
             .as_str()
             .expect("miner tx hash should be present")
     );
+    assert_eq!(output.block_height, summary.block_height);
     assert_eq!(output.index_in_transaction, 0);
     assert_eq!(output.index_on_blockchain, miner_output_index);
     assert_eq!(
@@ -504,6 +505,7 @@ fn oxide_wallet_scanner_matches_current_backend_output() {
     let current_output = &current_outputs[0];
     let oxide_output = &summary.outputs[0];
     assert_eq!(hex::encode(oxide_output.transaction), TARGET_TX_ID);
+    assert_eq!(oxide_output.block_height, summary.block_height);
     assert_eq!(
         oxide_output.index_in_transaction,
         u64::from(current_output.absolute.o)
@@ -610,6 +612,7 @@ fn oxide_wallet_rpc_block_expansion_matches_current_backend_output() {
     assert_eq!(summary.scanned_output_count, 1);
     assert_eq!(summary.outputs.len(), 1);
     assert_eq!(hex::encode(summary.outputs[0].transaction), TARGET_TX_ID);
+    assert_eq!(summary.outputs[0].block_height, summary.block_height);
     assert_eq!(summary.outputs[0].index_in_transaction, 1);
     assert_eq!(summary.outputs[0].index_on_blockchain, 6_693_930);
     assert_eq!(summary.outputs[0].amount, EXPECTED_AMOUNT);

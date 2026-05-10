@@ -151,6 +151,8 @@ pub struct OxideSpentKeyImageSummary {
 pub struct OxideWalletOutputSummary {
     /// Hash of the transaction that created the output.
     pub transaction: [u8; 32],
+    /// Block height containing the transaction that created the output.
+    pub block_height: usize,
     /// Output index within the transaction.
     pub index_in_transaction: u64,
     /// RingCT output index on the blockchain.
@@ -371,6 +373,7 @@ pub fn scan_block_with_wallet(
         .iter()
         .map(|output| OxideWalletOutputSummary {
             transaction: output.transaction(),
+            block_height,
             index_in_transaction: output.index_in_transaction(),
             index_on_blockchain: output.index_on_blockchain(),
             key: output.key().compress().to_bytes(),
