@@ -153,6 +153,8 @@ pub struct OxideWalletOutputSummary {
     pub transaction: [u8; 32],
     /// Block height containing the transaction that created the output.
     pub block_height: usize,
+    /// Whether the output was created by the miner transaction.
+    pub is_coinbase: bool,
     /// Output index within the transaction.
     pub index_in_transaction: u64,
     /// RingCT output index on the blockchain.
@@ -336,6 +338,7 @@ pub fn scan_block_with_wallet(
     let block_height = block.number();
     let block_timestamp = block.header.timestamp;
     let block_hash = block.hash();
+    let miner_transaction_hash = block.miner_transaction().hash();
     let previous_block_hash = block.header.previous;
     let transaction_hashes = block.transactions.clone();
 
@@ -374,6 +377,7 @@ pub fn scan_block_with_wallet(
         .map(|output| OxideWalletOutputSummary {
             transaction: output.transaction(),
             block_height,
+            is_coinbase: output.transaction() == miner_transaction_hash,
             index_in_transaction: output.index_in_transaction(),
             index_on_blockchain: output.index_on_blockchain(),
             key: output.key().compress().to_bytes(),
