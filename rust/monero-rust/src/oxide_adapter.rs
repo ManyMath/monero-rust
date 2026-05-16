@@ -341,6 +341,13 @@ pub fn scan_block_with_wallet(
     let miner_transaction_hash = block.miner_transaction().hash();
     let previous_block_hash = block.header.previous;
     let transaction_hashes = block.transactions.clone();
+    if transaction_hashes.len() != transaction_bytes.len() {
+        return Err(OxideAdapterError::Parse(format!(
+            "expected {} transaction blobs, got {}",
+            transaction_hashes.len(),
+            transaction_bytes.len()
+        )));
+    }
 
     let mut transactions = Vec::with_capacity(transaction_bytes.len());
     for (index, bytes) in transaction_bytes.iter().enumerate() {

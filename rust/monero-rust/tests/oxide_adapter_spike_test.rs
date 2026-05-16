@@ -653,6 +653,38 @@ fn oxide_wallet_rpc_block_expansion_rejects_missing_transaction_blob() {
 
 #[cfg(feature = "oxide-wallet-adapter-spike")]
 #[test]
+fn oxide_wallet_direct_block_scan_rejects_missing_transaction_blob() {
+    let (public_spend_key, private_view_key, _) = honked_wallet_key_bytes();
+    let result = honked_bagpipe_block_result();
+    let blob = hex::decode(result["blob"].as_str().expect("blob should be present"))
+        .expect("block blob should decode");
+    let mut transactions = honked_bagpipe_transactions_for_block(&result);
+    transactions.pop();
+    let transaction_blobs = transactions
+        .iter()
+        .map(|tx| hex::decode(&tx.as_hex).expect("transaction hex should decode"))
+        .collect::<Vec<_>>();
+    let transaction_blob_refs = transaction_blobs
+        .iter()
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+
+    let err = scan_block_with_wallet(
+        public_spend_key,
+        private_view_key,
+        OxideNetwork::Stagenet,
+        &blob,
+        &transaction_blob_refs,
+        None,
+        &[(0, 1), (1, 0)],
+    )
+    .expect_err("direct block scan should reject an incomplete transaction list");
+
+    assert!(matches!(err, OxideAdapterError::Parse(_)));
+}
+
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+#[test]
 fn oxide_wallet_rpc_block_expansion_rejects_mismatched_transaction_blob() {
     let (public_spend_key, private_view_key, _) = honked_wallet_key_bytes();
     let (mut block_entry, output_indices) = honked_rpc_block_entry_and_indices();
