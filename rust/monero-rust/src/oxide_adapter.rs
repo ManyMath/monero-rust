@@ -343,8 +343,22 @@ pub fn scan_block_with_wallet(
     let transaction_hashes = block.transactions.clone();
 
     let mut transactions = Vec::with_capacity(transaction_bytes.len());
-    for bytes in transaction_bytes {
-        transactions.push(parse_scannable_transaction(bytes)?);
+    for (index, bytes) in transaction_bytes.iter().enumerate() {
+        let (transaction, transaction_hash) = parse_scannable_transaction(bytes)?;
+        if let Some(actual_hash) = transaction_hash {
+            let expected_hash = transaction_hashes.get(index).ok_or_else(|| {
+                OxideAdapterError::Parse("missing block transaction hash".to_string())
+            })?;
+            if actual_hash != *expected_hash {
+                return Err(OxideAdapterError::Parse(format!(
+                    "expected expanded transaction {} to hash to {}, got {}",
+                    index,
+                    hex::encode(expected_hash),
+                    hex::encode(actual_hash)
+                )));
+            }
+        }
+        transactions.push(transaction);
     }
     let spent_key_images = transactions
         .iter()
@@ -594,19 +608,22 @@ pub fn validate_scan_summary_chain(
 }
 
 #[cfg(feature = "oxide-wallet-adapter-spike")]
-fn parse_scannable_transaction(bytes: &[u8]) -> Result<Transaction<Pruned>, OxideAdapterError> {
-    let mut pruned_cursor = Cursor::new(bytes);
-    match Transaction::<Pruned>::read(&mut pruned_cursor) {
-        Ok(transaction) if pruned_cursor.position() as usize == bytes.len() => {
-            return Ok(transaction);
+fn parse_scannable_transaction(
+    bytes: &[u8],
+) -> Result<(Transaction<Pruned>, Option<[u8; 32]>), OxideAdapterError> {
+    let mut full_cursor = Cursor::new(bytes);
+    match Transaction::<NotPruned>::read(&mut full_cursor) {
+        Ok(transaction) if full_cursor.position() as usize == bytes.len() => {
+            let hash = transaction.hash();
+            return Ok((Transaction::<Pruned>::from(transaction), Some(hash)));
         }
         Ok(_) | Err(_) => {}
     }
 
-    let mut full_cursor = Cursor::new(bytes);
-    let transaction = Transaction::<NotPruned>::read(&mut full_cursor)?;
-    ensure_fully_consumed(&full_cursor, bytes.len())?;
-    Ok(Transaction::<Pruned>::from(transaction))
+    let mut pruned_cursor = Cursor::new(bytes);
+    let transaction = Transaction::<Pruned>::read(&mut pruned_cursor)?;
+    ensure_fully_consumed(&pruned_cursor, bytes.len())?;
+    Ok((transaction, None))
 }
 
 fn summarize_timelock(timelock: Timelock) -> OxideTimelockSummary {

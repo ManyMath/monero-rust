@@ -653,6 +653,26 @@ fn oxide_wallet_rpc_block_expansion_rejects_missing_transaction_blob() {
 
 #[cfg(feature = "oxide-wallet-adapter-spike")]
 #[test]
+fn oxide_wallet_rpc_block_expansion_rejects_mismatched_transaction_blob() {
+    let (public_spend_key, private_view_key, _) = honked_wallet_key_bytes();
+    let (mut block_entry, output_indices) = honked_rpc_block_entry_and_indices();
+    block_entry.txs.swap(0, 1);
+
+    let err = scan_rpc_block_with_wallet(
+        public_spend_key,
+        private_view_key,
+        OxideNetwork::Stagenet,
+        &block_entry,
+        Some(&output_indices),
+        &[(0, 1), (1, 0)],
+    )
+    .expect_err("RPC expansion should reject transaction blobs with mismatched hashes");
+
+    assert!(matches!(err, OxideAdapterError::Parse(_)));
+}
+
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+#[test]
 fn oxide_wallet_rpc_batch_scans_miner_and_matching_blocks() {
     let (public_spend_key, private_view_key, _) = honked_wallet_key_bytes();
     let (miner_entry, miner_indices) = miner_only_rpc_block_entry_and_indices();
