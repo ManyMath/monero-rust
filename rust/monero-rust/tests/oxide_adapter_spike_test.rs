@@ -188,6 +188,9 @@ fn current_subaddress_tuple(subaddress: Option<CurrentSubaddressIndex>) -> Optio
 fn honked_rpc_block_entry_and_indices() -> (BlockCompleteEntry, BlockOutputIndices) {
     let result = honked_bagpipe_block_result();
     let transactions = honked_bagpipe_transactions_for_block(&result);
+    let block_weight = result["block_header"]["block_weight"]
+        .as_u64()
+        .expect("block weight should be present");
     (
         BlockCompleteEntry {
             block: hex::decode(result["blob"].as_str().expect("blob should be present"))
@@ -197,7 +200,7 @@ fn honked_rpc_block_entry_and_indices() -> (BlockCompleteEntry, BlockOutputIndic
                 .map(|tx| hex::decode(&tx.as_hex).expect("transaction hex should decode"))
                 .collect(),
             pruned: false,
-            block_weight: 0,
+            block_weight,
         },
         BlockOutputIndices {
             indices: transactions
@@ -213,13 +216,16 @@ fn honked_rpc_block_entry_and_indices() -> (BlockCompleteEntry, BlockOutputIndic
 #[cfg(feature = "oxide-wallet-adapter-spike")]
 fn miner_only_rpc_block_entry_and_indices() -> (BlockCompleteEntry, BlockOutputIndices) {
     let result = tx_construction_miner_only_block_result();
+    let block_weight = result["block_header"]["block_weight"]
+        .as_u64()
+        .expect("block weight should be present");
     (
         BlockCompleteEntry {
             block: hex::decode(result["blob"].as_str().expect("blob should be present"))
                 .expect("block blob should decode"),
             txs: vec![],
             pruned: false,
-            block_weight: 0,
+            block_weight,
         },
         BlockOutputIndices { indices: vec![] },
     )
@@ -353,6 +359,8 @@ fn oxide_wallet_scanner_runs_on_current_block_vector() {
             .as_str()
             .expect("previous block hash should be present")
     );
+    assert_eq!(summary.rpc_pruned, None);
+    assert_eq!(summary.rpc_block_weight, None);
     assert!(summary.transaction_hashes.is_empty());
     assert!(summary.spent_key_images.is_empty());
     assert_eq!(summary.scanned_output_count, 1);
@@ -457,6 +465,8 @@ fn oxide_wallet_scanner_matches_current_backend_output() {
         Block::read::<&[u8]>(&mut blob.as_ref()).expect("current backend should parse block");
     assert_eq!(summary.block_hash, compute_block_id(&current_block));
     assert_eq!(summary.previous_block_hash, current_block.header.previous);
+    assert_eq!(summary.rpc_pruned, None);
+    assert_eq!(summary.rpc_block_weight, None);
     assert_eq!(
         summary.block_timestamp,
         result["block_header"]["timestamp"]
@@ -611,6 +621,15 @@ fn oxide_wallet_rpc_block_expansion_matches_current_backend_output() {
             .as_str()
             .expect("previous block hash should be present")
     );
+    assert_eq!(summary.rpc_pruned, Some(false));
+    assert_eq!(
+        summary.rpc_block_weight,
+        Some(
+            result["block_header"]["block_weight"]
+                .as_u64()
+                .expect("block weight should be present")
+        )
+    );
     assert_eq!(summary.scanned_output_count, 1);
     assert_eq!(summary.outputs.len(), 1);
     assert_eq!(hex::encode(summary.outputs[0].transaction), TARGET_TX_ID);
@@ -723,6 +742,8 @@ fn oxide_wallet_rpc_batch_scans_miner_and_matching_blocks() {
 
     assert_eq!(summaries.len(), 2);
     assert_eq!(summaries[0].scanned_output_count, 0);
+    assert_eq!(summaries[0].rpc_pruned, Some(false));
+    assert_eq!(summaries[0].rpc_block_weight, Some(85));
     assert!(summaries[0].outputs.is_empty());
     assert_eq!(summaries[1].block_height, 1_384_526);
     assert_eq!(
@@ -732,6 +753,8 @@ fn oxide_wallet_rpc_batch_scans_miner_and_matching_blocks() {
             .expect("previous block hash should be present")
     );
     assert_eq!(summaries[1].scanned_output_count, 1);
+    assert_eq!(summaries[1].rpc_pruned, Some(false));
+    assert_eq!(summaries[1].rpc_block_weight, Some(4_487));
 }
 
 #[cfg(feature = "oxide-wallet-adapter-spike")]

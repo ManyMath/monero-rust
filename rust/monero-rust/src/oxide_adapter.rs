@@ -123,6 +123,10 @@ pub struct OxideWalletScanSummary {
     pub block_hash: [u8; 32],
     /// Previous block hash from the parsed block header.
     pub previous_block_hash: [u8; 32],
+    /// Pruned flag from the `/getblocks.bin` block entry, when scanned through the RPC wrapper.
+    pub rpc_pruned: Option<bool>,
+    /// Block weight from the `/getblocks.bin` block entry, when scanned through the RPC wrapper.
+    pub rpc_block_weight: Option<u64>,
     /// Number of transactions scanned, including the miner transaction.
     pub transaction_count: usize,
     /// Non-miner transaction hashes embedded in the scanned block.
@@ -424,6 +428,8 @@ pub fn scan_block_with_wallet(
         block_timestamp,
         block_hash,
         previous_block_hash,
+        rpc_pruned: None,
+        rpc_block_weight: None,
         transaction_count: 1 + transaction_bytes.len(),
         transaction_hashes,
         spent_key_images,
@@ -469,7 +475,7 @@ pub fn scan_rpc_block_with_wallet(
         None
     };
 
-    scan_block_with_wallet(
+    let mut summary = scan_block_with_wallet(
         public_spend_key,
         private_view_key,
         network,
@@ -477,7 +483,10 @@ pub fn scan_rpc_block_with_wallet(
         &transaction_bytes,
         output_index_for_first_ringct_output,
         subaddresses,
-    )
+    )?;
+    summary.rpc_pruned = Some(block_entry.pruned);
+    summary.rpc_block_weight = Some(block_entry.block_weight);
+    Ok(summary)
 }
 
 /// Expand and scan a sequence of `/getblocks.bin` block entries.
