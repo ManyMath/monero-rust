@@ -40,6 +40,7 @@ const HONKED_BAGPIPE_MNEMONIC: &str = "honked bagpipe alpine juicy faked afoot j
 #[derive(serde::Deserialize)]
 struct PrunedTxFixture {
     as_hex_full: String,
+    pruned_as_hex: String,
     txid: String,
 }
 
@@ -718,6 +719,29 @@ fn oxide_wallet_rpc_block_expansion_rejects_mismatched_transaction_blob() {
         &[(0, 1), (1, 0)],
     )
     .expect_err("RPC expansion should reject transaction blobs with mismatched hashes");
+
+    assert!(matches!(err, OxideAdapterError::Parse(_)));
+}
+
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+#[test]
+fn oxide_wallet_rpc_block_expansion_rejects_pruned_blob_for_unpruned_entry() {
+    let (public_spend_key, private_view_key, _) = honked_wallet_key_bytes();
+    let (mut block_entry, output_indices) = honked_rpc_block_entry_and_indices();
+    let fixture = pruned_tx_fixture();
+    block_entry.txs[0] =
+        hex::decode(fixture.pruned_as_hex).expect("pruned fixture transaction should decode");
+    block_entry.pruned = false;
+
+    let err = scan_rpc_block_with_wallet(
+        public_spend_key,
+        private_view_key,
+        OxideNetwork::Stagenet,
+        &block_entry,
+        Some(&output_indices),
+        &[(0, 1), (1, 0)],
+    )
+    .expect_err("unpruned RPC expansion should reject pruned transaction blobs");
 
     assert!(matches!(err, OxideAdapterError::Parse(_)));
 }

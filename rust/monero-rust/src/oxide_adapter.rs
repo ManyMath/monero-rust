@@ -458,6 +458,9 @@ pub fn scan_rpc_block_with_wallet(
             block_entry.txs.len()
         )));
     }
+    if !block_entry.pruned {
+        validate_unpruned_rpc_transaction_hashes(&block, &block_entry.txs)?;
+    }
 
     let transaction_bytes = block_entry
         .txs
@@ -640,6 +643,37 @@ fn parse_scannable_transaction(
     let transaction = Transaction::<Pruned>::read(&mut pruned_cursor)?;
     ensure_fully_consumed(&pruned_cursor, bytes.len())?;
     Ok((transaction, None))
+}
+
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+fn validate_unpruned_rpc_transaction_hashes(
+    block: &Block,
+    transaction_bytes: &[Vec<u8>],
+) -> Result<(), OxideAdapterError> {
+    for (index, bytes) in transaction_bytes.iter().enumerate() {
+        let mut cursor = Cursor::new(bytes.as_slice());
+        let transaction = Transaction::<NotPruned>::read(&mut cursor).map_err(|error| {
+            OxideAdapterError::Parse(format!(
+                "expected unpruned expanded transaction #{index}: {error}"
+            ))
+        })?;
+        ensure_fully_consumed(&cursor, bytes.len())?;
+
+        let actual_hash = transaction.hash();
+        let expected_hash = block.transactions.get(index).ok_or_else(|| {
+            OxideAdapterError::Parse("missing block transaction hash".to_string())
+        })?;
+        if actual_hash != *expected_hash {
+            return Err(OxideAdapterError::Parse(format!(
+                "expected unpruned expanded transaction #{} to hash to {}, got {}",
+                index,
+                hex::encode(expected_hash),
+                hex::encode(actual_hash)
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 fn summarize_timelock(timelock: Timelock) -> OxideTimelockSummary {
