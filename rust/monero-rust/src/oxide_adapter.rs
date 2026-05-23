@@ -9,6 +9,8 @@ use std::io::{self, Cursor};
 #[cfg(feature = "oxide-wallet-adapter-spike")]
 use crate::monero_backend::rpc::{BlockCompleteEntry, BlockOutputIndices};
 #[cfg(feature = "oxide-wallet-adapter-spike")]
+use crate::{scanner::BlockScanResult, wallet_output::WalletOutput};
+#[cfg(feature = "oxide-wallet-adapter-spike")]
 use monero_oxide::transaction::{NotPruned, Pruned};
 use monero_oxide::{
     block::Block,
@@ -577,6 +579,85 @@ pub fn derive_oxide_wallet_output_key_image(
 
     let key_image = Point::from(input_key * Point::biased_hash(output.key).into());
     Ok(key_image.compress().to_bytes())
+}
+
+/// Convert an experimental oxide wallet scan summary into the current scanner result model.
+///
+/// This is a read-only parity bridge for adapter experiments. Passing a private
+/// spend key fills output key images; `None` or an all-zero key keeps the
+/// view-only behavior used by current scanner paths.
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+pub fn oxide_wallet_summary_to_block_scan_result(
+    summary: &OxideWalletScanSummary,
+    private_spend_key: Option<[u8; 32]>,
+    daemon_height: u64,
+) -> Result<BlockScanResult, OxideAdapterError> {
+    let outputs = summary
+        .outputs
+        .iter()
+        .map(|output| {
+            let output_index = u8::try_from(output.index_in_transaction).map_err(|_| {
+                OxideAdapterError::Parse(format!(
+                    "output index {} does not fit current WalletOutput",
+                    output.index_in_transaction
+                ))
+            })?;
+            let key_image = match private_spend_key {
+                Some(private_spend_key) if private_spend_key != [0; 32] => hex::encode(
+                    derive_oxide_wallet_output_key_image(private_spend_key, output)?,
+                ),
+                _ => String::new(),
+            };
+
+            Ok(WalletOutput {
+                tx_hash: hex::encode(output.transaction),
+                output_index,
+                amount: output.amount,
+                amount_xmr: format!("{:.12}", output.amount as f64 / 1_000_000_000_000.0),
+                key: hex::encode(output.key),
+                key_offset: hex::encode(output.key_offset),
+                commitment_mask: hex::encode(output.commitment_mask),
+                subaddress_index: output.subaddress,
+                payment_id: output.payment_id.clone(),
+                received_output_bytes: hex::encode(&output.oxide_received_output_bytes),
+                block_height: u64::try_from(output.block_height).map_err(|_| {
+                    OxideAdapterError::Parse(format!(
+                        "output block height {} does not fit u64",
+                        output.block_height
+                    ))
+                })?,
+                spent: false,
+                spent_height: None,
+                key_image,
+                is_coinbase: output.is_coinbase,
+                frozen: false,
+            })
+        })
+        .collect::<Result<Vec<_>, OxideAdapterError>>()?;
+
+    Ok(BlockScanResult {
+        block_height: u64::try_from(summary.block_height).map_err(|_| {
+            OxideAdapterError::Parse(format!(
+                "block height {} does not fit u64",
+                summary.block_height
+            ))
+        })?,
+        block_hash: hex::encode(summary.block_hash),
+        block_timestamp: summary.block_timestamp,
+        tx_count: summary.transaction_count,
+        outputs,
+        daemon_height,
+        spent_key_images: summary
+            .spent_key_images
+            .iter()
+            .map(|spent| hex::encode(spent.key_image))
+            .collect(),
+        spent_key_image_tx_hashes: summary
+            .spent_key_images
+            .iter()
+            .map(|spent| hex::encode(spent.transaction))
+            .collect(),
+    })
 }
 
 /// Validate that scan summaries form a contiguous parent-hash chain.

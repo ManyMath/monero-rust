@@ -19,9 +19,11 @@ use monero_rust::monero_backend::wallet::{
 use monero_rust::{
     oxide_adapter::{
         derive_oxide_wallet_output_key_image, infer_first_ringct_output_index,
-        scan_block_with_wallet, scan_rpc_block_with_wallet, scan_rpc_blocks_with_wallet,
+        oxide_wallet_summary_to_block_scan_result, scan_block_with_wallet,
+        scan_rpc_block_with_wallet, scan_rpc_blocks_with_wallet,
         scan_validated_rpc_blocks_with_wallet, validate_scan_summary_chain, OxideNetwork,
     },
+    process_single_wallet_batch,
     scanner::derive_keys,
 };
 
@@ -656,6 +658,127 @@ fn oxide_wallet_rpc_block_expansion_matches_current_backend_output() {
     assert_eq!(summary.outputs[0].key_offset.len(), 32);
     assert_eq!(summary.outputs[0].commitment_mask.len(), 32);
     assert!(!summary.outputs[0].oxide_received_output_bytes.is_empty());
+}
+
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+#[test]
+fn oxide_wallet_summary_maps_to_current_block_scan_result() {
+    const EXPECTED_AMOUNT: u64 = 10_000_000_000_000;
+
+    let keys = derive_keys(HONKED_BAGPIPE_MNEMONIC, "stagenet", "")
+        .expect("current backend should derive fixture wallet keys");
+    let public_spend_key: [u8; 32] = hex::decode(&keys.public_spend_key)
+        .expect("public spend key should decode")
+        .try_into()
+        .expect("public spend key should be 32 bytes");
+    let private_view_key: [u8; 32] = hex::decode(&keys.secret_view_key)
+        .expect("secret view key should decode")
+        .try_into()
+        .expect("secret view key should be 32 bytes");
+    let private_spend_key: [u8; 32] = hex::decode(&keys.secret_spend_key)
+        .expect("secret spend key should decode")
+        .try_into()
+        .expect("secret spend key should be 32 bytes");
+    let (block_entry, output_indices) = honked_rpc_block_entry_and_indices();
+    let result = honked_bagpipe_block_result();
+
+    let summary = scan_rpc_block_with_wallet(
+        public_spend_key,
+        private_view_key,
+        OxideNetwork::Stagenet,
+        &block_entry,
+        Some(&output_indices),
+        &[(0, 1), (1, 0)],
+    )
+    .expect("monero-wallet scanner should scan RPC-expanded block");
+    let daemon_height = summary.block_height as u64 + 100;
+
+    let block_result =
+        oxide_wallet_summary_to_block_scan_result(&summary, Some(private_spend_key), daemon_height)
+            .expect("oxide scan summary should map to current scan result");
+
+    assert_eq!(block_result.block_height, summary.block_height as u64);
+    assert_eq!(block_result.block_hash, hex::encode(summary.block_hash));
+    assert_eq!(block_result.block_timestamp, summary.block_timestamp);
+    assert_eq!(block_result.tx_count, summary.transaction_count);
+    assert_eq!(block_result.daemon_height, daemon_height);
+    assert_eq!(
+        block_result.spent_key_images,
+        summary
+            .spent_key_images
+            .iter()
+            .map(|spent| hex::encode(spent.key_image))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        block_result.spent_key_image_tx_hashes,
+        summary
+            .spent_key_images
+            .iter()
+            .map(|spent| hex::encode(spent.transaction))
+            .collect::<Vec<_>>()
+    );
+
+    assert_eq!(block_result.outputs.len(), 1);
+    let oxide_output = &summary.outputs[0];
+    let output = &block_result.outputs[0];
+    assert_eq!(output.tx_hash, hex::encode(oxide_output.transaction));
+    assert_eq!(output.output_index, oxide_output.index_in_transaction as u8);
+    assert_eq!(output.amount, EXPECTED_AMOUNT);
+    assert_eq!(output.amount_xmr, "10.000000000000");
+    assert_eq!(output.key, hex::encode(oxide_output.key));
+    assert_eq!(output.key_offset, hex::encode(oxide_output.key_offset));
+    assert_eq!(
+        output.commitment_mask,
+        hex::encode(oxide_output.commitment_mask)
+    );
+    assert_eq!(output.subaddress_index, oxide_output.subaddress);
+    assert_eq!(output.payment_id, oxide_output.payment_id);
+    assert_eq!(
+        output.received_output_bytes,
+        hex::encode(&oxide_output.oxide_received_output_bytes)
+    );
+    assert_eq!(output.block_height, summary.block_height as u64);
+    assert!(!output.spent);
+    assert_eq!(output.spent_height, None);
+    assert!(!output.is_coinbase);
+    assert!(!output.frozen);
+    assert_eq!(
+        output.key_image,
+        hex::encode(
+            derive_oxide_wallet_output_key_image(private_spend_key, oxide_output)
+                .expect("mapped output should derive key image")
+        )
+    );
+
+    let batch = process_single_wallet_batch(
+        std::slice::from_ref(&block_result),
+        Some(&[0]),
+        daemon_height,
+        block_result.block_height,
+    );
+    assert_eq!(batch.outputs_to_store.len(), 1);
+    assert_eq!(batch.outputs_to_store[0].tx_hash, output.tx_hash);
+    assert_eq!(batch.blocks_with_outputs.len(), 1);
+    assert_eq!(
+        batch.block_hashes,
+        vec![(block_result.block_height, block_result.block_hash)]
+    );
+    assert_eq!(
+        batch.spent_key_images,
+        summary
+            .spent_key_images
+            .iter()
+            .map(|spent| hex::encode(spent.key_image))
+            .collect::<Vec<_>>()
+    );
+
+    assert_eq!(
+        result["block_header"]["hash"]
+            .as_str()
+            .expect("block hash should be present"),
+        batch.block_hashes[0].1
+    );
 }
 
 #[cfg(feature = "oxide-wallet-adapter-spike")]
