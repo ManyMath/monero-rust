@@ -36,6 +36,8 @@ use zeroize::Zeroizing;
 
 #[cfg(feature = "oxide-wallet-adapter-spike")]
 const HONKED_BAGPIPE_MNEMONIC: &str = "honked bagpipe alpine juicy faked afoot jostle claim cowl tunnel orphans negative pheasants feast jetting quote frown teeming cycling tribal womanly hills cottage daytime daytime";
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+const HEMLOCK_MNEMONIC: &str = "hemlock jubilee eden hacksaw boil superior inroads epoxy exhale orders cavernous second brunt saved richly lower upgrade hitched launching deepest mostly playful layout lower eden";
 
 #[derive(serde::Deserialize)]
 struct PrunedTxFixture {
@@ -234,7 +236,12 @@ fn miner_only_rpc_block_entry_and_indices() -> (BlockCompleteEntry, BlockOutputI
 
 #[cfg(feature = "oxide-wallet-adapter-spike")]
 fn honked_wallet_key_bytes() -> ([u8; 32], [u8; 32], String) {
-    let keys = derive_keys(HONKED_BAGPIPE_MNEMONIC, "stagenet", "")
+    wallet_key_bytes_from_mnemonic(HONKED_BAGPIPE_MNEMONIC)
+}
+
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+fn wallet_key_bytes_from_mnemonic(mnemonic: &str) -> ([u8; 32], [u8; 32], String) {
+    let keys = derive_keys(mnemonic, "stagenet", "")
         .expect("current backend should derive fixture wallet keys");
     let public_spend_key: [u8; 32] = hex::decode(&keys.public_spend_key)
         .expect("public spend key should decode")
@@ -649,6 +656,64 @@ fn oxide_wallet_rpc_block_expansion_matches_current_backend_output() {
     assert_eq!(summary.outputs[0].key_offset.len(), 32);
     assert_eq!(summary.outputs[0].commitment_mask.len(), 32);
     assert!(!summary.outputs[0].oxide_received_output_bytes.is_empty());
+}
+
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+#[test]
+fn oxide_wallet_rpc_block_expansion_matches_current_backend_for_unmatched_wallet() {
+    let (public_spend_key, private_view_key, address) =
+        wallet_key_bytes_from_mnemonic(HEMLOCK_MNEMONIC);
+    let (block_entry, output_indices) = honked_rpc_block_entry_and_indices();
+    let result = honked_bagpipe_block_result();
+
+    let summary = scan_rpc_block_with_wallet(
+        public_spend_key,
+        private_view_key,
+        OxideNetwork::Stagenet,
+        &block_entry,
+        Some(&output_indices),
+        &[(0, 1), (1, 0)],
+    )
+    .expect("monero-wallet scanner should scan RPC-expanded block for unmatched wallet");
+
+    let current_pair = current_view_pair_from_keys(public_spend_key, private_view_key);
+    let mut current_scanner = CurrentScanner::from_view(current_pair, Some(HashSet::new()));
+    let current_output_count = block_entry
+        .txs
+        .iter()
+        .map(|tx_bytes| {
+            let tx = Transaction::read::<&[u8]>(&mut tx_bytes.as_slice())
+                .expect("current backend should parse fixture transaction");
+            current_scanner
+                .scan_transaction(&tx)
+                .ignore_timelock()
+                .len()
+        })
+        .sum::<usize>();
+
+    assert_eq!(summary.legacy_address, address);
+    assert_eq!(summary.block_height, 1_384_526);
+    assert_eq!(summary.transaction_count, 3);
+    assert_eq!(
+        summary
+            .transaction_hashes
+            .iter()
+            .map(hex::encode)
+            .collect::<Vec<_>>(),
+        result["tx_hashes"]
+            .as_array()
+            .expect("block tx hashes should be present")
+            .iter()
+            .map(|hash| hash
+                .as_str()
+                .expect("tx hash should be a string")
+                .to_string())
+            .collect::<Vec<_>>()
+    );
+    assert!(!summary.spent_key_images.is_empty());
+    assert_eq!(summary.scanned_output_count, current_output_count);
+    assert_eq!(current_output_count, 0);
+    assert!(summary.outputs.is_empty());
 }
 
 #[cfg(feature = "oxide-wallet-adapter-spike")]
