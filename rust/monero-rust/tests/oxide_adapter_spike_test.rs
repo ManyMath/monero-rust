@@ -21,7 +21,8 @@ use monero_rust::{
         derive_oxide_wallet_output_key_image, infer_first_ringct_output_index,
         oxide_wallet_summary_to_block_scan_result, scan_block_with_wallet,
         scan_rpc_block_with_wallet, scan_rpc_blocks_with_wallet,
-        scan_validated_rpc_blocks_with_wallet, validate_scan_summary_chain, OxideNetwork,
+        scan_validated_rpc_blocks_as_block_scan_results, scan_validated_rpc_blocks_with_wallet,
+        validate_scan_summary_chain, OxideNetwork,
     },
     process_single_wallet_batch,
     scanner::derive_keys,
@@ -1080,6 +1081,104 @@ fn oxide_wallet_validated_rpc_batch_accepts_expected_single_parent() {
     assert_eq!(summaries.len(), 1);
     assert_eq!(summaries[0].block_height, 1_384_526);
     assert_eq!(summaries[0].scanned_output_count, 1);
+}
+
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+#[test]
+fn oxide_wallet_validated_rpc_batch_maps_to_current_block_scan_results() {
+    let keys = derive_keys(HONKED_BAGPIPE_MNEMONIC, "stagenet", "")
+        .expect("current backend should derive fixture wallet keys");
+    let public_spend_key: [u8; 32] = hex::decode(&keys.public_spend_key)
+        .expect("public spend key should decode")
+        .try_into()
+        .expect("public spend key should be 32 bytes");
+    let private_view_key: [u8; 32] = hex::decode(&keys.secret_view_key)
+        .expect("secret view key should decode")
+        .try_into()
+        .expect("secret view key should be 32 bytes");
+    let private_spend_key: [u8; 32] = hex::decode(&keys.secret_spend_key)
+        .expect("secret spend key should decode")
+        .try_into()
+        .expect("secret spend key should be 32 bytes");
+    let (block_entry, output_indices) = honked_rpc_block_entry_and_indices();
+    let honked_result = honked_bagpipe_block_result();
+    let expected_parent_hash: [u8; 32] = hex::decode(
+        honked_result["block_header"]["prev_hash"]
+            .as_str()
+            .expect("previous block hash should be present"),
+    )
+    .expect("previous block hash should decode")
+    .try_into()
+    .expect("previous block hash should be 32 bytes");
+    let daemon_height = honked_result["block_header"]["height"]
+        .as_u64()
+        .expect("block height should be present")
+        + 100;
+
+    let block_results = scan_validated_rpc_blocks_as_block_scan_results(
+        public_spend_key,
+        private_view_key,
+        OxideNetwork::Stagenet,
+        std::slice::from_ref(&block_entry),
+        std::slice::from_ref(&output_indices),
+        &[(0, 1), (1, 0)],
+        Some(expected_parent_hash),
+        Some(private_spend_key),
+        daemon_height,
+    )
+    .expect("validated oxide RPC scan should map into current block scan results");
+
+    assert_eq!(block_results.len(), 1);
+    let block_result = &block_results[0];
+    assert_eq!(block_result.block_height, 1_384_526);
+    assert_eq!(
+        block_result.block_hash,
+        honked_result["block_header"]["hash"]
+            .as_str()
+            .expect("block hash should be present")
+    );
+    assert_eq!(block_result.daemon_height, daemon_height);
+    assert_eq!(block_result.outputs.len(), 1);
+    assert!(!block_result.outputs[0].key_image.is_empty());
+    assert_eq!(block_result.spent_key_images.len(), 4);
+    assert_eq!(
+        block_result.spent_key_images.len(),
+        block_result.spent_key_image_tx_hashes.len()
+    );
+    assert_eq!(
+        block_result
+            .spent_key_image_tx_hashes
+            .iter()
+            .collect::<HashSet<_>>()
+            .len(),
+        2
+    );
+
+    let batch = process_single_wallet_batch(
+        &block_results,
+        Some(&[0]),
+        daemon_height,
+        block_result.block_height,
+    );
+    assert_eq!(batch.outputs_to_store.len(), 1);
+    assert_eq!(batch.block_hashes.len(), 1);
+    assert_eq!(batch.block_hashes[0].1, block_result.block_hash);
+
+    let mut wrong_parent_hash = expected_parent_hash;
+    wrong_parent_hash[0] ^= 1;
+    let err = scan_validated_rpc_blocks_as_block_scan_results(
+        public_spend_key,
+        private_view_key,
+        OxideNetwork::Stagenet,
+        &[block_entry],
+        &[output_indices],
+        &[(0, 1), (1, 0)],
+        Some(wrong_parent_hash),
+        Some(private_spend_key),
+        daemon_height,
+    )
+    .expect_err("validated oxide RPC scan should reject a wrong parent before mapping");
+    assert!(matches!(err, OxideAdapterError::Parse(_)));
 }
 
 #[cfg(feature = "oxide-wallet-adapter-spike")]
