@@ -9,7 +9,10 @@ use std::io::{self, Cursor};
 #[cfg(feature = "oxide-wallet-adapter-spike")]
 use crate::monero_backend::rpc::{BlockCompleteEntry, BlockOutputIndices};
 #[cfg(feature = "oxide-wallet-adapter-spike")]
-use crate::{scanner::BlockScanResult, wallet_output::WalletOutput};
+use crate::{
+    scanner::{BlockScanResult, MultiWalletScanResult, WalletScanData},
+    wallet_output::WalletOutput,
+};
 #[cfg(feature = "oxide-wallet-adapter-spike")]
 use monero_oxide::transaction::{NotPruned, Pruned};
 use monero_oxide::{
@@ -25,6 +28,8 @@ use monero_wallet::{
     interface::ScannableBlock,
     Scanner, ViewPair,
 };
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+use std::collections::HashMap;
 #[cfg(feature = "oxide-wallet-adapter-spike")]
 use zeroize::Zeroizing;
 
@@ -689,6 +694,69 @@ pub fn scan_validated_rpc_blocks_as_block_scan_results(
     .collect()
 }
 
+/// Convert same-block oxide wallet scan summaries into the current multi-wallet result model.
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+pub fn oxide_wallet_summaries_to_multi_wallet_scan_result(
+    summaries: &[OxideWalletScanSummary],
+    private_spend_keys: &[Option<[u8; 32]>],
+    daemon_height: u64,
+) -> Result<MultiWalletScanResult, OxideAdapterError> {
+    if summaries.is_empty() {
+        return Err(OxideAdapterError::Parse(
+            "at least one oxide wallet scan summary is required".to_string(),
+        ));
+    }
+    if summaries.len() != private_spend_keys.len() {
+        return Err(OxideAdapterError::Parse(format!(
+            "expected {} private spend-key entries, got {}",
+            summaries.len(),
+            private_spend_keys.len()
+        )));
+    }
+
+    let first = &summaries[0];
+    let spent_key_images = first
+        .spent_key_images
+        .iter()
+        .map(|spent| hex::encode(spent.key_image))
+        .collect::<Vec<_>>();
+    let spent_key_image_tx_hashes = first
+        .spent_key_images
+        .iter()
+        .map(|spent| hex::encode(spent.transaction))
+        .collect::<Vec<_>>();
+
+    let mut wallet_results = HashMap::new();
+    for (summary, private_spend_key) in summaries.iter().zip(private_spend_keys.iter().copied()) {
+        validate_same_block_scan_summary(first, summary)?;
+        let block_result =
+            oxide_wallet_summary_to_block_scan_result(summary, private_spend_key, daemon_height)?;
+        wallet_results.insert(
+            summary.legacy_address.clone(),
+            WalletScanData {
+                address: summary.legacy_address.clone(),
+                outputs: block_result.outputs,
+            },
+        );
+    }
+
+    Ok(MultiWalletScanResult {
+        block_height: u64::try_from(first.block_height).map_err(|_| {
+            OxideAdapterError::Parse(format!(
+                "block height {} does not fit u64",
+                first.block_height
+            ))
+        })?,
+        block_hash: hex::encode(first.block_hash),
+        block_timestamp: first.block_timestamp,
+        tx_count: first.transaction_count,
+        daemon_height,
+        spent_key_images,
+        spent_key_image_tx_hashes,
+        wallet_results,
+    })
+}
+
 /// Validate that scan summaries form a contiguous parent-hash chain.
 #[cfg(feature = "oxide-wallet-adapter-spike")]
 pub fn validate_scan_summary_chain(
@@ -781,6 +849,27 @@ fn validate_unpruned_rpc_transaction_hashes(
                 hex::encode(actual_hash)
             )));
         }
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+fn validate_same_block_scan_summary(
+    expected: &OxideWalletScanSummary,
+    actual: &OxideWalletScanSummary,
+) -> Result<(), OxideAdapterError> {
+    if actual.block_height != expected.block_height
+        || actual.block_hash != expected.block_hash
+        || actual.previous_block_hash != expected.previous_block_hash
+        || actual.block_timestamp != expected.block_timestamp
+        || actual.transaction_count != expected.transaction_count
+        || actual.transaction_hashes != expected.transaction_hashes
+        || actual.spent_key_images != expected.spent_key_images
+    {
+        return Err(OxideAdapterError::Parse(
+            "oxide wallet scan summaries do not describe the same block".to_string(),
+        ));
     }
 
     Ok(())
