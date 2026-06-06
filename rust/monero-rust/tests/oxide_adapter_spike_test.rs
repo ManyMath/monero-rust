@@ -1186,6 +1186,91 @@ fn oxide_wallet_validated_rpc_batch_maps_to_current_block_scan_results() {
 
 #[cfg(feature = "oxide-wallet-adapter-spike")]
 #[test]
+fn oxide_wallet_mapped_block_results_preserve_account_filter_boundaries() {
+    let keys = derive_keys(HONKED_BAGPIPE_MNEMONIC, "stagenet", "")
+        .expect("current backend should derive fixture wallet keys");
+    let public_spend_key: [u8; 32] = hex::decode(&keys.public_spend_key)
+        .expect("public spend key should decode")
+        .try_into()
+        .expect("public spend key should be 32 bytes");
+    let private_view_key: [u8; 32] = hex::decode(&keys.secret_view_key)
+        .expect("secret view key should decode")
+        .try_into()
+        .expect("secret view key should be 32 bytes");
+    let private_spend_key: [u8; 32] = hex::decode(&keys.secret_spend_key)
+        .expect("secret spend key should decode")
+        .try_into()
+        .expect("secret spend key should be 32 bytes");
+    let (block_entry, output_indices) = honked_rpc_block_entry_and_indices();
+    let honked_result = honked_bagpipe_block_result();
+    let expected_parent_hash: [u8; 32] = hex::decode(
+        honked_result["block_header"]["prev_hash"]
+            .as_str()
+            .expect("previous block hash should be present"),
+    )
+    .expect("previous block hash should decode")
+    .try_into()
+    .expect("previous block hash should be 32 bytes");
+    let daemon_height = honked_result["block_header"]["height"]
+        .as_u64()
+        .expect("block height should be present")
+        + 100;
+
+    let block_results = scan_validated_rpc_blocks_as_block_scan_results(
+        public_spend_key,
+        private_view_key,
+        OxideNetwork::Stagenet,
+        std::slice::from_ref(&block_entry),
+        std::slice::from_ref(&output_indices),
+        &[(0, 1), (1, 0)],
+        Some(expected_parent_hash),
+        Some(private_spend_key),
+        daemon_height,
+    )
+    .expect("validated oxide RPC scan should map into current block scan results");
+
+    let block_result = &block_results[0];
+    assert_eq!(block_result.outputs.len(), 1);
+    assert_eq!(block_result.outputs[0].subaddress_index, None);
+    assert_eq!(block_result.spent_key_images.len(), 4);
+
+    let excluded_account_batch = process_single_wallet_batch(
+        &block_results,
+        Some(&[1]),
+        daemon_height,
+        block_result.block_height,
+    );
+    assert!(excluded_account_batch.outputs_to_store.is_empty());
+    assert!(excluded_account_batch.blocks_with_outputs.is_empty());
+    assert_eq!(
+        excluded_account_batch.spent_key_images,
+        block_result.spent_key_images
+    );
+    assert_eq!(
+        excluded_account_batch.spent_key_image_tx_hashes,
+        block_result.spent_key_image_tx_hashes
+    );
+    assert_eq!(
+        excluded_account_batch.block_hashes,
+        vec![(block_result.block_height, block_result.block_hash.clone())]
+    );
+
+    let included_account_batch = process_single_wallet_batch(
+        &block_results,
+        Some(&[0]),
+        daemon_height,
+        block_result.block_height,
+    );
+    assert_eq!(included_account_batch.outputs_to_store.len(), 1);
+    assert_eq!(
+        included_account_batch.outputs_to_store[0].tx_hash,
+        block_result.outputs[0].tx_hash
+    );
+    assert_eq!(included_account_batch.blocks_with_outputs.len(), 1);
+}
+
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+#[test]
 fn oxide_wallet_summaries_map_to_current_multi_wallet_scan_result() {
     let keys = derive_keys(HONKED_BAGPIPE_MNEMONIC, "stagenet", "")
         .expect("current backend should derive fixture wallet keys");
