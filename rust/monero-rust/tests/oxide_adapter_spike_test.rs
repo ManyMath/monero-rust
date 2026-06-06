@@ -27,8 +27,9 @@ use monero_rust::{
         scan_validated_rpc_blocks_with_wallet, validate_scan_summary_chain, OxideNetwork,
         OxideWalletScanConfig,
     },
-    process_single_wallet_batch,
+    process_batch_with_reorg_detection, process_single_wallet_batch,
     scanner::derive_keys,
+    ScanBatchOutcome, WalletState,
 };
 
 #[cfg(feature = "oxide-wallet-adapter-spike")]
@@ -1267,6 +1268,96 @@ fn oxide_wallet_mapped_block_results_preserve_account_filter_boundaries() {
         block_result.outputs[0].tx_hash
     );
     assert_eq!(included_account_batch.blocks_with_outputs.len(), 1);
+}
+
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+#[test]
+fn oxide_wallet_mapped_block_results_feed_reorg_detection() {
+    let keys = derive_keys(HONKED_BAGPIPE_MNEMONIC, "stagenet", "")
+        .expect("current backend should derive fixture wallet keys");
+    let public_spend_key: [u8; 32] = hex::decode(&keys.public_spend_key)
+        .expect("public spend key should decode")
+        .try_into()
+        .expect("public spend key should be 32 bytes");
+    let private_view_key: [u8; 32] = hex::decode(&keys.secret_view_key)
+        .expect("secret view key should decode")
+        .try_into()
+        .expect("secret view key should be 32 bytes");
+    let private_spend_key: [u8; 32] = hex::decode(&keys.secret_spend_key)
+        .expect("secret spend key should decode")
+        .try_into()
+        .expect("secret spend key should be 32 bytes");
+    let (block_entry, output_indices) = honked_rpc_block_entry_and_indices();
+    let honked_result = honked_bagpipe_block_result();
+    let expected_parent_hash: [u8; 32] = hex::decode(
+        honked_result["block_header"]["prev_hash"]
+            .as_str()
+            .expect("previous block hash should be present"),
+    )
+    .expect("previous block hash should decode")
+    .try_into()
+    .expect("previous block hash should be 32 bytes");
+    let daemon_height = honked_result["block_header"]["height"]
+        .as_u64()
+        .expect("block height should be present")
+        + 100;
+
+    let block_results = scan_validated_rpc_blocks_as_block_scan_results(
+        public_spend_key,
+        private_view_key,
+        OxideNetwork::Stagenet,
+        std::slice::from_ref(&block_entry),
+        std::slice::from_ref(&output_indices),
+        &[(0, 1), (1, 0)],
+        Some(expected_parent_hash),
+        Some(private_spend_key),
+        daemon_height,
+    )
+    .expect("validated oxide RPC scan should map into current block scan results");
+    let block_result = &block_results[0];
+
+    let mut matching_state = WalletState::new();
+    matching_state.current_height = block_result.block_height;
+    matching_state.record_block_hash(block_result.block_height, block_result.block_hash.clone());
+    let matching_outcome = process_batch_with_reorg_detection(
+        &block_results,
+        &mut matching_state,
+        Some(&[0]),
+        daemon_height,
+        block_result.block_height,
+    )
+    .expect("matching oxide block hash should process normally");
+    let matching_batch = match matching_outcome {
+        ScanBatchOutcome::Normal(batch) => batch,
+        other => panic!("expected normal scan outcome, got {:?}", other),
+    };
+    assert_eq!(matching_batch.outputs_to_store.len(), 1);
+    assert_eq!(
+        matching_batch.block_hashes,
+        vec![(block_result.block_height, block_result.block_hash.clone())]
+    );
+
+    let mut stale_state = WalletState::new();
+    stale_state.current_height = block_result.block_height;
+    stale_state.record_block_hash(block_result.block_height, "stale_hash".to_string());
+    stale_state.add_outputs(block_result.outputs.clone());
+    let reorg_outcome = process_batch_with_reorg_detection(
+        &block_results,
+        &mut stale_state,
+        Some(&[0]),
+        daemon_height,
+        block_result.block_height,
+    )
+    .expect("stale oxide block hash should trigger current reorg handling");
+    let reorg = match reorg_outcome {
+        ScanBatchOutcome::Reorg(reorg) => reorg,
+        other => panic!("expected reorg scan outcome, got {:?}", other),
+    };
+    assert_eq!(reorg.split_height, block_result.block_height);
+    assert_eq!(reorg.blocks_detached, 1);
+    assert_eq!(reorg.outputs_removed, 1);
+    assert!(stale_state.outputs().is_empty());
+    assert_eq!(stale_state.current_height, block_result.block_height - 1);
 }
 
 #[cfg(feature = "oxide-wallet-adapter-spike")]
