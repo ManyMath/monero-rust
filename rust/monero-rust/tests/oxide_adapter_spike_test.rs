@@ -22,8 +22,10 @@ use monero_rust::{
         oxide_wallet_summaries_to_multi_wallet_scan_result,
         oxide_wallet_summary_to_block_scan_result, scan_block_with_wallet,
         scan_rpc_block_with_wallet, scan_rpc_blocks_with_wallet,
-        scan_validated_rpc_blocks_as_block_scan_results, scan_validated_rpc_blocks_with_wallet,
-        validate_scan_summary_chain, OxideNetwork,
+        scan_validated_rpc_blocks_as_block_scan_results,
+        scan_validated_rpc_blocks_as_multi_wallet_scan_results,
+        scan_validated_rpc_blocks_with_wallet, validate_scan_summary_chain, OxideNetwork,
+        OxideWalletScanConfig,
     },
     process_single_wallet_batch,
     scanner::derive_keys,
@@ -1296,6 +1298,131 @@ fn oxide_wallet_summaries_map_to_current_multi_wallet_scan_result() {
         daemon_height,
     )
     .expect_err("multi-wallet mapping should reject summaries from different blocks");
+    assert!(matches!(err, OxideAdapterError::Parse(_)));
+}
+
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+#[test]
+fn oxide_wallet_validated_rpc_batch_maps_to_current_multi_wallet_scan_results() {
+    let keys = derive_keys(HONKED_BAGPIPE_MNEMONIC, "stagenet", "")
+        .expect("current backend should derive fixture wallet keys");
+    let honked_public_spend_key: [u8; 32] = hex::decode(&keys.public_spend_key)
+        .expect("public spend key should decode")
+        .try_into()
+        .expect("public spend key should be 32 bytes");
+    let honked_private_view_key: [u8; 32] = hex::decode(&keys.secret_view_key)
+        .expect("secret view key should decode")
+        .try_into()
+        .expect("secret view key should be 32 bytes");
+    let honked_private_spend_key: [u8; 32] = hex::decode(&keys.secret_spend_key)
+        .expect("secret spend key should decode")
+        .try_into()
+        .expect("secret spend key should be 32 bytes");
+    let (hemlock_public_spend_key, hemlock_private_view_key, hemlock_address) =
+        wallet_key_bytes_from_mnemonic(HEMLOCK_MNEMONIC);
+    let (block_entry, output_indices) = honked_rpc_block_entry_and_indices();
+    let honked_result = honked_bagpipe_block_result();
+    let expected_parent_hash: [u8; 32] = hex::decode(
+        honked_result["block_header"]["prev_hash"]
+            .as_str()
+            .expect("previous block hash should be present"),
+    )
+    .expect("previous block hash should decode")
+    .try_into()
+    .expect("previous block hash should be 32 bytes");
+    let daemon_height = honked_result["block_header"]["height"]
+        .as_u64()
+        .expect("block height should be present")
+        + 100;
+    let wallet_configs = vec![
+        OxideWalletScanConfig {
+            public_spend_key: honked_public_spend_key,
+            private_view_key: honked_private_view_key,
+            private_spend_key: Some(honked_private_spend_key),
+            subaddresses: vec![(0, 1), (1, 0)],
+        },
+        OxideWalletScanConfig {
+            public_spend_key: hemlock_public_spend_key,
+            private_view_key: hemlock_private_view_key,
+            private_spend_key: None,
+            subaddresses: vec![(0, 1), (1, 0)],
+        },
+    ];
+
+    let multi_results = scan_validated_rpc_blocks_as_multi_wallet_scan_results(
+        OxideNetwork::Stagenet,
+        std::slice::from_ref(&block_entry),
+        std::slice::from_ref(&output_indices),
+        &wallet_configs,
+        Some(expected_parent_hash),
+        daemon_height,
+    )
+    .expect("validated oxide RPC scan should map into current multi-wallet results");
+
+    assert_eq!(multi_results.len(), 1);
+    let multi_result = &multi_results[0];
+    assert_eq!(multi_result.block_height, 1_384_526);
+    assert_eq!(
+        multi_result.block_hash,
+        honked_result["block_header"]["hash"]
+            .as_str()
+            .expect("block hash should be present")
+    );
+    assert_eq!(multi_result.daemon_height, daemon_height);
+    assert_eq!(multi_result.wallet_results.len(), 2);
+    assert_eq!(
+        multi_result
+            .wallet_results
+            .get(&keys.address)
+            .expect("matching wallet should be present")
+            .outputs
+            .len(),
+        1
+    );
+    assert!(
+        multi_result
+            .wallet_results
+            .get(&keys.address)
+            .expect("matching wallet should be present")
+            .outputs[0]
+            .key_image
+            .len()
+            > 0
+    );
+    assert!(multi_result
+        .wallet_results
+        .get(&hemlock_address)
+        .expect("unmatched wallet should be present")
+        .outputs
+        .is_empty());
+    assert_eq!(multi_result.spent_key_images.len(), 4);
+    assert_eq!(
+        multi_result.spent_key_images.len(),
+        multi_result.spent_key_image_tx_hashes.len()
+    );
+
+    let mut wrong_parent_hash = expected_parent_hash;
+    wrong_parent_hash[0] ^= 1;
+    let err = scan_validated_rpc_blocks_as_multi_wallet_scan_results(
+        OxideNetwork::Stagenet,
+        &[block_entry],
+        &[output_indices],
+        &wallet_configs,
+        Some(wrong_parent_hash),
+        daemon_height,
+    )
+    .expect_err("validated multi-wallet scan should reject a wrong parent before mapping");
+    assert!(matches!(err, OxideAdapterError::Parse(_)));
+
+    let err = scan_validated_rpc_blocks_as_multi_wallet_scan_results(
+        OxideNetwork::Stagenet,
+        &[],
+        &[],
+        &[],
+        None,
+        daemon_height,
+    )
+    .expect_err("multi-wallet scan should require at least one wallet config");
     assert!(matches!(err, OxideAdapterError::Parse(_)));
 }
 

@@ -188,6 +188,20 @@ pub struct OxideWalletOutputSummary {
     pub oxide_received_output_bytes: Vec<u8>,
 }
 
+/// Wallet keys and scan settings for experimental oxide multi-wallet scans.
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OxideWalletScanConfig {
+    /// Public spend key of the wallet to scan.
+    pub public_spend_key: [u8; 32],
+    /// Private view key of the wallet to scan.
+    pub private_view_key: [u8; 32],
+    /// Optional private spend key used to fill current-model output key images.
+    pub private_spend_key: Option<[u8; 32]>,
+    /// Non-primary subaddresses to register with the scanner.
+    pub subaddresses: Vec<(u32, u32)>,
+}
+
 /// Parse a full transaction blob with `monero-oxide` and return a stable summary.
 pub fn summarize_transaction(bytes: &[u8]) -> Result<OxideTransactionSummary, OxideAdapterError> {
     let mut cursor = Cursor::new(bytes);
@@ -755,6 +769,56 @@ pub fn oxide_wallet_summaries_to_multi_wallet_scan_result(
         spent_key_image_tx_hashes,
         wallet_results,
     })
+}
+
+/// Scan validated RPC-expanded blocks for multiple wallets and map into current results.
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+pub fn scan_validated_rpc_blocks_as_multi_wallet_scan_results(
+    network: OxideNetwork,
+    block_entries: &[BlockCompleteEntry],
+    output_indices: &[BlockOutputIndices],
+    wallet_configs: &[OxideWalletScanConfig],
+    expected_previous_block_hash: Option<[u8; 32]>,
+    daemon_height: u64,
+) -> Result<Vec<MultiWalletScanResult>, OxideAdapterError> {
+    if wallet_configs.is_empty() {
+        return Err(OxideAdapterError::Parse(
+            "at least one oxide wallet scan config is required".to_string(),
+        ));
+    }
+
+    let per_wallet_summaries = wallet_configs
+        .iter()
+        .map(|config| {
+            scan_validated_rpc_blocks_with_wallet(
+                config.public_spend_key,
+                config.private_view_key,
+                network,
+                block_entries,
+                output_indices,
+                &config.subaddresses,
+                expected_previous_block_hash,
+            )
+        })
+        .collect::<Result<Vec<_>, OxideAdapterError>>()?;
+
+    let private_spend_keys = wallet_configs
+        .iter()
+        .map(|config| config.private_spend_key)
+        .collect::<Vec<_>>();
+    (0..block_entries.len())
+        .map(|block_index| {
+            let block_summaries = per_wallet_summaries
+                .iter()
+                .map(|summaries| summaries[block_index].clone())
+                .collect::<Vec<_>>();
+            oxide_wallet_summaries_to_multi_wallet_scan_result(
+                &block_summaries,
+                &private_spend_keys,
+                daemon_height,
+            )
+        })
+        .collect()
 }
 
 /// Validate that scan summaries form a contiguous parent-hash chain.
