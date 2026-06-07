@@ -1458,6 +1458,16 @@ fn oxide_wallet_summaries_map_to_current_multi_wallet_scan_result() {
     assert_eq!(hemlock_wallet.address, hemlock_address);
     assert!(hemlock_wallet.outputs.is_empty());
 
+    let mut wrong_honked_spend_key = honked_private_spend_key;
+    wrong_honked_spend_key[0] ^= 1;
+    let err = oxide_wallet_summaries_to_multi_wallet_scan_result(
+        &[honked_summary.clone(), hemlock_summary.clone()],
+        &[Some(wrong_honked_spend_key), None],
+        daemon_height,
+    )
+    .expect_err("matching wallet outputs should reject wrong spend-key metadata");
+    assert!(matches!(err, OxideAdapterError::Parse(_)));
+
     let err = oxide_wallet_summaries_to_multi_wallet_scan_result(
         std::slice::from_ref(&honked_summary),
         &[],
