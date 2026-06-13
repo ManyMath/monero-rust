@@ -105,6 +105,35 @@ fn tx_construction_miner_only_block_result() -> serde_json::Value {
 }
 
 #[cfg(feature = "oxide-wallet-adapter-spike")]
+fn tx_construction_miner_only_block_results() -> Vec<serde_json::Value> {
+    let vectors: serde_json::Value =
+        serde_json::from_str(include_str!("vectors/tx_construction_test_vectors.json"))
+            .expect("tx construction fixture should parse");
+
+    vectors
+        .as_array()
+        .expect("fixture should be an array")
+        .iter()
+        .filter(|entry| {
+            entry["route"] == "json_rpc"
+                && entry["body"]
+                    .as_str()
+                    .is_some_and(|body| body.contains("\"method\":\"get_block\""))
+        })
+        .map(|entry| {
+            let response: serde_json::Value = serde_json::from_str(
+                entry["response"]
+                    .as_str()
+                    .expect("response should be a string"),
+            )
+            .expect("get_block response should parse");
+            response["result"].clone()
+        })
+        .filter(|result| result.get("blob").is_some())
+        .collect()
+}
+
+#[cfg(feature = "oxide-wallet-adapter-spike")]
 fn tx_construction_miner_output_index() -> u64 {
     let vectors: serde_json::Value =
         serde_json::from_str(include_str!("vectors/tx_construction_test_vectors.json"))
@@ -405,6 +434,126 @@ fn oxide_wallet_scanner_runs_on_current_block_vector() {
     assert_eq!(output.subaddress, None);
     assert_eq!(output.payment_id, None);
     assert!(!output.oxide_received_output_bytes.is_empty());
+}
+
+#[cfg(feature = "oxide-wallet-adapter-spike")]
+#[test]
+fn oxide_wallet_scanner_maps_contiguous_miner_batch_into_current_batch() {
+    let keys = derive_keys(HONKED_BAGPIPE_MNEMONIC, "stagenet", "")
+        .expect("current backend should derive fixture wallet keys");
+    let public_spend_key: [u8; 32] = hex::decode(&keys.public_spend_key)
+        .expect("public spend key should decode")
+        .try_into()
+        .expect("public spend key should be 32 bytes");
+    let private_view_key: [u8; 32] = hex::decode(&keys.secret_view_key)
+        .expect("secret view key should decode")
+        .try_into()
+        .expect("secret view key should be 32 bytes");
+    let private_spend_key: [u8; 32] = hex::decode(&keys.secret_spend_key)
+        .expect("secret spend key should decode")
+        .try_into()
+        .expect("secret spend key should be 32 bytes");
+
+    let miner_results = tx_construction_miner_only_block_results();
+    assert!(
+        miner_results.len() >= 4,
+        "fixture should contain a contiguous miner block run"
+    );
+    let first_miner_output_index = tx_construction_miner_output_index();
+    let summaries = miner_results
+        .iter()
+        .take(4)
+        .enumerate()
+        .map(|(offset, result)| {
+            let blob = hex::decode(result["blob"].as_str().expect("blob should be present"))
+                .expect("block blob should decode");
+            scan_block_with_wallet(
+                public_spend_key,
+                private_view_key,
+                OxideNetwork::Stagenet,
+                &blob,
+                &[],
+                Some(first_miner_output_index + offset as u64),
+                &[(0, 1), (1, 0)],
+            )
+            .expect("monero-wallet scanner should scan miner-only block")
+        })
+        .collect::<Vec<_>>();
+
+    validate_scan_summary_chain(None, &summaries)
+        .expect("contiguous miner-only fixture summaries should validate as a chain");
+
+    let daemon_height = summaries
+        .last()
+        .expect("summary should be present")
+        .block_height as u64
+        + 100;
+    let block_results = summaries
+        .iter()
+        .map(|summary| {
+            oxide_wallet_summary_to_block_scan_result(
+                summary,
+                Some(private_spend_key),
+                daemon_height,
+            )
+            .expect("oxide miner summary should map to current scan result")
+        })
+        .collect::<Vec<_>>();
+
+    let batch = process_single_wallet_batch(
+        &block_results,
+        Some(&[0]),
+        daemon_height,
+        block_results[0].block_height,
+    );
+
+    assert_eq!(block_results.len(), 4);
+    assert_eq!(batch.outputs_to_store.len(), 1);
+    assert_eq!(batch.blocks_with_outputs.len(), 1);
+    assert_eq!(batch.spent_key_images.len(), 0);
+    assert_eq!(batch.block_hashes.len(), 4);
+    assert_eq!(batch.batch_end_height, block_results[3].block_height + 1);
+    assert!(batch.should_continue);
+
+    for (offset, (summary, block_result)) in summaries.iter().zip(&block_results).enumerate() {
+        let fixture_result = &miner_results[offset];
+        assert_eq!(
+            summary.block_height as u64,
+            fixture_result["block_header"]["height"]
+                .as_u64()
+                .expect("block height should be present")
+        );
+        if offset == 0 {
+            assert_eq!(summary.scanned_output_count, 1);
+            assert_eq!(summary.outputs.len(), 1);
+            assert!(summary.outputs[0].is_coinbase);
+            assert_eq!(
+                summary.outputs[0].index_on_blockchain,
+                first_miner_output_index
+            );
+            assert_eq!(
+                summary.outputs[0].amount,
+                fixture_result["block_header"]["reward"]
+                    .as_u64()
+                    .expect("block reward should be present")
+            );
+            assert_eq!(
+                summary.outputs[0].additional_timelock,
+                OxideTimelockSummary::Block(summary.block_height + 60)
+            );
+            assert_eq!(block_result.outputs.len(), 1);
+            assert!(block_result.outputs[0].is_coinbase);
+            assert!(!block_result.outputs[0].key_image.is_empty());
+        } else {
+            assert_eq!(summary.scanned_output_count, 0);
+            assert!(summary.outputs.is_empty());
+            assert!(block_result.outputs.is_empty());
+        }
+        assert_eq!(
+            batch.block_hashes[offset],
+            (block_result.block_height, block_result.block_hash.clone())
+        );
+    }
 }
 
 #[cfg(feature = "oxide-wallet-adapter-spike")]
