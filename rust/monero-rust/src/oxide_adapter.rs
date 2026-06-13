@@ -927,6 +927,8 @@ fn validate_same_block_scan_summary(
         || actual.block_hash != expected.block_hash
         || actual.previous_block_hash != expected.previous_block_hash
         || actual.block_timestamp != expected.block_timestamp
+        || actual.rpc_pruned != expected.rpc_pruned
+        || actual.rpc_block_weight != expected.rpc_block_weight
         || actual.transaction_count != expected.transaction_count
         || actual.transaction_hashes != expected.transaction_hashes
         || actual.spent_key_images != expected.spent_key_images

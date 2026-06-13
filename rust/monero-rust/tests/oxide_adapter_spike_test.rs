@@ -1617,6 +1617,29 @@ fn oxide_wallet_summaries_map_to_current_multi_wallet_scan_result() {
     .expect_err("matching wallet outputs should reject wrong spend-key metadata");
     assert!(matches!(err, OxideAdapterError::Parse(_)));
 
+    let mut direct_scan_summary = hemlock_summary.clone();
+    direct_scan_summary.rpc_pruned = None;
+    direct_scan_summary.rpc_block_weight = None;
+    let err = oxide_wallet_summaries_to_multi_wallet_scan_result(
+        &[honked_summary.clone(), direct_scan_summary],
+        &[Some(honked_private_spend_key), None],
+        daemon_height,
+    )
+    .expect_err("multi-wallet mapping should reject mixed direct/RPC summaries");
+    assert!(matches!(err, OxideAdapterError::Parse(_)));
+
+    let mut wrong_rpc_weight_summary = hemlock_summary.clone();
+    wrong_rpc_weight_summary.rpc_block_weight = wrong_rpc_weight_summary
+        .rpc_block_weight
+        .map(|weight| weight + 1);
+    let err = oxide_wallet_summaries_to_multi_wallet_scan_result(
+        &[honked_summary.clone(), wrong_rpc_weight_summary],
+        &[Some(honked_private_spend_key), None],
+        daemon_height,
+    )
+    .expect_err("multi-wallet mapping should reject mismatched RPC block metadata");
+    assert!(matches!(err, OxideAdapterError::Parse(_)));
+
     let err = oxide_wallet_summaries_to_multi_wallet_scan_result(
         std::slice::from_ref(&honked_summary),
         &[],
