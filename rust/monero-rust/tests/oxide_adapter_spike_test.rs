@@ -1648,6 +1648,17 @@ fn oxide_wallet_summaries_map_to_current_multi_wallet_scan_result() {
     .expect_err("parallel spend-key metadata is required");
     assert!(matches!(err, OxideAdapterError::Parse(_)));
 
+    let err = oxide_wallet_summaries_to_multi_wallet_scan_result(
+        &[honked_summary.clone(), honked_summary.clone()],
+        &[
+            Some(honked_private_spend_key),
+            Some(honked_private_spend_key),
+        ],
+        daemon_height,
+    )
+    .expect_err("duplicate wallet summaries should not silently overwrite results");
+    assert!(matches!(err, OxideAdapterError::Parse(_)));
+
     let mut wrong_block_summary = hemlock_summary;
     wrong_block_summary.block_height += 1;
     let err = oxide_wallet_summaries_to_multi_wallet_scan_result(

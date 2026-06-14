@@ -745,13 +745,21 @@ pub fn oxide_wallet_summaries_to_multi_wallet_scan_result(
         validate_same_block_scan_summary(first, summary)?;
         let block_result =
             oxide_wallet_summary_to_block_scan_result(summary, private_spend_key, daemon_height)?;
-        wallet_results.insert(
-            summary.legacy_address.clone(),
-            WalletScanData {
-                address: summary.legacy_address.clone(),
-                outputs: block_result.outputs,
-            },
-        );
+        if wallet_results
+            .insert(
+                summary.legacy_address.clone(),
+                WalletScanData {
+                    address: summary.legacy_address.clone(),
+                    outputs: block_result.outputs,
+                },
+            )
+            .is_some()
+        {
+            return Err(OxideAdapterError::Parse(format!(
+                "duplicate oxide wallet scan summary for address {}",
+                summary.legacy_address
+            )));
+        }
     }
 
     Ok(MultiWalletScanResult {
