@@ -19,8 +19,12 @@ use sha3::{Digest, Keccak256};
 use zeroize::Zeroizing;
 
 use crate::epee_compat::KEY_IMAGES_MAGIC;
-use crate::monero_backend::ringct::hash_to_point;
 use crate::wallet_output::WalletOutput;
+
+/// Monero's biased hash-to-point, `H_p(key)`.
+fn hash_to_point(key: EdwardsPoint) -> EdwardsPoint {
+    monero_wallet::ed25519::Point::biased_hash(key.compress().to_bytes()).into()
+}
 
 /// A single key image entry for v3 export.
 #[derive(Debug, Clone)]

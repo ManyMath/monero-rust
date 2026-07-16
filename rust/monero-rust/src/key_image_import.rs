@@ -12,7 +12,6 @@
 //! Schnorr-like) that it was computed correctly from the output's one-time
 //! public key.  We verify that proof before accepting the import.
 
-use crate::monero_backend::ringct::hash_to_point;
 use curve25519_dalek::{
     constants::ED25519_BASEPOINT_TABLE,
     edwards::{CompressedEdwardsY, EdwardsPoint},
@@ -20,6 +19,11 @@ use curve25519_dalek::{
     traits::IsIdentity,
 };
 use sha3::{Digest, Keccak256};
+
+/// Monero's biased hash-to-point, `H_p(key)`.
+fn hash_to_point(key: EdwardsPoint) -> EdwardsPoint {
+    monero_wallet::ed25519::Point::biased_hash(key.compress().to_bytes()).into()
+}
 
 /// A single key image with its signature, as returned by monero-wallet-rpc.
 #[derive(Debug, Clone)]
