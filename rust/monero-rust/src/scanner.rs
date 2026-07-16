@@ -3,17 +3,27 @@
 //! This module provides wallet scanning functionality that works across
 //! both native and WASM targets through generic RpcConnection support.
 
-#[cfg(target_arch = "wasm32")]
-use crate::monero_backend::ringct::generate_key_image;
 use crate::monero_backend::{
     block::Block,
-    rpc::{GetBlocksFastResponse, Rpc, RpcConnection},
-    transaction::{Input, Transaction},
+    rpc::{BlockOutputIndices, GetBlocksFastResponse, Rpc, RpcConnection},
     wallet::{
-        address::{AddressMeta, AddressType, MoneroAddress, Network, SubaddressIndex},
+        address::{AddressMeta, AddressType, MoneroAddress, Network},
         seed::{Language, Seed},
-        Scanner, ViewPair,
     },
+};
+use monero_oxide::{
+    block::{Block as OxideBlock, BlockHeader as OxideBlockHeader},
+    transaction::{
+        Input as OxideInput, NotPruned, Pruned, Timelock as OxideTimelock,
+        Transaction as OxideTransaction, TransactionPrefix as OxideTransactionPrefix,
+    },
+};
+use monero_wallet::{
+    address::SubaddressIndex,
+    ed25519::{Point as OxidePoint, Scalar as OxideScalar},
+    extra::PaymentId,
+    interface::ScannableBlock,
+    Scanner, ViewPair as OxideViewPair, WalletOutput as OxideWalletOutput,
 };
 use curve25519_dalek::{
     constants::ED25519_BASEPOINT_TABLE,
@@ -324,10 +334,14 @@ fn spend_key_scalar_from_seed(seed: &Seed, passphrase: &str) -> Scalar {
     Scalar::from_bytes_mod_order(*key_bytes)
 }
 
-#[cfg(target_arch = "wasm32")]
+/// Compute the key image `x * H_p(xG)` for an owned one-time key.
+#[allow(dead_code)] // native targets fill key images after scanning instead
 fn calculate_key_image(spend_scalar: &Scalar, key_offset: &Scalar) -> EdwardsPoint {
     let one_time_key_scalar = Zeroizing::new(spend_scalar + key_offset);
-    generate_key_image(&one_time_key_scalar)
+    let one_time_key = &*one_time_key_scalar * ED25519_BASEPOINT_TABLE;
+    let hash_point: EdwardsPoint =
+        OxidePoint::biased_hash(one_time_key.compress().to_bytes()).into();
+    hash_point * *one_time_key_scalar
 }
 
 fn build_subaddress_indices(lookahead: Lookahead) -> Vec<SubaddressIndex> {
@@ -456,26 +470,6 @@ impl CachedScanner {
     /// Returns the compressed public spend key fingerprint used to identify this cached scanner.
     pub fn fingerprint(&self) -> [u8; 32] {
         self.fingerprint
-    }
-
-    fn expand_if_needed(&mut self, found: SubaddressIndex) -> bool {
-        expand_subaddresses_if_needed(
-            &mut self.scanner,
-            &mut self.watermark,
-            self.lookahead,
-            found,
-        )
-    }
-}
-
-impl CachedScannerEntry {
-    fn expand_if_needed(&mut self, found: SubaddressIndex) -> bool {
-        expand_subaddresses_if_needed(
-            &mut self.scanner,
-            &mut self.watermark,
-            self.lookahead,
-            found,
-        )
     }
 }
 
@@ -668,7 +662,10 @@ pub fn derive_subaddress(
     address_index: u32,
     passphrase: &str,
 ) -> Result<String, String> {
-    use crate::monero_backend::wallet::address::AddressSpec;
+    use crate::monero_backend::wallet::{
+        address::{AddressSpec, SubaddressIndex},
+        ViewPair,
+    };
 
     crate::error_codes::validate_network(network_str).map_err(|e| e.message.clone())?;
     let network = parse_network(network_str)?;
@@ -876,6 +873,261 @@ pub async fn scan_block_for_outputs_with_url_and_lookahead(
     }
 }
 
+/// Build a `monero-wallet` scanner from dalek key material.
+fn oxide_scanner_from_keys(
+    spend_point: &EdwardsPoint,
+    view_scalar: &Scalar,
+) -> Result<Scanner, String> {
+    let spend = OxidePoint::from(*spend_point);
+    let view = Zeroizing::new(OxideScalar::from(*view_scalar));
+    let view_pair =
+        OxideViewPair::new(spend, view).map_err(|e| format!("Invalid view keys: {}", e))?;
+    Ok(Scanner::new(view_pair))
+}
+
+/// Parse a full transaction blob into the hash and pruned representation used
+/// for scanning. Returns `None` when the blob isn't one whole transaction.
+fn parse_full_tx_blob(bytes: &[u8]) -> Option<([u8; 32], OxideTransaction<Pruned>)> {
+    let mut cursor = std::io::Cursor::new(bytes);
+    let tx = OxideTransaction::<NotPruned>::read(&mut cursor).ok()?;
+    if cursor.position() as usize != bytes.len() {
+        return None;
+    }
+    Some((tx.hash(), OxideTransaction::<Pruned>::from(tx)))
+}
+
+/// Infer the global RingCT index of a block's first RingCT output from
+/// `/getblocks.bin` per-transaction output indices.
+///
+/// Daemons include an entry for the miner transaction; some captured vectors
+/// only carry entries for the non-miner transactions. Both layouts are
+/// accepted. Falls back to `0` when no usable metadata is present so output
+/// detection still works; the global index embedded in scanned outputs is
+/// re-derived from the daemon at spend time.
+fn first_ringct_index_from_rpc(
+    block: &OxideBlock,
+    txs: &[OxideTransaction<Pruned>],
+    indices: Option<&BlockOutputIndices>,
+) -> u64 {
+    let Some(block_indices) = indices else {
+        return 0;
+    };
+    let entries = block_indices.indices.as_slice();
+    let miner = block.miner_transaction();
+    let miner_is_v2 = miner.version() == 2;
+
+    // Layout A: the miner transaction is the first entry.
+    if entries.len() == 1 + block.transactions.len() {
+        if miner_is_v2 {
+            if let Some(&first) = entries[0].indices.first() {
+                return first;
+            }
+        }
+        return first_ringct_index_from_tx_entries(&entries[1..], txs, 0);
+    }
+
+    // Layout B: entries parallel the non-miner transactions only.
+    if entries.len() == block.transactions.len() {
+        let miner_outputs = if miner_is_v2 {
+            miner.prefix().outputs.len() as u64
+        } else {
+            0
+        };
+        return first_ringct_index_from_tx_entries(entries, txs, miner_outputs);
+    }
+
+    0
+}
+
+/// Walk non-miner transactions until one carries daemon output indices and
+/// derive the block's first RingCT index from it.
+fn first_ringct_index_from_tx_entries(
+    entries: &[crate::monero_backend::rpc::TxOutputIndices],
+    txs: &[OxideTransaction<Pruned>],
+    mut ringct_outputs_before: u64,
+) -> u64 {
+    for (entry, tx) in entries.iter().zip(txs) {
+        if !matches!(tx, OxideTransaction::V2 { .. }) {
+            // v1 outputs don't occupy RingCT indices and their daemon indices
+            // are per-amount, not global.
+            continue;
+        }
+        if let Some(&first) = entry.indices.first() {
+            return first.saturating_sub(ringct_outputs_before);
+        }
+        ringct_outputs_before += tx.prefix().outputs.len() as u64;
+    }
+    0
+}
+
+/// Scan one fully parsed block for the scanner's outputs.
+fn scan_parsed_block(
+    scanner: &mut Scanner,
+    block: &OxideBlock,
+    txs: &[OxideTransaction<Pruned>],
+    first_ringct_index: u64,
+) -> Result<Vec<OxideWalletOutput>, String> {
+    scanner
+        .scan(ScannableBlock {
+            block: block.clone(),
+            transactions: txs.to_vec(),
+            output_index_for_first_ringct_output: Some(first_ringct_index),
+        })
+        .map(|timelocked| timelocked.ignore_additional_timelock())
+        .map_err(|e| format!("Failed to scan block {}: {}", block.number(), e))
+}
+
+/// Scan a fully parsed block, expanding the subaddress lookahead window and
+/// rescanning until no output lands near the edge of the window. This mirrors
+/// the per-transaction expansion the previous scanner applied within a block.
+fn scan_parsed_block_expanding(
+    scanner: &mut Scanner,
+    watermark: &mut SubaddressWatermark,
+    lookahead: Lookahead,
+    block: &OxideBlock,
+    txs: &[OxideTransaction<Pruned>],
+    first_ringct_index: u64,
+) -> Result<Vec<OxideWalletOutput>, String> {
+    loop {
+        let outputs = scan_parsed_block(scanner, block, txs, first_ringct_index)?;
+        let mut expanded = false;
+        for output in &outputs {
+            if let Some(found) = output.subaddress() {
+                expanded |= expand_subaddresses_if_needed(scanner, watermark, lookahead, found);
+            }
+        }
+        if !expanded {
+            return Ok(outputs);
+        }
+    }
+}
+
+/// Scan a single transaction outside its block context (mempool, or blocks
+/// where a sibling transaction blob couldn't be parsed).
+///
+/// `monero-wallet` only scans whole blocks, so the transaction is wrapped in
+/// a synthetic single-transaction block. The RingCT indices embedded in the
+/// returned outputs are relative to the transaction, not the chain.
+fn scan_single_transaction(
+    scanner: &mut Scanner,
+    tx_hash: [u8; 32],
+    tx: &OxideTransaction<Pruned>,
+) -> Result<Vec<OxideWalletOutput>, String> {
+    let miner_transaction = OxideTransaction::<NotPruned>::V2 {
+        prefix: OxideTransactionPrefix {
+            additional_timelock: OxideTimelock::None,
+            inputs: vec![OxideInput::Gen(0)],
+            outputs: vec![],
+            extra: vec![],
+        },
+        proofs: None,
+    };
+    let header = OxideBlockHeader {
+        hardfork_version: 16,
+        hardfork_signal: 0,
+        timestamp: 0,
+        previous: [0; 32],
+        nonce: 0,
+    };
+    let block = OxideBlock::new(header, miner_transaction, vec![tx_hash])
+        .ok_or_else(|| "Failed to build synthetic scan block".to_string())?;
+    scanner
+        .scan(ScannableBlock {
+            block,
+            transactions: vec![tx.clone()],
+            output_index_for_first_ringct_output: Some(0),
+        })
+        .map(|timelocked| timelocked.ignore_additional_timelock())
+        .map_err(|e| format!("Failed to scan transaction {}: {}", hex::encode(tx_hash), e))
+}
+
+/// Scan already-parsed transactions one at a time, expanding the subaddress
+/// window like `scan_parsed_block_expanding`. Used when a block contains a
+/// transaction blob the parser rejected, so the whole block can't be scanned.
+fn scan_parsed_txs_individually(
+    scanner: &mut Scanner,
+    watermark: &mut SubaddressWatermark,
+    lookahead: Lookahead,
+    txs_with_hashes: &[([u8; 32], OxideTransaction<Pruned>)],
+) -> Result<Vec<OxideWalletOutput>, String> {
+    loop {
+        let mut outputs = Vec::new();
+        for (hash, tx) in txs_with_hashes {
+            outputs.extend(scan_single_transaction(scanner, *hash, tx)?);
+        }
+        let mut expanded = false;
+        for output in &outputs {
+            if let Some(found) = output.subaddress() {
+                expanded |= expand_subaddresses_if_needed(scanner, watermark, lookahead, found);
+            }
+        }
+        if !expanded {
+            return Ok(outputs);
+        }
+    }
+}
+
+/// Map a `monero-wallet` payment ID into the hex representation the previous
+/// scanner reported: encrypted IDs of all zeroes mean "no payment ID".
+fn oxide_payment_id_hex(payment_id: PaymentId) -> Option<String> {
+    match payment_id {
+        PaymentId::Unencrypted(id) => Some(hex::encode(id)),
+        PaymentId::Encrypted(id) if id == [0; 8] => None,
+        PaymentId::Encrypted(id) => Some(hex::encode(id)),
+    }
+}
+
+/// Convert a scanned `monero-wallet` output into the wallet output model.
+///
+/// `key_image_scalar` carries the private spend key when key images should be
+/// filled at scan time (WASM full wallets); `None` leaves them empty.
+fn map_oxide_output(
+    output: &OxideWalletOutput,
+    block_height: u64,
+    miner_tx_hash: [u8; 32],
+    key_image_scalar: Option<&Scalar>,
+) -> Result<WalletOutput, String> {
+    let output_index = u8::try_from(output.index_in_transaction()).map_err(|_| {
+        format!(
+            "Output index {} exceeds the supported per-transaction range",
+            output.index_in_transaction()
+        )
+    })?;
+    let key_offset_bytes = <[u8; 32]>::from(output.key_offset());
+    let commitment = output.commitment();
+    let amount = commitment.amount;
+
+    let key_image = match key_image_scalar {
+        Some(spend_scalar) => {
+            let key_offset: Scalar = output.key_offset().into();
+            let key_image_point = calculate_key_image(spend_scalar, &key_offset);
+            hex::encode(key_image_point.compress().to_bytes())
+        }
+        None => String::new(),
+    };
+
+    Ok(WalletOutput {
+        tx_hash: hex::encode(output.transaction()),
+        output_index,
+        amount,
+        amount_xmr: format!("{:.12}", amount as f64 / 1_000_000_000_000.0),
+        key: hex::encode(output.key().compress().to_bytes()),
+        key_offset: hex::encode(key_offset_bytes),
+        commitment_mask: hex::encode(<[u8; 32]>::from(commitment.mask)),
+        subaddress_index: output
+            .subaddress()
+            .map(|idx| (idx.account(), idx.address())),
+        payment_id: output.payment_id().and_then(oxide_payment_id_hex),
+        received_output_bytes: hex::encode(output.serialize()),
+        block_height,
+        spent: false,
+        spent_height: None,
+        key_image,
+        is_coinbase: output.transaction() == miner_tx_hash,
+        frozen: false,
+    })
+}
+
 pub async fn scan_block_for_outputs<R: RpcConnection>(
     rpc: &Rpc<R>,
     block_height: u64,
@@ -925,8 +1177,7 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
         spend_key_scalar_from_seed(seed_opt.as_ref().unwrap(), passphrase)
     };
 
-    let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
-    let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+    let mut scanner = oxide_scanner_from_keys(&spend_point, &view_scalar)?;
     register_subaddresses(&mut scanner, lookahead);
 
     let block_hash_bytes = rpc
@@ -947,84 +1198,58 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
 
     let block_timestamp = block.header.timestamp;
     let tx_hashes = block.txs.clone();
-    let mut all_transactions = vec![block.miner_tx];
+    let oxide_block = OxideBlock::read::<&[u8]>(&mut block.serialize().as_ref())
+        .map_err(|e| format!("Failed to parse block at height {}: {:?}", block_height, e))?;
+    let miner_tx_hash = oxide_block.miner_transaction().hash();
+    let miner_tx = OxideTransaction::<Pruned>::from(oxide_block.miner_transaction().clone());
 
+    let mut txs = Vec::with_capacity(tx_hashes.len());
     if !tx_hashes.is_empty() {
         let fetched_txs = rpc
             .get_transactions(&tx_hashes)
             .await
             .map_err(|e| format!("Failed to fetch transactions: {:?}", e))?;
-        all_transactions.extend(fetched_txs);
+        for tx in &fetched_txs {
+            let (tx_hash, parsed) = parse_full_tx_blob(&tx.serialize())
+                .ok_or_else(|| format!("Failed to parse transaction {}", hex::encode(tx.hash())))?;
+            txs.push((tx_hash, parsed));
+        }
     }
 
-    let tx_count = all_transactions.len();
-    let mut outputs = Vec::new();
+    let tx_count = 1 + txs.len();
     let mut spent_key_images = Vec::new();
     let mut spent_key_image_tx_hashes = Vec::new();
-
-    for tx in all_transactions.iter() {
-        let tx_hash = hex::encode(tx.hash());
-        let is_coinbase = matches!(tx.prefix.inputs.get(0), Some(Input::Gen(_)));
-
-        // Extract spent key images from transaction inputs
-        for input in &tx.prefix.inputs {
-            if let Input::ToKey { key_image, .. } = input {
-                let ki_hex = hex::encode(key_image.compress().to_bytes());
-                spent_key_images.push(ki_hex);
-                spent_key_image_tx_hashes.push(tx_hash.clone());
+    for (tx_hash, tx) in std::iter::once((miner_tx_hash, &miner_tx))
+        .chain(txs.iter().map(|(hash, tx)| (*hash, tx)))
+    {
+        let tx_hash_hex = hex::encode(tx_hash);
+        for input in &tx.prefix().inputs {
+            if let OxideInput::ToKey { key_image, .. } = input {
+                spent_key_images.push(hex::encode(key_image.to_bytes()));
+                spent_key_image_tx_hashes.push(tx_hash_hex.clone());
             }
         }
+    }
 
-        let scan_result = scanner.scan_transaction(tx);
-        let owned_outputs = scan_result.ignore_timelock();
+    #[cfg(target_arch = "wasm32")]
+    let key_image_scalar = if spend_scalar == Scalar::ZERO {
+        None
+    } else {
+        Some(&spend_scalar)
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let key_image_scalar: Option<&Scalar> = None;
 
-        for output in owned_outputs {
-            let amount = output.data.commitment.amount;
-            let amount_xmr = format!("{:.12}", amount as f64 / 1_000_000_000_000.0);
-            let output_index = output.absolute.o;
-            let key = hex::encode(output.data.key.compress().to_bytes());
-            let key_offset = hex::encode(output.data.key_offset.to_bytes());
-            let commitment_mask = hex::encode(output.data.commitment.mask.to_bytes());
-            let subaddress_index = output
-                .metadata
-                .subaddress
-                .map(|idx| (idx.account(), idx.address()));
-            let payment_id = if output.metadata.payment_id != [0u8; 8] {
-                Some(hex::encode(output.metadata.payment_id))
-            } else {
-                None
-            };
-            let received_output_bytes = hex::encode(output.serialize());
-
-            #[cfg(target_arch = "wasm32")]
-            let key_image = if spend_scalar == Scalar::ZERO {
-                String::new()
-            } else {
-                let key_image_point = calculate_key_image(&spend_scalar, &output.data.key_offset);
-                hex::encode(key_image_point.compress().to_bytes())
-            };
-            #[cfg(not(target_arch = "wasm32"))]
-            let key_image = String::new();
-
-            outputs.push(WalletOutput {
-                tx_hash: tx_hash.clone(),
-                output_index,
-                amount,
-                amount_xmr,
-                key,
-                key_offset,
-                commitment_mask,
-                subaddress_index,
-                payment_id,
-                received_output_bytes,
-                block_height,
-                spent: false,
-                spent_height: None,
-                key_image,
-                is_coinbase,
-                frozen: false,
-            });
-        }
+    let scan_txs: Vec<OxideTransaction<Pruned>> = txs.iter().map(|(_, tx)| tx.clone()).collect();
+    let scanned = scan_parsed_block(&mut scanner, &oxide_block, &scan_txs, 0)?;
+    let mut outputs = Vec::with_capacity(scanned.len());
+    for output in &scanned {
+        outputs.push(map_oxide_output(
+            output,
+            block_height,
+            miner_tx_hash,
+            key_image_scalar,
+        )?);
     }
 
     Ok(BlockScanResult {
@@ -1114,8 +1339,7 @@ pub async fn process_batch_response(
             c
         } else {
             drop(c);
-            let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
-            let mut s = Scanner::from_view(view_pair, Some(HashSet::new()));
+            let mut s = oxide_scanner_from_keys(&spend_point, &view_scalar)?;
             register_subaddresses_async(&mut s, lookahead).await;
             CachedScanner {
                 scanner: s,
@@ -1127,8 +1351,7 @@ pub async fn process_batch_response(
             }
         }
     } else {
-        let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
-        let mut s = Scanner::from_view(view_pair, Some(HashSet::new()));
+        let mut s = oxide_scanner_from_keys(&spend_point, &view_scalar)?;
         register_subaddresses_async(&mut s, lookahead).await;
         CachedScanner {
             scanner: s,
@@ -1170,7 +1393,7 @@ pub async fn process_batch_response(
             continue;
         }
 
-        let block = Block::read::<&[u8]>(&mut block_entry.block.as_ref())
+        let block = OxideBlock::read::<&[u8]>(&mut block_entry.block.as_ref())
             .map_err(|e| format!("Failed to parse block at height {}: {:?}", block_height, e))?;
 
         if block.number() != block_height as usize {
@@ -1182,9 +1405,10 @@ pub async fn process_batch_response(
         }
 
         let block_timestamp = block.header.timestamp;
-        let block_hash = hex::encode(compute_block_id(&block));
+        let block_hash = hex::encode(block.hash());
 
-        let miner_tx = block.miner_tx;
+        let miner_tx_hash = block.miner_transaction().hash();
+        let miner_tx = OxideTransaction::<Pruned>::from(block.miner_transaction().clone());
         let tx_count = 1 + block_entry.txs.len();
 
         // When a block is pruned, the RingCT signature data is stripped from
@@ -1198,10 +1422,10 @@ pub async fn process_batch_response(
             let mut spent_key_images = Vec::new();
             let mut spent_key_image_tx_hashes = Vec::new();
 
-            for input in &miner_tx.prefix.inputs {
-                if let Input::ToKey { key_image, .. } = input {
-                    spent_key_images.push(hex::encode(key_image.compress().to_bytes()));
-                    spent_key_image_tx_hashes.push(hex::encode(miner_tx.hash()));
+            for input in &miner_tx.prefix().inputs {
+                if let OxideInput::ToKey { key_image, .. } = input {
+                    spent_key_images.push(hex::encode(key_image.to_bytes()));
+                    spent_key_image_tx_hashes.push(hex::encode(miner_tx_hash));
                 }
             }
 
@@ -1229,90 +1453,76 @@ pub async fn process_batch_response(
             let mut parsed_txs = Vec::with_capacity(block_entry.txs.len());
             let mut skipped_key_images = Vec::new();
             for tx_blob in &block_entry.txs {
-                match Transaction::read::<&[u8]>(&mut tx_blob.as_ref()) {
-                    Ok(tx) => parsed_txs.push(tx),
-                    Err(_) => {
+                match parse_full_tx_blob(tx_blob) {
+                    Some(parsed) => parsed_txs.push(parsed),
+                    None => {
                         skipped_key_images.extend(extract_key_images_from_raw_tx(tx_blob));
                     }
                 }
             }
 
-            let all_transactions: Vec<&Transaction> = std::iter::once(&miner_tx)
-                .chain(parsed_txs.iter())
-                .collect();
-
-            let mut outputs = Vec::new();
             let skipped_count = skipped_key_images.len();
             let mut spent_key_images = skipped_key_images;
             let mut spent_key_image_tx_hashes: Vec<String> = vec![String::new(); skipped_count];
-
-            for tx in &all_transactions {
-                let tx_hash = hex::encode(tx.hash());
-                let is_coinbase = matches!(tx.prefix.inputs.get(0), Some(Input::Gen(_)));
-
-                for input in &tx.prefix.inputs {
-                    if let Input::ToKey { key_image, .. } = input {
-                        let ki_hex = hex::encode(key_image.compress().to_bytes());
-                        spent_key_images.push(ki_hex);
-                        spent_key_image_tx_hashes.push(tx_hash.clone());
+            for (tx_hash, tx) in std::iter::once((miner_tx_hash, &miner_tx))
+                .chain(parsed_txs.iter().map(|(hash, tx)| (*hash, tx)))
+            {
+                let tx_hash_hex = hex::encode(tx_hash);
+                for input in &tx.prefix().inputs {
+                    if let OxideInput::ToKey { key_image, .. } = input {
+                        spent_key_images.push(hex::encode(key_image.to_bytes()));
+                        spent_key_image_tx_hashes.push(tx_hash_hex.clone());
                     }
                 }
+            }
 
-                let scan_result = scanner.scanner.scan_transaction(tx);
-                let owned_outputs = scan_result.ignore_timelock();
+            let scanned = if parsed_txs.len() == block.transactions.len() {
+                let scan_txs: Vec<OxideTransaction<Pruned>> =
+                    parsed_txs.iter().map(|(_, tx)| tx.clone()).collect();
+                let first_ringct_index = first_ringct_index_from_rpc(
+                    &block,
+                    &scan_txs,
+                    response.output_indices.get(block_idx),
+                );
+                scan_parsed_block_expanding(
+                    &mut scanner.scanner,
+                    &mut scanner.watermark,
+                    scanner.lookahead,
+                    &block,
+                    &scan_txs,
+                    first_ringct_index,
+                )?
+            } else {
+                // A transaction blob was rejected by the parser: the whole
+                // block can't be scanned, so scan the parseable transactions
+                // individually.
+                let mut txs_with_hashes = vec![(miner_tx_hash, miner_tx.clone())];
+                txs_with_hashes.extend(parsed_txs.iter().cloned());
+                scan_parsed_txs_individually(
+                    &mut scanner.scanner,
+                    &mut scanner.watermark,
+                    scanner.lookahead,
+                    &txs_with_hashes,
+                )?
+            };
 
-                for output in owned_outputs {
-                    if let Some(subaddr) = output.metadata.subaddress {
-                        scanner.expand_if_needed(subaddr);
-                    }
+            #[cfg(target_arch = "wasm32")]
+            let key_image_scalar = if scanner.spend_scalar == Scalar::ZERO {
+                None // view-only: no spend key available
+            } else {
+                Some(&scanner.spend_scalar)
+            };
+            #[cfg(not(target_arch = "wasm32"))]
+            let key_image_scalar: Option<&Scalar> = None;
 
-                    let amount = output.data.commitment.amount;
-                    let amount_xmr = format!("{:.12}", amount as f64 / 1_000_000_000_000.0);
-                    let output_index = output.absolute.o;
-                    let key = hex::encode(output.data.key.compress().to_bytes());
-                    let key_offset = hex::encode(output.data.key_offset.to_bytes());
-                    let commitment_mask = hex::encode(output.data.commitment.mask.to_bytes());
-                    let subaddress_index = output
-                        .metadata
-                        .subaddress
-                        .map(|idx| (idx.account(), idx.address()));
-                    let payment_id = if output.metadata.payment_id != [0u8; 8] {
-                        Some(hex::encode(output.metadata.payment_id))
-                    } else {
-                        None
-                    };
-                    let received_output_bytes = hex::encode(output.serialize());
-
-                    #[cfg(target_arch = "wasm32")]
-                    let key_image = if scanner.spend_scalar == Scalar::ZERO {
-                        String::new() // view-only: no spend key available
-                    } else {
-                        let key_image_point =
-                            calculate_key_image(&scanner.spend_scalar, &output.data.key_offset);
-                        hex::encode(key_image_point.compress().to_bytes())
-                    };
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let key_image = String::new();
-
-                    outputs.push(WalletOutput {
-                        tx_hash: tx_hash.clone(),
-                        output_index,
-                        amount,
-                        amount_xmr,
-                        key,
-                        key_offset,
-                        commitment_mask,
-                        subaddress_index,
-                        payment_id,
-                        received_output_bytes,
-                        block_height,
-                        spent: false,
-                        spent_height: None,
-                        key_image,
-                        is_coinbase,
-                        frozen: false,
-                    });
-                }
+            let mut outputs = Vec::with_capacity(scanned.len());
+            for output in &scanned {
+                outputs.push(map_oxide_output(
+                    output,
+                    block_height,
+                    miner_tx_hash,
+                    key_image_scalar,
+                )?);
             }
 
             results.push(BlockScanResult {
@@ -1494,8 +1704,7 @@ pub async fn process_batch_multi_wallet_response(
                 spend_key_scalar_from_seed(seed_opt.as_ref().unwrap(), &config.passphrase)
             };
 
-            let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
-            let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+            let mut scanner = oxide_scanner_from_keys(&spend_point, &view_scalar)?;
             register_subaddresses_async(&mut scanner, config.lookahead).await;
 
             entries.push(CachedScannerEntry {
@@ -1550,7 +1759,7 @@ pub async fn process_batch_multi_wallet_response(
             continue;
         }
 
-        let block = Block::read::<&[u8]>(&mut block_entry.block.as_ref())
+        let block = OxideBlock::read::<&[u8]>(&mut block_entry.block.as_ref())
             .map_err(|e| format!("Failed to parse block at height {}: {:?}", block_height, e))?;
 
         if block.number() != block_height as usize {
@@ -1562,19 +1771,20 @@ pub async fn process_batch_multi_wallet_response(
         }
 
         let block_timestamp = block.header.timestamp;
-        let block_hash = hex::encode(compute_block_id(&block));
+        let block_hash = hex::encode(block.hash());
 
-        let miner_tx = block.miner_tx;
+        let miner_tx_hash = block.miner_transaction().hash();
+        let miner_tx = OxideTransaction::<Pruned>::from(block.miner_transaction().clone());
         let tx_count = 1 + block_entry.txs.len();
 
         if block_entry.pruned {
             let mut spent_key_images = Vec::new();
             let mut spent_key_image_tx_hashes = Vec::new();
 
-            for input in &miner_tx.prefix.inputs {
-                if let Input::ToKey { key_image, .. } = input {
-                    spent_key_images.push(hex::encode(key_image.compress().to_bytes()));
-                    spent_key_image_tx_hashes.push(hex::encode(miner_tx.hash()));
+            for input in &miner_tx.prefix().inputs {
+                if let OxideInput::ToKey { key_image, .. } = input {
+                    spent_key_images.push(hex::encode(key_image.to_bytes()));
+                    spent_key_image_tx_hashes.push(hex::encode(miner_tx_hash));
                 }
             }
 
@@ -1611,93 +1821,80 @@ pub async fn process_batch_multi_wallet_response(
             let mut parsed_txs = Vec::with_capacity(block_entry.txs.len());
             let mut skipped_key_images = Vec::new();
             for tx_blob in &block_entry.txs {
-                match Transaction::read::<&[u8]>(&mut tx_blob.as_ref()) {
-                    Ok(tx) => parsed_txs.push(tx),
-                    Err(_) => {
+                match parse_full_tx_blob(tx_blob) {
+                    Some(parsed) => parsed_txs.push(parsed),
+                    None => {
                         skipped_key_images.extend(extract_key_images_from_raw_tx(tx_blob));
                     }
                 }
             }
 
-            let all_transactions: Vec<&Transaction> = std::iter::once(&miner_tx)
-                .chain(parsed_txs.iter())
-                .collect();
-
             let skipped_count = skipped_key_images.len();
             let mut spent_key_images = skipped_key_images;
             let mut spent_key_image_tx_hashes: Vec<String> = vec![String::new(); skipped_count];
-            for tx in &all_transactions {
-                let tx_hash_for_ki = hex::encode(tx.hash());
-                for input in &tx.prefix.inputs {
-                    if let Input::ToKey { key_image, .. } = input {
-                        spent_key_images.push(hex::encode(key_image.compress().to_bytes()));
-                        spent_key_image_tx_hashes.push(tx_hash_for_ki.clone());
+            for (tx_hash, tx) in std::iter::once((miner_tx_hash, &miner_tx))
+                .chain(parsed_txs.iter().map(|(hash, tx)| (*hash, tx)))
+            {
+                let tx_hash_hex = hex::encode(tx_hash);
+                for input in &tx.prefix().inputs {
+                    if let OxideInput::ToKey { key_image, .. } = input {
+                        spent_key_images.push(hex::encode(key_image.to_bytes()));
+                        spent_key_image_tx_hashes.push(tx_hash_hex.clone());
                     }
                 }
             }
 
+            let whole_block = parsed_txs.len() == block.transactions.len();
+            let scan_txs: Vec<OxideTransaction<Pruned>> =
+                parsed_txs.iter().map(|(_, tx)| tx.clone()).collect();
+            let first_ringct_index = first_ringct_index_from_rpc(
+                &block,
+                &scan_txs,
+                response.output_indices.get(block_idx),
+            );
+
             let mut wallet_results = HashMap::new();
             for entry in &mut cached_scanners.entries {
-                let mut outputs = Vec::new();
-                for tx in &all_transactions {
-                    let tx_hash = hex::encode(tx.hash());
-                    let is_coinbase = matches!(tx.prefix.inputs.get(0), Some(Input::Gen(_)));
+                let scanned = if whole_block {
+                    scan_parsed_block_expanding(
+                        &mut entry.scanner,
+                        &mut entry.watermark,
+                        entry.lookahead,
+                        &block,
+                        &scan_txs,
+                        first_ringct_index,
+                    )?
+                } else {
+                    // A transaction blob was rejected by the parser: the whole
+                    // block can't be scanned, so scan the parseable
+                    // transactions individually.
+                    let mut txs_with_hashes = vec![(miner_tx_hash, miner_tx.clone())];
+                    txs_with_hashes.extend(parsed_txs.iter().cloned());
+                    scan_parsed_txs_individually(
+                        &mut entry.scanner,
+                        &mut entry.watermark,
+                        entry.lookahead,
+                        &txs_with_hashes,
+                    )?
+                };
 
-                    let scan_result = entry.scanner.scan_transaction(tx);
-                    let owned_outputs = scan_result.ignore_timelock();
+                #[cfg(target_arch = "wasm32")]
+                let key_image_scalar = if entry.spend_scalar == Scalar::ZERO {
+                    None // view-only: no spend key available
+                } else {
+                    Some(&entry.spend_scalar)
+                };
+                #[cfg(not(target_arch = "wasm32"))]
+                let key_image_scalar: Option<&Scalar> = None;
 
-                    for output in owned_outputs {
-                        if let Some(subaddr) = output.metadata.subaddress {
-                            entry.expand_if_needed(subaddr);
-                        }
-
-                        let amount = output.data.commitment.amount;
-                        let amount_xmr = format!("{:.12}", amount as f64 / 1_000_000_000_000.0);
-                        let output_index = output.absolute.o;
-                        let key = hex::encode(output.data.key.compress().to_bytes());
-                        let key_offset = hex::encode(output.data.key_offset.to_bytes());
-                        let commitment_mask = hex::encode(output.data.commitment.mask.to_bytes());
-                        let subaddress_index = output
-                            .metadata
-                            .subaddress
-                            .map(|idx| (idx.account(), idx.address()));
-                        let payment_id = if output.metadata.payment_id != [0u8; 8] {
-                            Some(hex::encode(output.metadata.payment_id))
-                        } else {
-                            None
-                        };
-                        let received_output_bytes = hex::encode(output.serialize());
-
-                        #[cfg(target_arch = "wasm32")]
-                        let key_image = if entry.spend_scalar == Scalar::ZERO {
-                            String::new() // view-only: no spend key available
-                        } else {
-                            let key_image_point =
-                                calculate_key_image(&entry.spend_scalar, &output.data.key_offset);
-                            hex::encode(key_image_point.compress().to_bytes())
-                        };
-                        #[cfg(not(target_arch = "wasm32"))]
-                        let key_image = String::new();
-
-                        outputs.push(WalletOutput {
-                            tx_hash: tx_hash.clone(),
-                            output_index,
-                            amount,
-                            amount_xmr,
-                            key,
-                            key_offset,
-                            commitment_mask,
-                            subaddress_index,
-                            payment_id,
-                            received_output_bytes,
-                            block_height,
-                            spent: false,
-                            spent_height: None,
-                            key_image,
-                            is_coinbase,
-                            frozen: false,
-                        });
-                    }
+                let mut outputs = Vec::with_capacity(scanned.len());
+                for output in &scanned {
+                    outputs.push(map_oxide_output(
+                        output,
+                        block_height,
+                        miner_tx_hash,
+                        key_image_scalar,
+                    )?);
                 }
                 wallet_results.insert(
                     entry.address.clone(),
@@ -2075,38 +2272,48 @@ pub async fn scan_block_multi_wallet<R: RpcConnection + Send + Sync + Clone + 's
 
     let block_timestamp = block.header.timestamp;
     let tx_hashes = block.txs.clone();
-    let mut all_transactions = vec![block.miner_tx.clone()];
+    let oxide_block = OxideBlock::read::<&[u8]>(&mut block.serialize().as_ref())
+        .map_err(|e| format!("Failed to parse block at height {}: {:?}", block_height, e))?;
+    let miner_tx_hash = oxide_block.miner_transaction().hash();
+    let miner_tx = OxideTransaction::<Pruned>::from(oxide_block.miner_transaction().clone());
 
+    let mut txs = Vec::with_capacity(tx_hashes.len());
     if !tx_hashes.is_empty() {
         let fetched_txs = rpc
             .get_transactions(&tx_hashes)
             .await
             .map_err(|e| format!("Failed to fetch transactions: {:?}", e))?;
-        all_transactions.extend(fetched_txs);
+        for tx in &fetched_txs {
+            let (tx_hash, parsed) = parse_full_tx_blob(&tx.serialize())
+                .ok_or_else(|| format!("Failed to parse transaction {}", hex::encode(tx.hash())))?;
+            txs.push((tx_hash, parsed));
+        }
     }
 
-    let tx_count = all_transactions.len();
+    let tx_count = 1 + txs.len();
 
     // Extract spent key images (shared across all wallets)
     let mut spent_key_images = Vec::new();
     let mut spent_key_image_tx_hashes = Vec::new();
-    for tx in all_transactions.iter() {
-        let tx_hash = hex::encode(tx.hash());
-        for input in &tx.prefix.inputs {
-            if let Input::ToKey { key_image, .. } = input {
-                let ki_hex = hex::encode(key_image.compress().to_bytes());
-                spent_key_images.push(ki_hex);
-                spent_key_image_tx_hashes.push(tx_hash.clone());
+    for (tx_hash, tx) in std::iter::once((miner_tx_hash, &miner_tx))
+        .chain(txs.iter().map(|(hash, tx)| (*hash, tx)))
+    {
+        let tx_hash_hex = hex::encode(tx_hash);
+        for input in &tx.prefix().inputs {
+            if let OxideInput::ToKey { key_image, .. } = input {
+                spent_key_images.push(hex::encode(key_image.to_bytes()));
+                spent_key_image_tx_hashes.push(tx_hash_hex.clone());
             }
         }
     }
 
     // Step 2: Spawn parallel scanning tasks for each wallet
     let mut join_set = JoinSet::new();
-    let txs = Arc::new(all_transactions);
+    let scan_txs: Vec<OxideTransaction<Pruned>> = txs.iter().map(|(_, tx)| tx.clone()).collect();
+    let shared_block = Arc::new((oxide_block, scan_txs));
 
     for wallet_config in wallet_configs {
-        let txs = Arc::clone(&txs);
+        let shared_block = Arc::clone(&shared_block);
 
         join_set.spawn(async move {
             let network = parse_network(&wallet_config.network)?;
@@ -2127,68 +2334,14 @@ pub async fn scan_block_multi_wallet<R: RpcConnection + Send + Sync + Clone + 's
                 (sp, vs, addr)
             };
 
-            let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
-            let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+            let mut scanner = oxide_scanner_from_keys(&spend_point, &view_scalar)?;
             register_subaddresses(&mut scanner, wallet_config.lookahead);
 
-            // Scan all transactions for this wallet
-            let mut outputs = Vec::new();
-
-            for tx in txs.iter() {
-                let tx_hash = hex::encode(tx.hash());
-                let is_coinbase = matches!(tx.prefix.inputs.get(0), Some(Input::Gen(_)));
-
-                let scan_result = scanner.scan_transaction(tx);
-                let owned_outputs = scan_result.ignore_timelock();
-
-                for output in owned_outputs {
-                    let amount = output.data.commitment.amount;
-                    let amount_xmr = format!("{:.12}", amount as f64 / 1_000_000_000_000.0);
-                    let output_index = output.absolute.o;
-                    let key = hex::encode(output.data.key.compress().to_bytes());
-                    let key_offset = hex::encode(output.data.key_offset.to_bytes());
-                    let commitment_mask = hex::encode(output.data.commitment.mask.to_bytes());
-                    let subaddress_index = output
-                        .metadata
-                        .subaddress
-                        .map(|idx| (idx.account(), idx.address()));
-                    let payment_id = if output.metadata.payment_id != [0u8; 8] {
-                        Some(hex::encode(output.metadata.payment_id))
-                    } else {
-                        None
-                    };
-                    let received_output_bytes = hex::encode(output.serialize());
-
-                    #[cfg(target_arch = "wasm32")]
-                    let key_image = if spend_scalar == Scalar::ZERO {
-                        String::new()
-                    } else {
-                        let key_image_point =
-                            calculate_key_image(&spend_scalar, &output.data.key_offset);
-                        hex::encode(key_image_point.compress().to_bytes())
-                    };
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let key_image = String::new();
-
-                    outputs.push(WalletOutput {
-                        tx_hash: tx_hash.clone(),
-                        output_index,
-                        amount,
-                        amount_xmr,
-                        key,
-                        key_offset,
-                        commitment_mask,
-                        subaddress_index,
-                        payment_id,
-                        received_output_bytes,
-                        block_height,
-                        spent: false,
-                        spent_height: None,
-                        key_image,
-                        is_coinbase,
-                        frozen: false,
-                    });
-                }
+            let (block, scan_txs) = shared_block.as_ref();
+            let scanned = scan_parsed_block(&mut scanner, block, scan_txs, 0)?;
+            let mut outputs = Vec::with_capacity(scanned.len());
+            for output in &scanned {
+                outputs.push(map_oxide_output(output, block_height, miner_tx_hash, None)?);
             }
 
             Ok::<(String, WalletScanData), String>((
@@ -2262,33 +2415,43 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
 
     let block_timestamp = block.header.timestamp;
     let tx_hashes = block.txs.clone();
-    let mut all_transactions = vec![block.miner_tx.clone()];
+    let oxide_block = OxideBlock::read::<&[u8]>(&mut block.serialize().as_ref())
+        .map_err(|e| format!("Failed to parse block at height {}: {:?}", block_height, e))?;
+    let miner_tx_hash = oxide_block.miner_transaction().hash();
+    let miner_tx = OxideTransaction::<Pruned>::from(oxide_block.miner_transaction().clone());
 
+    let mut txs = Vec::with_capacity(tx_hashes.len());
     if !tx_hashes.is_empty() {
         let fetched_txs = rpc
             .get_transactions(&tx_hashes)
             .await
             .map_err(|e| format!("Failed to fetch transactions: {:?}", e))?;
-        all_transactions.extend(fetched_txs);
+        for tx in &fetched_txs {
+            let (tx_hash, parsed) = parse_full_tx_blob(&tx.serialize())
+                .ok_or_else(|| format!("Failed to parse transaction {}", hex::encode(tx.hash())))?;
+            txs.push((tx_hash, parsed));
+        }
     }
 
-    let tx_count = all_transactions.len();
+    let tx_count = 1 + txs.len();
 
     // Extract spent key images (shared across all wallets)
     let mut spent_key_images = Vec::new();
     let mut spent_key_image_tx_hashes = Vec::new();
-    for tx in all_transactions.iter() {
-        let tx_hash = hex::encode(tx.hash());
-        for input in &tx.prefix.inputs {
-            if let Input::ToKey { key_image, .. } = input {
-                let ki_hex = hex::encode(key_image.compress().to_bytes());
-                spent_key_images.push(ki_hex);
-                spent_key_image_tx_hashes.push(tx_hash.clone());
+    for (tx_hash, tx) in std::iter::once((miner_tx_hash, &miner_tx))
+        .chain(txs.iter().map(|(hash, tx)| (*hash, tx)))
+    {
+        let tx_hash_hex = hex::encode(tx_hash);
+        for input in &tx.prefix().inputs {
+            if let OxideInput::ToKey { key_image, .. } = input {
+                spent_key_images.push(hex::encode(key_image.to_bytes()));
+                spent_key_image_tx_hashes.push(tx_hash_hex.clone());
             }
         }
     }
 
     // Step 2: Scan sequentially for each wallet (WASM is single-threaded)
+    let scan_txs: Vec<OxideTransaction<Pruned>> = txs.iter().map(|(_, tx)| tx.clone()).collect();
     let mut wallet_results = HashMap::new();
 
     for wallet_config in wallet_configs {
@@ -2321,68 +2484,24 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
             spend_key_scalar_from_seed(seed_opt.as_ref().unwrap(), passphrase)
         };
 
-        let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
-        let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+        let mut scanner = oxide_scanner_from_keys(&spend_point, &view_scalar)?;
         register_subaddresses(&mut scanner, wallet_config.lookahead);
 
-        // Scan all transactions for this wallet
-        let mut outputs = Vec::new();
+        let key_image_scalar = if spend_scalar == Scalar::ZERO {
+            None // view-only: no spend key available
+        } else {
+            Some(&spend_scalar)
+        };
 
-        for tx in all_transactions.iter() {
-            let tx_hash = hex::encode(tx.hash());
-            let is_coinbase = matches!(tx.prefix.inputs.get(0), Some(Input::Gen(_)));
-
-            let scan_result = scanner.scan_transaction(tx);
-            let owned_outputs = scan_result.ignore_timelock();
-
-            for output in owned_outputs {
-                let amount = output.data.commitment.amount;
-                let amount_xmr = format!("{:.12}", amount as f64 / 1_000_000_000_000.0);
-                let output_index = output.absolute.o;
-                let key = hex::encode(output.data.key.compress().to_bytes());
-                let key_offset = hex::encode(output.data.key_offset.to_bytes());
-                let commitment_mask = hex::encode(output.data.commitment.mask.to_bytes());
-                let subaddress_index = output
-                    .metadata
-                    .subaddress
-                    .map(|idx| (idx.account(), idx.address()));
-                let payment_id = if output.metadata.payment_id != [0u8; 8] {
-                    Some(hex::encode(output.metadata.payment_id))
-                } else {
-                    None
-                };
-                let received_output_bytes = hex::encode(output.serialize());
-
-                #[cfg(target_arch = "wasm32")]
-                let key_image = if spend_scalar == Scalar::ZERO {
-                    String::new()
-                } else {
-                    let key_image_point =
-                        calculate_key_image(&spend_scalar, &output.data.key_offset);
-                    hex::encode(key_image_point.compress().to_bytes())
-                };
-                #[cfg(not(target_arch = "wasm32"))]
-                let key_image = String::new();
-
-                outputs.push(WalletOutput {
-                    tx_hash: tx_hash.clone(),
-                    output_index,
-                    amount,
-                    amount_xmr,
-                    key,
-                    key_offset,
-                    commitment_mask,
-                    subaddress_index,
-                    payment_id,
-                    received_output_bytes,
-                    block_height,
-                    spent: false,
-                    spent_height: None,
-                    key_image,
-                    is_coinbase,
-                    frozen: false,
-                });
-            }
+        let scanned = scan_parsed_block(&mut scanner, &oxide_block, &scan_txs, 0)?;
+        let mut outputs = Vec::with_capacity(scanned.len());
+        for output in &scanned {
+            outputs.push(map_oxide_output(
+                output,
+                block_height,
+                miner_tx_hash,
+                key_image_scalar,
+            )?);
         }
 
         wallet_results.insert(address.clone(), WalletScanData { address, outputs });
@@ -2508,8 +2627,7 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
         spend_key_scalar_from_seed(seed_opt.as_ref().unwrap(), passphrase)
     };
 
-    let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
-    let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+    let mut scanner = oxide_scanner_from_keys(&spend_point, &view_scalar)?;
     register_subaddresses(&mut scanner, lookahead);
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -2537,66 +2655,35 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
         .map(|ki| (hex::encode(ki), String::new()))
         .collect();
 
-    for tx in mempool_txs.iter() {
-        let tx_hash = hex::encode(tx.hash());
-        let is_coinbase = matches!(tx.prefix.inputs.get(0), Some(Input::Gen(_)));
+    #[cfg(target_arch = "wasm32")]
+    let key_image_scalar = if spend_scalar == Scalar::ZERO {
+        None // view-only: no spend key available
+    } else {
+        Some(&spend_scalar)
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let key_image_scalar: Option<&Scalar> = None;
 
-        for input in &tx.prefix.inputs {
-            if let Input::ToKey { key_image, .. } = input {
-                let ki_hex = hex::encode(key_image.compress().to_bytes());
-                spent_key_images_map.insert(ki_hex, tx_hash.clone());
+    for tx in mempool_txs.iter() {
+        let (tx_hash, parsed) = parse_full_tx_blob(&tx.serialize())
+            .ok_or_else(|| format!("Failed to parse transaction {}", hex::encode(tx.hash())))?;
+        let tx_hash_hex = hex::encode(tx_hash);
+
+        for input in &parsed.prefix().inputs {
+            if let OxideInput::ToKey { key_image, .. } = input {
+                let ki_hex = hex::encode(key_image.to_bytes());
+                spent_key_images_map.insert(ki_hex, tx_hash_hex.clone());
             }
         }
 
-        let scan_result = scanner.scan_transaction(tx);
-        let owned_outputs = scan_result.ignore_timelock();
-
-        for output in owned_outputs {
-            let amount = output.data.commitment.amount;
-            let amount_xmr = format!("{:.12}", amount as f64 / 1_000_000_000_000.0);
-            let output_index = output.absolute.o;
-            let key = hex::encode(output.data.key.compress().to_bytes());
-            let key_offset = hex::encode(output.data.key_offset.to_bytes());
-            let commitment_mask = hex::encode(output.data.commitment.mask.to_bytes());
-            let subaddress_index = output
-                .metadata
-                .subaddress
-                .map(|idx| (idx.account(), idx.address()));
-            let payment_id = if output.metadata.payment_id != [0u8; 8] {
-                Some(hex::encode(output.metadata.payment_id))
-            } else {
-                None
-            };
-            let received_output_bytes = hex::encode(output.serialize());
-
-            #[cfg(target_arch = "wasm32")]
-            let key_image = if spend_scalar == Scalar::ZERO {
-                String::new()
-            } else {
-                let key_image_point = calculate_key_image(&spend_scalar, &output.data.key_offset);
-                hex::encode(key_image_point.compress().to_bytes())
-            };
-            #[cfg(not(target_arch = "wasm32"))]
-            let key_image = String::new();
-
-            outputs.push(WalletOutput {
-                tx_hash: tx_hash.clone(),
-                output_index,
-                amount,
-                amount_xmr,
-                key,
-                key_offset,
-                commitment_mask,
-                subaddress_index,
-                payment_id,
-                received_output_bytes,
-                block_height: 0, // Unconfirmed - in mempool
-                spent: false,
-                spent_height: None,
-                key_image,
-                is_coinbase,
-                frozen: false,
-            });
+        let scanned = scan_single_transaction(&mut scanner, tx_hash, &parsed)?;
+        for output in &scanned {
+            outputs.push(map_oxide_output(
+                output,
+                0,        // unconfirmed: still in the mempool
+                [0u8; 32], // mempool transactions are never coinbase
+                key_image_scalar,
+            )?);
         }
     }
 
@@ -2614,6 +2701,28 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Transitional parity check while the serai mirror is still vendored:
+    /// the oxide hash-to-point and our key-image computation must match the
+    /// previous backend bit-for-bit.
+    #[test]
+    fn oxide_key_image_matches_serai() {
+        use crate::monero_backend::ringct::{generate_key_image, hash_to_point};
+
+        for i in 1u64..8 {
+            let secret = Scalar::from(i * 7919 + 3);
+            let public = &secret * ED25519_BASEPOINT_TABLE;
+
+            let serai_hp = hash_to_point(public);
+            let oxide_hp: EdwardsPoint =
+                OxidePoint::biased_hash(public.compress().to_bytes()).into();
+            assert_eq!(serai_hp.compress(), oxide_hp.compress());
+
+            let serai_ki = generate_key_image(&Zeroizing::new(secret));
+            let oxide_ki = calculate_key_image(&secret, &Scalar::ZERO);
+            assert_eq!(serai_ki.compress(), oxide_ki.compress());
+        }
+    }
 
     const TEST_VECTOR_1_SEED: &str = "hemlock jubilee eden hacksaw boil superior inroads epoxy exhale orders cavernous second brunt saved richly lower upgrade hitched launching deepest mostly playful layout lower eden";
     const TEST_VECTOR_1_SPEND_KEY: &str =
@@ -3172,8 +3281,7 @@ mod tests {
         let spend = Scalar::from(42u64);
         let spend_point = &spend * ED25519_BASEPOINT_TABLE;
         let view = Scalar::from(99u64);
-        let view_pair = ViewPair::new(spend_point, Zeroizing::new(view));
-        let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+        let mut scanner = oxide_scanner_from_keys(&spend_point, &view).unwrap();
         register_subaddresses(&mut scanner, la);
         let mut wm = SubaddressWatermark::new(la);
 
@@ -3195,8 +3303,7 @@ mod tests {
         let spend = Scalar::from(42u64);
         let spend_point = &spend * ED25519_BASEPOINT_TABLE;
         let view = Scalar::from(99u64);
-        let view_pair = ViewPair::new(spend_point, Zeroizing::new(view));
-        let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+        let mut scanner = oxide_scanner_from_keys(&spend_point, &view).unwrap();
         register_subaddresses(&mut scanner, la);
         let mut wm = SubaddressWatermark::new(la);
 
@@ -3217,8 +3324,7 @@ mod tests {
         let spend = Scalar::from(42u64);
         let spend_point = &spend * ED25519_BASEPOINT_TABLE;
         let view = Scalar::from(99u64);
-        let view_pair = ViewPair::new(spend_point, Zeroizing::new(view));
-        let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+        let mut scanner = oxide_scanner_from_keys(&spend_point, &view).unwrap();
         let mut wm = SubaddressWatermark::new(la);
 
         let found = SubaddressIndex::new(0, 1).unwrap();
@@ -3235,8 +3341,7 @@ mod tests {
         let spend = Scalar::from(42u64);
         let spend_point = &spend * ED25519_BASEPOINT_TABLE;
         let view = Scalar::from(99u64);
-        let view_pair = ViewPair::new(spend_point, Zeroizing::new(view));
-        let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+        let mut scanner = oxide_scanner_from_keys(&spend_point, &view).unwrap();
         register_subaddresses(&mut scanner, la);
         let mut wm = SubaddressWatermark::new(la);
 
@@ -3269,8 +3374,7 @@ mod tests {
         let spend = Scalar::from(42u64);
         let spend_point = &spend * ED25519_BASEPOINT_TABLE;
         let view = Scalar::from(99u64);
-        let view_pair = ViewPair::new(spend_point, Zeroizing::new(view));
-        let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
+        let mut scanner = oxide_scanner_from_keys(&spend_point, &view).unwrap();
         register_subaddresses(&mut scanner, la);
         let mut wm = SubaddressWatermark::new(la);
 

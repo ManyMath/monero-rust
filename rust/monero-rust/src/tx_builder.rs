@@ -6,7 +6,7 @@ pub mod native {
         rpc::{Rpc, RpcConnection, DEFAULT_MAX_FEE_PER_BYTE},
         transaction::Transaction,
         wallet::{
-            address::{AddressMeta, AddressType, MoneroAddress, Network},
+            address::{AddressMeta, AddressType, MoneroAddress, Network, SubaddressIndex},
             seed::Seed,
             sign_offline, Change, Decoys, Fee, InternalPayment, ReceivedOutput, Scanner,
             SignableTransactionBuilder, SpendableOutput, UnsignedInput, UnsignedTransaction,
@@ -25,7 +25,7 @@ pub mod native {
     #[cfg(target_arch = "wasm32")]
     use crate::rpc_serai::WasmRpcConnection;
 
-    use crate::scanner::{register_subaddresses, resolve_seed, Lookahead, DEFAULT_LOOKAHEAD};
+    use crate::scanner::{resolve_seed, Lookahead, DEFAULT_LOOKAHEAD};
     use serde::{Deserialize, Serialize};
     use serde_json::Value;
     use sha3::{Digest, Keccak256};
@@ -197,7 +197,15 @@ pub mod native {
         lookahead: Lookahead,
     ) -> Vec<ChangeOutputInfo> {
         let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
-        register_subaddresses(&mut scanner, lookahead);
+        // Register the subaddress window on the legacy scanner; the production
+        // scanner registration helper now works on `monero-wallet` scanners.
+        for account in 0..=lookahead.account {
+            for address in 0..=lookahead.subaddress {
+                if let Some(index) = SubaddressIndex::new(account, address) {
+                    scanner.register_subaddress(index);
+                }
+            }
+        }
         let scan_result = scanner.scan_transaction(tx);
         let our_outputs = scan_result.ignore_timelock();
 
