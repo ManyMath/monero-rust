@@ -46,6 +46,7 @@ sha3 = { version = "0.10", default-features = false }
 hex = { version = "0.4", default-features = false, features = ["alloc"] }
 rand_core = { version = "0.6", default-features = false }
 rand = { version = "0.8", default-features = false, features = ["getrandom"] }
+rand_distr = { version = "0.4", default-features = false, features = ["std"] }
 
 # WASM
 [target.'cfg(target_arch = "wasm32")'.dependencies]
