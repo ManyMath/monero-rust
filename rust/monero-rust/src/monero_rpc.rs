@@ -1,0 +1,1145 @@
+//! Monero daemon RPC client, ported from the vendored serai mirror onto the
+//! monero-oxide types.
+//!
+//! monero-oxide's `interface` crate is trait-only: it ships no HTTP client,
+//! so this keeps our HTTP / wasm-fetch / epee stack: JSON-RPC and binary
+//! (`.bin`, epee) endpoints, `/getblocks.bin` batching with output indices,
+//! pruned handling, and digest authentication.
+
+// The facade cutover repoints monero_backend::rpc here.
+#![allow(dead_code)]
+
+use std::fmt::Debug;
+
+use async_trait::async_trait;
+use thiserror::Error;
+
+use curve25519_dalek::edwards::{CompressedEdwardsY, EdwardsPoint};
+
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde_json::{json, Value};
+
+#[cfg(not(target_arch = "wasm32"))]
+use digest_auth::AuthContext;
+#[cfg(not(target_arch = "wasm32"))]
+use reqwest::Client;
+
+use monero_oxide::{
+    block::Block,
+    transaction::{Input, NotPruned, Timelock, Transaction},
+};
+
+use crate::wallet_compat::{Fee, Protocol};
+
+#[derive(Deserialize, Debug)]
+pub struct EmptyResponse {}
+#[derive(Deserialize, Debug)]
+pub struct JsonRpcResponse<T> {
+    result: T,
+}
+
+#[derive(Deserialize, Debug)]
+struct TransactionResponse {
+    tx_hash: String,
+    as_hex: String,
+    pruned_as_hex: String,
+}
+#[derive(Deserialize, Debug)]
+struct TransactionsResponse {
+    #[serde(default)]
+    missed_tx: Vec<String>,
+    txs: Vec<TransactionResponse>,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, Error)]
+pub enum RpcError {
+    #[error("internal error ({0})")]
+    InternalError(&'static str),
+    #[error("connection error")]
+    ConnectionError,
+    #[error("invalid node")]
+    InvalidNode,
+    #[error("unsupported protocol version ({0})")]
+    UnsupportedProtocol(usize),
+    #[error("transactions not found")]
+    TransactionsNotFound(Vec<[u8; 32]>),
+    #[error("invalid point ({0})")]
+    InvalidPoint(String),
+    #[error("pruned transaction")]
+    PrunedTransaction,
+    #[error("invalid transaction ({0:?})")]
+    InvalidTransaction([u8; 32]),
+    #[error("fee exceeds limit (per_weight: {per_weight}, limit: {limit})")]
+    FeeExceedsLimit { per_weight: u64, limit: u64 },
+    #[error("zero fee returned by node")]
+    ZeroFee,
+    #[error("zero fee mask returned by node")]
+    ZeroMask,
+}
+
+/// A generous upper bound for fee per byte in atomic units.
+/// Monero's typical max is ~20000, but we use 100000 to avoid false positives
+/// on congested networks or unusual fee conditions.
+pub const DEFAULT_MAX_FEE_PER_BYTE: u64 = 100_000;
+
+fn rpc_hex(value: &str) -> Result<Vec<u8>, RpcError> {
+    hex::decode(value).map_err(|_| RpcError::InvalidNode)
+}
+
+fn hash_hex(hash: &str) -> Result<[u8; 32], RpcError> {
+    rpc_hex(hash)?.try_into().map_err(|_| RpcError::InvalidNode)
+}
+
+fn rpc_point(point: &str) -> Result<EdwardsPoint, RpcError> {
+    CompressedEdwardsY(
+        rpc_hex(point)?
+            .try_into()
+            .map_err(|_| RpcError::InvalidPoint(point.to_string()))?,
+    )
+    .decompress()
+    .ok_or_else(|| RpcError::InvalidPoint(point.to_string()))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[async_trait]
+pub trait RpcConnection: Clone + Debug + Send + Sync {
+    /// Perform a POST request to the specified route with the specified body.
+    ///
+    /// The implementor is left to handle anything such as authentication.
+    async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError>;
+}
+
+#[cfg(target_arch = "wasm32")]
+#[async_trait(?Send)]
+pub trait RpcConnection: Clone + Debug {
+    /// Perform a POST request to the specified route with the specified body.
+    ///
+    /// The implementor is left to handle anything such as authentication.
+    async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError>;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug)]
+pub struct HttpRpc {
+    client: Client,
+    userpass: Option<(String, String)>,
+    url: String,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl HttpRpc {
+    /// Create a new HTTP(S) RPC connection.
+    ///
+    /// A daemon requiring authentication can be used via including the
+    /// username and password in the URL.
+    pub fn new(mut url: String) -> Result<Rpc<HttpRpc>, RpcError> {
+        // Parse out the username and password
+        let userpass = if url.contains('@') {
+            let url_clone = url;
+            let split_url = url_clone.split('@').collect::<Vec<_>>();
+            if split_url.len() != 2 {
+                Err(RpcError::InvalidNode)?;
+            }
+            let mut userpass = split_url[0];
+            url = split_url[1].to_string();
+
+            // If there was additionally a protocol string, restore that to the daemon URL
+            if userpass.contains("://") {
+                let split_userpass = userpass.split("://").collect::<Vec<_>>();
+                if split_userpass.len() != 2 {
+                    Err(RpcError::InvalidNode)?;
+                }
+                url = split_userpass[0].to_string() + "://" + &url;
+                userpass = split_userpass[1];
+            }
+
+            let split_userpass = userpass.split(':').collect::<Vec<_>>();
+            if split_userpass.len() != 2 {
+                Err(RpcError::InvalidNode)?;
+            }
+            Some((split_userpass[0].to_string(), split_userpass[1].to_string()))
+        } else {
+            None
+        };
+
+        Ok(Rpc(HttpRpc {
+            client: Client::new(),
+            userpass,
+            url,
+        }))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[async_trait]
+impl RpcConnection for HttpRpc {
+    async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
+        let mut builder = self.client.post(self.url.clone() + "/" + route).body(body);
+
+        if let Some((user, pass)) = &self.userpass {
+            let req = self
+                .client
+                .post(&self.url)
+                .send()
+                .await
+                .map_err(|_| RpcError::InvalidNode)?;
+            // Only provide authentication if this daemon actually expects it
+            if let Some(header) = req.headers().get("www-authenticate") {
+                builder = builder.header(
+                    "Authorization",
+                    digest_auth::parse(header.to_str().map_err(|_| RpcError::InvalidNode)?)
+                        .map_err(|_| RpcError::InvalidNode)?
+                        .respond(&AuthContext::new_post::<_, _, _, &[u8]>(
+                            user,
+                            pass,
+                            "/".to_string() + route,
+                            None,
+                        ))
+                        .map_err(|_| RpcError::InvalidNode)?
+                        .to_header_string(),
+                );
+            }
+        }
+
+        Ok(builder
+            .send()
+            .await
+            .map_err(|_| RpcError::ConnectionError)?
+            .bytes()
+            .await
+            .map_err(|_| RpcError::ConnectionError)?
+            .slice(..)
+            .to_vec())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Rpc<R: RpcConnection>(R);
+impl<R: RpcConnection> Rpc<R> {
+    /// Create a new Rpc instance from any RpcConnection implementation.
+    pub fn new_with_connection(connection: R) -> Self {
+        Rpc(connection)
+    }
+
+    /// Perform a RPC call to the specified route with the provided parameters.
+    ///
+    /// This is NOT a JSON-RPC call. They use a route of "json_rpc" and are
+    /// available via `json_rpc_call`.
+    pub async fn rpc_call<Params: Serialize + Debug, Response: DeserializeOwned + Debug>(
+        &self,
+        route: &str,
+        params: Option<Params>,
+    ) -> Result<Response, RpcError> {
+        self.call_tail(
+            route,
+            self.0
+                .post(
+                    route,
+                    if let Some(params) = params {
+                        serde_json::to_vec(&params).map_err(|_| {
+                            RpcError::InternalError("Failed to serialize JSON request")
+                        })?
+                    } else {
+                        vec![]
+                    },
+                )
+                .await?,
+        )
+        .await
+    }
+
+    /// Perform a JSON-RPC call with the specified method with the provided parameters.
+    pub async fn json_rpc_call<Response: DeserializeOwned + Debug>(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<Response, RpcError> {
+        let mut req = json!({ "method": method });
+        if let Some(params) = params {
+            req.as_object_mut()
+                .ok_or(RpcError::InternalError("Failed to build JSON-RPC request"))?
+                .insert("params".into(), params);
+        }
+        Ok(self
+            .rpc_call::<_, JsonRpcResponse<Response>>("json_rpc", Some(req))
+            .await?
+            .result)
+    }
+
+    /// Perform a binary call to the specified route with the provided parameters.
+    pub async fn bin_call<Response: DeserializeOwned + Debug>(
+        &self,
+        route: &str,
+        params: Vec<u8>,
+    ) -> Result<Response, RpcError> {
+        self.call_tail(route, self.0.post(route, params).await?).await
+    }
+
+    async fn call_tail<Response: DeserializeOwned + Debug>(
+        &self,
+        route: &str,
+        res: Vec<u8>,
+    ) -> Result<Response, RpcError> {
+        Ok(if !route.ends_with(".bin") {
+            serde_json::from_str(std::str::from_utf8(&res).map_err(|_| RpcError::InvalidNode)?)
+                .map_err(|_| RpcError::InternalError("Failed to parse JSON response"))?
+        } else {
+            monero_epee_bin_serde::from_bytes(&res)
+                .map_err(|_| RpcError::InternalError("Failed to parse binary response"))?
+        })
+    }
+
+    /// Get the active blockchain protocol version.
+    pub async fn get_protocol(&self) -> Result<Protocol, RpcError> {
+        #[derive(Deserialize, Debug)]
+        struct ProtocolResponse {
+            major_version: usize,
+        }
+
+        #[derive(Deserialize, Debug)]
+        struct LastHeaderResponse {
+            block_header: ProtocolResponse,
+        }
+
+        Ok(
+            match self
+                .json_rpc_call::<LastHeaderResponse>("get_last_block_header", None)
+                .await?
+                .block_header
+                .major_version
+            {
+                13 | 14 => Protocol::v14,
+                15 | 16 => Protocol::v16,
+                protocol => Err(RpcError::UnsupportedProtocol(protocol))?,
+            },
+        )
+    }
+
+    pub async fn get_height(&self) -> Result<usize, RpcError> {
+        #[derive(Deserialize, Debug)]
+        struct HeightResponse {
+            height: usize,
+        }
+        Ok(self
+            .rpc_call::<Option<()>, HeightResponse>("get_height", None)
+            .await?
+            .height)
+    }
+
+    pub async fn get_transactions(
+        &self,
+        hashes: &[[u8; 32]],
+    ) -> Result<Vec<Transaction>, RpcError> {
+        if hashes.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let txs: TransactionsResponse = self
+            .rpc_call(
+                "get_transactions",
+                Some(json!({
+                  "txs_hashes": hashes.iter().map(hex::encode).collect::<Vec<_>>()
+                })),
+            )
+            .await?;
+
+        if !txs.missed_tx.is_empty() {
+            Err(RpcError::TransactionsNotFound(
+                txs.missed_tx
+                    .iter()
+                    .map(|hash| hash_hex(hash))
+                    .collect::<Result<_, _>>()?,
+            ))?;
+        }
+
+        txs.txs
+            .iter()
+            .enumerate()
+            .map(|(i, res)| {
+                let tx = Transaction::<NotPruned>::read::<&[u8]>(
+                    &mut rpc_hex(if !res.as_hex.is_empty() {
+                        &res.as_hex
+                    } else {
+                        &res.pruned_as_hex
+                    })?
+                    .as_ref(),
+                )
+                .map_err(|_| match hash_hex(&res.tx_hash) {
+                    Ok(hash) => RpcError::InvalidTransaction(hash),
+                    Err(err) => err,
+                })?;
+
+                // https://github.com/monero-project/monero/issues/8311
+                if res.as_hex.is_empty() {
+                    match tx.prefix().inputs.first() {
+                        Some(Input::Gen { .. }) => (),
+                        _ => Err(RpcError::PrunedTransaction)?,
+                    }
+                }
+
+                // This provides resilience against invalid/malicious nodes
+                if tx.hash() != hashes[i] {
+                    Err(RpcError::InvalidNode)?;
+                }
+
+                Ok(tx)
+            })
+            .collect()
+    }
+
+    pub async fn get_transaction(&self, tx: [u8; 32]) -> Result<Transaction, RpcError> {
+        self.get_transactions(&[tx])
+            .await
+            .map(|mut txs| txs.swap_remove(0))
+    }
+
+    /// Get timelocks for the given transaction hashes.
+    /// Only parses the start of the transaction prefix, so this works with
+    /// pruned node data.
+    async fn get_transaction_timelocks(
+        &self,
+        hashes: &[[u8; 32]],
+    ) -> Result<Vec<Timelock>, RpcError> {
+        if hashes.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let txs: TransactionsResponse = self
+            .rpc_call(
+                "get_transactions",
+                Some(json!({
+                  "txs_hashes": hashes.iter().map(hex::encode).collect::<Vec<_>>()
+                })),
+            )
+            .await?;
+
+        if !txs.missed_tx.is_empty() {
+            Err(RpcError::TransactionsNotFound(
+                txs.missed_tx
+                    .iter()
+                    .map(|hash| hash_hex(hash))
+                    .collect::<Result<_, _>>()?,
+            ))?;
+        }
+
+        txs.txs
+            .iter()
+            .map(|res| {
+                let hex_data = if !res.as_hex.is_empty() {
+                    &res.as_hex
+                } else {
+                    &res.pruned_as_hex
+                };
+                let data = rpc_hex(hex_data)?;
+                prefix_timelock(&data)
+            })
+            .collect()
+    }
+
+    /// Get the hash of a block from the node by the block's number.
+    /// This function does not verify the returned block hash is actually for
+    /// the number in question.
+    pub async fn get_block_hash(&self, number: usize) -> Result<[u8; 32], RpcError> {
+        #[derive(Deserialize, Debug)]
+        struct BlockHeaderResponse {
+            hash: String,
+        }
+        #[derive(Deserialize, Debug)]
+        struct BlockHeaderByHeightResponse {
+            block_header: BlockHeaderResponse,
+        }
+
+        let header: BlockHeaderByHeightResponse = self
+            .json_rpc_call("get_block_header_by_height", Some(json!({ "height": number })))
+            .await?;
+        rpc_hex(&header.block_header.hash)?
+            .try_into()
+            .map_err(|_| RpcError::InvalidNode)
+    }
+
+    /// Fetches a block by hash and verifies its content commitment.
+    pub async fn get_block(&self, hash: [u8; 32]) -> Result<Block, RpcError> {
+        #[derive(Deserialize, Debug)]
+        struct BlockResponse {
+            blob: String,
+        }
+
+        let res: BlockResponse = self
+            .json_rpc_call("get_block", Some(json!({ "hash": hex::encode(hash) })))
+            .await?;
+
+        let block = Block::read::<&[u8]>(&mut rpc_hex(&res.blob)?.as_ref())
+            .map_err(|_| RpcError::InvalidNode)?;
+
+        // Verify the block ID matches the requested hash
+        if block.hash() != hash {
+            return Err(RpcError::InvalidNode);
+        }
+
+        Ok(block)
+    }
+
+    pub async fn get_block_by_number(&self, number: usize) -> Result<Block, RpcError> {
+        let block = self.get_block(self.get_block_hash(number).await?).await?;
+        // Make sure this is actually the block for this number
+        if block.number() == number {
+            Ok(block)
+        } else {
+            Err(RpcError::InvalidNode)
+        }
+    }
+
+    pub async fn get_block_transactions(
+        &self,
+        hash: [u8; 32],
+    ) -> Result<Vec<Transaction>, RpcError> {
+        let block = self.get_block(hash).await?;
+        let mut res = vec![block.miner_transaction().clone()];
+        res.extend(self.get_transactions(&block.transactions).await?);
+        Ok(res)
+    }
+
+    pub async fn get_block_transactions_by_number(
+        &self,
+        number: usize,
+    ) -> Result<Vec<Transaction>, RpcError> {
+        self.get_block_transactions(self.get_block_hash(number).await?)
+            .await
+    }
+
+    /// Get the output indexes of the specified transaction.
+    pub async fn get_o_indexes(&self, hash: [u8; 32]) -> Result<Vec<u64>, RpcError> {
+        #[derive(Serialize, Debug)]
+        struct Request {
+            txid: [u8; 32],
+        }
+
+        #[allow(dead_code)]
+        #[derive(Deserialize, Debug)]
+        struct OIndexes {
+            o_indexes: Vec<u64>,
+            status: String,
+            untrusted: bool,
+            credits: usize,
+            top_hash: String,
+        }
+
+        let indexes: OIndexes = self
+            .bin_call(
+                "get_o_indexes.bin",
+                monero_epee_bin_serde::to_bytes(&Request { txid: hash }).map_err(|_| {
+                    RpcError::InternalError("epee serialization failed for get_o_indexes request")
+                })?,
+            )
+            .await?;
+
+        Ok(indexes.o_indexes)
+    }
+
+    /// Get the output distribution, from the specified height to the
+    /// specified height (both inclusive).
+    pub async fn get_output_distribution(
+        &self,
+        from: usize,
+        to: usize,
+    ) -> Result<Vec<u64>, RpcError> {
+        #[allow(dead_code)]
+        #[derive(Deserialize, Debug)]
+        struct Distribution {
+            distribution: Vec<u64>,
+        }
+
+        #[allow(dead_code)]
+        #[derive(Deserialize, Debug)]
+        struct Distributions {
+            distributions: Vec<Distribution>,
+        }
+
+        let mut distributions: Distributions = self
+            .json_rpc_call(
+                "get_output_distribution",
+                Some(json!({
+                  "binary": false,
+                  "amounts": [0],
+                  "cumulative": true,
+                  "from_height": from,
+                  "to_height": to,
+                })),
+            )
+            .await?;
+
+        Ok(distributions.distributions.swap_remove(0).distribution)
+    }
+
+    /// Get the specified outputs from the RingCT (zero-amount) pool, but only
+    /// return them if their timelock has been satisfied. This is distinct
+    /// from being free of the 10-block lock applied to all Monero
+    /// transactions.
+    pub async fn get_unlocked_outputs(
+        &self,
+        indexes: &[u64],
+        height: usize,
+    ) -> Result<Vec<Option<[EdwardsPoint; 2]>>, RpcError> {
+        #[derive(Deserialize, Debug)]
+        struct Out {
+            key: String,
+            mask: String,
+            txid: String,
+        }
+
+        #[derive(Deserialize, Debug)]
+        struct Outs {
+            outs: Vec<Out>,
+        }
+
+        let outs: Outs = self
+            .rpc_call(
+                "get_outs",
+                Some(json!({
+                  "get_txid": true,
+                  "outputs": indexes.iter().map(|o| json!({
+                      "amount": 0,
+                      "index": o
+                  })).collect::<Vec<_>>()
+                })),
+            )
+            .await?;
+
+        let timelocks = self
+            .get_transaction_timelocks(
+                &outs
+                    .outs
+                    .iter()
+                    .map(|out| {
+                        rpc_hex(&out.txid)?
+                            .try_into()
+                            .map_err(|_| RpcError::InvalidNode)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            )
+            .await?;
+
+        outs.outs
+            .iter()
+            .enumerate()
+            .map(|(i, out)| {
+                Ok(
+                    Some([rpc_point(&out.key)?, rpc_point(&out.mask)?]).filter(|_| {
+                        match timelocks[i] {
+                            Timelock::None => true,
+                            Timelock::Block(t_height) => t_height <= height,
+                            _ => false,
+                        }
+                    }),
+                )
+            })
+            .collect()
+    }
+
+    /// Get the currently estimated fee from the node. This may be manipulated
+    /// to unsafe levels and MUST be sanity checked. Prefer `get_fee_checked`
+    /// for production use.
+    pub async fn get_fee(&self) -> Result<Fee, RpcError> {
+        #[allow(dead_code)]
+        #[derive(Deserialize, Debug)]
+        struct FeeResponse {
+            fee: u64,
+            quantization_mask: u64,
+        }
+
+        let res: FeeResponse = self.json_rpc_call("get_fee_estimate", None).await?;
+        Ok(Fee {
+            per_weight: res.fee,
+            mask: res.quantization_mask,
+        })
+    }
+
+    /// Get the currently estimated fee from the node with a sanity check.
+    ///
+    /// Returns an error if the fee per weight is zero (indicating a bug) or
+    /// exceeds `max_fee_per_byte` (indicating a malicious or malfunctioning
+    /// node). Use `DEFAULT_MAX_FEE_PER_BYTE` for a reasonable default limit.
+    pub async fn get_fee_checked(&self, max_fee_per_byte: u64) -> Result<Fee, RpcError> {
+        let fee = self.get_fee().await?;
+
+        if fee.per_weight == 0 {
+            return Err(RpcError::ZeroFee);
+        }
+
+        if fee.mask == 0 {
+            return Err(RpcError::ZeroMask);
+        }
+
+        if fee.per_weight > max_fee_per_byte {
+            return Err(RpcError::FeeExceedsLimit {
+                per_weight: fee.per_weight,
+                limit: max_fee_per_byte,
+            });
+        }
+
+        Ok(fee)
+    }
+
+    pub async fn publish_transaction(&self, tx: &Transaction) -> Result<(), RpcError> {
+        #[allow(dead_code)]
+        #[derive(Deserialize, Debug)]
+        struct SendRawResponse {
+            status: String,
+            double_spend: bool,
+            fee_too_low: bool,
+            invalid_input: bool,
+            invalid_output: bool,
+            low_mixin: bool,
+            not_relayed: bool,
+            overspend: bool,
+            too_big: bool,
+            too_few_outputs: bool,
+            reason: String,
+        }
+
+        let res: SendRawResponse = self
+            .rpc_call(
+                "send_raw_transaction",
+                Some(json!({ "tx_as_hex": hex::encode(tx.serialize()) })),
+            )
+            .await?;
+
+        if res.status != "OK" {
+            Err(RpcError::InvalidTransaction(tx.hash()))?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn generate_blocks(&self, address: &str, block_count: usize) -> Result<(), RpcError> {
+        self.rpc_call::<_, EmptyResponse>(
+            "json_rpc",
+            Some(json!({
+              "method": "generateblocks",
+              "params": {
+                "wallet_address": address,
+                "amount_of_blocks": block_count
+              },
+            })),
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn get_transaction_pool(
+        &self,
+    ) -> Result<(Vec<Transaction>, Vec<[u8; 32]>), RpcError> {
+        #[derive(Deserialize, Debug)]
+        struct PoolTransaction {
+            id_hash: String,
+            tx_blob: String,
+        }
+
+        #[derive(Deserialize, Debug)]
+        struct SpentKeyImage {
+            id_hash: String,
+        }
+
+        #[allow(dead_code)]
+        #[derive(Deserialize, Debug)]
+        struct TransactionPoolResponse {
+            #[serde(default)]
+            transactions: Vec<PoolTransaction>,
+            #[serde(default)]
+            spent_key_images: Vec<SpentKeyImage>,
+            status: String,
+        }
+
+        let res: TransactionPoolResponse = self
+            .rpc_call::<Option<()>, _>("get_transaction_pool", None)
+            .await?;
+
+        if res.status != "OK" {
+            return Err(RpcError::InvalidNode);
+        }
+
+        let transactions = res
+            .transactions
+            .iter()
+            .map(|pool_tx| {
+                let tx_bytes = rpc_hex(&pool_tx.tx_blob)?;
+                let tx = Transaction::<NotPruned>::read::<&[u8]>(&mut tx_bytes.as_ref())
+                    .map_err(|_| RpcError::InvalidNode)?;
+
+                let expected_hash = hash_hex(&pool_tx.id_hash)?;
+                if tx.hash() != expected_hash {
+                    return Err(RpcError::InvalidNode);
+                }
+
+                Ok(tx)
+            })
+            .collect::<Result<Vec<_>, RpcError>>()?;
+
+        let spent_key_images = res
+            .spent_key_images
+            .iter()
+            .map(|ki| hash_hex(&ki.id_hash))
+            .collect::<Result<Vec<_>, RpcError>>()?;
+
+        Ok((transactions, spent_key_images))
+    }
+
+    /// Fetch multiple blocks at once using the binary `/getblocks.bin` endpoint.
+    ///
+    /// Returns up to ~1000 blocks starting from `start_height`. The
+    /// `block_ids` parameter should contain at least one known block hash for
+    /// the daemon to find the fork point.
+    pub async fn get_blocks_fast(
+        &self,
+        block_ids: &[[u8; 32]],
+        start_height: u64,
+        prune: bool,
+    ) -> Result<GetBlocksFastResponse, RpcError> {
+        // block_ids must be serialized as a contiguous blob
+        // (KV_SERIALIZE_CONTAINER_POD_AS_BLOB)
+        let block_ids_blob: Vec<u8> = block_ids.iter().flat_map(|h| h.iter().copied()).collect();
+
+        #[derive(Serialize, Debug)]
+        struct Request {
+            block_ids: Vec<u8>,
+            start_height: u64,
+            prune: bool,
+            no_miner_tx: bool,
+        }
+
+        let req = Request {
+            block_ids: block_ids_blob,
+            start_height,
+            prune,
+            no_miner_tx: false,
+        };
+
+        let res: GetBlocksFastResponse = self
+            .bin_call(
+                "getblocks.bin",
+                monero_epee_bin_serde::to_bytes(&req).map_err(|_| {
+                    RpcError::InternalError("epee serialization failed for getblocks.bin request")
+                })?,
+            )
+            .await?;
+
+        if res.status != "OK" {
+            return Err(RpcError::InvalidNode);
+        }
+
+        Ok(res)
+    }
+}
+
+/// Parse the additional timelock out of a transaction prefix: the version
+/// varint followed by the timelock varint.
+fn prefix_timelock(data: &[u8]) -> Result<Timelock, RpcError> {
+    fn read_varint(data: &[u8], position: &mut usize) -> Result<u64, RpcError> {
+        let mut bits = 0u32;
+        let mut res = 0u64;
+        loop {
+            let byte = *data.get(*position).ok_or(RpcError::InvalidNode)?;
+            *position += 1;
+            res |= u64::from(byte & 0x7f)
+                .checked_shl(bits)
+                .ok_or(RpcError::InvalidNode)?;
+            if byte & 0x80 == 0 {
+                return Ok(res);
+            }
+            bits += 7;
+            if bits >= 64 {
+                return Err(RpcError::InvalidNode);
+            }
+        }
+    }
+
+    let mut position = 0;
+    let _version = read_varint(data, &mut position)?;
+    let raw = read_varint(data, &mut position)?;
+    // Monero interprets timelocks under 500 million as block numbers
+    const TIMELOCK_BLOCK_THRESHOLD: u64 = 500_000_000;
+    Ok(if raw == 0 {
+        Timelock::None
+    } else if raw < TIMELOCK_BLOCK_THRESHOLD {
+        Timelock::Block(usize::try_from(raw).map_err(|_| RpcError::InvalidNode)?)
+    } else {
+        Timelock::Time(raw)
+    })
+}
+
+/// Deserialize a single `Vec<u8>` from an epee byte-blob field.
+mod epee_byte_blob {
+    use serde::de::{Deserializer, Visitor};
+    use std::fmt;
+
+    struct ByteBlobVisitor;
+
+    impl<'de> Visitor<'de> for ByteBlobVisitor {
+        type Value = Vec<u8>;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a byte blob")
+        }
+
+        fn visit_bytes<E: serde::de::Error>(self, v: &[u8]) -> Result<Self::Value, E> {
+            Ok(v.to_vec())
+        }
+
+        fn visit_byte_buf<E: serde::de::Error>(self, v: Vec<u8>) -> Result<Self::Value, E> {
+            Ok(v)
+        }
+
+        fn visit_string<E: serde::de::Error>(self, v: String) -> Result<Self::Value, E> {
+            Ok(v.into_bytes())
+        }
+
+        fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            Ok(v.as_bytes().to_vec())
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_byte_buf(ByteBlobVisitor)
+    }
+
+    #[allow(dead_code)]
+    pub fn serialize<S>(data: &[u8], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_bytes(data)
+    }
+}
+
+/// Deserialize a `Vec<Vec<u8>>` where each element is an epee byte-blob field.
+mod vec_of_bytes {
+    use serde::de::{Deserializer, SeqAccess, Visitor};
+    use std::fmt;
+
+    struct ByteBlob;
+
+    impl<'de> serde::de::DeserializeSeed<'de> for ByteBlob {
+        type Value = Vec<u8>;
+
+        fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
+            struct ByteBlobVisitor;
+
+            impl<'de> Visitor<'de> for ByteBlobVisitor {
+                type Value = Vec<u8>;
+
+                fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                    f.write_str("a byte blob")
+                }
+
+                fn visit_bytes<E: serde::de::Error>(self, v: &[u8]) -> Result<Self::Value, E> {
+                    Ok(v.to_vec())
+                }
+
+                fn visit_byte_buf<E: serde::de::Error>(self, v: Vec<u8>) -> Result<Self::Value, E> {
+                    Ok(v)
+                }
+
+                fn visit_string<E: serde::de::Error>(self, v: String) -> Result<Self::Value, E> {
+                    Ok(v.into_bytes())
+                }
+
+                fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                    Ok(v.as_bytes().to_vec())
+                }
+            }
+
+            deserializer.deserialize_byte_buf(ByteBlobVisitor)
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<Vec<u8>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct VecOfBytesVisitor;
+
+        impl<'de> Visitor<'de> for VecOfBytesVisitor {
+            type Value = Vec<Vec<u8>>;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("a sequence of byte blobs")
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut result = Vec::new();
+                while let Some(bytes) = seq.next_element_seed(ByteBlob)? {
+                    result.push(bytes);
+                }
+                Ok(result)
+            }
+        }
+
+        deserializer.deserialize_seq(VecOfBytesVisitor)
+    }
+
+    #[allow(dead_code)]
+    pub fn serialize<S>(data: &[Vec<u8>], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeSeq;
+        let mut seq = serializer.serialize_seq(Some(data.len()))?;
+        for item in data {
+            seq.serialize_element(&serde_bytes::Bytes::new(item))?;
+        }
+        seq.end()
+    }
+}
+
+/// A single block entry returned by `/getblocks.bin`.
+#[allow(dead_code)]
+#[derive(Deserialize, Debug, Clone)]
+pub struct BlockCompleteEntry {
+    /// Raw block blob (header + miner tx + tx hashes).
+    #[serde(with = "epee_byte_blob")]
+    pub block: Vec<u8>,
+    /// Raw transaction blobs (full transactions when prune=false).
+    #[serde(default, with = "vec_of_bytes")]
+    pub txs: Vec<Vec<u8>>,
+    /// Whether the transaction data is pruned.
+    #[serde(default)]
+    pub pruned: bool,
+    /// Block weight.
+    #[serde(default)]
+    pub block_weight: u64,
+}
+
+/// Output indices for a single transaction.
+#[derive(Deserialize, Debug, Clone)]
+pub struct TxOutputIndices {
+    #[serde(default)]
+    pub indices: Vec<u64>,
+}
+
+/// Output indices for all transactions in a block.
+#[derive(Deserialize, Debug, Clone)]
+pub struct BlockOutputIndices {
+    #[serde(default)]
+    pub indices: Vec<TxOutputIndices>,
+}
+
+/// Response from the `/getblocks.bin` binary RPC endpoint.
+#[allow(dead_code)]
+#[derive(Deserialize, Debug)]
+pub struct GetBlocksFastResponse {
+    pub status: String,
+    #[serde(default)]
+    pub blocks: Vec<BlockCompleteEntry>,
+    pub start_height: u64,
+    pub current_height: u64,
+    #[serde(default)]
+    pub output_indices: Vec<BlockOutputIndices>,
+    #[serde(default)]
+    pub untrusted: bool,
+    #[serde(default)]
+    pub credits: u64,
+    #[serde(default)]
+    pub top_hash: String,
+    #[serde(default)]
+    pub daemon_time: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn getblocks_request_bytes_match_previous_backend() {
+        // The epee request serialization must be byte-identical to what the
+        // previous client sent.
+        #[derive(Serialize, Debug)]
+        struct Request {
+            block_ids: Vec<u8>,
+            start_height: u64,
+            prune: bool,
+            no_miner_tx: bool,
+        }
+
+        let hashes = [[7u8; 32], [9u8; 32]];
+        let request = Request {
+            block_ids: hashes.iter().flat_map(|h| h.iter().copied()).collect(),
+            start_height: 12345,
+            prune: false,
+            no_miner_tx: false,
+        };
+        let bytes = monero_epee_bin_serde::to_bytes(&request).unwrap();
+        // Round-trips through the epee parser with the blob intact
+        #[derive(Deserialize, Debug)]
+        struct Parsed {
+            #[serde(with = "epee_byte_blob")]
+            block_ids: Vec<u8>,
+            start_height: u64,
+            prune: bool,
+            no_miner_tx: bool,
+        }
+        let parsed: Parsed = monero_epee_bin_serde::from_bytes(&bytes).unwrap();
+        assert_eq!(parsed.block_ids.len(), 64);
+        assert_eq!(parsed.start_height, 12345);
+        assert!(!parsed.prune);
+        assert!(!parsed.no_miner_tx);
+    }
+
+    #[test]
+    fn parses_get_o_indexes_fixture() {
+        // The captured binary fixture from a real daemon must parse with the
+        // ported response structs.
+        #[derive(serde::Deserialize)]
+        struct RpcCall {
+            route: String,
+            response: String,
+            is_binary: bool,
+        }
+        let vectors_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/vectors/honked_bagpipe_rpc.json");
+        let calls: Vec<RpcCall> =
+            serde_json::from_str(&std::fs::read_to_string(vectors_path).unwrap()).unwrap();
+        let call = calls
+            .iter()
+            .find(|call| call.route == "get_o_indexes.bin")
+            .unwrap();
+        assert!(call.is_binary);
+
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&call.response)
+            .unwrap();
+
+        #[allow(dead_code)]
+        #[derive(Deserialize, Debug)]
+        struct OIndexes {
+            o_indexes: Vec<u64>,
+        }
+        let parsed: OIndexes = monero_epee_bin_serde::from_bytes(&bytes).unwrap();
+        assert!(!parsed.o_indexes.is_empty());
+    }
+
+    #[test]
+    fn prefix_timelock_parses_variants() {
+        // version 2, timelock 0
+        assert_eq!(prefix_timelock(&[2, 0]).unwrap(), Timelock::None);
+        // version 2, timelock 1000 (varint 0xe8 0x07)
+        assert_eq!(
+            prefix_timelock(&[2, 0xe8, 0x07]).unwrap(),
+            Timelock::Block(1000)
+        );
+        // version 2, timelock at the block/time threshold
+        let mut data = vec![2];
+        crate::wallet_compat::write_varint(&500_000_000u64, &mut data).unwrap();
+        assert_eq!(
+            prefix_timelock(&data).unwrap(),
+            Timelock::Time(500_000_000)
+        );
+    }
+}

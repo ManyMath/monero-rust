@@ -66,6 +66,7 @@ rand_core = "0.6"
 rand = "0.8"
 tokio = { version = "1.29", features = ["rt", "macros"] }
 reqwest = { version = "0.12", features = ["json"] }
+digest_auth = "0.3"
 
 [dev-dependencies]
 monero-serai = { path = "../monero-serai-mirror", features = ["http-rpc", "test-helpers"] }

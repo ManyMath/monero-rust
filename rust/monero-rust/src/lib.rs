@@ -12,6 +12,7 @@ pub mod encryption;
 pub mod error_codes;
 pub mod key_image_import;
 pub mod monero_backend;
+pub mod monero_rpc;
 pub(crate) mod decoy_select;
 pub(crate) mod oxide_output_bytes;
 pub mod wallet_compat;
