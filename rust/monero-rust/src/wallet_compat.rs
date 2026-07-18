@@ -635,6 +635,514 @@ impl InternalPayment {
 }
 
 // ---------------------------------------------------------------------------
+// View pairs and addresses
+// ---------------------------------------------------------------------------
+
+/// Errors when building a transaction.
+#[derive(Clone, PartialEq, Eq, Debug, thiserror::Error)]
+pub enum TransactionError {
+    #[error("multiple payment ids")]
+    MultiplePaymentIds,
+    #[error("no inputs")]
+    NoInputs,
+    #[error("no outputs")]
+    NoOutputs,
+    #[error("only one output and no change address")]
+    NoChange,
+    #[error("too much data")]
+    TooMuchData,
+    #[error("too many outputs")]
+    TooManyOutputs,
+    #[error("too large transaction")]
+    TooLargeTransaction,
+    #[error("not enough funds (in {0}, out {1})")]
+    NotEnoughFunds(u64, u64),
+    #[error("wrong private key")]
+    WrongPrivateKey,
+    #[error("invalid transaction ({0})")]
+    InvalidTransaction(String),
+    #[error("rpc error ({0})")]
+    RpcError(String),
+}
+
+/// An address specification, matching the previous backend's model.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Zeroize)]
+pub enum AddressSpec {
+    Standard,
+    Integrated([u8; 8]),
+    Subaddress(SubaddressIndex),
+    Featured {
+        subaddress: Option<SubaddressIndex>,
+        payment_id: Option<[u8; 8]>,
+        guaranteed: bool,
+    },
+}
+
+/// The pair of keys necessary to scan and receive: the public spend key and
+/// the private view key.
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
+pub struct ViewPair {
+    spend: EdwardsPoint,
+    view: Zeroizing<Scalar>,
+}
+
+impl ViewPair {
+    pub fn new(spend: EdwardsPoint, view: Zeroizing<Scalar>) -> ViewPair {
+        ViewPair { spend, view }
+    }
+
+    pub fn spend(&self) -> EdwardsPoint {
+        self.spend
+    }
+
+    pub fn view_scalar(&self) -> &Zeroizing<Scalar> {
+        &self.view
+    }
+
+    fn to_oxide(&self) -> Result<monero_wallet::ViewPair, String> {
+        let spend = monero_wallet::ed25519::CompressedPoint::from(
+            self.spend.compress().to_bytes(),
+        )
+        .decompress()
+        .ok_or_else(|| "invalid spend key".to_string())?;
+        monero_wallet::ViewPair::new(
+            spend,
+            Zeroizing::new(monero_wallet::ed25519::Scalar::from(**(&self.view))),
+        )
+        .map_err(|e| format!("invalid view pair: {}", e))
+    }
+
+    /// Derive an address of the given specification.
+    pub fn address(
+        &self,
+        network: monero_wallet::address::Network,
+        spec: AddressSpec,
+    ) -> MoneroAddress {
+        let pair = self
+            .to_oxide()
+            .expect("deriving an address from an invalid view pair");
+        match spec {
+            AddressSpec::Standard => pair.legacy_address(network),
+            AddressSpec::Integrated(payment_id) => {
+                pair.legacy_integrated_address(network, payment_id)
+            }
+            AddressSpec::Subaddress(index) => pair.subaddress(network, index),
+            AddressSpec::Featured {
+                subaddress,
+                payment_id,
+                guaranteed,
+            } => {
+                // Resolve the spend/view keys for the (sub)address, then
+                // re-wrap them in a featured address
+                let base = match subaddress {
+                    Some(index) => pair.subaddress(network, index),
+                    None => pair.legacy_address(network),
+                };
+                MoneroAddress::new(
+                    network,
+                    monero_wallet::address::AddressType::Featured {
+                        subaddress: subaddress.is_some(),
+                        payment_id,
+                        guaranteed,
+                    },
+                    base.spend(),
+                    base.view(),
+                )
+            }
+        }
+    }
+}
+
+impl Change {
+    /// Create a change output specification from a ViewPair, as needed to
+    /// maintain privacy.
+    pub fn new(view: &ViewPair, guaranteed: bool) -> Change {
+        Change {
+            address: view.address(
+                monero_wallet::address::Network::Mainnet,
+                if !guaranteed {
+                    AddressSpec::Standard
+                } else {
+                    AddressSpec::Featured {
+                        subaddress: None,
+                        payment_id: None,
+                        guaranteed: true,
+                    }
+                },
+            ),
+            view: Some(view.view.clone()),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Fee weight estimation (mirror arithmetic)
+// ---------------------------------------------------------------------------
+
+const MAX_ARBITRARY_DATA_SIZE: usize = 255 - 1;
+const MAX_OUTPUTS: usize = 16;
+const BP_LOG_N: usize = 6;
+
+fn varint_len(varint: usize) -> usize {
+    ((usize::try_from(usize::BITS - varint.leading_zeros())
+        .expect("bit count exceeds usize")
+        .saturating_sub(1)) /
+        7) +
+        1
+}
+
+fn input_fee_weight(ring_len: usize) -> usize {
+    // 1 byte VarInt amount (0), 1 byte input type, 1 byte ring length
+    1 + 1 + 1 + (8 * ring_len) + 32
+}
+
+fn output_fee_weight() -> usize {
+    1 + 1 + 32 + 1
+}
+
+fn prefix_fee_weight(ring_len: usize, inputs: usize, outputs: usize, extra: usize) -> usize {
+    // Assumes Timelock::None
+    1 + 1 +
+        varint_len(inputs) +
+        (inputs * input_fee_weight(ring_len)) +
+        1 +
+        (outputs * output_fee_weight()) +
+        varint_len(extra) +
+        extra
+}
+
+fn clsag_fee_weight(ring_len: usize) -> usize {
+    (ring_len * 32) + 32 + 32
+}
+
+fn bulletproofs_fee_weight(plus: bool, outputs: usize) -> usize {
+    let fields = if plus { 6 } else { 9 };
+
+    #[allow(non_snake_case)]
+    let mut LR_len = usize::try_from(usize::BITS - (outputs - 1).leading_zeros())
+        .expect("bit count exceeds usize");
+    let padded_outputs = 1 << LR_len;
+    LR_len += BP_LOG_N;
+
+    let len = (fields + (2 * LR_len)) * 32;
+    len +
+        if padded_outputs <= 2 {
+            0
+        } else {
+            let base = ((fields + (2 * (BP_LOG_N + 1))) * 32) / 2;
+            let size = (fields + (2 * LR_len)) * 32;
+            ((base * padded_outputs) - size) * 4 / 5
+        }
+}
+
+fn rct_base_fee_weight(outputs: usize) -> usize {
+    1 + 8 + (outputs * (8 + 32))
+}
+
+fn extra_fee_weight(outputs: usize, additional: bool, payment_id: bool, data: &[Vec<u8>]) -> usize {
+    // PublicKey, key
+    (1 + 32) +
+        // PublicKeys, length, additional keys
+        (if additional { 1 + 1 + (outputs * 32) } else { 0 }) +
+        // PaymentId (Nonce), length, encrypted, ID
+        (if payment_id { 1 + 1 + 1 + 8 } else { 0 }) +
+        // Nonce, length, ARBITRARY_DATA_MARKER, data
+        data.iter().map(|v| 1 + varint_len(1 + v.len()) + 1 + v.len()).sum::<usize>()
+}
+
+/// Worst-case transaction weight for fee estimation, matching the previous
+/// backend's arithmetic exactly.
+pub fn transaction_fee_weight(
+    protocol: Protocol,
+    inputs: usize,
+    outputs: usize,
+    extra: usize,
+) -> usize {
+    prefix_fee_weight(protocol.ring_len(), inputs, outputs, extra) +
+        rct_base_fee_weight(outputs) +
+        1 +
+        bulletproofs_fee_weight(protocol.bp_plus(), outputs) +
+        (inputs * (clsag_fee_weight(protocol.ring_len()) + 32))
+}
+
+// ---------------------------------------------------------------------------
+// Signable transactions (online side)
+// ---------------------------------------------------------------------------
+
+/// A transaction with all data necessary to prepare or sign it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct SignableTransaction {
+    protocol: Protocol,
+    r_seed: Option<Zeroizing<[u8; 32]>>,
+    inputs: Vec<SpendableOutput>,
+    payments: Vec<InternalPayment>,
+    data: Vec<Vec<u8>>,
+    fee: u64,
+}
+
+impl SignableTransaction {
+    /// Create a signable transaction, validating it and computing its fee.
+    pub fn new(
+        protocol: Protocol,
+        r_seed: Option<Zeroizing<[u8; 32]>>,
+        inputs: Vec<SpendableOutput>,
+        mut payments: Vec<(MoneroAddress, u64)>,
+        change_address: Option<Change>,
+        data: Vec<Vec<u8>>,
+        fee_rate: Fee,
+    ) -> Result<SignableTransaction, TransactionError> {
+        // Make sure there's only one payment ID
+        let mut has_payment_id = {
+            let mut payment_ids = 0;
+            let mut count = |addr: &MoneroAddress| {
+                if addr.payment_id().is_some() {
+                    payment_ids += 1
+                }
+            };
+            for payment in &payments {
+                count(&payment.0);
+            }
+            if let Some(change) = change_address.as_ref() {
+                count(change.address());
+            }
+            if payment_ids > 1 {
+                Err(TransactionError::MultiplePaymentIds)?;
+            }
+            payment_ids == 1
+        };
+
+        if inputs.is_empty() {
+            Err(TransactionError::NoInputs)?;
+        }
+        if payments.is_empty() {
+            Err(TransactionError::NoOutputs)?;
+        }
+
+        for part in &data {
+            if part.len() > MAX_ARBITRARY_DATA_SIZE {
+                Err(TransactionError::TooMuchData)?;
+            }
+        }
+
+        // If we don't have two outputs, as required by Monero, error
+        if (payments.len() == 1) && change_address.is_none() {
+            Err(TransactionError::NoChange)?;
+        }
+        let outputs = payments.len() + usize::from(change_address.is_some());
+        // A dummy payment ID is added if there's only 2 outputs
+        has_payment_id |= outputs == 2;
+
+        // Calculate the extra length, assuming additional keys are needed for
+        // a worst-case estimation
+        let extra = extra_fee_weight(outputs, true, has_payment_id, data.as_ref());
+
+        // https://github.com/monero-project/monero/pull/8733
+        const MAX_EXTRA_SIZE: usize = 1060;
+        if extra > MAX_EXTRA_SIZE {
+            Err(TransactionError::TooMuchData)?;
+        }
+
+        let estimated_tx_size = transaction_fee_weight(protocol, inputs.len(), outputs, extra);
+
+        // wallet2 will only create transactions up to 100k bytes
+        const MAX_TX_SIZE: usize = 100_000;
+        if estimated_tx_size >= MAX_TX_SIZE {
+            Err(TransactionError::TooLargeTransaction)?;
+        }
+
+        // Calculate the minimum fee. Omitting change may increase the actual fee.
+        let mut fee = fee_rate.calculate(estimated_tx_size);
+
+        // Make sure we have enough funds
+        let in_amount = inputs
+            .iter()
+            .map(|input| input.commitment().amount)
+            .sum::<u64>();
+        let out_amount = payments.iter().map(|payment| payment.1).sum::<u64>() + fee;
+        if in_amount < out_amount {
+            Err(TransactionError::NotEnoughFunds(in_amount, out_amount))?;
+        }
+
+        if outputs > MAX_OUTPUTS {
+            Err(TransactionError::TooManyOutputs)?;
+        }
+
+        let mut payments = payments
+            .drain(..)
+            .map(InternalPayment::Payment)
+            .collect::<Vec<_>>();
+        if let Some(change) = change_address {
+            payments.push(InternalPayment::Change(change, in_amount - out_amount));
+        } else {
+            // Intentionally omitted change becomes miner fee. Keep the recorded
+            // fee balanced with the actual inputs and fixed recipient amounts.
+            // This cannot overflow: out_amount includes fee and is <= in_amount.
+            fee += in_amount - out_amount;
+        }
+
+        Ok(SignableTransaction {
+            protocol,
+            r_seed,
+            inputs,
+            payments,
+            data,
+            fee,
+        })
+    }
+
+    pub fn fee(&self) -> u64 {
+        self.fee
+    }
+
+    /// Select decoys for every input and package everything into an
+    /// `UnsignedTransaction` for offline signing.
+    pub async fn prepare_unsigned<
+        R: rand_core::RngCore + rand_core::CryptoRng,
+        C: crate::monero_backend::rpc::RpcConnection,
+    >(
+        self,
+        rng: &mut R,
+        rpc: &crate::monero_backend::rpc::Rpc<C>,
+    ) -> Result<UnsignedTransaction, TransactionError> {
+        let height = rpc
+            .get_height()
+            .await
+            .map_err(|e| TransactionError::RpcError(format!("{:?}", e)))?;
+
+        let ring_len = u8::try_from(self.protocol.ring_len())
+            .map_err(|_| TransactionError::InvalidTransaction("ring too large".to_string()))?;
+
+        let mut inputs = Vec::with_capacity(self.inputs.len());
+        for output in &self.inputs {
+            let spent = crate::decoy_select::SpentOutput {
+                index_on_blockchain: output.global_index,
+                key: output.key(),
+                commitment: output.commitment().calculate(),
+            };
+            let decoys = crate::decoy_select::select_decoys(
+                rng,
+                rpc,
+                ring_len,
+                height.saturating_sub(1),
+                &spent,
+            )
+            .await
+            .map_err(TransactionError::RpcError)?;
+            inputs.push(UnsignedInput {
+                output: output.clone(),
+                decoys: Decoys::from_oxide(&decoys),
+            });
+        }
+
+        let r_seed = match &self.r_seed {
+            Some(seed) => seed.clone(),
+            None => {
+                let mut seed = Zeroizing::new([0; 32]);
+                rng.fill_bytes(seed.as_mut());
+                seed
+            }
+        };
+
+        Ok(UnsignedTransaction {
+            protocol: self.protocol,
+            r_seed,
+            fee: self.fee,
+            payments: self.payments.clone(),
+            data: self.data.clone(),
+            inputs,
+        })
+    }
+
+    /// Select decoys and sign this transaction with the private spend key.
+    pub async fn sign<
+        R: rand_core::RngCore + rand_core::CryptoRng,
+        C: crate::monero_backend::rpc::RpcConnection,
+    >(
+        self,
+        rng: &mut R,
+        rpc: &crate::monero_backend::rpc::Rpc<C>,
+        spend: &Zeroizing<Scalar>,
+    ) -> Result<monero_oxide::transaction::Transaction, TransactionError> {
+        let unsigned = self.prepare_unsigned(rng, rpc).await?;
+        let (tx, _, _) = sign_offline(rng, spend, unsigned)
+            .map_err(TransactionError::InvalidTransaction)?;
+        Ok(tx)
+    }
+}
+
+/// A builder for signable transactions, matching the previous backend's API.
+#[derive(Clone, Debug)]
+pub struct SignableTransactionBuilder {
+    protocol: Protocol,
+    fee: Fee,
+    r_seed: Option<Zeroizing<[u8; 32]>>,
+    inputs: Vec<SpendableOutput>,
+    payments: Vec<(MoneroAddress, u64)>,
+    change_address: Option<Change>,
+    data: Vec<Vec<u8>>,
+}
+
+impl SignableTransactionBuilder {
+    pub fn new(
+        protocol: Protocol,
+        fee: Fee,
+        change_address: Option<Change>,
+    ) -> SignableTransactionBuilder {
+        SignableTransactionBuilder {
+            protocol,
+            fee,
+            r_seed: None,
+            inputs: vec![],
+            payments: vec![],
+            change_address,
+            data: vec![],
+        }
+    }
+
+    pub fn set_r_seed(&mut self, r_seed: Zeroizing<[u8; 32]>) -> &mut Self {
+        self.r_seed = Some(r_seed);
+        self
+    }
+
+    pub fn add_input(&mut self, input: SpendableOutput) -> &mut Self {
+        self.inputs.push(input);
+        self
+    }
+
+    pub fn add_inputs(&mut self, inputs: &[SpendableOutput]) -> &mut Self {
+        self.inputs.extend(inputs.iter().cloned());
+        self
+    }
+
+    pub fn add_payment(&mut self, dest: MoneroAddress, amount: u64) -> &mut Self {
+        self.payments.push((dest, amount));
+        self
+    }
+
+    pub fn add_payments(&mut self, payments: &[(MoneroAddress, u64)]) -> &mut Self {
+        self.payments.extend(payments.iter().cloned());
+        self
+    }
+
+    pub fn add_data(&mut self, data: Vec<u8>) -> &mut Self {
+        self.data.push(data);
+        self
+    }
+
+    pub fn build(self) -> Result<SignableTransaction, TransactionError> {
+        SignableTransaction::new(
+            self.protocol,
+            self.r_seed,
+            self.inputs,
+            self.payments,
+            self.change_address,
+            self.data,
+            self.fee,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Unsigned transactions and offline signing
 // ---------------------------------------------------------------------------
 
@@ -1058,6 +1566,90 @@ mod tests {
     }
 
     #[test]
+    fn builder_fee_matches_mirror_formula() {
+        let spend = Zeroizing::new(Scalar::from(31u64));
+        let key_offset = Scalar::from(7u64);
+        let output = SpendableOutput::test_new(
+            ReceivedOutput {
+                absolute: AbsoluteId { tx: [1; 32], o: 0 },
+                data: OutputData {
+                    key: &(*spend + key_offset) * ED25519_BASEPOINT_TABLE,
+                    key_offset,
+                    commitment: Commitment::new(Scalar::from(3u64), 2_000_000_000),
+                },
+                metadata: Metadata {
+                    subaddress: None,
+                    payment_id: [0; 8],
+                    arbitrary_data: vec![],
+                },
+            },
+            5,
+        );
+
+        let convert = |point: EdwardsPoint| {
+            monero_wallet::ed25519::CompressedPoint::from(point.compress().to_bytes())
+                .decompress()
+                .unwrap()
+        };
+        let dest = MoneroAddress::new(
+            monero_wallet::address::Network::Mainnet,
+            monero_wallet::address::AddressType::Legacy,
+            convert(&Scalar::from(41u64) * ED25519_BASEPOINT_TABLE),
+            convert(&Scalar::from(43u64) * ED25519_BASEPOINT_TABLE),
+        );
+        let view_pair = ViewPair::new(
+            &Scalar::from(51u64) * ED25519_BASEPOINT_TABLE,
+            Zeroizing::new(Scalar::from(53u64)),
+        );
+
+        let fee_rate = Fee {
+            per_weight: 8000,
+            mask: 10000,
+        };
+        let mut builder = SignableTransactionBuilder::new(
+            Protocol::v16,
+            fee_rate,
+            Some(Change::new(&view_pair, false)),
+        );
+        builder.add_input(output);
+        builder.add_payment(dest, 1_000_000_000);
+        let signable = builder.build().unwrap();
+
+        // Two outputs (payment + change); a dummy payment ID applies
+        let extra = extra_fee_weight(2, true, true, &[]);
+        let expected_fee =
+            fee_rate.calculate(transaction_fee_weight(Protocol::v16, 1, 2, extra));
+        assert_eq!(signable.fee(), expected_fee);
+    }
+
+    #[test]
+    fn builder_rejects_single_payment_without_change() {
+        let output = SpendableOutput::test_new(sample_received_output(), 5);
+        let convert = |point: EdwardsPoint| {
+            monero_wallet::ed25519::CompressedPoint::from(point.compress().to_bytes())
+                .decompress()
+                .unwrap()
+        };
+        let dest = MoneroAddress::new(
+            monero_wallet::address::Network::Mainnet,
+            monero_wallet::address::AddressType::Legacy,
+            convert(&Scalar::from(41u64) * ED25519_BASEPOINT_TABLE),
+            convert(&Scalar::from(43u64) * ED25519_BASEPOINT_TABLE),
+        );
+        let mut builder = SignableTransactionBuilder::new(
+            Protocol::v16,
+            Fee {
+                per_weight: 8000,
+                mask: 10000,
+            },
+            None,
+        );
+        builder.add_input(output);
+        builder.add_payment(dest, 1);
+        assert_eq!(builder.build().unwrap_err(), TransactionError::NoChange);
+    }
+
+    #[test]
     fn sign_offline_produces_valid_transaction() {
         use rand::SeedableRng;
 
@@ -1201,6 +1793,94 @@ mod tests {
         let (tx2, tx_key2, _) = sign_offline(&mut rng2, &spend, unsigned).unwrap();
         assert_eq!(tx_key2, tx_key);
         assert_eq!(tx2.prefix().extra, tx.prefix().extra);
+    }
+
+    #[test]
+    fn no_change_builder_records_residual_as_the_signed_fee() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(987);
+        let spend = Zeroizing::new(Scalar::from(31u64));
+        let view = ViewPair::new(
+            &*spend * ED25519_BASEPOINT_TABLE,
+            Zeroizing::new(Scalar::from(53u64)),
+        );
+        let mut received = sample_received_output();
+        received.data.key = &(*spend + received.data.key_offset) * ED25519_BASEPOINT_TABLE;
+        received.data.commitment.amount = 2_000_000_000;
+        let output = SpendableOutput::test_new(received, 1000);
+        let ring = (0..16u64)
+            .map(|i| {
+                if i == 0 {
+                    [output.key(), output.commitment().calculate()]
+                } else {
+                    let point = &Scalar::from(9000 + i) * ED25519_BASEPOINT_TABLE;
+                    [point, point]
+                }
+            })
+            .collect();
+        let mut offsets = vec![1000];
+        offsets.extend(std::iter::repeat(3).take(15));
+        let recipients = vec![
+            (
+                view.address(
+                    monero_wallet::address::Network::Mainnet,
+                    AddressSpec::Standard,
+                ),
+                1_000_000_000,
+            ),
+            (
+                view.address(
+                    monero_wallet::address::Network::Mainnet,
+                    AddressSpec::Subaddress(SubaddressIndex::new(0, 1).unwrap()),
+                ),
+                999_000_000,
+            ),
+        ];
+        let signable = SignableTransaction::new(
+            Protocol::v16,
+            Some(Zeroizing::new([42; 32])),
+            vec![output],
+            recipients,
+            None,
+            vec![],
+            Fee {
+                per_weight: 1,
+                mask: 1,
+            },
+        )
+        .unwrap();
+        assert_eq!(signable.fee(), 1_000_000);
+        assert!(signable
+            .payments
+            .iter()
+            .all(|p| matches!(p, InternalPayment::Payment(_))));
+        let unsigned = UnsignedTransaction {
+            protocol: signable.protocol,
+            r_seed: signable.r_seed.unwrap(),
+            fee: signable.fee,
+            payments: signable.payments,
+            data: signable.data,
+            inputs: vec![UnsignedInput {
+                output: signable.inputs[0].clone(),
+                decoys: Decoys {
+                    i: 0,
+                    offsets,
+                    ring,
+                },
+            }],
+        };
+        let bytes = unsigned.serialize();
+        let unsigned = UnsignedTransaction::read(&mut bytes.as_slice()).unwrap();
+        assert_eq!(unsigned.fee, 1_000_000);
+        let (tx, _, _) = sign_offline(&mut rng, &spend, unsigned).unwrap();
+        let monero_oxide::transaction::Transaction::V2 {
+            proofs: Some(proofs),
+            ..
+        } = tx
+        else {
+            panic!("expected RingCT transaction")
+        };
+        assert_eq!(proofs.base.fee, 1_000_000);
     }
 
     #[test]

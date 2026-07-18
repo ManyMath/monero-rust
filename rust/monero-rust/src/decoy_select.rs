@@ -15,7 +15,17 @@ use curve25519_dalek::traits::IsIdentity as _;
 use monero_oxide::{
     ringct::clsag::Decoys, BLOCK_TIME, COINBASE_LOCK_WINDOW, DEFAULT_LOCK_WINDOW,
 };
-use monero_wallet::{ed25519::CompressedPoint, WalletOutput};
+use monero_wallet::ed25519::CompressedPoint;
+
+/// The facts about the output being spent that decoy selection needs.
+pub(crate) struct SpentOutput {
+    /// The output's global RingCT index.
+    pub index_on_blockchain: u64,
+    /// The one-time output key.
+    pub key: curve25519_dalek::EdwardsPoint,
+    /// The output's commitment.
+    pub commitment: curve25519_dalek::EdwardsPoint,
+}
 use rand_core::{CryptoRng, RngCore};
 use rand_distr::{Distribution as _, Gamma};
 
@@ -29,7 +39,7 @@ async fn select_n<R: RngCore + CryptoRng, C: RpcConnection>(
     rng: &mut R,
     rpc: &Rpc<C>,
     block_number: usize,
-    output_being_spent: &WalletOutput,
+    output_being_spent: &SpentOutput,
     ring_len: u8,
 ) -> Result<Vec<(u64, [CompressedPoint; 2])>, String> {
     if block_number <= DEFAULT_LOCK_WINDOW {
@@ -70,7 +80,7 @@ async fn select_n<R: RngCore + CryptoRng, C: RpcConnection>(
         (outputs as f64) / ((blocks * BLOCK_TIME) as f64)
     };
 
-    let output_being_spent_index = output_being_spent.index_on_blockchain();
+    let output_being_spent_index = output_being_spent.index_on_blockchain;
 
     // Don't select the real output
     let mut do_not_select = HashSet::new();
@@ -152,11 +162,8 @@ async fn select_n<R: RngCore + CryptoRng, C: RpcConnection>(
         for (i, output) in unlocked.into_iter().enumerate() {
             if real_index == Some(i) {
                 let matches = output.map_or(false, |[key, commitment]| {
-                    let expected_key: curve25519_dalek::EdwardsPoint =
-                        output_being_spent.key().into();
-                    let expected_commitment: curve25519_dalek::EdwardsPoint =
-                        output_being_spent.commitment().commit().into();
-                    (key == expected_key) && (commitment == expected_commitment)
+                    (key == output_being_spent.key)
+                        && (commitment == output_being_spent.commitment)
                 });
                 if !matches {
                     return Err(
@@ -195,14 +202,14 @@ async fn select_n<R: RngCore + CryptoRng, C: RpcConnection>(
 /// Select decoys for spending `input`, mirroring `monero-wallet`'s
 /// `select_decoys`.
 ///
-/// `input.index_on_blockchain()` must be the output's true global RingCT
-/// index (see `oxide_output_bytes::wallet_output_with_index_on_blockchain`).
+/// `input.index_on_blockchain` must be the output's true global RingCT
+/// index, re-resolved from the daemon when the scanner couldn't learn it.
 pub(crate) async fn select_decoys<R: RngCore + CryptoRng, C: RpcConnection>(
     rng: &mut R,
     rpc: &Rpc<C>,
     ring_len: u8,
     block_number: usize,
-    input: &WalletOutput,
+    input: &SpentOutput,
 ) -> Result<Decoys, String> {
     if ring_len == 0 {
         return Err("requesting a ring of length 0".to_string());
@@ -225,10 +232,17 @@ pub(crate) async fn select_decoys<R: RngCore + CryptoRng, C: RpcConnection>(
             Ok((index, [key, commitment]))
         })
         .collect::<Result<Vec<_>, String>>()?;
-    ring.push((
-        input.index_on_blockchain(),
-        [input.key(), input.commitment().commit()],
-    ));
+    {
+        let convert = |point: &curve25519_dalek::EdwardsPoint| {
+            CompressedPoint::from(point.compress().to_bytes())
+                .decompress()
+                .ok_or_else(|| "real spend failed to decompress".to_string())
+        };
+        ring.push((
+            input.index_on_blockchain,
+            [convert(&input.key)?, convert(&input.commitment)?],
+        ));
+    }
     ring.sort_by_key(|(index_on_blockchain, _value)| *index_on_blockchain);
 
     // We need to convert our positional indexes to offset indexes
@@ -239,7 +253,7 @@ pub(crate) async fn select_decoys<R: RngCore + CryptoRng, C: RpcConnection>(
     }
 
     let signer_index = u8::try_from(
-        ring.partition_point(|x| x.0 < input.index_on_blockchain()),
+        ring.partition_point(|x| x.0 < input.index_on_blockchain),
     )
     .map_err(|_| "ring of size <= u8::MAX had an index exceeding u8::MAX".to_string())?;
 
