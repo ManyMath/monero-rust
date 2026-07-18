@@ -634,6 +634,330 @@ impl InternalPayment {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Unsigned transactions and offline signing
+// ---------------------------------------------------------------------------
+
+/// An input of an unsigned transaction: the output being spent plus the
+/// decoys selected for its ring.
+#[derive(Clone, PartialEq, Eq, Debug, Zeroize, ZeroizeOnDrop)]
+pub struct UnsignedInput {
+    pub output: SpendableOutput,
+    pub decoys: Decoys,
+}
+
+/// A fully prepared transaction awaiting an offline signature.
+///
+/// The wire format matches the previous backend byte-for-byte: it's produced
+/// by the online (view-only) side and consumed by cold-signing devices.
+#[derive(Clone, PartialEq, Eq, Debug, Zeroize, ZeroizeOnDrop)]
+pub struct UnsignedTransaction {
+    pub protocol: Protocol,
+    pub r_seed: Zeroizing<[u8; 32]>,
+    pub fee: u64,
+    pub payments: Vec<InternalPayment>,
+    pub data: Vec<Vec<u8>>,
+    pub inputs: Vec<UnsignedInput>,
+}
+
+impl UnsignedTransaction {
+    pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
+        self.protocol.write(w)?;
+        w.write_all(self.r_seed.as_ref())?;
+        w.write_all(&self.fee.to_le_bytes())?;
+
+        fn write_payment<W: Write>(payment: &InternalPayment, w: &mut W) -> io::Result<()> {
+            match payment {
+                InternalPayment::Payment(payment) => {
+                    w.write_all(&[0])?;
+                    write_vec(write_byte, payment.0.to_string().as_bytes(), w)?;
+                    w.write_all(&payment.1.to_le_bytes())
+                }
+                InternalPayment::Change(change, amount) => {
+                    w.write_all(&[1])?;
+                    write_vec(write_byte, change.address().to_string().as_bytes(), w)?;
+                    if let Some(view) = change.view() {
+                        w.write_all(&[1])?;
+                        write_scalar(view, w)?;
+                    } else {
+                        w.write_all(&[0])?;
+                    }
+                    w.write_all(&amount.to_le_bytes())
+                }
+            }
+        }
+        write_vec(write_payment, &self.payments, w)?;
+
+        write_varint(&(self.data.len() as u64), w)?;
+        for chunk in &self.data {
+            write_vec(write_byte, chunk, w)?;
+        }
+
+        write_varint(&(self.inputs.len() as u64), w)?;
+        for input in &self.inputs {
+            input.output.write(w)?;
+            input.decoys.write(w)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        self.write(&mut buf)
+            .expect("writing into a Vec never fails");
+        buf
+    }
+
+    pub fn read<R: Read>(r: &mut R) -> io::Result<UnsignedTransaction> {
+        let protocol = Protocol::read(r)?;
+        let r_seed = Zeroizing::new(read_bytes::<_, 32>(r)?);
+        let fee = read_u64(r)?;
+
+        fn read_payment<R: Read>(r: &mut R) -> io::Result<InternalPayment> {
+            fn read_address<R: Read>(r: &mut R) -> io::Result<MoneroAddress> {
+                String::from_utf8(read_vec(read_byte, r)?)
+                    .ok()
+                    .and_then(|str| MoneroAddress::from_str_with_unchecked_network(&str).ok())
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "invalid address"))
+            }
+
+            Ok(match read_byte(r)? {
+                0 => InternalPayment::Payment((read_address(r)?, read_u64(r)?)),
+                1 => InternalPayment::Change(
+                    Change::from_raw(
+                        read_address(r)?,
+                        match read_byte(r)? {
+                            0 => None,
+                            1 => Some(Zeroizing::new(read_scalar(r)?)),
+                            _ => Err(io::Error::new(
+                                io::ErrorKind::Other,
+                                "invalid change payment",
+                            ))?,
+                        },
+                    ),
+                    read_u64(r)?,
+                ),
+                _ => Err(io::Error::new(io::ErrorKind::Other, "invalid payment"))?,
+            })
+        }
+
+        let payments = read_vec(read_payment, r)?;
+
+        let data_len: usize = read_varint(r)?
+            .try_into()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "data length overflow"))?;
+        if data_len > 1_000_000 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "data length exceeds limit",
+            ));
+        }
+        let mut data = Vec::with_capacity(data_len);
+        for _ in 0..data_len {
+            data.push(read_vec(read_byte, r)?);
+        }
+
+        let inputs_len: usize = read_varint(r)?
+            .try_into()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "inputs length overflow"))?;
+        if inputs_len > 1000 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "inputs count exceeds limit",
+            ));
+        }
+        let mut inputs = Vec::with_capacity(inputs_len);
+        for _ in 0..inputs_len {
+            inputs.push(UnsignedInput {
+                output: SpendableOutput::read(r)?,
+                decoys: Decoys::read(r)?,
+            });
+        }
+
+        Ok(UnsignedTransaction {
+            protocol,
+            r_seed,
+            fee,
+            payments,
+            data,
+            inputs,
+        })
+    }
+}
+
+/// Monero's canonical input ordering: descending by key image bytes.
+fn key_image_sort(x: &[u8; 32], y: &[u8; 32]) -> std::cmp::Ordering {
+    x.cmp(y).reverse()
+}
+
+/// Sign a prepared `UnsignedTransaction` with the private spend key,
+/// entirely offline.
+///
+/// Returns the signed transaction plus the transaction key (and additional
+/// keys, when payments to subaddresses require them) for payment proofs.
+pub fn sign_offline<R: rand_core::RngCore + rand_core::CryptoRng>(
+    rng: &mut R,
+    spend: &Zeroizing<Scalar>,
+    unsigned: UnsignedTransaction,
+) -> Result<
+    (
+        monero_oxide::transaction::Transaction,
+        Zeroizing<Scalar>,
+        Vec<Zeroizing<Scalar>>,
+    ),
+    String,
+> {
+    use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
+
+    if unsigned.inputs.is_empty() {
+        return Err("unsigned transaction has no inputs".to_string());
+    }
+
+    // Verify the spend key owns every input before doing anything else
+    for input in &unsigned.inputs {
+        let offset = Zeroizing::new(**spend + input.output.key_offset());
+        if (&*offset * ED25519_BASEPOINT_TABLE) != input.output.key() {
+            return Err("wrong private key for unsigned transaction".to_string());
+        }
+    }
+
+    // The unsigned transaction carries a fixed fee; monero-wallet derives the
+    // fee as inputs minus outputs when no change output is specified, so the
+    // amounts must be consistent for the fee to be honored exactly.
+    let input_sum: u64 = unsigned
+        .inputs
+        .iter()
+        .map(|input| input.output.commitment().amount)
+        .sum();
+    let payment_sum: u64 = unsigned
+        .payments
+        .iter()
+        .map(|payment| payment.address_and_amount().1)
+        .sum();
+    if input_sum != payment_sum.checked_add(unsigned.fee).ok_or_else(|| {
+        "unsigned transaction amounts overflow".to_string()
+    })? {
+        return Err("unsigned transaction fee doesn't match its amounts".to_string());
+    }
+
+    // Package each input with its pre-selected decoys
+    let mut inputs = Vec::with_capacity(unsigned.inputs.len());
+    for input in &unsigned.inputs {
+        let mut bytes = input.output.output.data.serialize();
+        input
+            .decoys
+            .to_oxide()?
+            .write(&mut bytes)
+            .map_err(|e| format!("Failed to serialize decoys: {}", e))?;
+        inputs.push(
+            monero_wallet::OutputWithDecoys::read(&mut bytes.as_slice())
+                .map_err(|e| format!("Invalid unsigned transaction input: {}", e))?,
+        );
+    }
+
+    // Express every output, change included, as a fixed payment so the
+    // stored fee is used exactly (all unspent input value becomes the fee)
+    let payments: Vec<(MoneroAddress, u64)> = unsigned
+        .payments
+        .iter()
+        .map(|payment| {
+            let (address, amount) = payment.address_and_amount();
+            (address.clone(), amount)
+        })
+        .collect();
+
+    // A floor fee rate: the fee was already decided by the online side; this
+    // only has to keep the necessary fee at or below it
+    let fee_rate = monero_wallet::interface::FeeRate::new(1, 1)
+        .ok_or_else(|| "failed to construct fee rate".to_string())?;
+
+    let signable = monero_wallet::send::SignableTransaction::new(
+        unsigned.protocol.rct_type(),
+        unsigned.r_seed.clone(),
+        inputs,
+        payments,
+        monero_wallet::send::Change::fingerprintable(None),
+        unsigned.data.clone(),
+        fee_rate,
+    )
+    .map_err(|e| format!("Failed to build signable transaction: {}", e))?;
+
+    // Re-derive the transaction keys the signer will embed, for payment
+    // proofs. They're seeded from the outgoing view key and the inputs in
+    // their final (key image sorted) order.
+    let (tx_key, additional_keys) = {
+        let mut keyed_inputs = unsigned
+            .inputs
+            .iter()
+            .map(|input| {
+                let offset = Zeroizing::new(**spend + input.output.key_offset());
+                let key_image_point: EdwardsPoint = monero_wallet::ed25519::Point::biased_hash(
+                    input.output.key().compress().to_bytes(),
+                )
+                .into();
+                let key_image = (key_image_point * **(&offset)).compress().to_bytes();
+                (key_image, input)
+            })
+            .collect::<Vec<_>>();
+        keyed_inputs.sort_by(|(x, _), (y, _)| key_image_sort(x, y));
+
+        let input_keys_and_commitments = keyed_inputs
+            .iter()
+            .map(|(_, input)| {
+                let convert = |point: EdwardsPoint| {
+                    monero_wallet::ed25519::CompressedPoint::from(point.compress().to_bytes())
+                        .decompress()
+                        .ok_or_else(|| "input key failed to decompress".to_string())
+                };
+                Ok((
+                    convert(input.output.key())?,
+                    convert(input.output.commitment().calculate())?,
+                ))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+
+        let mut tx_keys = monero_wallet::send::TransactionKeys::new(
+            &unsigned.r_seed,
+            input_keys_and_commitments,
+        );
+        let tx_key = tx_keys
+            .next()
+            .expect("TransactionKeys (never-ending) was exhausted");
+
+        // Additional keys are used iff any payment is to a subaddress (the
+        // change carries no view key in this construction)
+        let uses_additional_keys = unsigned
+            .payments
+            .iter()
+            .any(|payment| payment.address_and_amount().0.is_subaddress());
+        let mut additional_keys = vec![];
+        if uses_additional_keys {
+            for _ in 0..unsigned.payments.len() {
+                additional_keys.push(
+                    tx_keys
+                        .next()
+                        .expect("TransactionKeys (never-ending) was exhausted"),
+                );
+            }
+        }
+        (
+            Zeroizing::new(Scalar::from_bytes_mod_order(<[u8; 32]>::from(*tx_key))),
+            additional_keys
+                .into_iter()
+                .map(|key| Zeroizing::new(Scalar::from_bytes_mod_order(<[u8; 32]>::from(*key))))
+                .collect::<Vec<_>>(),
+        )
+    };
+
+    let spend_oxide = Zeroizing::new(monero_wallet::ed25519::Scalar::from(**spend));
+    let tx = signable
+        .sign(rng, &spend_oxide)
+        .map_err(|e| format!("Failed to sign transaction: {}", e))?;
+
+    Ok((tx, tx_key, additional_keys))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -731,6 +1055,181 @@ mod tests {
         assert_eq!(oxide.offsets(), &decoys.offsets[..]);
         let back = Decoys::from_oxide(&oxide);
         assert_eq!(back, decoys);
+    }
+
+    #[test]
+    fn sign_offline_produces_valid_transaction() {
+        use rand::SeedableRng;
+
+        let mut rng = rand::rngs::StdRng::seed_from_u64(12345);
+        let spend = Zeroizing::new(Scalar::from(987654321u64));
+        let key_offset = Scalar::from(1122334455u64);
+        let one_time_key = &(*spend + key_offset) * ED25519_BASEPOINT_TABLE;
+        let mask = Scalar::from(31337u64);
+        let amount_in = 2_000_000_000u64;
+        let commitment = Commitment::new(mask, amount_in);
+        let commitment_point = commitment.calculate();
+
+        let signer_index = 5u8;
+        let ring: Vec<[EdwardsPoint; 2]> = (0..16u64)
+            .map(|i| {
+                if i == u64::from(signer_index) {
+                    [one_time_key, commitment_point]
+                } else {
+                    let point = &Scalar::from(9000 + i) * ED25519_BASEPOINT_TABLE;
+                    [point, point]
+                }
+            })
+            .collect();
+        let mut offsets = vec![1000u64];
+        offsets.extend(std::iter::repeat(3).take(15));
+        let decoys = Decoys {
+            i: signer_index,
+            offsets: offsets.clone(),
+            ring,
+        };
+
+        let output = SpendableOutput::test_new(
+            ReceivedOutput {
+                absolute: AbsoluteId { tx: [5; 32], o: 0 },
+                data: OutputData {
+                    key: one_time_key,
+                    key_offset,
+                    commitment,
+                },
+                metadata: Metadata {
+                    subaddress: None,
+                    payment_id: [0; 8],
+                    arbitrary_data: vec![],
+                },
+            },
+            1000 + 3 * 5,
+        );
+
+        let recipient_spend = &Scalar::from(777u64) * ED25519_BASEPOINT_TABLE;
+        let recipient_view = &Scalar::from(888u64) * ED25519_BASEPOINT_TABLE;
+        let convert = |point: EdwardsPoint| {
+            monero_wallet::ed25519::CompressedPoint::from(point.compress().to_bytes())
+                .decompress()
+                .unwrap()
+        };
+        let recipient = MoneroAddress::new(
+            monero_wallet::address::Network::Mainnet,
+            monero_wallet::address::AddressType::Legacy,
+            convert(recipient_spend),
+            convert(recipient_view),
+        );
+        let change_addr = MoneroAddress::new(
+            monero_wallet::address::Network::Mainnet,
+            monero_wallet::address::AddressType::Legacy,
+            convert(&Scalar::from(111u64) * ED25519_BASEPOINT_TABLE),
+            convert(&Scalar::from(222u64) * ED25519_BASEPOINT_TABLE),
+        );
+
+        let pay = 1_000_000_000u64;
+        let change = 900_000_000u64;
+        let fee = amount_in - pay - change;
+        let unsigned = UnsignedTransaction {
+            protocol: Protocol::v16,
+            r_seed: Zeroizing::new([42; 32]),
+            fee,
+            payments: vec![
+                InternalPayment::Payment((recipient, pay)),
+                InternalPayment::Change(Change::from_raw(change_addr, None), change),
+            ],
+            data: vec![],
+            inputs: vec![UnsignedInput {
+                output,
+                decoys,
+            }],
+        };
+
+        // The wire format roundtrips
+        let bytes = unsigned.serialize();
+        assert_eq!(
+            UnsignedTransaction::read(&mut bytes.as_slice()).unwrap(),
+            unsigned
+        );
+
+        let (tx, tx_key, additional_keys) =
+            sign_offline(&mut rng, &spend, unsigned.clone()).unwrap();
+        assert!(additional_keys.is_empty());
+
+        // Input structure: our ring offsets, our key image
+        assert_eq!(tx.version(), 2);
+        let inputs = &tx.prefix().inputs;
+        assert_eq!(inputs.len(), 1);
+        let monero_oxide::transaction::Input::ToKey {
+            key_offsets,
+            key_image,
+            ..
+        } = &inputs[0]
+        else {
+            panic!("input wasn't ToKey");
+        };
+        assert_eq!(key_offsets, &offsets);
+        let expected_key_image: EdwardsPoint = monero_wallet::ed25519::Point::biased_hash(
+            one_time_key.compress().to_bytes(),
+        )
+        .into();
+        let expected_key_image = expected_key_image * (*spend + key_offset);
+        assert_eq!(
+            key_image.to_bytes(),
+            expected_key_image.compress().to_bytes()
+        );
+
+        // Two outputs (payment + change-as-payment), exact fee honored
+        assert_eq!(tx.prefix().outputs.len(), 2);
+        let monero_oxide::transaction::Transaction::V2 {
+            proofs: Some(proofs),
+            ..
+        } = &tx
+        else {
+            panic!("transaction wasn't RingCT");
+        };
+        assert_eq!(proofs.base.fee, fee);
+
+        // The returned tx key matches the pubkey embedded in extra
+        let extra =
+            monero_wallet::extra::Extra::read(&mut tx.prefix().extra.as_slice()).unwrap();
+        let (tx_pubkeys, _additional) = extra.keys().unwrap();
+        let expected_pubkey = (&*tx_key * ED25519_BASEPOINT_TABLE).compress().to_bytes();
+        assert_eq!(tx_pubkeys[0].compress().to_bytes(), expected_pubkey);
+
+        // Deterministic given the same seed material
+        let mut rng2 = rand::rngs::StdRng::seed_from_u64(999);
+        let (tx2, tx_key2, _) = sign_offline(&mut rng2, &spend, unsigned).unwrap();
+        assert_eq!(tx_key2, tx_key);
+        assert_eq!(tx2.prefix().extra, tx.prefix().extra);
+    }
+
+    #[test]
+    fn sign_offline_rejects_wrong_key_and_fee() {
+        use rand::SeedableRng;
+
+        let mut rng = rand::rngs::StdRng::seed_from_u64(1);
+        let spend = Zeroizing::new(Scalar::from(4u64));
+        let output = SpendableOutput::test_new(sample_received_output(), 9);
+        let decoys = Decoys {
+            i: 0,
+            offsets: vec![9],
+            ring: vec![[output.key(), output.commitment().calculate()]],
+        };
+        let unsigned = UnsignedTransaction {
+            protocol: Protocol::v16,
+            r_seed: Zeroizing::new([1; 32]),
+            fee: 1,
+            payments: vec![],
+            data: vec![],
+            inputs: vec![UnsignedInput {
+                output,
+                decoys,
+            }],
+        };
+        // sample_received_output isn't owned by `spend`
+        assert!(sign_offline(&mut rng, &spend, unsigned)
+            .unwrap_err()
+            .contains("wrong private key"));
     }
 
     #[test]
