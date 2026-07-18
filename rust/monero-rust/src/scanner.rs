@@ -874,7 +874,7 @@ pub async fn scan_block_for_outputs_with_url_and_lookahead(
 }
 
 /// Build a `monero-wallet` scanner from dalek key material.
-fn oxide_scanner_from_keys(
+pub(crate) fn oxide_scanner_from_keys(
     spend_point: &EdwardsPoint,
     view_scalar: &Scalar,
 ) -> Result<Scanner, String> {
@@ -887,7 +887,7 @@ fn oxide_scanner_from_keys(
 
 /// Parse a full transaction blob into the hash and pruned representation used
 /// for scanning. Returns `None` when the blob isn't one whole transaction.
-fn parse_full_tx_blob(bytes: &[u8]) -> Option<([u8; 32], OxideTransaction<Pruned>)> {
+pub(crate) fn parse_full_tx_blob(bytes: &[u8]) -> Option<([u8; 32], OxideTransaction<Pruned>)> {
     let mut cursor = std::io::Cursor::new(bytes);
     let tx = OxideTransaction::<NotPruned>::read(&mut cursor).ok()?;
     if cursor.position() as usize != bytes.len() {
@@ -1008,7 +1008,7 @@ fn scan_parsed_block_expanding(
 /// `monero-wallet` only scans whole blocks, so the transaction is wrapped in
 /// a synthetic single-transaction block. The RingCT indices embedded in the
 /// returned outputs are relative to the transaction, not the chain.
-fn scan_single_transaction(
+pub(crate) fn scan_single_transaction(
     scanner: &mut Scanner,
     tx_hash: [u8; 32],
     tx: &OxideTransaction<Pruned>,

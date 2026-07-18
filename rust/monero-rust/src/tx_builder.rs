@@ -2,22 +2,124 @@
 
 pub mod native {
     use crate::monero_backend::{
-        ringct::generate_key_image,
         rpc::{Rpc, RpcConnection, DEFAULT_MAX_FEE_PER_BYTE},
-        transaction::Transaction,
-        wallet::{
-            address::{AddressMeta, AddressType, MoneroAddress, Network, SubaddressIndex},
-            seed::Seed,
-            sign_offline, Change, Decoys, Fee, InternalPayment, ReceivedOutput, Scanner,
-            SignableTransactionBuilder, SpendableOutput, UnsignedInput, UnsignedTransaction,
-            ViewPair,
-        },
-        Protocol,
+        wallet::seed::Seed,
+    };
+    use crate::wallet_compat::{
+        sign_offline, transaction_fee_weight, AbsoluteId, Change, Commitment, Decoys, Fee,
+        InternalPayment, Metadata, OutputData, Protocol, ReceivedOutput,
+        SignableTransactionBuilder, SpendableOutput, UnsignedInput, UnsignedTransaction, ViewPair,
     };
     use curve25519_dalek::{
-        constants::ED25519_BASEPOINT_TABLE, edwards::CompressedEdwardsY, scalar::Scalar,
+        constants::ED25519_BASEPOINT_TABLE,
+        edwards::{CompressedEdwardsY, EdwardsPoint},
+        scalar::Scalar,
     };
+    use monero_oxide::transaction::{NotPruned, Pruned, Transaction};
+    use monero_wallet::address::{AddressType, MoneroAddress, Network};
     use rand_core::RngCore;
+
+    /// Compute the key image `x * H_p(xG)` for an owned one-time key.
+    fn generate_key_image(secret: &Zeroizing<Scalar>) -> EdwardsPoint {
+        let public = &**secret * ED25519_BASEPOINT_TABLE;
+        let hash_point: EdwardsPoint =
+            monero_wallet::ed25519::Point::biased_hash(public.compress().to_bytes()).into();
+        hash_point * **secret
+    }
+
+    /// Convert the RPC client's protocol report into the compat model.
+    fn compat_protocol(protocol: crate::monero_backend::Protocol) -> Protocol {
+        match protocol {
+            crate::monero_backend::Protocol::v14 => Protocol::v14,
+            crate::monero_backend::Protocol::v16 => Protocol::v16,
+            crate::monero_backend::Protocol::Custom { ring_len, bp_plus } => {
+                Protocol::Custom { ring_len, bp_plus }
+            }
+        }
+    }
+
+    /// Convert the RPC client's fee rate into the compat model.
+    fn compat_fee(fee: crate::monero_backend::wallet::Fee) -> Fee {
+        Fee {
+            per_weight: fee.per_weight,
+            mask: fee.mask,
+        }
+    }
+
+    /// Convert a scanned `monero-wallet` output into the compat model.
+    fn received_from_wallet_output(
+        output: &monero_wallet::WalletOutput,
+    ) -> Result<ReceivedOutput, String> {
+        let output_index = u8::try_from(output.index_in_transaction())
+            .map_err(|_| "Output index exceeds the supported range".to_string())?;
+        let key_offset =
+            Option::from(Scalar::from_canonical_bytes(<[u8; 32]>::from(output.key_offset())))
+                .ok_or_else(|| "Invalid stored output key offset".to_string())?;
+        let mask = Option::from(Scalar::from_canonical_bytes(<[u8; 32]>::from(
+            output.commitment().mask,
+        )))
+        .ok_or_else(|| "Invalid stored output commitment mask".to_string())?;
+        let payment_id = match output.payment_id() {
+            Some(monero_wallet::extra::PaymentId::Encrypted(id)) => id,
+            _ => [0u8; 8],
+        };
+        Ok(ReceivedOutput {
+            absolute: AbsoluteId {
+                tx: output.transaction(),
+                o: output_index,
+            },
+            data: OutputData {
+                key: output.key().into(),
+                key_offset,
+                commitment: Commitment::new(mask, output.commitment().amount),
+            },
+            metadata: Metadata {
+                subaddress: output.subaddress(),
+                payment_id,
+                arbitrary_data: output.arbitrary_data().to_vec(),
+            },
+        })
+    }
+
+    /// Parse stored output bytes (the `monero-wallet` serialization written by
+    /// the scanner) and resolve the output's global RingCT index.
+    async fn spendable_from_stored_bytes<R: RpcConnection>(
+        rpc: &Rpc<R>,
+        received_output_bytes_hex: &str,
+    ) -> Result<SpendableOutput, String> {
+        let bytes = hex::decode(received_output_bytes_hex)
+            .map_err(|e| format!("Invalid output bytes: {:?}", e))?;
+        let wallet_output = monero_wallet::WalletOutput::read(&mut bytes.as_slice())
+            .map_err(|e| format!("Failed to parse output: {}", e))?;
+        let received = received_from_wallet_output(&wallet_output)?;
+        create_spendable_output(rpc, received).await
+    }
+
+    /// Select decoys for a set of spendable outputs.
+    async fn select_output_decoys<R: RpcConnection>(
+        rpc: &Rpc<R>,
+        protocol: Protocol,
+        height: usize,
+        outputs: &[SpendableOutput],
+    ) -> Result<Vec<Decoys>, String> {
+        let ring_len = u8::try_from(protocol.ring_len())
+            .map_err(|_| "Ring length exceeds supported range".to_string())?;
+        let mut rng = rand::rngs::OsRng;
+        let mut decoys = Vec::with_capacity(outputs.len());
+        for output in outputs {
+            let spent = crate::decoy_select::SpentOutput {
+                index_on_blockchain: output.global_index,
+                key: output.key(),
+                commitment: output.commitment().calculate(),
+            };
+            let selected =
+                crate::decoy_select::select_decoys(&mut rng, rpc, ring_len, height, &spent)
+                    .await
+                    .map_err(|e| format!("Decoy selection failed: {}", e))?;
+            decoys.push(Decoys::from_oxide(&selected));
+        }
+        Ok(decoys)
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
     use crate::monero_backend::rpc::HttpRpc;
@@ -29,7 +131,6 @@ pub mod native {
     use serde::{Deserialize, Serialize};
     use serde_json::Value;
     use sha3::{Digest, Keccak256};
-    use std::collections::HashSet;
     use zeroize::Zeroizing;
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -196,31 +297,36 @@ pub mod native {
         spend_key: Zeroizing<Scalar>,
         lookahead: Lookahead,
     ) -> Vec<ChangeOutputInfo> {
-        let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
-        // Register the subaddress window on the legacy scanner; the production
-        // scanner registration helper now works on `monero-wallet` scanners.
-        for account in 0..=lookahead.account {
-            for address in 0..=lookahead.subaddress {
-                if let Some(index) = SubaddressIndex::new(account, address) {
-                    scanner.register_subaddress(index);
-                }
-            }
-        }
-        let scan_result = scanner.scan_transaction(tx);
-        let our_outputs = scan_result.ignore_timelock();
+        let Ok(mut scanner) =
+            crate::scanner::oxide_scanner_from_keys(&view_pair.spend(), view_pair.view_scalar())
+        else {
+            return vec![];
+        };
+        crate::scanner::register_subaddresses(&mut scanner, lookahead);
+
+        let Ok(tx_hash) = hex::decode(tx_id) else {
+            return vec![];
+        };
+        let Ok(tx_hash) = <[u8; 32]>::try_from(tx_hash) else {
+            return vec![];
+        };
+        let pruned = Transaction::<Pruned>::from(tx.clone());
+        let our_outputs =
+            crate::scanner::scan_single_transaction(&mut scanner, tx_hash, &pruned)
+                .unwrap_or_default();
 
         our_outputs
             .into_iter()
             .map(|output| {
-                let amount = output.data.commitment.amount;
+                let amount = output.commitment().amount;
                 let amount_xmr = format!("{:.12}", amount as f64 / 1_000_000_000_000.0);
-                let key = hex::encode(output.data.key.compress().to_bytes());
-                let key_offset_scalar = output.data.key_offset;
+                let key = hex::encode(output.key().compress().to_bytes());
+                let key_offset_scalar =
+                    Scalar::from_bytes_mod_order(<[u8; 32]>::from(output.key_offset()));
                 let key_offset = hex::encode(key_offset_scalar.to_bytes());
-                let commitment_mask = hex::encode(output.data.commitment.mask.to_bytes());
+                let commitment_mask = hex::encode(<[u8; 32]>::from(output.commitment().mask));
                 let subaddress_index = output
-                    .metadata
-                    .subaddress
+                    .subaddress()
                     .map(|idx| (idx.account(), idx.address()));
                 let received_output_bytes = hex::encode(output.serialize());
 
@@ -230,7 +336,7 @@ pub mod native {
 
                 ChangeOutputInfo {
                     tx_hash: tx_id.to_string(),
-                    output_index: output.absolute.o,
+                    output_index: u8::try_from(output.index_in_transaction()).unwrap_or(u8::MAX),
                     amount,
                     amount_xmr,
                     key,
@@ -278,9 +384,20 @@ pub mod native {
         rpc: &Rpc<R>,
         received_output: ReceivedOutput,
     ) -> Result<SpendableOutput, String> {
-        SpendableOutput::from(rpc, received_output)
+        // Resolve the global RingCT index from the daemon; the scanner can't
+        // always know it at scan time.
+        let indexes = rpc
+            .get_o_indexes(received_output.absolute.tx)
             .await
-            .map_err(|e| format!("Failed to create spendable output: {:?}", e))
+            .map_err(|e| format!("Failed to create spendable output: {:?}", e))?;
+        let global_index = indexes
+            .get(usize::from(received_output.absolute.o))
+            .copied()
+            .ok_or_else(|| "Daemon returned too few output indexes".to_string())?;
+        Ok(SpendableOutput {
+            output: received_output,
+            global_index,
+        })
     }
 
     /// Fetch decoys for a set of outputs to be spent.
@@ -289,8 +406,6 @@ pub mod native {
         node_url: &str,
         stored_outputs: Vec<StoredOutputData>,
     ) -> Result<DecoyResult, String> {
-        use std::io::Cursor;
-
         crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
         if stored_outputs.is_empty() {
             return Err("No outputs provided".to_string());
@@ -302,10 +417,11 @@ pub mod native {
         #[cfg(target_arch = "wasm32")]
         let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
 
-        let protocol = rpc
-            .get_protocol()
-            .await
-            .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
+        let protocol = compat_protocol(
+            rpc.get_protocol()
+                .await
+                .map_err(|e| format!("Failed to get protocol: {:?}", e))?,
+        );
 
         let height = rpc
             .get_height()
@@ -314,25 +430,17 @@ pub mod native {
 
         let mut spendable_outputs = Vec::with_capacity(stored_outputs.len());
         for stored in &stored_outputs {
-            let output_bytes = hex::decode(&stored.received_output_bytes)
-                .map_err(|e| format!("Invalid output bytes: {:?}", e))?;
-            let mut cursor = Cursor::new(output_bytes);
-            let received = ReceivedOutput::read(&mut cursor)
-                .map_err(|e| format!("Failed to parse output: {:?}", e))?;
-            let spendable = create_spendable_output(&rpc, received).await?;
+            let spendable = spendable_from_stored_bytes(&rpc, &stored.received_output_bytes).await?;
             spendable_outputs.push(spendable);
         }
 
-        let mut rng = rand::rngs::OsRng;
-        let decoys = Decoys::select(
-            &mut rng,
+        let decoys = select_output_decoys(
             &rpc,
-            protocol.ring_len(),
+            protocol,
             height.saturating_sub(1),
             &spendable_outputs,
         )
-        .await
-        .map_err(|e| format!("Decoy selection failed: {:?}", e))?;
+        .await?;
 
         Ok(DecoyResult {
             height: height.saturating_sub(1),
@@ -365,19 +473,21 @@ pub mod native {
         #[cfg(target_arch = "wasm32")]
         let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
 
-        let protocol = rpc
-            .get_protocol()
-            .await
-            .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
+        let protocol = compat_protocol(
+            rpc.get_protocol()
+                .await
+                .map_err(|e| format!("Failed to get protocol: {:?}", e))?,
+        );
 
-        let fee_rate: Fee = rpc
-            .get_fee_checked(DEFAULT_MAX_FEE_PER_BYTE)
-            .await
-            .map_err(|e| format!("Failed to get fee rate: {:?}", e))?;
+        let fee_rate: Fee = compat_fee(
+            rpc.get_fee_checked(DEFAULT_MAX_FEE_PER_BYTE)
+                .await
+                .map_err(|e| format!("Failed to get fee rate: {:?}", e))?,
+        );
 
         // Worst-case extra: assume payment ID and additional keys
         let extra = extra_weight(num_outputs, true, &[]);
-        let weight = Transaction::fee_weight(protocol, num_inputs, num_outputs, extra);
+        let weight = transaction_fee_weight(protocol, num_inputs, num_outputs, extra);
         let fee = fee_rate.calculate(weight);
 
         Ok(FeeEstimate {
@@ -530,15 +640,17 @@ pub mod native {
         #[cfg(target_arch = "wasm32")]
         let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
 
-        let protocol = rpc
-            .get_protocol()
-            .await
-            .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
+        let protocol = compat_protocol(
+            rpc.get_protocol()
+                .await
+                .map_err(|e| format!("Failed to get protocol: {:?}", e))?,
+        );
 
-        let fee = rpc
-            .get_fee_checked(DEFAULT_MAX_FEE_PER_BYTE)
-            .await
-            .map_err(|e| format!("Failed to get fee: {:?}", e))?;
+        let fee = compat_fee(
+            rpc.get_fee_checked(DEFAULT_MAX_FEE_PER_BYTE)
+                .await
+                .map_err(|e| format!("Failed to get fee: {:?}", e))?,
+        );
 
         // Parse and validate all destination addresses
         let mut dest_addrs = Vec::with_capacity(recipients.len());
@@ -550,17 +662,8 @@ pub mod native {
 
         let mut spendable_outputs = Vec::new();
 
-        use std::io::Cursor;
-
         for stored in &stored_outputs {
-            let output_bytes = hex::decode(&stored.received_output_bytes)
-                .map_err(|e| format!("Invalid received_output_bytes: {:?}", e))?;
-
-            let mut cursor = Cursor::new(output_bytes);
-            let received_output = ReceivedOutput::read(&mut cursor)
-                .map_err(|e| format!("Failed to deserialize ReceivedOutput: {:?}", e))?;
-
-            let spendable = create_spendable_output(&rpc, received_output).await?;
+            let spendable = spendable_from_stored_bytes(&rpc, &stored.received_output_bytes).await?;
             spendable_outputs.push(spendable);
         }
 
@@ -572,7 +675,7 @@ pub mod native {
         let total_send: u64 = recipients.iter().map(|(_, amt)| *amt).sum();
         let num_out_with_change = recipients.len() + 1;
         let extra_wc = extra_weight(num_out_with_change, true, &[]);
-        let weight_wc = Transaction::fee_weight(
+        let weight_wc = transaction_fee_weight(
             protocol,
             spendable_outputs.len(),
             num_out_with_change,
@@ -633,21 +736,18 @@ pub mod native {
 
         let fee_amount = signable.fee();
 
-        // Get the eventuality to extract the private tx_key before signing
-        let eventuality = signable
-            .eventuality()
-            .ok_or_else(|| "Failed to get eventuality (r_seed not set)".to_string())?;
-        let tx_key = hex::encode(eventuality.tx_key().to_bytes());
-        let tx_key_additional: Vec<String> = eventuality
-            .tx_key_additional()
+        // Select decoys online, then sign; the signer returns the tx keys
+        let unsigned = signable
+            .prepare_unsigned(&mut rng, &rpc)
+            .await
+            .map_err(|e| format!("Failed to prepare transaction: {:?}", e))?;
+        let (tx, tx_key, tx_key_additional) = sign_offline(&mut rng, &spend_key, unsigned)
+            .map_err(|e| format!("Failed to sign transaction: {:?}", e))?;
+        let tx_key = hex::encode(tx_key.to_bytes());
+        let tx_key_additional: Vec<String> = tx_key_additional
             .iter()
             .map(|k| hex::encode(k.to_bytes()))
             .collect();
-
-        let tx = signable
-            .sign(&mut rng, &rpc, &spend_key)
-            .await
-            .map_err(|e| format!("Failed to sign transaction: {:?}", e))?;
 
         let tx_id = hex::encode(tx.hash());
         let tx_blob = hex::encode(tx.serialize());
@@ -700,15 +800,17 @@ pub mod native {
         #[cfg(target_arch = "wasm32")]
         let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
 
-        let protocol = rpc
-            .get_protocol()
-            .await
-            .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
+        let protocol = compat_protocol(
+            rpc.get_protocol()
+                .await
+                .map_err(|e| format!("Failed to get protocol: {:?}", e))?,
+        );
 
-        let fee = rpc
-            .get_fee_checked(DEFAULT_MAX_FEE_PER_BYTE)
-            .await
-            .map_err(|e| format!("Failed to get fee: {:?}", e))?;
+        let fee = compat_fee(
+            rpc.get_fee_checked(DEFAULT_MAX_FEE_PER_BYTE)
+                .await
+                .map_err(|e| format!("Failed to get fee: {:?}", e))?,
+        );
 
         // Parse destination address
         let dest_addr = MoneroAddress::from_str(network, destination_address).map_err(|e| {
@@ -720,17 +822,9 @@ pub mod native {
 
         // Convert stored outputs to spendable outputs
         let mut spendable_outputs = Vec::new();
-        use std::io::Cursor;
 
         for stored in &stored_outputs {
-            let output_bytes = hex::decode(&stored.received_output_bytes)
-                .map_err(|e| format!("Invalid received_output_bytes: {:?}", e))?;
-
-            let mut cursor = Cursor::new(output_bytes);
-            let received_output = ReceivedOutput::read(&mut cursor)
-                .map_err(|e| format!("Failed to deserialize ReceivedOutput: {:?}", e))?;
-
-            let spendable = create_spendable_output(&rpc, received_output).await?;
+            let spendable = spendable_from_stored_bytes(&rpc, &stored.received_output_bytes).await?;
             spendable_outputs.push(spendable);
         }
 
@@ -746,7 +840,7 @@ pub mod native {
         // Worst-case extra: assume payment ID and additional keys
         let extra = extra_weight(num_outputs, true, &[]);
         let estimated_tx_size =
-            Transaction::fee_weight(protocol, spendable_outputs.len(), num_outputs, extra);
+            transaction_fee_weight(protocol, spendable_outputs.len(), num_outputs, extra);
 
         let fee_amount = fee.calculate(estimated_tx_size);
 
@@ -785,21 +879,18 @@ pub mod native {
 
         let actual_fee = signable.fee();
 
-        // Get the eventuality to extract the private tx_key before signing
-        let eventuality = signable
-            .eventuality()
-            .ok_or_else(|| "Failed to get eventuality (r_seed not set)".to_string())?;
-        let tx_key = hex::encode(eventuality.tx_key().to_bytes());
-        let tx_key_additional: Vec<String> = eventuality
-            .tx_key_additional()
+        // Select decoys online, then sign; the signer returns the tx keys
+        let unsigned = signable
+            .prepare_unsigned(&mut rng, &rpc)
+            .await
+            .map_err(|e| format!("Failed to prepare sweep transaction: {:?}", e))?;
+        let (tx, tx_key, tx_key_additional) = sign_offline(&mut rng, &spend_key, unsigned)
+            .map_err(|e| format!("Failed to sign sweep transaction: {:?}", e))?;
+        let tx_key = hex::encode(tx_key.to_bytes());
+        let tx_key_additional: Vec<String> = tx_key_additional
             .iter()
             .map(|k| hex::encode(k.to_bytes()))
             .collect();
-
-        let tx = signable
-            .sign(&mut rng, &rpc, &spend_key)
-            .await
-            .map_err(|e| format!("Failed to sign sweep transaction: {:?}", e))?;
 
         let tx_id = hex::encode(tx.hash());
         let tx_blob = hex::encode(tx.serialize());
@@ -833,7 +924,7 @@ pub mod native {
     ) -> Result<(), String> {
         let tx_bytes = hex::decode(tx_blob_hex).map_err(|e| format!("Invalid hex: {:?}", e))?;
 
-        let tx = Transaction::read::<&[u8]>(&mut tx_bytes.as_ref())
+        let tx = Transaction::<NotPruned>::read::<&[u8]>(&mut tx_bytes.as_ref())
             .map_err(|e| format!("Invalid transaction: {:?}", e))?;
 
         let _rpc = HttpRpc::new(node_url.to_string())
@@ -868,7 +959,7 @@ pub mod native {
     ) -> Result<(), String> {
         let tx_bytes = hex::decode(tx_blob_hex).map_err(|e| format!("Invalid hex: {:?}", e))?;
 
-        let tx = Transaction::read::<&[u8]>(&mut tx_bytes.as_ref())
+        let tx = Transaction::<NotPruned>::read::<&[u8]>(&mut tx_bytes.as_ref())
             .map_err(|e| format!("Invalid transaction: {:?}", e))?;
 
         let conn = WasmRpcConnection::new(node_url.to_string());
@@ -887,6 +978,49 @@ pub mod native {
         check_send_raw_transaction_response(&response)
     }
 
+    async fn received_outputs_from_scan_inner<R: RpcConnection>(
+        rpc: &Rpc<R>,
+        block_height: u64,
+        seed_phrase: &str,
+    ) -> Result<Vec<ReceivedOutput>, String> {
+        let seed = resolve_seed(seed_phrase)?;
+        let view_pair = view_pair_from_seed(&seed);
+        let mut scanner =
+            crate::scanner::oxide_scanner_from_keys(&view_pair.spend(), view_pair.view_scalar())?;
+
+        let block = rpc
+            .get_block_by_number(block_height as usize)
+            .await
+            .map_err(|e| format!("Failed to get block: {:?}", e))?;
+
+        let mut txs_with_hashes = Vec::new();
+        txs_with_hashes.push(
+            crate::scanner::parse_full_tx_blob(&block.miner_tx.serialize())
+                .ok_or_else(|| "Failed to parse miner transaction".to_string())?,
+        );
+        if !block.txs.is_empty() {
+            let fetched_txs = rpc
+                .get_transactions(&block.txs)
+                .await
+                .map_err(|e| format!("Failed to get transactions: {:?}", e))?;
+            for tx in &fetched_txs {
+                txs_with_hashes.push(
+                    crate::scanner::parse_full_tx_blob(&tx.serialize())
+                        .ok_or_else(|| "Failed to parse transaction".to_string())?,
+                );
+            }
+        }
+
+        let mut received_outputs = Vec::new();
+        for (tx_hash, tx) in &txs_with_hashes {
+            let outputs = crate::scanner::scan_single_transaction(&mut scanner, *tx_hash, tx)?;
+            for output in &outputs {
+                received_outputs.push(received_from_wallet_output(output)?);
+            }
+        }
+        Ok(received_outputs)
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn get_received_outputs_from_scan(
         node_url: &str,
@@ -894,37 +1028,9 @@ pub mod native {
         seed_phrase: &str,
         _network_str: &str,
     ) -> Result<Vec<ReceivedOutput>, String> {
-        let seed = resolve_seed(seed_phrase)?;
-
-        let view_pair = view_pair_from_seed(&seed);
-        let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
-
         let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
-
-        let block = rpc
-            .get_block_by_number(block_height as usize)
-            .await
-            .map_err(|e| format!("Failed to get block: {:?}", e))?;
-
-        let mut all_transactions = vec![block.miner_tx];
-
-        if !block.txs.is_empty() {
-            let fetched_txs = rpc
-                .get_transactions(&block.txs)
-                .await
-                .map_err(|e| format!("Failed to get transactions: {:?}", e))?;
-            all_transactions.extend(fetched_txs);
-        }
-
-        let mut received_outputs = Vec::new();
-        for tx in all_transactions.iter() {
-            let scan_result = scanner.scan_transaction(tx);
-            let outputs = scan_result.ignore_timelock();
-            received_outputs.extend(outputs);
-        }
-
-        Ok(received_outputs)
+        received_outputs_from_scan_inner(&rpc, block_height, seed_phrase).await
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -934,36 +1040,8 @@ pub mod native {
         seed_phrase: &str,
         _network_str: &str,
     ) -> Result<Vec<ReceivedOutput>, String> {
-        let seed = resolve_seed(seed_phrase)?;
-
-        let view_pair = view_pair_from_seed(&seed);
-        let mut scanner = Scanner::from_view(view_pair, Some(HashSet::new()));
-
         let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
-
-        let block = rpc
-            .get_block_by_number(block_height as usize)
-            .await
-            .map_err(|e| format!("Failed to get block: {:?}", e))?;
-
-        let mut all_transactions = vec![block.miner_tx];
-
-        if !block.txs.is_empty() {
-            let fetched_txs = rpc
-                .get_transactions(&block.txs)
-                .await
-                .map_err(|e| format!("Failed to get transactions: {:?}", e))?;
-            all_transactions.extend(fetched_txs);
-        }
-
-        let mut received_outputs = Vec::new();
-        for tx in all_transactions.iter() {
-            let scan_result = scanner.scan_transaction(tx);
-            let outputs = scan_result.ignore_timelock();
-            received_outputs.extend(outputs);
-        }
-
-        Ok(received_outputs)
+        received_outputs_from_scan_inner(&rpc, block_height, seed_phrase).await
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1187,7 +1265,7 @@ pub mod native {
         if !destination.original.is_empty() {
             let address = std::str::from_utf8(&destination.original)
                 .map_err(|e| format!("Wallet2 destination original address is not UTF-8: {e}"))?;
-            return MoneroAddress::from_str_raw(address)
+            return MoneroAddress::from_str_with_unchecked_network(address)
                 .map_err(|e| format!("Invalid wallet2 destination address: {e:?}"));
         }
         if destination.is_integrated {
@@ -1196,22 +1274,18 @@ pub mod native {
                     .to_string(),
             );
         }
-        let spend = CompressedEdwardsY(destination.spend_public_key)
+        let spend = monero_wallet::ed25519::CompressedPoint::from(destination.spend_public_key)
             .decompress()
             .ok_or_else(|| "Invalid wallet2 destination spend public key".to_string())?;
-        let view = CompressedEdwardsY(destination.view_public_key)
+        let view = monero_wallet::ed25519::CompressedPoint::from(destination.view_public_key)
             .decompress()
             .ok_or_else(|| "Invalid wallet2 destination view public key".to_string())?;
         let address_type = if destination.is_subaddress {
             AddressType::Subaddress
         } else {
-            AddressType::Standard
+            AddressType::Legacy
         };
-        Ok(MoneroAddress::new(
-            AddressMeta::new(network, address_type),
-            spend,
-            view,
-        ))
+        Ok(MoneroAddress::new(network, address_type, spend, view))
     }
 
     fn wallet2_source_decoys(
@@ -1473,14 +1547,16 @@ pub mod native {
         #[cfg(target_arch = "wasm32")]
         let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
 
-        let protocol = rpc
-            .get_protocol()
-            .await
-            .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
-        let fee_rate: Fee = rpc
-            .get_fee_checked(max_fee_per_weight.unwrap_or(DEFAULT_MAX_FEE_PER_BYTE))
-            .await
-            .map_err(|e| format!("Failed to get fee: {:?}", e))?;
+        let protocol = compat_protocol(
+            rpc.get_protocol()
+                .await
+                .map_err(|e| format!("Failed to get protocol: {:?}", e))?,
+        );
+        let fee_rate: Fee = compat_fee(
+            rpc.get_fee_checked(max_fee_per_weight.unwrap_or(DEFAULT_MAX_FEE_PER_BYTE))
+                .await
+                .map_err(|e| format!("Failed to get fee: {:?}", e))?,
+        );
 
         let mut dest_addrs = Vec::with_capacity(recipients.len());
         for (addr_str, _) in recipients {
@@ -1489,15 +1565,9 @@ pub mod native {
             dest_addrs.push(dest_addr);
         }
 
-        use std::io::Cursor;
         let mut spendable_outputs = Vec::with_capacity(stored_outputs.len());
         for stored in &stored_outputs {
-            let output_bytes = hex::decode(&stored.received_output_bytes)
-                .map_err(|e| format!("Invalid output bytes: {:?}", e))?;
-            let mut cursor = Cursor::new(output_bytes);
-            let received = ReceivedOutput::read(&mut cursor)
-                .map_err(|e| format!("Failed to parse output: {:?}", e))?;
-            let spendable = create_spendable_output(&rpc, received).await?;
+            let spendable = spendable_from_stored_bytes(&rpc, &stored.received_output_bytes).await?;
             spendable_outputs.push(spendable);
         }
 
@@ -1508,7 +1578,7 @@ pub mod native {
         let total_send: u64 = recipients.iter().map(|(_, amt)| *amt).sum();
         let num_out_with_change = recipients.len() + 1;
         let extra_wc = extra_weight(num_out_with_change, true, &[]);
-        let weight_wc = Transaction::fee_weight(
+        let weight_wc = transaction_fee_weight(
             protocol,
             spendable_outputs.len(),
             num_out_with_change,
