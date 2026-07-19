@@ -2,7 +2,7 @@
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, edwards::EdwardsPoint, scalar::Scalar};
 use monero_rust::monero_backend::{
-    ringct::{RctBase, RctPrunable, RctSignatures},
+    ringct::{bulletproofs::Bulletproof, RctBase, RctProofs, RctPrunable},
     transaction::{Transaction, TransactionPrefix},
     wallet::{
         address::{AddressSpec, Network},
@@ -47,22 +47,44 @@ fn parse_pruned_transaction<R: std::io::Read>(
     r: &mut R,
     _prunable_hash: [u8; 32],
 ) -> std::io::Result<Transaction> {
-    let prefix = TransactionPrefix::read(r)?;
-    if prefix.version != 2 {
+    let version: u64 = monero_oxide::io::VarInt::read(r)?;
+    let prefix = TransactionPrefix::read(r, version)?;
+    if version != 2 {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "invalid version",
         ));
     }
-    let (rct_base, _rct_type) = RctBase::read(prefix.outputs.len(), r)?;
-    Ok(Transaction {
+    let Some((_rct_type, rct_base)) = RctBase::read(prefix.inputs.len(), prefix.outputs.len(), r)?
+    else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "pruned RCT transaction had no RCT base",
+        ));
+    };
+    // RctPrunable::Null no longer exists in the oxide backend, so stand in a
+    // placeholder prunable. It is discarded (only the RCT base is kept) when
+    // the transaction is converted to its pruned form for scanning.
+    Ok(Transaction::V2 {
         prefix,
-        signatures: vec![],
-        rct_signatures: RctSignatures {
+        proofs: Some(RctProofs {
             base: rct_base,
-            prunable: RctPrunable::Null,
-        },
+            prunable: placeholder_bp_plus_prunable(),
+        }),
     })
+}
+
+/// A structurally-valid, all-zero Bulletproof+ prunable placeholder, filling
+/// the role of the removed `RctPrunable::Null`.
+fn placeholder_bp_plus_prunable() -> RctPrunable {
+    // Three compressed points, three scalars, and two empty point vectors.
+    let zero_bp_plus = [0u8; (6 * 32) + 2];
+    RctPrunable::Clsag {
+        clsags: vec![],
+        pseudo_outs: vec![],
+        bulletproof: Bulletproof::read_plus(&mut zero_bp_plus.as_slice())
+            .expect("all-zero Bulletproof+ placeholder should parse"),
+    }
 }
 
 #[tokio::test]

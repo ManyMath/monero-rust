@@ -28,7 +28,7 @@ fn compute_block_id_matches_daemon_hash() {
     let expected_miner_tx_hash = result["miner_tx_hash"].as_str().unwrap();
 
     assert_eq!(
-        hex::encode(block.miner_tx.hash()),
+        hex::encode(block.miner_transaction().hash()),
         expected_miner_tx_hash,
         "miner tx hash should match the daemon's miner_tx_hash"
     );

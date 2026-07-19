@@ -42,7 +42,7 @@ mod local_stagenet_tests {
         let expected_tx_hash = hex::decode(EXPECTED_TX).unwrap();
         let mut expected = [0u8; 32];
         expected.copy_from_slice(&expected_tx_hash);
-        assert!(block.txs.contains(&expected));
+        assert!(block.transactions.contains(&expected));
     }
 
     #[tokio::test]

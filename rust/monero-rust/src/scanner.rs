@@ -6,7 +6,7 @@
 use crate::monero_backend::{
     block::Block,
     rpc::{BlockOutputIndices, GetBlocksFastResponse, Rpc, RpcConnection},
-    wallet::address::{AddressMeta, AddressType, MoneroAddress, Network},
+    wallet::address::{MoneroAddress, Network},
 };
 use crate::seed_compat::{Language, Seed};
 use monero_oxide::{
@@ -54,85 +54,9 @@ async fn yield_to_event_loop() {
     }
 }
 
-/// Encode a u64 as a Monero varint into a byte buffer.
-fn write_varint_to_buf(val: u64, buf: &mut Vec<u8>) {
-    let mut v = val;
-    loop {
-        let byte = (v & 0x7f) as u8;
-        v >>= 7;
-        if v == 0 {
-            buf.push(byte);
-            break;
-        }
-        buf.push(byte | 0x80);
-    }
-}
-
-/// Monero Merkle tree hash (CryptoNote tree_hash algorithm).
-fn tree_hash(hashes: &[[u8; 32]]) -> [u8; 32] {
-    use sha3::{Digest, Keccak256};
-
-    match hashes.len() {
-        0 => [0u8; 32],
-        1 => hashes[0],
-        2 => {
-            let mut buf = [0u8; 64];
-            buf[..32].copy_from_slice(&hashes[0]);
-            buf[32..].copy_from_slice(&hashes[1]);
-            Keccak256::digest(buf).into()
-        }
-        n => {
-            // Per Monero's tree-hash.c: cnt is the largest power of two with
-            // cnt < n <= 2*cnt. The first 2*cnt - n leaves are carried as-is;
-            // the remaining leaves are hashed in pairs from the tail.
-            let mut cnt = n.next_power_of_two() / 2;
-            let carried = 2 * cnt - n;
-            let mut ints = vec![[0u8; 32]; cnt];
-            ints[..carried].copy_from_slice(&hashes[..carried]);
-            let mut i = carried;
-            for int in ints.iter_mut().skip(carried) {
-                let mut hasher = Keccak256::new();
-                hasher.update(hashes[i]);
-                hasher.update(hashes[i + 1]);
-                *int = hasher.finalize().into();
-                i += 2;
-            }
-            while cnt > 1 {
-                cnt /= 2;
-                for j in 0..cnt {
-                    let mut hasher = Keccak256::new();
-                    hasher.update(ints[2 * j]);
-                    hasher.update(ints[2 * j + 1]);
-                    ints[j] = hasher.finalize().into();
-                }
-            }
-            ints[0]
-        }
-    }
-}
-
 /// Computes a Monero block ID.
-///
-/// block_id = keccak256(header_blob || tree_hash(tx_hashes) || varint(tx_count))
 pub fn compute_block_id(block: &Block) -> [u8; 32] {
-    // The miner tx hash must use Monero's three-part transaction hash for v2
-    // transactions; a plain keccak of the serialization only matches v1.
-    let miner_tx_hash: [u8; 32] = block.miner_tx.hash();
-    let mut tx_hashes = Vec::with_capacity(1 + block.txs.len());
-    tx_hashes.push(miner_tx_hash);
-    tx_hashes.extend_from_slice(&block.txs);
-
-    let root = tree_hash(&tx_hashes);
-
-    let mut blob = block.header.serialize();
-    blob.extend_from_slice(&root);
-    write_varint_to_buf(tx_hashes.len() as u64, &mut blob);
-
-    // Monero hashes blocks as keccak(varint(len(hashing_blob)) || hashing_blob)
-    let mut prefixed = Vec::with_capacity(blob.len() + 9);
-    write_varint_to_buf(blob.len() as u64, &mut prefixed);
-    prefixed.extend_from_slice(&blob);
-    Keccak256::digest(&prefixed).into()
+    block.hash()
 }
 
 /// Fallback key image extraction from raw tx bytes when `Transaction::read()` fails.
@@ -288,6 +212,21 @@ pub const WALLET_CLI_HARDWARE_LOOKAHEAD: Lookahead = Lookahead {
     account: 5,
     subaddress: 20,
 };
+
+/// Derive a legacy (standard) address from raw public keys.
+fn standard_address(network: Network, spend: EdwardsPoint, view: EdwardsPoint) -> MoneroAddress {
+    let convert = |point: EdwardsPoint| {
+        monero_wallet::ed25519::CompressedPoint::from(point.compress().to_bytes())
+            .decompress()
+            .expect("deriving an address from an invalid public key")
+    };
+    MoneroAddress::new(
+        network,
+        monero_wallet::address::AddressType::Legacy,
+        convert(spend),
+        convert(view),
+    )
+}
 
 fn parse_network(network_str: &str) -> Result<Network, String> {
     match network_str.to_lowercase().as_str() {
@@ -555,11 +494,7 @@ pub fn derive_keys_from_view_only(
     ))
     .ok_or_else(|| "Invalid view-only key hex".to_string())?;
     let view_point: EdwardsPoint = &view_scalar * ED25519_BASEPOINT_TABLE;
-    let address = MoneroAddress::new(
-        AddressMeta::new(network, AddressType::Standard),
-        spend_point,
-        view_point,
-    );
+    let address = standard_address(network, spend_point, view_point);
     Ok(DerivedKeys {
         secret_spend_key: String::new(),
         secret_view_key: hex::encode(view_scalar.to_bytes()),
@@ -582,11 +517,7 @@ pub fn derive_address_from_view_only(
     ))
     .ok_or_else(|| "Invalid view-only key hex".to_string())?;
     let view_point: EdwardsPoint = &view_scalar * ED25519_BASEPOINT_TABLE;
-    let address = MoneroAddress::new(
-        AddressMeta::new(network, AddressType::Standard),
-        spend_point,
-        view_point,
-    );
+    let address = standard_address(network, spend_point, view_point);
     Ok(address.to_string())
 }
 
@@ -628,12 +559,7 @@ fn address_from_seed(seed: &Seed, network: Network, passphrase: &str) -> String 
     let view_scalar = view_key_from_seed(seed, passphrase);
     let view_point: EdwardsPoint = &view_scalar * ED25519_BASEPOINT_TABLE;
 
-    MoneroAddress::new(
-        AddressMeta::new(network, AddressType::Standard),
-        spend_point,
-        view_point,
-    )
-    .to_string()
+    standard_address(network, spend_point, view_point).to_string()
 }
 
 pub fn derive_address(
@@ -722,11 +648,7 @@ pub fn derive_keys(
     let view_scalar = Scalar::from_bytes_mod_order(view);
     let view_point: EdwardsPoint = &view_scalar * ED25519_BASEPOINT_TABLE;
 
-    let address = MoneroAddress::new(
-        AddressMeta::new(network, AddressType::Standard),
-        spend_point,
-        view_point,
-    );
+    let address = standard_address(network, spend_point, view_point);
 
     Ok(DerivedKeys {
         secret_spend_key: hex::encode(spend_scalar.to_bytes()),
@@ -1195,9 +1117,8 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
         .map_err(|e| format!("Failed to fetch block: {:?}", e))?;
 
     let block_timestamp = block.header.timestamp;
-    let tx_hashes = block.txs.clone();
-    let oxide_block = OxideBlock::read::<&[u8]>(&mut block.serialize().as_ref())
-        .map_err(|e| format!("Failed to parse block at height {}: {:?}", block_height, e))?;
+    let tx_hashes = block.transactions.clone();
+    let oxide_block = block;
     let miner_tx_hash = oxide_block.miner_transaction().hash();
     let miner_tx = OxideTransaction::<Pruned>::from(oxide_block.miner_transaction().clone());
 
@@ -1682,9 +1603,7 @@ pub async fn process_batch_multi_wallet_response(
             };
             let (spend_point, view_scalar, address) = if let Some((vs, sp)) = view_only.as_ref() {
                 let vp: EdwardsPoint = vs * ED25519_BASEPOINT_TABLE;
-                let addr =
-                    MoneroAddress::new(AddressMeta::new(network, AddressType::Standard), *sp, vp)
-                        .to_string();
+                let addr = standard_address(network, *sp, vp).to_string();
                 (*sp, *vs, addr)
             } else {
                 let seed = seed_opt.as_ref().unwrap();
@@ -2269,9 +2188,8 @@ pub async fn scan_block_multi_wallet<R: RpcConnection + Send + Sync + Clone + 's
         .map_err(|e| format!("Failed to fetch block: {:?}", e))?;
 
     let block_timestamp = block.header.timestamp;
-    let tx_hashes = block.txs.clone();
-    let oxide_block = OxideBlock::read::<&[u8]>(&mut block.serialize().as_ref())
-        .map_err(|e| format!("Failed to parse block at height {}: {:?}", block_height, e))?;
+    let tx_hashes = block.transactions.clone();
+    let oxide_block = block;
     let miner_tx_hash = oxide_block.miner_transaction().hash();
     let miner_tx = OxideTransaction::<Pruned>::from(oxide_block.miner_transaction().clone());
 
@@ -2320,9 +2238,7 @@ pub async fn scan_block_multi_wallet<R: RpcConnection + Send + Sync + Clone + 's
                 parse_view_only_keys(&wallet_config.mnemonic)
             {
                 let vp: EdwardsPoint = &vs * ED25519_BASEPOINT_TABLE;
-                let addr =
-                    MoneroAddress::new(AddressMeta::new(network, AddressType::Standard), sp, vp)
-                        .to_string();
+                let addr = standard_address(network, sp, vp).to_string();
                 (sp, vs, addr)
             } else {
                 let seed = resolve_seed(&wallet_config.mnemonic)?;
@@ -2412,9 +2328,8 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
         .map_err(|e| format!("Failed to fetch block: {:?}", e))?;
 
     let block_timestamp = block.header.timestamp;
-    let tx_hashes = block.txs.clone();
-    let oxide_block = OxideBlock::read::<&[u8]>(&mut block.serialize().as_ref())
-        .map_err(|e| format!("Failed to parse block at height {}: {:?}", block_height, e))?;
+    let tx_hashes = block.transactions.clone();
+    let oxide_block = block;
     let miner_tx_hash = oxide_block.miner_transaction().hash();
     let miner_tx = OxideTransaction::<Pruned>::from(oxide_block.miner_transaction().clone());
 
@@ -2463,9 +2378,7 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
         };
         let (spend_point, view_scalar, address) = if let Some((vs, sp)) = view_only.as_ref() {
             let vp: EdwardsPoint = vs * ED25519_BASEPOINT_TABLE;
-            let addr =
-                MoneroAddress::new(AddressMeta::new(network, AddressType::Standard), *sp, vp)
-                    .to_string();
+            let addr = standard_address(network, *sp, vp).to_string();
             (*sp, *vs, addr)
         } else {
             let seed = seed_opt.as_ref().unwrap();
@@ -2699,28 +2612,6 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Transitional parity check while the serai mirror is still vendored:
-    /// the oxide hash-to-point and our key-image computation must match the
-    /// previous backend bit-for-bit.
-    #[test]
-    fn oxide_key_image_matches_serai() {
-        use crate::monero_backend::ringct::{generate_key_image, hash_to_point};
-
-        for i in 1u64..8 {
-            let secret = Scalar::from(i * 7919 + 3);
-            let public = &secret * ED25519_BASEPOINT_TABLE;
-
-            let serai_hp = hash_to_point(public);
-            let oxide_hp: EdwardsPoint =
-                OxidePoint::biased_hash(public.compress().to_bytes()).into();
-            assert_eq!(serai_hp.compress(), oxide_hp.compress());
-
-            let serai_ki = generate_key_image(&Zeroizing::new(secret));
-            let oxide_ki = calculate_key_image(&secret, &Scalar::ZERO);
-            assert_eq!(serai_ki.compress(), oxide_ki.compress());
-        }
-    }
 
     const TEST_VECTOR_1_SEED: &str = "hemlock jubilee eden hacksaw boil superior inroads epoxy exhale orders cavernous second brunt saved richly lower upgrade hitched launching deepest mostly playful layout lower eden";
     const TEST_VECTOR_1_SPEND_KEY: &str =

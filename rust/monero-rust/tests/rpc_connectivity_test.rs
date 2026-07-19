@@ -97,12 +97,12 @@ mod rpc_tests {
         println!(
             "Timestamp: {}, txs: {}",
             block.header.timestamp,
-            block.txs.len() + 1
+            block.transactions.len() + 1
         );
 
-        if !block.txs.is_empty() {
-            let transactions = rpc.get_transactions(&block.txs).await.unwrap();
-            assert_eq!(transactions.len(), block.txs.len());
+        if !block.transactions.is_empty() {
+            let transactions = rpc.get_transactions(&block.transactions).await.unwrap();
+            assert_eq!(transactions.len(), block.transactions.len());
         }
     }
 
@@ -129,8 +129,8 @@ mod rpc_tests {
         assert_eq!(hex::encode(tx.hash()), tx_hex);
         println!(
             "inputs: {}, outputs: {}",
-            tx.prefix.inputs.len(),
-            tx.prefix.outputs.len()
+            tx.prefix().inputs.len(),
+            tx.prefix().outputs.len()
         );
     }
 
@@ -152,7 +152,7 @@ mod rpc_tests {
         let target_height = 1384526;
         let _block_hash_bytes = rpc.get_block_hash(target_height).await.unwrap();
         let block = rpc.get_block_by_number(target_height).await.unwrap();
-        println!("Block {}: {} txs", target_height, block.txs.len() + 1);
+        println!("Block {}: {} txs", target_height, block.transactions.len() + 1);
 
         let tx_hex = "07a561e60118c0a485b20bbfac787fd8efead96a9f422d9dff4a86f2985db7c5";
         let tx_hash_bytes = hex::decode(tx_hex).unwrap();
@@ -183,12 +183,12 @@ mod rpc_tests {
             "Block {}: hash={}, txs={}",
             target_height,
             &block_hash[..16],
-            block.txs.len() + 1
+            block.transactions.len() + 1
         );
 
-        if !block.txs.is_empty() {
-            let limit = block.txs.len().min(3);
-            let transactions = rpc.get_transactions(&block.txs[..limit]).await.unwrap();
+        if !block.transactions.is_empty() {
+            let limit = block.transactions.len().min(3);
+            let transactions = rpc.get_transactions(&block.transactions[..limit]).await.unwrap();
             println!("Fetched {} txs", transactions.len());
         }
     }

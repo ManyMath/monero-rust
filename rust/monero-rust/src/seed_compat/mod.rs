@@ -163,46 +163,35 @@ impl Seed {
 mod tests {
   use super::*;
 
-  /// Transitional parity check while the serai mirror is still vendored: the
-  /// ported seed handling must match the previous backend exactly.
+  /// The ported seed handling must keep matching the captured wallet vectors.
   #[test]
-  fn matches_mirror_seed_handling() {
-    use crate::monero_backend::wallet::seed::Seed as MirrorSeed;
-
-    for mnemonic in [
-      "hemlock jubilee eden hacksaw boil superior inroads epoxy exhale orders cavernous second brunt saved richly lower upgrade hitched launching deepest mostly playful layout lower eden",
-      "vocal either anvil films dolphin zeal bacon cuisine quote syndrome rejoices envy okay pancakes tulips lair greater petals organs enmity dedicated oust thwart tomorrow tomorrow",
-      "honked bagpipe alpine juicy faked afoot jostle claim cowl tunnel orphans negative pheasants feast jetting quote frown teeming cycling tribal womanly hills cottage daytime daytime",
-    ] {
-      let ported = Seed::from_string(Zeroizing::new(mnemonic.to_string())).unwrap();
-      let mirror = MirrorSeed::from_string(Zeroizing::new(mnemonic.to_string())).unwrap();
-      assert_eq!(ported.entropy(), mirror.entropy());
-      assert_eq!(ported.key_bytes(), mirror.key_bytes());
-      assert_eq!(
-        ported.key_bytes_with_passphrase("hunter2"),
-        mirror.key_bytes_with_passphrase("hunter2")
-      );
-      assert_eq!(ported.to_string(), mirror.to_string());
-      assert_eq!(ported.birthday(), mirror.birthday());
-    }
+  fn classic_seed_matches_vectors() {
+    let mnemonic = "hemlock jubilee eden hacksaw boil superior inroads epoxy exhale orders cavernous second brunt saved richly lower upgrade hitched launching deepest mostly playful layout lower eden";
+    let seed = Seed::from_string(Zeroizing::new(mnemonic.to_string())).unwrap();
+    assert_eq!(
+      hex::encode(&*seed.entropy()),
+      "29adefc8f67515b4b4bf48031780ab9d071d24f8a674b879ce7f245c37523807"
+    );
+    assert_eq!(seed.key_bytes(), seed.entropy());
+    assert_eq!(seed.key_bytes_with_passphrase(""), seed.key_bytes());
+    assert_ne!(seed.key_bytes_with_passphrase("hunter2"), seed.key_bytes());
+    assert_eq!(&*seed.to_string(), mnemonic);
+    assert_eq!(seed.birthday(), None);
   }
 
   #[test]
-  fn polyseed_roundtrip_matches_mirror() {
-    use crate::monero_backend::wallet::seed::Seed as MirrorSeed;
+  fn polyseed_roundtrip() {
     use rand_core::SeedableRng;
 
     let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(7);
     let ported = Seed::new_polyseed(&mut rng);
     let words = ported.to_string();
-
-    let mirror = MirrorSeed::from_string(words.clone()).unwrap();
-    assert_eq!(ported.entropy(), mirror.entropy());
-    assert_eq!(ported.key_bytes(), mirror.key_bytes());
-    assert_eq!(ported.birthday(), mirror.birthday());
+    assert_eq!(words.split_whitespace().count(), 16);
 
     let reparsed = Seed::from_string(words).unwrap();
     assert_eq!(reparsed.entropy(), ported.entropy());
+    assert_eq!(reparsed.key_bytes(), ported.key_bytes());
+    assert!(ported.birthday().is_some());
   }
 
   #[test]
@@ -223,13 +212,16 @@ mod tests {
         entropy[0] = 7;
         let mut seed = Polyseed::from(PolyseedLanguage::English, 0, 1_700_000_000, Zeroizing::new(entropy)).unwrap();
         let words = seed.to_string(Coin::Monero);
-        let expected = Seed::from_string(words.clone()).unwrap().key_bytes();
+        let expected = crate::scanner::derive_address(&words, "mainnet", "").unwrap();
         seed.crypt("password");
         let encrypted = seed.to_string(Coin::Monero);
         assert_eq!(Seed::from_string(encrypted.clone()).unwrap_err(), SeedError::EncryptedPolyseed);
-        assert!(Seed::from_string(encrypted).is_err());
+        for passphrase in ["", "password", "wrong"] {
+            assert!(crate::scanner::derive_address(&encrypted, "mainnet", passphrase).is_err());
+            assert!(crate::scanner::derive_keys(&encrypted, "mainnet", passphrase).is_err());
+        }
         seed.crypt("password");
-        assert_eq!(Seed::from_string(seed.to_string(Coin::Monero)).unwrap().key_bytes(), expected);
+        assert_eq!(crate::scanner::derive_address(&seed.to_string(Coin::Monero), "mainnet", "").unwrap(), expected);
     }
 
 }

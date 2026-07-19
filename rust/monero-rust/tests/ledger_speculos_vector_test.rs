@@ -91,11 +91,11 @@ fn ledger_app_speculos_crypto_vector_matches_local_primitives() {
     let address = MoneroAddress::from_str(Network::Stagenet, &vector.decoded.address)
         .expect("Ledger address should decode as stagenet");
     assert_eq!(
-        address.view.compress().to_bytes(),
+        address.view().compress().to_bytes(),
         decode_32(&vector.decoded.public_view_key)
     );
     assert_eq!(
-        address.spend.compress().to_bytes(),
+        address.spend().compress().to_bytes(),
         decode_32(&vector.decoded.public_spend_key)
     );
 

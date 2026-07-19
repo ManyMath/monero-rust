@@ -310,7 +310,7 @@ impl From<SeedError> for ErrorResponse {
             SeedError::EnglishOldWithChecksum => {
                 ErrorResponse::new(ERR_SEED_ENGLISH_OLD_CHECKSUM, e.to_string())
             }
-            SeedError::InvalidSeed => ErrorResponse::new(ERR_SEED_INVALID, e.to_string())
+            SeedError::InvalidSeed | SeedError::EncryptedPolyseed => ErrorResponse::new(ERR_SEED_INVALID, e.to_string())
                 .with_hint("The seed phrase could not be decoded"),
         }
     }
@@ -319,19 +319,21 @@ impl From<SeedError> for ErrorResponse {
 impl From<AddressError> for ErrorResponse {
     fn from(e: AddressError) -> Self {
         match e {
-            AddressError::InvalidByte => ErrorResponse::new(ERR_INVALID_ADDRESS, e.to_string())
-                .with_hint("The address prefix byte is not recognized"),
+            AddressError::InvalidTypeByte(_) => {
+                ErrorResponse::new(ERR_INVALID_ADDRESS, e.to_string())
+                    .with_hint("The address prefix byte is not recognized")
+            }
             AddressError::InvalidEncoding => ErrorResponse::new(ERR_INVALID_ADDRESS, e.to_string())
                 .with_hint("The address is not valid base58"),
             AddressError::InvalidLength => ErrorResponse::new(ERR_INVALID_ADDRESS, e.to_string())
                 .with_hint("The address has an unexpected length"),
             AddressError::InvalidKey => ErrorResponse::new(ERR_INVALID_KEY, e.to_string())
                 .with_hint("The address contains an invalid cryptographic key"),
-            AddressError::UnknownFeatures => ErrorResponse::new(ERR_INVALID_ADDRESS, e.to_string()),
-            AddressError::DifferentNetwork => {
+            AddressError::DifferentNetwork { .. } => {
                 ErrorResponse::new(ERR_ADDRESS_WRONG_NETWORK, e.to_string())
                     .with_hint("The address belongs to a different Monero network")
             }
+            _ => ErrorResponse::new(ERR_INVALID_ADDRESS, e.to_string()),
         }
     }
 }

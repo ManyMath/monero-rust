@@ -214,9 +214,9 @@ fn test_step7_direct_scanner_e2e() {
     let tx_hex = get_transaction_hex(EXPECTED_TX_HASH);
     let tx_bytes = hex::decode(&tx_hex).expect("failed to decode transaction hex");
 
-    let transaction = monero_rust::monero_backend::transaction::Transaction::read::<&[u8]>(
-        &mut tx_bytes.as_ref(),
-    )
+    let transaction = monero_rust::monero_backend::transaction::Transaction::<
+        monero_rust::monero_backend::transaction::NotPruned,
+    >::read::<&[u8]>(&mut tx_bytes.as_ref())
     .expect("failed to parse transaction");
 
     let scan_result = scanner.scan_transaction(&transaction);

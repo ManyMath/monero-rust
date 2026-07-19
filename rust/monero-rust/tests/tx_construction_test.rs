@@ -1,7 +1,7 @@
 mod common;
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
-use monero_rust::monero_backend::transaction::Transaction;
+use monero_rust::monero_backend::transaction::{NotPruned, Transaction};
 use monero_rust::monero_backend::wallet::{
     address::{AddressSpec, MoneroAddress, Network},
     seed::Seed,
@@ -170,14 +170,14 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
     tx.write(&mut tx_bytes)?;
 
     let mut cursor = Cursor::new(&tx_bytes[..]);
-    let deserialized_tx = Transaction::read(&mut cursor)?;
+    let deserialized_tx = Transaction::<NotPruned>::read(&mut cursor)?;
 
     assert_eq!(deserialized_tx.hash(), tx_hash);
-    assert_eq!(deserialized_tx.prefix.inputs.len(), 1);
-    assert_eq!(deserialized_tx.prefix.outputs.len(), 2);
-    assert_eq!(deserialized_tx.prefix.version, 2);
+    assert_eq!(deserialized_tx.prefix().inputs.len(), 1);
+    assert_eq!(deserialized_tx.prefix().outputs.len(), 2);
+    assert_eq!(u64::from(deserialized_tx.version()), 2);
 
-    for input in &deserialized_tx.prefix.inputs {
+    for input in &deserialized_tx.prefix().inputs {
         match input {
             monero_rust::monero_backend::transaction::Input::ToKey {
                 key_offsets,
@@ -186,20 +186,27 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
             } => {
                 assert!(key_offsets.len() >= 11);
                 let mut key_image_bytes = [0u8; 32];
-                key_image_bytes.copy_from_slice(&key_image.compress().to_bytes());
+                key_image_bytes.copy_from_slice(&key_image.to_bytes());
                 assert_ne!(key_image_bytes, [0u8; 32]);
             }
             _ => panic!("Expected ToKey input"),
         }
     }
 
-    for output in &deserialized_tx.prefix.outputs {
-        assert_eq!(output.amount, 0);
+    for output in &deserialized_tx.prefix().outputs {
+        assert_eq!(output.amount.unwrap_or(0), 0);
         assert_ne!(output.key.to_bytes(), [0u8; 32]);
     }
 
-    assert_eq!(deserialized_tx.rct_signatures.base.commitments.len(), 2);
-    assert_eq!(deserialized_tx.rct_signatures.base.fee, fee);
+    let Transaction::V2 {
+        proofs: Some(proofs),
+        ..
+    } = &deserialized_tx
+    else {
+        panic!("signed TX must be a v2 transaction with RCT proofs");
+    };
+    assert_eq!(proofs.base.commitments.len(), 2);
+    assert_eq!(proofs.base.fee, fee);
 
     use monero_rust::monero_backend::wallet::Scanner;
     use std::collections::HashSet;
@@ -394,8 +401,8 @@ async fn test_transaction_with_multiple_inputs() -> Result<(), Box<dyn std::erro
                 .sign(&mut rng, &rpc, &Zeroizing::new(spend_scalar))
                 .await?;
 
-            assert_eq!(tx.prefix.inputs.len(), 2);
-            assert_eq!(tx.prefix.outputs.len(), 2);
+            assert_eq!(tx.prefix().inputs.len(), 2);
+            assert_eq!(tx.prefix().outputs.len(), 2);
         }
 
         Ok(())

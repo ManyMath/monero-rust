@@ -1,7 +1,7 @@
 //! Output scanning test using the honked bagpipe stagenet wallet.
 
 use monero_rust::monero_backend::{
-    transaction::Transaction,
+    transaction::{NotPruned, Transaction},
     wallet::{
         address::{AddressSpec, Network},
         seed::Seed,
@@ -104,7 +104,7 @@ fn test_scan_actual_transaction() {
     // parser only when a pruned blob is actually present.
     let transaction = if tx_info.pruned_as_hex.is_empty() {
         let tx_bytes = hex::decode(&tx_info.as_hex).expect("failed to decode transaction hex");
-        Transaction::read::<&[u8]>(&mut tx_bytes.as_ref())
+        Transaction::<NotPruned>::read::<&[u8]>(&mut tx_bytes.as_ref())
             .expect("failed to parse full transaction")
     } else {
         let tx_bytes =
@@ -155,29 +155,45 @@ fn parse_pruned_transaction<R: std::io::Read>(
     _prunable_hash: [u8; 32],
 ) -> std::io::Result<Transaction> {
     use monero_rust::monero_backend::{
-        ringct::{RctBase, RctPrunable, RctSignatures},
+        ringct::{bulletproofs::Bulletproof, RctBase, RctProofs, RctPrunable},
         transaction::TransactionPrefix,
     };
 
-    let prefix = TransactionPrefix::read(r)?;
+    let version: u64 = monero_oxide::io::VarInt::read(r)?;
+    let prefix = TransactionPrefix::read(r, version)?;
 
-    if prefix.version != 2 {
+    if version != 2 {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "invalid version",
         ));
     }
 
-    let (rct_base, _rct_type) = RctBase::read(prefix.outputs.len(), r)?;
-
-    let rct_sigs_complete = RctSignatures {
-        base: rct_base,
-        prunable: RctPrunable::Null,
+    let Some((_rct_type, rct_base)) = RctBase::read(prefix.inputs.len(), prefix.outputs.len(), r)?
+    else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "pruned RCT transaction had no RCT base",
+        ));
     };
 
-    Ok(Transaction {
+    // RctPrunable::Null no longer exists in the oxide backend, so stand in a
+    // structurally-valid, all-zero Bulletproof+ placeholder. It is discarded
+    // (only the RCT base is kept) when the transaction is converted to its
+    // pruned form for scanning.
+    let zero_bp_plus = [0u8; (6 * 32) + 2];
+    let placeholder_prunable = RctPrunable::Clsag {
+        clsags: vec![],
+        pseudo_outs: vec![],
+        bulletproof: Bulletproof::read_plus(&mut zero_bp_plus.as_slice())
+            .expect("all-zero Bulletproof+ placeholder should parse"),
+    };
+
+    Ok(Transaction::V2 {
         prefix,
-        signatures: vec![],
-        rct_signatures: rct_sigs_complete,
+        proofs: Some(RctProofs {
+            base: rct_base,
+            prunable: placeholder_prunable,
+        }),
     })
 }

@@ -4,7 +4,7 @@ mod common;
 mod mock_rpc;
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
-use monero_rust::monero_backend::transaction::Transaction;
+use monero_rust::monero_backend::transaction::{NotPruned, Transaction};
 use monero_rust::monero_backend::wallet::{
     address::{MoneroAddress, Network},
     seed::Seed,
@@ -183,7 +183,7 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
 
     // --- Step 6: Deserialize the signed blob and verify structure ---
     let signed_bytes = hex::decode(&result.tx_blob)?;
-    let deserialized_tx = Transaction::read(&mut Cursor::new(&signed_bytes[..]))?;
+    let deserialized_tx = Transaction::<NotPruned>::read(&mut Cursor::new(&signed_bytes[..]))?;
 
     // Hash of deserialized transaction must match tx_id from sign result
     let tx_hash = hex::encode(deserialized_tx.hash());
@@ -193,26 +193,34 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
     );
 
     assert_eq!(
-        deserialized_tx.prefix.version, 2,
+        u64::from(deserialized_tx.version()),
+        2,
         "TX version must be 2 (RingCT)"
     );
-    assert_eq!(deserialized_tx.prefix.inputs.len(), 1, "Must have 1 input");
+    assert_eq!(deserialized_tx.prefix().inputs.len(), 1, "Must have 1 input");
     assert_eq!(
-        deserialized_tx.prefix.outputs.len(),
+        deserialized_tx.prefix().outputs.len(),
         2,
         "Must have 2 outputs (send + change)"
     );
 
     // Verify CLSAG signature present
-    assert_eq!(deserialized_tx.rct_signatures.base.commitments.len(), 2);
-    assert!(deserialized_tx.rct_signatures.base.fee > 0);
+    let Transaction::V2 {
+        proofs: Some(proofs),
+        ..
+    } = &deserialized_tx
+    else {
+        panic!("signed TX must be a v2 transaction with RCT proofs");
+    };
+    assert_eq!(proofs.base.commitments.len(), 2);
+    assert!(proofs.base.fee > 0);
     assert_eq!(
-        deserialized_tx.rct_signatures.base.fee, expected_fee,
+        proofs.base.fee, expected_fee,
         "Fee in signed TX must match expected"
     );
 
     // Verify ring signature inputs have proper key offsets
-    for input in &deserialized_tx.prefix.inputs {
+    for input in &deserialized_tx.prefix().inputs {
         match input {
             monero_rust::monero_backend::transaction::Input::ToKey {
                 key_offsets,
@@ -223,7 +231,7 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
                     key_offsets.len() >= 11,
                     "Ring size must be at least 11 (16 on modern protocol)"
                 );
-                let ki_bytes = key_image.compress().to_bytes();
+                let ki_bytes = key_image.to_bytes();
                 assert_ne!(ki_bytes, [0u8; 32], "Key image must not be zero");
             }
             _ => panic!("Expected ToKey input"),
@@ -231,8 +239,12 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
     }
 
     // Verify outputs are confidential (amount == 0 in prefix for RingCT)
-    for output in &deserialized_tx.prefix.outputs {
-        assert_eq!(output.amount, 0, "RingCT outputs must have 0 prefix amount");
+    for output in &deserialized_tx.prefix().outputs {
+        assert_eq!(
+            output.amount.unwrap_or(0),
+            0,
+            "RingCT outputs must have 0 prefix amount"
+        );
         assert_ne!(
             output.key.to_bytes(),
             [0u8; 32],

@@ -1,4 +1,4 @@
-use monero_rust::monero_backend::transaction::{Input, Transaction};
+use monero_rust::monero_backend::transaction::{Input, NotPruned, Transaction};
 use sha3::{Digest, Keccak256};
 
 #[derive(serde::Deserialize)]
@@ -20,7 +20,7 @@ fn load_fixture() -> PrunedTxFixture {
 fn test_full_tx_parses_successfully() {
     let fixture = load_fixture();
     let bytes = hex::decode(&fixture.as_hex_full).expect("failed to decode as_hex_full");
-    let tx = Transaction::read::<&[u8]>(&mut bytes.as_ref())
+    let tx = Transaction::<NotPruned>::read::<&[u8]>(&mut bytes.as_ref())
         .expect("Transaction::read() should succeed on full unpruned TX");
 
     // Verify the transaction hash matches the expected txid
@@ -35,15 +35,18 @@ fn test_key_images_extractable_from_pruned() {
 
     // Parse just the prefix + RctBase from pruned data
     let mut cursor = std::io::Cursor::new(&pruned_bytes);
-    let prefix = monero_rust::monero_backend::transaction::TransactionPrefix::read(&mut cursor)
-        .expect("prefix should parse from pruned data");
+    let version: u64 =
+        monero_oxide::io::VarInt::read(&mut cursor).expect("version should parse from pruned data");
+    let prefix =
+        monero_rust::monero_backend::transaction::TransactionPrefix::read(&mut cursor, version)
+            .expect("prefix should parse from pruned data");
 
     // Extract key images from the parsed prefix
     let key_images: Vec<String> = prefix
         .inputs
         .iter()
         .filter_map(|input| match input {
-            Input::ToKey { key_image, .. } => Some(hex::encode(key_image.compress().to_bytes())),
+            Input::ToKey { key_image, .. } => Some(hex::encode(key_image.to_bytes())),
             _ => None,
         })
         .collect();
@@ -60,14 +63,14 @@ fn test_key_images_extractable_from_pruned() {
 
     // Cross-check: parse full TX and verify same key images
     let full_bytes = hex::decode(&fixture.as_hex_full).expect("decode full");
-    let full_tx = Transaction::read::<&[u8]>(&mut full_bytes.as_ref()).expect("parse full");
+    let full_tx = Transaction::<NotPruned>::read::<&[u8]>(&mut full_bytes.as_ref()).expect("parse full");
 
     let full_key_images: Vec<String> = full_tx
-        .prefix
+        .prefix()
         .inputs
         .iter()
         .filter_map(|input| match input {
-            Input::ToKey { key_image, .. } => Some(hex::encode(key_image.compress().to_bytes())),
+            Input::ToKey { key_image, .. } => Some(hex::encode(key_image.to_bytes())),
             _ => None,
         })
         .collect();
@@ -84,10 +87,17 @@ fn test_prunable_hash_matches_keccak256() {
 
     // Parse the full transaction to extract the prunable portion
     let full_bytes = hex::decode(&fixture.as_hex_full).expect("decode full");
-    let tx = Transaction::read::<&[u8]>(&mut full_bytes.as_ref()).expect("parse full tx");
+    let tx = Transaction::<NotPruned>::read::<&[u8]>(&mut full_bytes.as_ref()).expect("parse full tx");
 
     // Serialize the prunable portion and compute its Keccak-256 hash
-    let prunable_bytes = tx.rct_signatures.prunable.serialize();
+    let Transaction::V2 {
+        proofs: Some(proofs),
+        ..
+    } = &tx
+    else {
+        panic!("full TX should be a v2 transaction with proofs");
+    };
+    let prunable_bytes = proofs.prunable.serialize(proofs.rct_type());
     assert!(
         !prunable_bytes.is_empty(),
         "Prunable section should not be empty for a full transaction"

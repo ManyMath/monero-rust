@@ -17,8 +17,6 @@ pub mod seed_compat;
 pub(crate) mod decoy_select;
 pub(crate) mod oxide_output_bytes;
 pub mod wallet_compat;
-#[cfg(feature = "oxide-adapter-spike")]
-pub mod oxide_adapter;
 pub mod scan_coordinator;
 pub mod scanner;
 pub mod wallet_output;

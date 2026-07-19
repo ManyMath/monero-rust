@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "monero-rust",
-    "monero-serai-mirror",
     "monero-epee-bin-serde",
     "monero-cli",
     "cuprate-cryptonight",

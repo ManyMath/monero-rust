@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 use monero_rust::monero_backend::ringct::generate_key_image;
-use monero_rust::monero_backend::transaction::Transaction;
+use monero_rust::monero_backend::transaction::{NotPruned, Transaction};
 use monero_rust::{
     epee_compat, extract_key_image_hex, key_image_signing, parse_rpc_export,
     wallet_keys_file::read_keys_file, WalletOutput, WalletState,
@@ -425,7 +425,7 @@ fn cold_signing_unsigned_txset_converts_to_app_unsigned_payload() {
         monero_rust::monero_backend::wallet::sign_offline(&mut rng, &spend, app_unsigned)
             .expect("converted wallet2 unsigned payload should sign offline");
     let tx_bytes = tx.serialize();
-    Transaction::read(&mut std::io::Cursor::new(tx_bytes.clone()))
+    Transaction::<NotPruned>::read(&mut std::io::Cursor::new(tx_bytes.clone()))
         .expect("signed converted tx should reparse");
     let signed_key_images = monero_rust::scanner::extract_key_images_from_raw_tx(&tx_bytes);
     assert_eq!(signed_key_images.len(), 2);
@@ -493,7 +493,7 @@ fn cold_signing_signed_txset_parses_wallet2_pending_summary() {
     assert_eq!(hex::encode(ptx.tx_hash), expected_tx_hash);
     assert!(!ptx.tx_blob.is_empty());
     let mut tx_blob_cursor = ptx.tx_blob.as_slice();
-    let reparsed_tx = Transaction::read(&mut tx_blob_cursor)
+    let reparsed_tx = Transaction::<NotPruned>::read(&mut tx_blob_cursor)
         .expect("extracted signed tx blob should parse as monero-serai transaction");
     assert!(tx_blob_cursor.is_empty());
     assert_eq!(hex::encode(reparsed_tx.hash()), expected_tx_hash);
@@ -727,7 +727,7 @@ fn cold_signing_wallet2_unsigned_txset_signs_with_imported_cold_wallet_keys() {
     assert!(signed.tx_id.len() == 64);
     assert!(!signed.tx_blob.is_empty());
     let tx_bytes = hex::decode(&signed.tx_blob).expect("signed tx blob should be hex");
-    Transaction::read(&mut std::io::Cursor::new(tx_bytes))
+    Transaction::<NotPruned>::read(&mut std::io::Cursor::new(tx_bytes))
         .expect("signed wallet2-converted tx should parse");
     assert_eq!(signed.spent_key_images.len(), 2);
     for expected_index in [0usize, 20usize] {

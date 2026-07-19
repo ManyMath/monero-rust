@@ -4,9 +4,9 @@ pub mod native {
     use crate::monero_backend::rpc::{Rpc, RpcConnection, DEFAULT_MAX_FEE_PER_BYTE};
     use crate::seed_compat::Seed;
     use crate::wallet_compat::{
-        sign_offline, transaction_fee_weight, AbsoluteId, Change, Commitment, Decoys, Fee,
-        InternalPayment, Metadata, OutputData, Protocol, ReceivedOutput,
-        SignableTransactionBuilder, SpendableOutput, UnsignedInput, UnsignedTransaction, ViewPair,
+        sign_offline, transaction_fee_weight, Change, Decoys, Fee, InternalPayment, Protocol,
+        ReceivedOutput, SignableTransactionBuilder, SpendableOutput, UnsignedInput,
+        UnsignedTransaction, ViewPair,
     };
     use curve25519_dalek::{
         constants::ED25519_BASEPOINT_TABLE,
@@ -25,60 +25,6 @@ pub mod native {
         hash_point * **secret
     }
 
-    /// Convert the RPC client's protocol report into the compat model.
-    fn compat_protocol(protocol: crate::monero_backend::Protocol) -> Protocol {
-        match protocol {
-            crate::monero_backend::Protocol::v14 => Protocol::v14,
-            crate::monero_backend::Protocol::v16 => Protocol::v16,
-            crate::monero_backend::Protocol::Custom { ring_len, bp_plus } => {
-                Protocol::Custom { ring_len, bp_plus }
-            }
-        }
-    }
-
-    /// Convert the RPC client's fee rate into the compat model.
-    fn compat_fee(fee: crate::monero_backend::wallet::Fee) -> Fee {
-        Fee {
-            per_weight: fee.per_weight,
-            mask: fee.mask,
-        }
-    }
-
-    /// Convert a scanned `monero-wallet` output into the compat model.
-    fn received_from_wallet_output(
-        output: &monero_wallet::WalletOutput,
-    ) -> Result<ReceivedOutput, String> {
-        let output_index = u8::try_from(output.index_in_transaction())
-            .map_err(|_| "Output index exceeds the supported range".to_string())?;
-        let key_offset =
-            Option::from(Scalar::from_canonical_bytes(<[u8; 32]>::from(output.key_offset())))
-                .ok_or_else(|| "Invalid stored output key offset".to_string())?;
-        let mask = Option::from(Scalar::from_canonical_bytes(<[u8; 32]>::from(
-            output.commitment().mask,
-        )))
-        .ok_or_else(|| "Invalid stored output commitment mask".to_string())?;
-        let payment_id = match output.payment_id() {
-            Some(monero_wallet::extra::PaymentId::Encrypted(id)) => id,
-            _ => [0u8; 8],
-        };
-        Ok(ReceivedOutput {
-            absolute: AbsoluteId {
-                tx: output.transaction(),
-                o: output_index,
-            },
-            data: OutputData {
-                key: output.key().into(),
-                key_offset,
-                commitment: Commitment::new(mask, output.commitment().amount),
-            },
-            metadata: Metadata {
-                subaddress: output.subaddress(),
-                payment_id,
-                arbitrary_data: output.arbitrary_data().to_vec(),
-            },
-        })
-    }
-
     /// Parse stored output bytes (the `monero-wallet` serialization written by
     /// the scanner) and resolve the output's global RingCT index.
     async fn spendable_from_stored_bytes<R: RpcConnection>(
@@ -89,7 +35,7 @@ pub mod native {
             .map_err(|e| format!("Invalid output bytes: {:?}", e))?;
         let wallet_output = monero_wallet::WalletOutput::read(&mut bytes.as_slice())
             .map_err(|e| format!("Failed to parse output: {}", e))?;
-        let received = received_from_wallet_output(&wallet_output)?;
+        let received = crate::wallet_compat::received_from_wallet_output(&wallet_output)?;
         create_spendable_output(rpc, received).await
     }
 
@@ -415,11 +361,10 @@ pub mod native {
         #[cfg(target_arch = "wasm32")]
         let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
 
-        let protocol = compat_protocol(
-            rpc.get_protocol()
-                .await
-                .map_err(|e| format!("Failed to get protocol: {:?}", e))?,
-        );
+        let protocol = rpc
+            .get_protocol()
+            .await
+            .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
 
         let height = rpc
             .get_height()
@@ -471,17 +416,15 @@ pub mod native {
         #[cfg(target_arch = "wasm32")]
         let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
 
-        let protocol = compat_protocol(
-            rpc.get_protocol()
-                .await
-                .map_err(|e| format!("Failed to get protocol: {:?}", e))?,
-        );
+        let protocol = rpc
+            .get_protocol()
+            .await
+            .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
 
-        let fee_rate: Fee = compat_fee(
-            rpc.get_fee_checked(DEFAULT_MAX_FEE_PER_BYTE)
-                .await
-                .map_err(|e| format!("Failed to get fee rate: {:?}", e))?,
-        );
+        let fee_rate: Fee = rpc
+            .get_fee_checked(DEFAULT_MAX_FEE_PER_BYTE)
+            .await
+            .map_err(|e| format!("Failed to get fee rate: {:?}", e))?;
 
         // Worst-case extra: assume payment ID and additional keys
         let extra = extra_weight(num_outputs, true, &[]);
@@ -638,17 +581,15 @@ pub mod native {
         #[cfg(target_arch = "wasm32")]
         let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
 
-        let protocol = compat_protocol(
-            rpc.get_protocol()
-                .await
-                .map_err(|e| format!("Failed to get protocol: {:?}", e))?,
-        );
+        let protocol = rpc
+            .get_protocol()
+            .await
+            .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
 
-        let fee = compat_fee(
-            rpc.get_fee_checked(DEFAULT_MAX_FEE_PER_BYTE)
-                .await
-                .map_err(|e| format!("Failed to get fee: {:?}", e))?,
-        );
+        let fee = rpc
+            .get_fee_checked(DEFAULT_MAX_FEE_PER_BYTE)
+            .await
+            .map_err(|e| format!("Failed to get fee: {:?}", e))?;
 
         // Parse and validate all destination addresses
         let mut dest_addrs = Vec::with_capacity(recipients.len());
@@ -798,17 +739,15 @@ pub mod native {
         #[cfg(target_arch = "wasm32")]
         let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
 
-        let protocol = compat_protocol(
-            rpc.get_protocol()
-                .await
-                .map_err(|e| format!("Failed to get protocol: {:?}", e))?,
-        );
+        let protocol = rpc
+            .get_protocol()
+            .await
+            .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
 
-        let fee = compat_fee(
-            rpc.get_fee_checked(DEFAULT_MAX_FEE_PER_BYTE)
-                .await
-                .map_err(|e| format!("Failed to get fee: {:?}", e))?,
-        );
+        let fee = rpc
+            .get_fee_checked(DEFAULT_MAX_FEE_PER_BYTE)
+            .await
+            .map_err(|e| format!("Failed to get fee: {:?}", e))?;
 
         // Parse destination address
         let dest_addr = MoneroAddress::from_str(network, destination_address).map_err(|e| {
@@ -992,20 +931,18 @@ pub mod native {
             .map_err(|e| format!("Failed to get block: {:?}", e))?;
 
         let mut txs_with_hashes = Vec::new();
-        txs_with_hashes.push(
-            crate::scanner::parse_full_tx_blob(&block.miner_tx.serialize())
-                .ok_or_else(|| "Failed to parse miner transaction".to_string())?,
-        );
-        if !block.txs.is_empty() {
+        let miner_tx = block.miner_transaction();
+        txs_with_hashes.push((
+            miner_tx.hash(),
+            Transaction::<Pruned>::from(miner_tx.clone()),
+        ));
+        if !block.transactions.is_empty() {
             let fetched_txs = rpc
-                .get_transactions(&block.txs)
+                .get_transactions(&block.transactions)
                 .await
                 .map_err(|e| format!("Failed to get transactions: {:?}", e))?;
-            for tx in &fetched_txs {
-                txs_with_hashes.push(
-                    crate::scanner::parse_full_tx_blob(&tx.serialize())
-                        .ok_or_else(|| "Failed to parse transaction".to_string())?,
-                );
+            for tx in fetched_txs {
+                txs_with_hashes.push((tx.hash(), Transaction::<Pruned>::from(tx)));
             }
         }
 
@@ -1013,7 +950,7 @@ pub mod native {
         for (tx_hash, tx) in &txs_with_hashes {
             let outputs = crate::scanner::scan_single_transaction(&mut scanner, *tx_hash, tx)?;
             for output in &outputs {
-                received_outputs.push(received_from_wallet_output(output)?);
+                received_outputs.push(crate::wallet_compat::received_from_wallet_output(output)?);
             }
         }
         Ok(received_outputs)
@@ -1545,16 +1482,14 @@ pub mod native {
         #[cfg(target_arch = "wasm32")]
         let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
 
-        let protocol = compat_protocol(
-            rpc.get_protocol()
-                .await
-                .map_err(|e| format!("Failed to get protocol: {:?}", e))?,
-        );
-        let fee_rate: Fee = compat_fee(
-            rpc.get_fee_checked(max_fee_per_weight.unwrap_or(DEFAULT_MAX_FEE_PER_BYTE))
-                .await
-                .map_err(|e| format!("Failed to get fee: {:?}", e))?,
-        );
+        let protocol = rpc
+            .get_protocol()
+            .await
+            .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
+        let fee_rate: Fee = rpc
+            .get_fee_checked(max_fee_per_weight.unwrap_or(DEFAULT_MAX_FEE_PER_BYTE))
+            .await
+            .map_err(|e| format!("Failed to get fee: {:?}", e))?;
 
         let mut dest_addrs = Vec::with_capacity(recipients.len());
         for (addr_str, _) in recipients {

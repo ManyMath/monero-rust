@@ -634,6 +634,134 @@ impl InternalPayment {
     }
 }
 
+/// Convert a scanned `monero-wallet` output into the compat model.
+pub fn received_from_wallet_output(
+    output: &monero_wallet::WalletOutput,
+) -> Result<ReceivedOutput, String> {
+    let output_index = u8::try_from(output.index_in_transaction())
+        .map_err(|_| "Output index exceeds the supported range".to_string())?;
+    let key_offset = Option::from(Scalar::from_canonical_bytes(<[u8; 32]>::from(
+        output.key_offset(),
+    )))
+    .ok_or_else(|| "Invalid stored output key offset".to_string())?;
+    let mask = Option::from(Scalar::from_canonical_bytes(<[u8; 32]>::from(
+        output.commitment().mask,
+    )))
+    .ok_or_else(|| "Invalid stored output commitment mask".to_string())?;
+    let payment_id = match output.payment_id() {
+        Some(monero_wallet::extra::PaymentId::Encrypted(id)) => id,
+        _ => [0u8; 8],
+    };
+    Ok(ReceivedOutput {
+        absolute: AbsoluteId {
+            tx: output.transaction(),
+            o: output_index,
+        },
+        data: OutputData {
+            key: output.key().into(),
+            key_offset,
+            commitment: Commitment::new(mask, output.commitment().amount),
+        },
+        metadata: Metadata {
+            subaddress: output.subaddress(),
+            payment_id,
+            arbitrary_data: output.arbitrary_data().to_vec(),
+        },
+    })
+}
+
+impl SpendableOutput {
+    /// Update the spendable output's global index from the daemon. This is
+    /// intended to be called if a re-organization occurred.
+    pub async fn refresh_global_index<R: crate::monero_rpc::RpcConnection>(
+        &mut self,
+        rpc: &crate::monero_rpc::Rpc<R>,
+    ) -> Result<(), crate::monero_rpc::RpcError> {
+        let indexes = rpc.get_o_indexes(self.output.absolute.tx).await?;
+        self.global_index = indexes
+            .get(usize::from(self.output.absolute.o))
+            .copied()
+            .ok_or(crate::monero_rpc::RpcError::InvalidNode)?;
+        Ok(())
+    }
+
+    /// Create a spendable output by resolving the received output's global
+    /// RingCT index from the daemon.
+    pub async fn from<R: crate::monero_rpc::RpcConnection>(
+        rpc: &crate::monero_rpc::Rpc<R>,
+        output: ReceivedOutput,
+    ) -> Result<SpendableOutput, crate::monero_rpc::RpcError> {
+        let mut output = SpendableOutput {
+            output,
+            global_index: 0,
+        };
+        output.refresh_global_index(rpc).await?;
+        Ok(output)
+    }
+}
+
+/// A collection of received outputs, gated behind their timelocks.
+///
+/// Matches the previous backend's scanner result shape.
+pub struct Timelocked(pub(crate) Vec<ReceivedOutput>);
+
+impl Timelocked {
+    /// Ignore the timelocks and return all outputs within this container.
+    pub fn ignore_timelock(self) -> Vec<ReceivedOutput> {
+        self.0
+    }
+}
+
+/// A per-transaction scanner matching the previous backend's API.
+///
+/// `monero-wallet` only scans whole blocks; this wraps its scanner with the
+/// synthetic-block machinery the production paths use for mempool scanning.
+pub struct Scanner {
+    inner: monero_wallet::Scanner,
+}
+
+impl Scanner {
+    /// Create a Scanner from a ViewPair.
+    ///
+    /// The burning-bug filter set of the previous API is accepted and ignored;
+    /// callers are responsible for output deduplication.
+    pub fn from_view(
+        pair: ViewPair,
+        _burning_bug: Option<std::collections::HashSet<curve25519_dalek::edwards::CompressedEdwardsY>>,
+    ) -> Scanner {
+        let inner = pair
+            .to_oxide()
+            .map(monero_wallet::Scanner::new)
+            .expect("creating a scanner from an invalid view pair");
+        Scanner { inner }
+    }
+
+    /// Register a subaddress to scan for.
+    pub fn register_subaddress(&mut self, subaddress: SubaddressIndex) {
+        self.inner.register_subaddress(subaddress);
+    }
+
+    /// Scan a single transaction for outputs owned by this scanner's keys.
+    pub fn scan_transaction(
+        &mut self,
+        tx: &monero_oxide::transaction::Transaction,
+    ) -> Timelocked {
+        let tx_hash = tx.hash();
+        let pruned = monero_oxide::transaction::Transaction::<
+            monero_oxide::transaction::Pruned,
+        >::from(tx.clone());
+        let outputs =
+            crate::scanner::scan_single_transaction(&mut self.inner, tx_hash, &pruned)
+                .unwrap_or_default();
+        Timelocked(
+            outputs
+                .iter()
+                .filter_map(|output| received_from_wallet_output(output).ok())
+                .collect(),
+        )
+    }
+}
+
 // ---------------------------------------------------------------------------
 // View pairs and addresses
 // ---------------------------------------------------------------------------

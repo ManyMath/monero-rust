@@ -15,25 +15,24 @@ const STAGENET_NODE: &str = "http://127.0.0.1:38081";
 
 fn make_coinbase_block(height: u64) -> Block {
     use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
-    use monero_rust::monero_backend::ringct::*;
+    use monero_oxide::ed25519::CompressedPoint;
     use monero_rust::monero_backend::transaction::*;
 
-    Block {
-        header: monero_rust::monero_backend::block::BlockHeader {
-            major_version: 16,
-            minor_version: 16,
+    Block::new(
+        monero_rust::monero_backend::block::BlockHeader {
+            hardfork_version: 16,
+            hardfork_signal: 16,
             timestamp: 1600000000 + height * 120,
             previous: [0u8; 32],
             nonce: 0,
         },
-        miner_tx: Transaction {
+        Transaction::V2 {
             prefix: TransactionPrefix {
-                version: 2,
-                timelock: Timelock::Block((height + 60) as usize),
-                inputs: vec![Input::Gen(height)],
+                additional_timelock: Timelock::Block((height + 60) as usize),
+                inputs: vec![Input::Gen(height as usize)],
                 outputs: vec![Output {
-                    amount: 0,
-                    key: ED25519_BASEPOINT_POINT.compress(),
+                    amount: Some(0),
+                    key: CompressedPoint::from(ED25519_BASEPOINT_POINT.compress().to_bytes()),
                     view_tag: Some(0),
                 }],
                 extra: vec![
@@ -41,18 +40,11 @@ fn make_coinbase_block(height: u64) -> Block {
                     0, 0, 0, 0, 0, 0, 0,
                 ],
             },
-            signatures: vec![],
-            rct_signatures: RctSignatures {
-                base: RctBase {
-                    fee: 0,
-                    ecdh_info: vec![],
-                    commitments: vec![],
-                },
-                prunable: RctPrunable::Null,
-            },
+            proofs: None,
         },
-        txs: vec![],
-    }
+        vec![],
+    )
+    .expect("synthetic coinbase block should be valid")
 }
 
 fn make_response(start_height: u64, count: usize, daemon_height: u64) -> GetBlocksFastResponse {
