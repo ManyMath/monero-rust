@@ -1,4 +1,4 @@
-use crate::monero_backend::wallet::address::{MoneroAddress, Network};
+use monero_wallet::address::{MoneroAddress, Network};
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, edwards::EdwardsPoint, scalar::Scalar};
 use getrandom::getrandom;
 use serde::{Deserialize, Serialize};
@@ -60,10 +60,10 @@ pub fn generate_out_proof_v2(
     let r_point: EdwardsPoint = r.deref() * ED25519_BASEPOINT_TABLE;
 
     // A = recipient's view public key
-    let a_point = address.view;
+    let a_point: EdwardsPoint = address.view().into();
 
     // B = recipient's spend public key (for standard addresses, optional for subaddresses)
-    let b_point = address.spend;
+    let b_point: EdwardsPoint = address.spend().into();
 
     // D = r*A (ECDH shared secret / key derivation)
     let d_point: EdwardsPoint = r.deref() * a_point;
@@ -224,8 +224,8 @@ pub fn verify_out_proof_v2(
     let address = MoneroAddress::from_str(network, recipient_address)
         .map_err(|e| format!("Invalid address: {:?}", e))?;
 
-    let a_point = address.view;
-    let b_point = address.spend;
+    let a_point: EdwardsPoint = address.view().into();
+    let b_point: EdwardsPoint = address.spend().into();
 
     // Parse tx_id
     let tx_id_bytes = hex::decode(tx_id).map_err(|e| format!("Invalid tx_id hex: {}", e))?;

@@ -2,11 +2,9 @@
 
 use crate::monero_backend::{
     rpc::RpcError,
-    wallet::{
-        address::{AddressError, Network as SeraiNetwork},
-        seed::SeedError,
-    },
+    wallet::address::{AddressError, Network as SeraiNetwork},
 };
+use crate::seed_compat::SeedError;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

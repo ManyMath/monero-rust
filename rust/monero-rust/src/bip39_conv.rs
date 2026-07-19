@@ -1,4 +1,4 @@
-use crate::monero_backend::wallet::seed::{Language, Seed};
+use crate::seed_compat::{Language, Seed};
 use curve25519_dalek::scalar::Scalar;
 use zeroize::Zeroizing;
 

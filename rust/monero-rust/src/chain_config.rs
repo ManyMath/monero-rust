@@ -14,7 +14,7 @@
 // monero-serai Scanner: does not take a network parameter directly; network is
 //   embedded in the ViewPair / address derivation step.
 
-use crate::monero_backend::wallet::address::Network;
+use monero_wallet::address::Network;
 
 /// Configuration for a specific Monero-compatible chain.
 /// Passed to WalletActor at startup to support both Monero and child chains.

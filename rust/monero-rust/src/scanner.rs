@@ -6,11 +6,9 @@
 use crate::monero_backend::{
     block::Block,
     rpc::{BlockOutputIndices, GetBlocksFastResponse, Rpc, RpcConnection},
-    wallet::{
-        address::{AddressMeta, AddressType, MoneroAddress, Network},
-        seed::{Language, Seed},
-    },
+    wallet::address::{AddressMeta, AddressType, MoneroAddress, Network},
 };
+use crate::seed_compat::{Language, Seed};
 use monero_oxide::{
     block::{Block as OxideBlock, BlockHeader as OxideBlockHeader},
     transaction::{

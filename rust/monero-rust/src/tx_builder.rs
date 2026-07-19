@@ -1,10 +1,8 @@
 //! Transaction building.
 
 pub mod native {
-    use crate::monero_backend::{
-        rpc::{Rpc, RpcConnection, DEFAULT_MAX_FEE_PER_BYTE},
-        wallet::seed::Seed,
-    };
+    use crate::monero_backend::rpc::{Rpc, RpcConnection, DEFAULT_MAX_FEE_PER_BYTE};
+    use crate::seed_compat::Seed;
     use crate::wallet_compat::{
         sign_offline, transaction_fee_weight, AbsoluteId, Change, Commitment, Decoys, Fee,
         InternalPayment, Metadata, OutputData, Protocol, ReceivedOutput,
