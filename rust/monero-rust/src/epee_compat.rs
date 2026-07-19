@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 use std::io::{Cursor, Read};
 
-use crate::monero_backend::transaction::{Input, Transaction};
+use monero_oxide::transaction::{Input, NotPruned, Transaction};
 
 pub const UNSIGNED_TX_MAGIC: &[u8] = b"Monero unsigned tx set\x05";
 pub const SIGNED_TX_MAGIC: &[u8] = b"Monero signed tx set\x05";
@@ -368,7 +368,7 @@ pub fn build_signed_monero_txset(request: BuildSignedTxSetRequest<'_>) -> Result
         .enumerate()
     {
         let mut cursor = Cursor::new(*tx_blob);
-        let tx = Transaction::read(&mut cursor)
+        let tx = Transaction::<NotPruned>::read(&mut cursor)
             .map_err(|e| format!("Signed transaction blob #{index} is not valid: {e:?}"))?;
         let mut trailing = [0u8; 1];
         if cursor
@@ -411,11 +411,11 @@ pub fn build_signed_monero_txset(request: BuildSignedTxSetRequest<'_>) -> Result
             .ok_or_else(|| "Wallet2 outputs exceed inputs".to_string())?;
 
         let spent_key_images = tx
-            .prefix
+            .prefix()
             .inputs
             .iter()
             .map(|input| match input {
-                Input::ToKey { key_image, .. } => Ok(key_image.compress().to_bytes()),
+                Input::ToKey { key_image, .. } => Ok(key_image.to_bytes()),
                 Input::Gen(_) => {
                     Err("Signed wallet2 txset cannot contain miner inputs".to_string())
                 }
@@ -1012,7 +1012,7 @@ impl<'a> BinaryArchiveReader<'a> {
 
         let tx_blob = self.bytes[tx_start..self.offset].to_vec();
         let mut cursor = Cursor::new(tx_blob.as_slice());
-        let tx = Transaction::read(&mut cursor)
+        let tx = Transaction::<NotPruned>::read(&mut cursor)
             .map_err(|e| format!("Parsed signed txset transaction is not valid: {e:?}"))?;
         let mut trailing = [0u8; 1];
         if cursor
