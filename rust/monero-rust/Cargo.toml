@@ -32,6 +32,9 @@ cipher = "0.4"
 argon2 = "0.5"
 serde_bytes = "0.11"
 cuprate-cryptonight = { path = "../cuprate-cryptonight" }
+polyseed = { path = "../monero-utils-mirror/polyseed", default-features = false }
+crc = "3"
+lazy_static = "1" 
 monero-epee-bin-serde = { path = "../monero-epee-bin-serde" }
 monero-oxide = { git = "https://github.com/monero-oxide/monero-oxide", rev = "946ec5f00ff071b129758ee8cba5528539fccfe4", package = "monero-oxide", default-features = false, features = ["std"] }
 monero-wallet = { git = "https://github.com/monero-oxide/monero-oxide", rev = "946ec5f00ff071b129758ee8cba5528539fccfe4", package = "monero-wallet", default-features = false, features = ["std"] }
@@ -74,6 +77,7 @@ reqwest = "0.12"
 criterion = { version = "0.5", features = ["html_reports"] }
 tempfile = "3"
 wasm-bindgen-test = "0.3"
+rand_chacha = "0.3"
 
 # Tokio is only needed for native tests
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
