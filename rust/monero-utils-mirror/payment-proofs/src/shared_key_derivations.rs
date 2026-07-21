@@ -74,9 +74,9 @@ impl SharedKeyDerivations {
     for input in inputs {
       match input {
         Input::Gen(height) => {
-          write_varint(height, &mut u).unwrap();
+          write_varint(&(*height as u64), &mut u).unwrap();
         }
-        Input::ToKey { key_image, .. } => u.extend(key_image.compress().to_bytes()),
+        Input::ToKey { key_image, .. } => u.extend(key_image.to_bytes()),
       }
     }
     keccak256(u)

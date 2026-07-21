@@ -5,7 +5,8 @@ use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 
 use crate::monero_backend::wallet::{
   ViewPair,
-  address::{Network, AddressSpec},
+  ed25519::{Point, Scalar as OxideScalar},
+  address::Network,
 };
 
 use crate::OutProof;
@@ -19,12 +20,13 @@ fn random_scalar(rng: &mut impl RngCore) -> Scalar {
 #[test]
 fn out_proof_serialization() {
   let spend_key = Zeroizing::new(random_scalar(&mut OsRng));
-  let view_key = Zeroizing::new(random_scalar(&mut OsRng));
-  let view_pair = ViewPair::new(ED25519_BASEPOINT_TABLE * &*spend_key, view_key);
+  let view_key = Zeroizing::new(OxideScalar::from(random_scalar(&mut OsRng)));
+  let view_pair =
+    ViewPair::new(Point::from(ED25519_BASEPOINT_TABLE * &*spend_key), view_key).unwrap();
 
   let ephemeral_key = Zeroizing::new(random_scalar(&mut OsRng));
 
-  let address = view_pair.address(Network::Mainnet, AddressSpec::Standard);
+  let address = view_pair.legacy_address(Network::Mainnet);
   let proof = OutProof::prove(&mut OsRng, &address, &ephemeral_key, &[]);
 
   let mut proofs = vec![];

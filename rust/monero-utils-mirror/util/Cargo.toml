@@ -14,7 +14,7 @@ thiserror = { version = "1", default-features = false, optional = true }
 zeroize = { version = "^1.5", default-features = false, features = ["zeroize_derive"] }
 rand_core = { version = "0.6", default-features = false }
 
-monero-serai = { path = "../../monero-serai-mirror", default-features = false }
+monero-wallet = { git = "https://github.com/monero-oxide/monero-oxide", rev = "946ec5f00ff071b129758ee8cba5528539fccfe4", package = "monero-wallet", default-features = false }
 
 monero-seed = { path = "../seed", default-features = false }
 polyseed = { path = "../polyseed", default-features = false }
@@ -33,6 +33,8 @@ std = [
 
   "zeroize/std",
   "rand_core/std",
+
+  "monero-wallet/std",
 
   "monero-seed/std",
   "polyseed/std",

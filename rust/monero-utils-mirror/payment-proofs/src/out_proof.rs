@@ -12,9 +12,11 @@ use curve25519_dalek::{
   edwards::{EdwardsPoint, CompressedEdwardsY},
 };
 
+use monero_oxide::ringct::EncryptedAmount;
+
 use crate::monero_backend::{
   transaction::Transaction,
-  wallet::address::{AddressBytes, Address},
+  wallet::address::MoneroAddress,
   wallet::extra::{PaymentId, Extra},
 };
 
@@ -57,8 +59,8 @@ pub struct OutProof {
 }
 
 impl OutProof {
-  fn challenge<B: AddressBytes>(
-    address: &Address<B>,
+  fn challenge(
+    address: &MoneroAddress,
     nonce_commitment_generator: EdwardsPoint,
     nonce_commitment_view_key: EdwardsPoint,
     ephemeral_key_commitment: EdwardsPoint,
@@ -76,9 +78,9 @@ impl OutProof {
       keccak.update(keccak256(b"TXPROOF_V2_GUARANTEED"));
     }
     keccak.update(ephemeral_key_commitment.compress().to_bytes());
-    keccak.update(address.view.compress().to_bytes());
+    keccak.update(address.view().compress().to_bytes());
     if address.is_subaddress() {
-      keccak.update(address.spend.compress().to_bytes());
+      keccak.update(address.spend().compress().to_bytes());
     } else {
       keccak.update([0; 32]);
     }
@@ -86,20 +88,22 @@ impl OutProof {
   }
 
   /// Prove an OutProof v2.
-  pub fn prove<B: AddressBytes>(
+  pub fn prove(
     rng: &mut (impl RngCore + CryptoRng),
-    address: &Address<B>,
+    address: &MoneroAddress,
     ephemeral_key: &Zeroizing<Scalar>,
     message: &[u8],
   ) -> Self {
+    let spend: EdwardsPoint = address.spend().into();
+    let view: EdwardsPoint = address.view().into();
     let nonce = {
       let mut wide = Zeroizing::new([0u8; 64]);
       rng.fill_bytes(wide.as_mut());
       Zeroizing::new(Scalar::from_bytes_mod_order_wide(&*wide))
     };
     let commitment_generator =
-      if address.is_subaddress() { address.spend } else { ED25519_BASEPOINT_POINT };
-    let commit = |value: &Scalar| (commitment_generator * value, address.view * value);
+      if address.is_subaddress() { spend } else { ED25519_BASEPOINT_POINT };
+    let commit = |value: &Scalar| (commitment_generator * value, view * value);
     let (nonce_commitment_generator, nonce_commitment_view_key) = commit(&*nonce);
     let (ephemeral_key_commitment, ecdh) = commit(&**ephemeral_key);
     let c = Self::challenge(
@@ -115,26 +119,32 @@ impl OutProof {
   }
 
   /// Verify an OutProof. Returns the amount if valid.
-  pub fn verify<B: AddressBytes>(
+  pub fn verify(
     self,
     tx: &Transaction,
     output_index: usize,
-    address: &Address<B>,
+    address: &MoneroAddress,
     message: &[u8],
   ) -> Option<u64> {
+    let spend: EdwardsPoint = address.spend().into();
+    let view: EdwardsPoint = address.view().into();
     let commitment_generator =
-      if address.is_subaddress() { address.spend } else { ED25519_BASEPOINT_POINT };
+      if address.is_subaddress() { spend } else { ED25519_BASEPOINT_POINT };
 
     let OutProof { ecdh, c, s } = self;
     let s_commitment_generator = commitment_generator * s;
-    let s_commitment_view_key = address.view * s;
+    let s_commitment_view_key = view * s;
 
-    let extra = Extra::read(&mut tx.prefix.extra.as_slice()).ok()?;
-    let (tx_pub_key, additional_keys) = extra.keys()?;
-    let mut keys = core::iter::once(Some(tx_pub_key))
+    let prefix = tx.prefix();
+    let extra = Extra::read(&mut prefix.extra.as_slice()).ok()?;
+    let (tx_pub_keys, additional_keys) = extra.keys()?;
+    let mut keys = tx_pub_keys
+      .into_iter()
+      .map(Some)
       .chain(core::iter::once(additional_keys.and_then(|keys| keys.get(output_index).copied())));
 
     while let Some(Some(key)) = keys.next() {
+      let key: EdwardsPoint = key.into();
       if c ==
         Self::challenge(
           address,
@@ -145,10 +155,10 @@ impl OutProof {
           message,
         )
       {
-        let output = tx.prefix.outputs.get(output_index)?;
+        let output = prefix.outputs.get(output_index)?;
 
         let shared_key_derivations = SharedKeyDerivations::output_derivations(
-          address.is_guaranteed().then(|| SharedKeyDerivations::uniqueness(&tx.prefix.inputs)),
+          address.is_guaranteed().then(|| SharedKeyDerivations::uniqueness(&prefix.inputs)),
           ecdh,
           output_index,
         );
@@ -159,29 +169,42 @@ impl OutProof {
           }
         }
 
-        if output.key !=
-          (address.spend + (&shared_key_derivations.shared_key * ED25519_BASEPOINT_TABLE))
+        if output.key.to_bytes() !=
+          (spend + (&shared_key_derivations.shared_key * ED25519_BASEPOINT_TABLE))
             .compress()
+            .to_bytes()
         {
           None?;
         }
 
         if let Some(payment_id) = address.payment_id() {
-          if PaymentId::Encrypted(payment_id) !=
-            (extra.payment_id()? ^ SharedKeyDerivations::payment_id_xor(ecdh))
-          {
+          let PaymentId::Encrypted(encrypted_id) = extra.payment_id()? else {
+            return None;
+          };
+          let decrypted = (u64::from_le_bytes(encrypted_id) ^
+            u64::from_le_bytes(SharedKeyDerivations::payment_id_xor(ecdh)))
+          .to_le_bytes();
+          if decrypted != payment_id {
             None?;
           }
         }
 
-        if tx.prefix.version == 1 || output.amount != 0 {
-          return Some(output.amount);
+        let plaintext_amount = output.amount.unwrap_or(0);
+        if (tx.version() == 1) || (plaintext_amount != 0) {
+          return Some(plaintext_amount);
         }
 
-        let encrypted = tx.rct_signatures.base.ecdh_info.get(output_index)?;
+        let Transaction::V2 { proofs: Some(proofs), .. } = tx else {
+          return None;
+        };
+        let EncryptedAmount::Compact { amount: encrypted } =
+          proofs.base.encrypted_amounts.get(output_index)?
+        else {
+          return None;
+        };
         let commitment = shared_key_derivations.decrypt_compact(encrypted);
-        let expected = tx.rct_signatures.base.commitments.get(output_index)?;
-        if commitment.calculate() != *expected {
+        let expected = proofs.base.commitments.get(output_index)?;
+        if commitment.calculate().compress().to_bytes() != expected.to_bytes() {
           None?;
         }
 
