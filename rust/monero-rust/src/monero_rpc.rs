@@ -1057,7 +1057,7 @@ mod tests {
 
     #[test]
     fn getblocks_request_bytes_match_previous_backend() {
-        // The epee request serialization must be byte-identical to what the
+        // The epee request serialization must match what the
         // previous client sent.
         #[derive(Serialize, Debug)]
         struct Request {

@@ -23,7 +23,7 @@ fn make_test_output(amount: u64, height: u64, tx_hash: &str, account: u32) -> Wa
 }
 
 /// Regression guard for the "No selected outputs" bug:
-/// Wallet outputs must survive serialization/deserialization roundtrip
+/// Wallet outputs must persist through serialization/deserialization roundtrip
 /// via replace_outputs with correct balance preserved.
 #[test]
 fn test_wallet_state_reload_roundtrip() {
@@ -80,7 +80,7 @@ fn test_wallet_state_reload_roundtrip() {
     assert_eq!(restored.block_hashes.get_hash(1002), Some("hash_1002"));
 }
 
-/// Verify that spent status survives serialization roundtrip.
+/// Verify that spent status persists through serialization roundtrip.
 #[test]
 fn test_wallet_state_reload_preserves_spent_status() {
     let mut state = WalletState::new();

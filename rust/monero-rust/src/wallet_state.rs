@@ -1738,7 +1738,7 @@ mod tests {
         state.daemon_height = 100;
 
         state.freeze_output("ki1");
-        // Rollback to 95: output at height 80 survives, output at 90 survives
+        // Rollback to 95: output at height 80 remains, output at 90 remains
         state.rollback_to_height(95);
         // ki1 should still be frozen after rollback
         assert!(

@@ -18,6 +18,10 @@ curve25519-dalek = { version = "4.1", default-features = false, features = ["all
 monero-oxide = { git = "https://github.com/monero-oxide/monero-oxide", rev = "946ec5f00ff071b129758ee8cba5528539fccfe4", package = "monero-oxide", default-features = false }
 monero-wallet = { git = "https://github.com/monero-oxide/monero-oxide", rev = "946ec5f00ff071b129758ee8cba5528539fccfe4", package = "monero-wallet", default-features = false }
 
+# monero-oxide pulls rand_core/getrandom, which needs its js backend to build for wasm32
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+
 [features]
 std = [
   "std-shims/std",

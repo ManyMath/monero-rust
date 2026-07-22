@@ -581,7 +581,7 @@ mod tests {
     #[test]
     fn reorg_removes_outputs_and_unspends() {
         let mut state = WalletState::new();
-        // Output below fork survives, output at fork removed
+        // Output below fork remains, output at fork removed
         state.add_outputs(vec![
             make_output(1000, 50, "tx_keep", 0),
             make_output(2000, 101, "tx_remove", 0),

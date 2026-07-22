@@ -700,7 +700,7 @@ impl SpendableOutput {
     }
 }
 
-/// A collection of received outputs, gated behind their timelocks.
+/// A collection of received outputs, restricted by their timelocks.
 ///
 /// Matches the previous backend's scanner result shape.
 pub struct Timelocked(pub(crate) Vec<ReceivedOutput>);
