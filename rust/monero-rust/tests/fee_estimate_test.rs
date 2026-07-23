@@ -27,7 +27,7 @@ struct FeeEstimateResult {
 /// Sanity-check upper bound for per-weight fee (in piconero).
 /// A fee above this per byte would be unreasonably expensive and likely
 /// indicates a manipulated node response.  100,000 pico/byte is generous
-/// — typical mainnet fees are around 20,000-40,000 pico/byte.
+/// for the captured response checked here.
 const MAX_FEE_PER_BYTE: u64 = 100_000;
 
 // ---------------------------------------------------------------------------

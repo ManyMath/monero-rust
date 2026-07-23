@@ -215,6 +215,34 @@ impl OutProof {
     None
   }
 
+  /// Verify an OutProof against a known transaction public key.
+  ///
+  /// This checks the signature alone: that the prover knew the ephemeral key behind
+  /// `tx_public_key`, and that `D` is the shared secret for `address`. No transaction is
+  /// inspected, so the amount sent isn't recovered - use [`OutProof::verify`] for that.
+  pub fn verify_signature(
+    self,
+    address: &MoneroAddress,
+    message: &[u8],
+    tx_public_key: EdwardsPoint,
+  ) -> bool {
+    let spend: EdwardsPoint = address.spend().into();
+    let view: EdwardsPoint = address.view().into();
+    let commitment_generator =
+      if address.is_subaddress() { spend } else { ED25519_BASEPOINT_POINT };
+
+    let OutProof { ecdh, c, s } = self;
+    c ==
+      Self::challenge(
+        address,
+        (commitment_generator * s) + (c * tx_public_key),
+        (view * s) + (c * ecdh),
+        tx_public_key,
+        ecdh,
+        message,
+      )
+  }
+
   /// Serialize a series of OutProofs to a single string.
   pub fn serialize(proofs: &[Self]) -> String {
     let mut res = String::with_capacity(10 + (proofs.len() * 96));

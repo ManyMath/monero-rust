@@ -457,7 +457,7 @@ fn test_invalid_checksum_on_corrupted_word() {
   // Sanity: the good seed parses
   Polyseed::from_string(Language::English, Zeroizing::new(good.into()), Coin::Monero, 0).unwrap();
 
-  // Replace one word ("tail" → "ability") to corrupt the checksum
+  // Replace one word ("tail" -> "ability") to corrupt the checksum
   let bad = "raven ability swear infant grief assist regular lamp \
       duck valid someone little harsh puppy airport language";
   let res = Polyseed::from_string(Language::English, Zeroizing::new(bad.into()), Coin::Monero, 0);
