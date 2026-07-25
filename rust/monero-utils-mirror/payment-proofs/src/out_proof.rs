@@ -1,5 +1,5 @@
 use core::fmt;
-use std::io::{self, Read};
+use std_shims::io::{self, Read};
 use std_shims::{string::String, vec::Vec, vec};
 
 use zeroize::Zeroizing;

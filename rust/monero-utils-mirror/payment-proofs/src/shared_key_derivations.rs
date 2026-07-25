@@ -2,6 +2,7 @@
 // Helpers (keccak256, write_varint, Commitment) are inlined here since
 // monero-serai-mirror keeps them pub(crate).
 
+use std_shims::io;
 use std_shims::vec::Vec;
 
 use zeroize::{Zeroize, Zeroizing};
@@ -25,7 +26,7 @@ fn keccak256_to_scalar(data: impl AsRef<[u8]>) -> Scalar {
   Scalar::from_bytes_mod_order(keccak256(data))
 }
 
-fn write_varint<W: std::io::Write>(varint: &u64, w: &mut W) -> std::io::Result<()> {
+fn write_varint<W: io::Write>(varint: &u64, w: &mut W) -> io::Result<()> {
   let mut varint = *varint;
   loop {
     let mut b = (varint & 0x7f) as u8;
