@@ -70,8 +70,9 @@ pub(crate) fn decode(data: &str) -> Option<Vec<u8>> {
     let mut sum = 0u64;
     for this_char in chunk {
       sum = sum.checked_mul(ALPHABET_LEN)?;
-      sum += u64::try_from(ALPHABET.iter().position(|a| a == this_char)?)
+      let digit = u64::try_from(ALPHABET.iter().position(|a| a == this_char)?)
         .expect("alphabet len exceeded 2**64");
+      sum = sum.checked_add(digit)?;
     }
 
     // From the size of the encoding, determine the size of the bytes
@@ -82,9 +83,43 @@ pub(crate) fn decode(data: &str) -> Option<Vec<u8>> {
         break;
       }
     }
-    // Only push on the used bytes
-    res.extend(&sum.to_be_bytes()[(BLOCK_LEN - used_bytes.unwrap()) ..]);
+    let used_bytes = used_bytes?;
+    // Partial blocks must fit their decoded byte count; truncation would
+    // accept multiple encodings of the same bytes.
+    if used_bytes < BLOCK_LEN && sum >= (1u64 << (used_bytes * 8)) {
+      return None;
+    }
+    res.extend(&sum.to_be_bytes()[(BLOCK_LEN - used_bytes)..]);
   }
 
   Some(res)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_overflow_and_invalid_block_lengths() {
+        // 2^64: the final multiplication fits, but adding the last digit does not.
+        assert!(decode("jpXCZedGfVR").is_none());
+        assert!(decode("zzzzzzzzzzz").is_none());
+        for invalid in ["1", "1111", "11111111", "5R", "zz", "0", "é"] {
+            assert!(decode(invalid).is_none(), "accepted {invalid}");
+        }
+    }
+
+    #[test]
+    fn accepts_all_block_sizes_and_maximum_values() {
+        for size in 0..=24 {
+            for byte in [0u8, 1, 127, 255] {
+                let bytes = std_shims::vec![byte; size];
+                let encoded = encode(&bytes);
+                assert_eq!(encoded.len(), encoded_len_for_bytes(size));
+                assert_eq!(decode(&encoded), Some(bytes));
+            }
+        }
+        assert_eq!(decode("jpXCZedGfVQ"), Some(u64::MAX.to_be_bytes().to_vec()));
+        assert_eq!(decode("5Q"), Some(std_shims::vec![255]));
+    }
 }

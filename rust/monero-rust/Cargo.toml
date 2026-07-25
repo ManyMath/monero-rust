@@ -34,6 +34,7 @@ polyseed = { path = "../monero-utils-mirror/polyseed", default-features = false 
 crc = "3"
 lazy_static = "1" 
 monero-epee-bin-serde = { path = "../monero-epee-bin-serde" }
+monero-payment-proofs = { path = "../monero-utils-mirror/payment-proofs" }
 monero-oxide = { git = "https://github.com/monero-oxide/monero-oxide", rev = "946ec5f00ff071b129758ee8cba5528539fccfe4", package = "monero-oxide", default-features = false, features = ["std"] }
 monero-wallet = { git = "https://github.com/monero-oxide/monero-oxide", rev = "946ec5f00ff071b129758ee8cba5528539fccfe4", package = "monero-wallet", default-features = false, features = ["std"] }
 

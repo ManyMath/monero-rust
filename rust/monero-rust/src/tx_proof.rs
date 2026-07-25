@@ -1,13 +1,9 @@
+use monero_payment_proofs::OutProof;
 use monero_wallet::address::{MoneroAddress, Network};
-use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, edwards::EdwardsPoint, scalar::Scalar};
-use getrandom::getrandom;
+use curve25519_dalek::scalar::Scalar;
+use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
-use sha3::{Digest, Keccak256};
-use std::ops::Deref;
 use zeroize::Zeroizing;
-
-/// Domain separator for OutProofV2 (from Monero's config.cpp)
-const HASH_KEY_TXPROOF_V2: &[u8] = b"TXPROOF_V2";
 
 /// Result of generating an OutProof
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,9 +14,28 @@ pub struct OutProofResult {
     pub formatted: String,
 }
 
-fn hash_to_scalar(data: &[u8]) -> Scalar {
-    let hash: [u8; 32] = Keccak256::digest(data).into();
-    Scalar::from_bytes_mod_order(hash)
+fn parse_network(network_str: &str) -> Result<Network, String> {
+    match network_str.to_lowercase().as_str() {
+        "mainnet" => Ok(Network::Mainnet),
+        "testnet" => Ok(Network::Testnet),
+        "stagenet" => Ok(Network::Stagenet),
+        _ => Err(format!("Invalid network: {}", network_str)),
+    }
+}
+
+fn parse_32(hex_str: &str, what: &str) -> Result<[u8; 32], String> {
+    let bytes = hex::decode(hex_str).map_err(|e| format!("Invalid {} hex: {}", what, e))?;
+    bytes
+        .try_into()
+        .map_err(|_| format!("{} must be 32 bytes", what))
+}
+
+/// Concatenate `txid || message`; the proof implementation hashes this to form
+/// Monero's prefix hash.
+fn prefix_data(tx_id_bytes: &[u8; 32], message: &str) -> Vec<u8> {
+    let mut data = tx_id_bytes.to_vec();
+    data.extend_from_slice(message.as_bytes());
+    data
 }
 
 /// Generate OutProofV2 signature
@@ -37,92 +52,15 @@ pub fn generate_out_proof_v2(
     message: &str,
     network_str: &str,
 ) -> Result<OutProofResult, String> {
-    let network = match network_str.to_lowercase().as_str() {
-        "mainnet" => Network::Mainnet,
-        "testnet" => Network::Testnet,
-        "stagenet" => Network::Stagenet,
-        _ => return Err(format!("Invalid network: {}", network_str)),
-    };
-    // Parse tx_key (r scalar)
-    let tx_key_bytes = hex::decode(tx_key_hex).map_err(|e| format!("Invalid tx_key hex: {}", e))?;
-    if tx_key_bytes.len() != 32 {
-        return Err("tx_key must be 32 bytes".to_string());
-    }
-    let mut r_bytes = [0u8; 32];
-    r_bytes.copy_from_slice(&tx_key_bytes);
-    let r = Zeroizing::new(Scalar::from_bytes_mod_order(r_bytes));
+    let network = parse_network(network_str)?;
+    let tx_id_bytes = parse_32(tx_id, "tx_id")?;
+    let r = Zeroizing::new(Scalar::from_bytes_mod_order(parse_32(tx_key_hex, "tx_key")?));
 
-    // Parse recipient address
     let address = MoneroAddress::from_str(network, recipient_address)
         .map_err(|e| format!("Invalid address: {:?}", e))?;
 
-    // R = r*G (public tx key)
-    let r_point: EdwardsPoint = r.deref() * ED25519_BASEPOINT_TABLE;
-
-    // A = recipient's view public key
-    let a_point: EdwardsPoint = address.view().into();
-
-    // B = recipient's spend public key (for standard addresses, optional for subaddresses)
-    let b_point: EdwardsPoint = address.spend().into();
-
-    // D = r*A (ECDH shared secret / key derivation)
-    let d_point: EdwardsPoint = r.deref() * a_point;
-
-    // Parse tx_id as the message prefix
-    let tx_id_bytes = hex::decode(tx_id).map_err(|e| format!("Invalid tx_id hex: {}", e))?;
-    if tx_id_bytes.len() != 32 {
-        return Err("tx_id must be 32 bytes".to_string());
-    }
-
-    // Generate random k for Schnorr signature
-    let mut k_bytes = [0u8; 32];
-    getrandom(&mut k_bytes).map_err(|e| format!("RNG failed: {}", e))?;
-    let k = Zeroizing::new(Scalar::from_bytes_mod_order(k_bytes));
-
-    // X = k*G
-    let x_point: EdwardsPoint = k.deref() * ED25519_BASEPOINT_TABLE;
-
-    // Y = k*A
-    let y_point: EdwardsPoint = k.deref() * a_point;
-
-    // Build message hash for V2 proof
-    // H(domain_sep || msg || D || X || Y || R || A || B)
-    let msg_hash = if message.is_empty() {
-        tx_id_bytes.clone()
-    } else {
-        // Hash the message with tx_id
-        let mut hasher = Keccak256::new();
-        hasher.update(&tx_id_bytes);
-        hasher.update(message.as_bytes());
-        hasher.finalize().to_vec()
-    };
-
-    let mut challenge_data = Vec::new();
-    challenge_data.extend_from_slice(&msg_hash);
-    challenge_data.extend_from_slice(&d_point.compress().to_bytes());
-    challenge_data.extend_from_slice(&x_point.compress().to_bytes());
-    challenge_data.extend_from_slice(&y_point.compress().to_bytes());
-    challenge_data.extend_from_slice(&r_point.compress().to_bytes());
-    challenge_data.extend_from_slice(&a_point.compress().to_bytes());
-    challenge_data.extend_from_slice(&b_point.compress().to_bytes());
-    challenge_data.extend_from_slice(HASH_KEY_TXPROOF_V2);
-
-    let c = hash_to_scalar(&challenge_data);
-
-    // s = k - c*r (Monero uses subtraction form)
-    let s = k.deref() - (c * r.deref());
-
-    // Encode signature as OutProofV2
-    // Format: "OutProofV2" + base58(D || c || s)
-    let mut sig_data = Vec::with_capacity(32 + 32 + 32);
-    sig_data.extend_from_slice(&d_point.compress().to_bytes());
-    sig_data.extend_from_slice(&c.to_bytes());
-    sig_data.extend_from_slice(&s.to_bytes());
-
-    let signature = format!(
-        "OutProofV2{}",
-        base58_monero::encode(&sig_data).map_err(|e| format!("Base58 encode failed: {:?}", e))?
-    );
+    let proof = OutProof::prove(&mut OsRng, &address, &r, &prefix_data(&tx_id_bytes, message));
+    let signature = proof.to_string();
 
     // Build formatted proof (Feather Wallet style)
     let network_name = match network {
@@ -174,120 +112,35 @@ pub fn verify_out_proof_v2(
     network_str: &str,
     tx_public_key_hex: &str,
 ) -> Result<bool, String> {
-    let network = match network_str.to_lowercase().as_str() {
-        "mainnet" => Network::Mainnet,
-        "testnet" => Network::Testnet,
-        "stagenet" => Network::Stagenet,
-        _ => return Err(format!("Invalid network: {}", network_str)),
-    };
+    let network = parse_network(network_str)?;
+    let tx_id_bytes = parse_32(tx_id, "tx_id")?;
 
-    // Parse tx public key R
-    let r_bytes =
-        hex::decode(tx_public_key_hex).map_err(|e| format!("Invalid tx_public_key hex: {}", e))?;
-    if r_bytes.len() != 32 {
-        return Err("tx_public_key must be 32 bytes".to_string());
-    }
-    let mut r_arr = [0u8; 32];
-    r_arr.copy_from_slice(&r_bytes);
-    let r_point = curve25519_dalek::edwards::CompressedEdwardsY(r_arr)
-        .decompress()
-        .ok_or("Invalid tx public key point")?;
+    let r_point = curve25519_dalek::edwards::CompressedEdwardsY(parse_32(
+        tx_public_key_hex,
+        "tx_public_key",
+    )?)
+    .decompress()
+    .ok_or("Invalid tx public key point")?;
 
-    // Strip "OutProofV2" prefix
-    let sig_str = signature
-        .strip_prefix("OutProofV2")
-        .ok_or("Signature must start with OutProofV2")?;
-
-    // Decode base58
-    let sig_data =
-        base58_monero::decode(sig_str).map_err(|e| format!("Invalid base58: {:?}", e))?;
-
-    if sig_data.len() != 96 {
-        return Err(format!(
-            "Invalid signature length: expected 96, got {}",
-            sig_data.len()
-        ));
-    }
-
-    // Parse D, c, s from signature
-    let d_bytes: [u8; 32] = sig_data[0..32].try_into().unwrap();
-    let c_bytes: [u8; 32] = sig_data[32..64].try_into().unwrap();
-    let s_bytes: [u8; 32] = sig_data[64..96].try_into().unwrap();
-
-    let d_point = curve25519_dalek::edwards::CompressedEdwardsY(d_bytes)
-        .decompress()
-        .ok_or("Invalid D point")?;
-    let c = Scalar::from_bytes_mod_order(c_bytes);
-    let s = Scalar::from_bytes_mod_order(s_bytes);
-
-    // Parse recipient address
     let address = MoneroAddress::from_str(network, recipient_address)
         .map_err(|e| format!("Invalid address: {:?}", e))?;
 
-    let a_point: EdwardsPoint = address.view().into();
-    let b_point: EdwardsPoint = address.spend().into();
-
-    // Parse tx_id
-    let tx_id_bytes = hex::decode(tx_id).map_err(|e| format!("Invalid tx_id hex: {}", e))?;
-    if tx_id_bytes.len() != 32 {
-        return Err("tx_id must be 32 bytes".to_string());
-    }
-
-    // Reconstruct X' = s*G + c*R
-    let x_prime = &s * ED25519_BASEPOINT_TABLE + c * r_point;
-
-    // Reconstruct Y' = s*A + c*D
-    let y_prime = s * a_point + c * d_point;
-
-    // Recompute challenge hash
-    let msg_hash = if message.is_empty() {
-        tx_id_bytes.clone()
-    } else {
-        let mut hasher = Keccak256::new();
-        hasher.update(&tx_id_bytes);
-        hasher.update(message.as_bytes());
-        hasher.finalize().to_vec()
+    let proofs = OutProof::read(signature).ok_or("Malformed OutProofV2 signature")?;
+    let [proof] = proofs.as_slice() else {
+        return Err(format!(
+            "Expected a single OutProof, got {}",
+            proofs.len()
+        ));
     };
 
-    let mut challenge_data = Vec::new();
-    challenge_data.extend_from_slice(&msg_hash);
-    challenge_data.extend_from_slice(&d_point.compress().to_bytes());
-    challenge_data.extend_from_slice(&x_prime.compress().to_bytes());
-    challenge_data.extend_from_slice(&y_prime.compress().to_bytes());
-    challenge_data.extend_from_slice(&r_point.compress().to_bytes());
-    challenge_data.extend_from_slice(&a_point.compress().to_bytes());
-    challenge_data.extend_from_slice(&b_point.compress().to_bytes());
-    challenge_data.extend_from_slice(HASH_KEY_TXPROOF_V2);
-
-    let c_prime = hash_to_scalar(&challenge_data);
-
-    Ok(c == c_prime)
+    Ok(proof.verify_signature(&address, &prefix_data(&tx_id_bytes, message), r_point))
 }
-
-// TODO: Add deterministic OutProofV2 test using a monero-wallet-cli test
-// vector.  Generate a proof with `get_tx_proof` in monero-wallet-cli, then
-// verify our implementation produces the same signature given the same inputs
-// and nonce (k):
-// - Make the random k deterministic via a seeded RNG for testing
-// - Verify our proof against monero-wallet-cli's `check_tx_proof`
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_hash_to_scalar() {
-        let data = b"test data";
-        let scalar = hash_to_scalar(data);
-
-        // Same input should produce same scalar
-        let scalar2 = hash_to_scalar(data);
-        assert_eq!(scalar.to_bytes(), scalar2.to_bytes());
-
-        // Different input should produce different scalar
-        let scalar3 = hash_to_scalar(b"different data");
-        assert_ne!(scalar.to_bytes(), scalar3.to_bytes());
-    }
+    use curve25519_dalek::edwards::{CompressedEdwardsY, EdwardsPoint};
+    use sha3::{Digest, Keccak256};
 
     #[test]
     fn test_generate_out_proof() {
@@ -381,7 +234,7 @@ mod tests {
         let mut r_bytes = [0u8; 32];
         r_bytes.copy_from_slice(&tx_key_bytes);
         let r = Scalar::from_bytes_mod_order(r_bytes);
-        let r_point = &r * ED25519_BASEPOINT_TABLE;
+        let r_point = &r * curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
         hex::encode(r_point.compress().to_bytes())
     }
 
@@ -419,6 +272,26 @@ mod tests {
             &tx_public_key(tx_key),
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_verify_out_proof_base58_addition_overflow() {
+        let signature = format!("OutProofV2jpXCZedGfVR{}", "1".repeat(121));
+        let tx_id = "aa".repeat(32);
+        let tx_pub_key = hex::encode(
+            curve25519_dalek::constants::ED25519_BASEPOINT_POINT
+                .compress()
+                .to_bytes(),
+        );
+        assert!(verify_out_proof_v2(
+            &tx_id,
+            "55LTR8KniP4LQGJSPtbYDacR7dz8RBFnsfAKMaMuwUNYX6aQbBcovzDPyrQF9KXF9tVU6Xk3K8no1BywnJX6GvZX8yJsXvt",
+            "",
+            &signature,
+            "stagenet",
+            &tx_pub_key,
+        )
+        .is_err());
     }
 
     #[test]
@@ -473,5 +346,121 @@ mod tests {
         let deserialized: OutProofResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result.signature, deserialized.signature);
         assert_eq!(result.formatted, deserialized.formatted);
+    }
+
+    /// Monero hashes `s_comm_2` as raw struct memory in `crypto::generate_tx_proof`
+    /// (monero src/crypto/crypto.cpp): msg || D || X || Y || sep || R || A || B, where
+    /// `msg = keccak(txid || message)`, `sep = keccak("TXPROOF_V2")`, and B is zeroed for
+    /// non-subaddress recipients. Rebuilt here so the challenge stays pinned to that layout.
+    fn monero_challenge(
+        tx_id: &str,
+        message: &str,
+        d: EdwardsPoint,
+        x: EdwardsPoint,
+        y: EdwardsPoint,
+        tx_pub_key: EdwardsPoint,
+        address: &MoneroAddress,
+    ) -> Scalar {
+        let mut msg = hex::decode(tx_id).unwrap();
+        msg.extend_from_slice(message.as_bytes());
+
+        let mut buf = Vec::with_capacity(8 * 32);
+        buf.extend_from_slice(&<[u8; 32]>::from(Keccak256::digest(&msg)));
+        buf.extend_from_slice(&d.compress().to_bytes());
+        buf.extend_from_slice(&x.compress().to_bytes());
+        buf.extend_from_slice(&y.compress().to_bytes());
+        buf.extend_from_slice(&<[u8; 32]>::from(Keccak256::digest(b"TXPROOF_V2")));
+        buf.extend_from_slice(&tx_pub_key.compress().to_bytes());
+        buf.extend_from_slice(&point(address.view()).compress().to_bytes());
+        if address.is_subaddress() {
+            buf.extend_from_slice(&point(address.spend()).compress().to_bytes());
+        } else {
+            buf.extend_from_slice(&[0u8; 32]);
+        }
+
+        Scalar::from_bytes_mod_order(Keccak256::digest(&buf).into())
+    }
+
+    fn point(p: monero_wallet::ed25519::Point) -> EdwardsPoint {
+        p.into()
+    }
+
+    /// Decode an OutProofV2 string into `(D, c, s)`.
+    fn decode_proof(signature: &str) -> (EdwardsPoint, Scalar, Scalar) {
+        let payload = signature.strip_prefix("OutProofV2").expect("prefix");
+        let data = base58_monero::decode(payload).expect("base58");
+        assert_eq!(data.len(), 96, "proof payload must be D || c || s");
+
+        let d = CompressedEdwardsY(data[0 .. 32].try_into().unwrap())
+            .decompress()
+            .expect("D on curve");
+        let c = Scalar::from_bytes_mod_order(data[32 .. 64].try_into().unwrap());
+        let s = Scalar::from_bytes_mod_order(data[64 .. 96].try_into().unwrap());
+        (d, c, s)
+    }
+
+    /// Check the challenge for standard addresses (zero B, generator G)
+    /// and subaddresses (recipient B as generator).
+    #[test]
+    fn out_proof_matches_monero_challenge() {
+        let tx_id = "46d9f3eaf8d25b6a5d0847ad0beaece8b153d1b8c25ce317934ec17223025806";
+        let message = "spec conformance";
+        let tx_key = "0000000000000000000000000000000000000000000000000000000000000001";
+
+        let r = Scalar::from_bytes_mod_order(parse_32(tx_key, "tx_key").unwrap());
+
+        // Use this view pair to derive standard and subaddress recipients.
+        let spend = &Scalar::from(7u64) * curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
+        let view = Zeroizing::new(monero_wallet::ed25519::Scalar::from(Scalar::from(9u64)));
+        let view_pair =
+            monero_wallet::ViewPair::new(monero_wallet::ed25519::Point::from(spend), view).unwrap();
+
+        let standard = view_pair.legacy_address(Network::Stagenet);
+        let subaddress = view_pair.subaddress(
+            Network::Stagenet,
+            monero_wallet::address::SubaddressIndex::new(0, 1).unwrap(),
+        );
+
+        for address in [standard, subaddress] {
+            let is_sub = address.is_subaddress();
+            // Subaddresses use `R = r*B`; standard addresses use `R = r*G`.
+            let tx_pub_key = if is_sub {
+                point(address.spend()) * r
+            } else {
+                &r * curve25519_dalek::constants::ED25519_BASEPOINT_TABLE
+            };
+
+            let proof =
+                generate_out_proof_v2(tx_id, tx_key, &address.to_string(), message, "stagenet")
+                    .expect("generate");
+            let (d, c, s) = decode_proof(&proof.signature);
+
+            // Recover the nonce commitments from the signature.
+            let generator = if is_sub {
+                point(address.spend())
+            } else {
+                curve25519_dalek::constants::ED25519_BASEPOINT_POINT
+            };
+            let x = (generator * s) + (c * tx_pub_key);
+            let y = (point(address.view()) * s) + (c * d);
+
+            assert_eq!(
+                c,
+                monero_challenge(tx_id, message, d, x, y, tx_pub_key, &address),
+                "challenge must match Monero's s_comm_2 layout (subaddress: {})",
+                is_sub
+            );
+
+            // Check the public verification API too.
+            assert!(verify_out_proof_v2(
+                tx_id,
+                &address.to_string(),
+                message,
+                &proof.signature,
+                "stagenet",
+                &hex::encode(tx_pub_key.compress().to_bytes()),
+            )
+            .unwrap());
+        }
     }
 }
