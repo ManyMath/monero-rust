@@ -69,6 +69,28 @@ lazy_static! {
   ]);
 }
 
+/// The order languages are tried in when detecting a seed's language.
+///
+/// This mirrors the `language_instances` list in monero's `find_seed_language`
+/// (src/mnemonics/electrum-words.cpp). It has to be a fixed order: prefix sets overlap
+/// heavily between languages, so more than one wordlist routinely matches the same seed,
+/// and iterating a HashMap would resolve that differently from one process to the next.
+static LANGUAGE_ORDER: [Language; 13] = [
+  Language::Chinese,
+  Language::English,
+  Language::Dutch,
+  Language::French,
+  Language::Spanish,
+  Language::German,
+  Language::Italian,
+  Language::Portuguese,
+  Language::Japanese,
+  Language::Russian,
+  Language::Esperanto,
+  Language::Lojban,
+  Language::EnglishOld,
+];
+
 #[cfg(test)]
 pub(crate) fn trim_by_lang(word: &str, lang: Language) -> String {
   if lang != Language::EnglishOld {
@@ -156,9 +178,14 @@ pub(crate) fn seed_to_bytes(words: &str) -> Result<(Language, Zeroizing<[u8; 32]
   let (matched_indices, lang_name, lang) = (|| {
     let has_checksum = words.len() == CLASSIC_SEED_LENGTH_WITH_CHECKSUM;
     let mut matched_indices = Zeroizing::new(vec![]);
+    // Set when a language matched every word but failed the checksum. monero keeps this to
+    // tell "mistyped seed in a known language" apart from "not a seed we recognize".
+    let mut checksum_mismatch = false;
 
     // Iterate through all the languages
-    'language: for (lang_name, lang) in LANGUAGES.iter() {
+    'language: for lang_name in &LANGUAGE_ORDER {
+      let lang = &LANGUAGES[lang_name];
+
       matched_indices.zeroize();
       matched_indices.clear();
 
@@ -179,10 +206,6 @@ pub(crate) fn seed_to_bytes(words: &str) -> Result<(Language, Zeroizing<[u8; 32]
       }
 
       if has_checksum {
-        if lang_name == &Language::EnglishOld {
-          Err(SeedError::EnglishOldWithChecksum)?;
-        }
-
         // exclude the last word when calculating a checksum.
         let last_word = words.last().unwrap().clone();
         let checksum = words[checksum_index(&words[.. words.len() - 1], lang)].clone();
@@ -190,13 +213,22 @@ pub(crate) fn seed_to_bytes(words: &str) -> Result<(Language, Zeroizing<[u8; 32]
         // check the trimmed checksum and trimmed last word line up
         if trim(&checksum, lang.unique_prefix_length) != trim(&last_word, lang.unique_prefix_length)
         {
-          Err(SeedError::InvalidChecksum)?;
+          // Every word being present in this wordlist is weak evidence, since short
+          // prefixes collide across languages. A failed checksum means we almost certainly
+          // picked the wrong language, not that the seed is bad, so keep looking.
+          checksum_mismatch = true;
+          continue 'language;
         }
       }
 
       return Ok((matched_indices, lang_name, lang));
     }
 
+    // No language matched outright. If one matched on words alone, the seed is a seed with
+    // a broken checksum rather than something we don't recognize at all.
+    if checksum_mismatch {
+      Err(SeedError::InvalidChecksum)?;
+    }
     Err(SeedError::UnknownLanguage)?
   })()?;
 
