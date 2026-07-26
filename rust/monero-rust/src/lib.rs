@@ -15,7 +15,6 @@ pub mod monero_backend;
 pub mod monero_rpc;
 pub mod seed_compat;
 pub(crate) mod decoy_select;
-pub(crate) mod oxide_output_bytes;
 pub mod wallet_compat;
 pub mod scan_coordinator;
 pub mod scanner;

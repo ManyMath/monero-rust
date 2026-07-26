@@ -47,6 +47,12 @@ impl MockRpc {
         self
     }
 
+    /// Serve a binary response assembled by a test.
+    pub fn with_binary_response(mut self, route: &str, bytes: Vec<u8>) -> Self {
+        Arc::make_mut(&mut self.binary_files).insert(route.to_string(), bytes);
+        self
+    }
+
     fn find_matching_call(&self, route: &str, body: &[u8]) -> Option<RpcCall> {
         if let Some(bytes) = self.binary_files.get(route) {
             return Some(RpcCall {
