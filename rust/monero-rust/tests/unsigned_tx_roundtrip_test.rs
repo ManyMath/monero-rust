@@ -8,13 +8,15 @@ use monero_rust::monero_backend::transaction::{NotPruned, Transaction};
 use monero_rust::monero_backend::wallet::{
     address::{MoneroAddress, Network},
     seed::Seed,
-    Change, ReceivedOutput, SignableTransactionBuilder, SpendableOutput, ViewPair,
+    Change, SignableTransactionBuilder, SpendableOutput, ViewPair,
 };
 use monero_rust::scanner::{
     derive_address, derive_keys, scan_block_for_outputs_with_lookahead, Lookahead,
 };
 #[cfg(feature = "mock-rpc")]
 use rand::SeedableRng;
+use monero_rust::wallet_compat::received_from_wallet_output;
+use monero_wallet::WalletOutput;
 use std::io::Cursor;
 use zeroize::Zeroizing;
 
@@ -109,7 +111,7 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
 
     let test_output = &all_outputs[0];
     let output_bytes = hex::decode(&test_output.received_output_bytes)?;
-    let received = ReceivedOutput::read(&mut Cursor::new(output_bytes))?;
+    let received = received_from_wallet_output(&WalletOutput::read(&mut Cursor::new(output_bytes))?)?;
     let spendable = SpendableOutput::from(&rpc, received.clone()).await?;
 
     let change = Change::new(&view_pair, false);

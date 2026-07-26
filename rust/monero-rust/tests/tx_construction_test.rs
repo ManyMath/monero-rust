@@ -5,13 +5,15 @@ use monero_rust::monero_backend::transaction::{NotPruned, Transaction};
 use monero_rust::monero_backend::wallet::{
     address::{AddressSpec, MoneroAddress, Network},
     seed::Seed,
-    Change, ReceivedOutput, SignableTransactionBuilder, SpendableOutput, ViewPair,
+    Change, SignableTransactionBuilder, SpendableOutput, ViewPair,
 };
 use monero_rust::scanner::{
     derive_address, derive_keys, scan_block_for_outputs_with_lookahead, Lookahead,
 };
 #[cfg(feature = "mock-rpc")]
 use rand::SeedableRng;
+use monero_rust::wallet_compat::received_from_wallet_output;
+use monero_wallet::WalletOutput;
 use std::io::Cursor;
 use zeroize::Zeroizing;
 
@@ -136,7 +138,7 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
     let test_output = &all_outputs[0];
     let output_bytes = hex::decode(&test_output.received_output_bytes)?;
     let mut cursor = Cursor::new(output_bytes);
-    let received = ReceivedOutput::read(&mut cursor)?;
+    let received = received_from_wallet_output(&WalletOutput::read(&mut cursor)?)?;
 
     assert_eq!(received.commitment().amount, test_output.amount);
 
@@ -378,7 +380,7 @@ async fn test_transaction_with_multiple_inputs() -> Result<(), Box<dyn std::erro
             for output in all_outputs.iter().take(2) {
                 let output_bytes = hex::decode(&output.received_output_bytes)?;
                 let mut cursor = Cursor::new(output_bytes);
-                let received = ReceivedOutput::read(&mut cursor)?;
+                let received = received_from_wallet_output(&WalletOutput::read(&mut cursor)?)?;
 
                 let spendable = SpendableOutput::from(&rpc, received).await?;
                 builder.add_input(spendable);
@@ -455,7 +457,7 @@ async fn test_transaction_parsing_and_validation() -> Result<(), Box<dyn std::er
         if let Some(output) = test_output {
             let output_bytes = hex::decode(&output.received_output_bytes)?;
             let mut cursor = Cursor::new(&output_bytes);
-            let received = ReceivedOutput::read(&mut cursor)?;
+            let received = received_from_wallet_output(&WalletOutput::read(&mut cursor)?)?;
 
             assert_eq!(received.commitment().amount, output.amount);
             assert!(!output.key.is_empty());
