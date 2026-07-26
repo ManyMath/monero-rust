@@ -1,5 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+mod common;
+
 use monero_rust::monero_backend::rpc::HttpRpc;
 use monero_rust::scanner::scan_block_for_outputs;
 
@@ -7,9 +9,13 @@ const HONKED_BAGPIPE_SEED: &str = "honked bagpipe alpine juicy faked afoot jostl
 const LOCAL_NODE: &str = "http://127.0.0.1:38081";
 const TEST_BLOCK: u64 = 1384526;
 
-/// Soft-skip when no local stagenet node is reachable, matching the
+/// Soft-skip unless a real stagenet node is reachable, matching the
 /// describeIfNode convention used by the E2E suite.
 async fn node_available(rpc: &monero_rust::monero_backend::rpc::Rpc<HttpRpc>) -> bool {
+    // Reachable isn't enough - these blocks only exist on stagenet.
+    if !common::stagenet_available() {
+        return false;
+    }
     match rpc.get_height().await {
         Ok(_) => true,
         Err(e) => {

@@ -1,4 +1,7 @@
 #[cfg(not(target_arch = "wasm32"))]
+mod common;
+
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod local_stagenet_tests {
     use monero_rust::monero_backend::rpc::HttpRpc;
@@ -10,9 +13,13 @@ mod local_stagenet_tests {
     const EXPECTED_TX: &str = "07a561e60118c0a485b20bbfac787fd8efead96a9f422d9dff4a86f2985db7c5";
     const EXPECTED_ADDRESS: &str = "58aWiYGUeqZc5idYcx31rYR58K1EVsCYkN6thrZppU1MGqMowPh1BYy4frVWH5RjGLPWthZy9sRGm5ZC4fgX44HUCmqtGUf";
 
-    /// Soft-skip when no local stagenet node is reachable, matching the
+    /// Soft-skip unless a real stagenet node is reachable, matching the
     /// describeIfNode convention used by the E2E suite.
     async fn node_height(rpc: &monero_rust::monero_backend::rpc::Rpc<HttpRpc>) -> Option<usize> {
+        // Reachable isn't enough - these blocks only exist on stagenet.
+        if !crate::common::stagenet_available() {
+            return None;
+        }
         match rpc.get_height().await {
             Ok(height) => Some(height),
             Err(e) => {
