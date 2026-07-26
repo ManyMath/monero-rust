@@ -1,3 +1,7 @@
+// Test binaries use different subsets of these shared helpers. Recorded-RPC
+// helpers also require the mock-rpc feature.
+#![allow(dead_code)]
+
 use base64::Engine;
 use monero_rust::monero_backend::rpc::{RpcConnection, RpcError};
 use serde::Deserialize;

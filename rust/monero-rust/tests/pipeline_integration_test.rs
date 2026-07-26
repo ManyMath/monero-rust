@@ -540,13 +540,8 @@ fn reorg_basic_detection_and_rollback() {
     assert_eq!(state.outputs().len(), 2);
     assert_eq!(state.current_height, 102);
 
-    // Now a reorg: block 101 has a different hash
-    let reorg_batch = vec![
-        make_block_result(100, vec![], vec![]), // hash matches
-                                                // block 101: make_block_result produces "hash_101" but we recorded "hash_101" - same.
-                                                // To trigger reorg, we need a block with a different hash at a known height.
-    ];
-    // Simulate reorg by creating a block 101 with a custom hash
+    // Use a different hash at height 101 to simulate a fork; `make_block_result`
+    // otherwise derives the same hash from the height.
     let mut reorg_block_101 = make_block_result(101, vec![], vec![]);
     reorg_block_101.block_hash = "reorged_hash_101".to_string();
     let reorg_batch = vec![make_block_result(100, vec![], vec![]), reorg_block_101];

@@ -13,6 +13,7 @@ use monero_rust::monero_backend::wallet::{
 use monero_rust::scanner::{
     derive_address, derive_keys, scan_block_for_outputs_with_lookahead, Lookahead,
 };
+#[cfg(feature = "mock-rpc")]
 use rand::SeedableRng;
 use std::io::Cursor;
 use zeroize::Zeroizing;
@@ -28,6 +29,7 @@ const NETWORK_STR: &str = "stagenet";
 const NETWORK: Network = Network::Stagenet;
 const START_BLOCK: u64 = 1386863;
 const END_BLOCK: u64 = 1386874;
+#[cfg(feature = "mock-rpc")]
 const TEST_VECTORS_PATH: &str = "tests/vectors/tx_construction_test_vectors.json";
 
 /// Full unsigned TX roundtrip: build -> serialize -> sign offline -> verify structure.

@@ -20,6 +20,8 @@ struct RpcCall {
     route: String,
     body: String,
     response: String,
+    // Retain this fixture field for deserialization; this test serves only JSON routes.
+    #[allow(dead_code)]
     is_binary: bool,
 }
 
