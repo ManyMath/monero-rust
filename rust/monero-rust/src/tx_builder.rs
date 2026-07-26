@@ -1470,8 +1470,7 @@ pub mod native {
         }
         let mut spend_arr = [0u8; 32];
         spend_arr.copy_from_slice(&spend_bytes);
-        let spend_point = curve25519_dalek::edwards::CompressedEdwardsY(spend_arr)
-            .decompress()
+        let spend_point = crate::scanner::decompress_public_spend_key(spend_arr)
             .ok_or("Invalid public spend key point")?;
 
         let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));

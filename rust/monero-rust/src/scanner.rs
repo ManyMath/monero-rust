@@ -477,8 +477,17 @@ pub fn parse_view_only_keys(seed: &str) -> Option<(Scalar, EdwardsPoint)> {
     let view_bytes: [u8; 32] = hex::decode(view_hex).ok()?.try_into().ok()?;
     let spend_bytes: [u8; 32] = hex::decode(spend_hex).ok()?.try_into().ok()?;
     let view_scalar = Option::<Scalar>::from(Scalar::from_canonical_bytes(view_bytes))?;
-    let spend_point = CompressedEdwardsY(spend_bytes).decompress()?;
+    let spend_point = decompress_public_spend_key(spend_bytes)?;
     Some((view_scalar, spend_point))
+}
+
+/// Decompress an imported public spend key and check its subgroup.
+///
+/// `monero-wallet` requires a prime-order point for `ViewPair`. Reject torsioned
+/// keys at import so later address derivation cannot panic on them.
+pub fn decompress_public_spend_key(bytes: [u8; 32]) -> Option<EdwardsPoint> {
+    let point = CompressedEdwardsY(bytes).decompress()?;
+    point.is_torsion_free().then_some(point)
 }
 
 /// Derive keys for a view-only wallet (no secret spend key available).
