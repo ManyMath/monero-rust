@@ -1,10 +1,7 @@
-//! Classic (25-word) seed vectors, run against the seed implementation the app ships.
+//! Classic seed vectors for `monero_rust::seed_compat`.
 //!
-//! These vectors lived only in `monero-seed`'s own test suite, and nothing reaches
-//! `monero-seed` from the app - `monero_rust::seed_compat` is what the wallet actually
-//! parses seeds with, and it had a single English mnemonic covering it. Same blind spot
-//! that let the OutProofV2 challenge bug remain: the broad vectors sat next to an
-//! implementation no one called.
+//! These vectors come from the removed `monero-seed` crate. They cover its
+//! language cases against the seed parser used by this wallet library.
 
 use monero_rust::seed_compat::{Language, Seed};
 use serde::Deserialize;
