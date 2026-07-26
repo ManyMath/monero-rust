@@ -1,10 +1,10 @@
 {
   "source": {
-    "description": "Monero classic (25-word) seed vectors: mnemonic -> spend key, with the view key Monero derives as H(spend).",
-    "origin": "monero-seed's test suite (rust/monero-utils-mirror/seed/src/tests.rs), which carries them from Monero itself.",
-    "note": "Extracted so they exercise monero-rust's seed_compat, the seed implementation the app actually ships. monero-seed itself is not reachable from the app.",
+    "description": "Classic seed vectors with mnemonics, spend keys, and view keys derived as H(spend).",
+    "origin": "Copied from monero-seed tests originally sourced from Monero. The removed crate remains in Git history.",
+    "note": "These vectors test the wallet library's seed_compat implementation.",
     "extracted": "2026-07-27",
-    "ambiguity_note": "Two Spanish vectors are trim-identical to English ones. monero-seed resolves them because its API takes an explicit language; seed_compat detects the language, so it resolves them the way monero's find_seed_language does. Those carry an 'ambiguous' block with the expected outcome."
+    "ambiguity_note": "Two Spanish vectors have the same trimmed words as English vectors. monero-seed accepted an explicit language; seed_compat detects it in Monero's find_seed_language order. The ambiguous field records the expected detected result."
   },
   "vectors": [
     {

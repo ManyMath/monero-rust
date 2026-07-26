@@ -4,7 +4,7 @@ members = [
     "monero-epee-bin-serde",
     "monero-cli",
     "cuprate-cryptonight",
-    "monero-utils-mirror/polyseed",
-    "monero-utils-mirror/payment-proofs",
+    "monero-utils/polyseed",
+    "monero-utils/payment-proofs",
 ]
 resolver = "2"
