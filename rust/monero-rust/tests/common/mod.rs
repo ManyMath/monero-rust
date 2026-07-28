@@ -31,12 +31,38 @@ pub fn stagenet_available() -> bool {
     })
 }
 
-/// Ask the local daemon which network it is on, via `/get_info`.
+/// A private regtest node to run live tests against, if one was started for us.
 ///
-/// Direct TcpStream so the gate depends on neither an async runtime nor the RPC
-/// client that the tests it gates are exercising.
+/// `scripts/regtest-node.sh start` takes a free port and exports it as
+/// `MONERO_REGTEST_RPC`. Nothing is hardcoded, so this can't collide with whatever else is
+/// on the machine - which is the failure the stagenet port kept producing.
+pub fn regtest_node() -> Option<String> {
+    let url = std::env::var("MONERO_REGTEST_RPC").ok()?;
+    let authority = url.trim_end_matches('/').rsplit("//").next()?.to_string();
+
+    match node_nettype_of(&authority) {
+        Some(nettype) if nettype == "fakechain" => Some(url),
+        Some(nettype) => {
+            eprintln!("Skipping regtest tests: {} is a '{}' chain, not regtest", url, nettype);
+            None
+        }
+        None => {
+            eprintln!("Skipping regtest tests: nothing reachable at {}", url);
+            None
+        }
+    }
+}
+
+/// Read the local daemon's network from `/get_info`.
+///
+/// Use `TcpStream` so this check needs neither an async runtime nor the RPC
+/// client under test.
 fn node_nettype() -> Option<String> {
-    let addr: SocketAddr = STAGENET_ADDR.parse().ok()?;
+    node_nettype_of(STAGENET_ADDR)
+}
+
+fn node_nettype_of(authority: &str) -> Option<String> {
+    let addr: SocketAddr = authority.parse().ok()?;
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(1)).ok()?;
     stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
     stream.set_write_timeout(Some(Duration::from_secs(2))).ok()?;
