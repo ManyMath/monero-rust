@@ -12,8 +12,18 @@
 
 mod common;
 
+use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 use monero_rust::monero_backend::rpc::HttpRpc;
-use monero_rust::scanner::{derive_address, scan_block_for_outputs_with_lookahead, Lookahead};
+use monero_rust::monero_backend::wallet::{
+    address::{MoneroAddress, Network},
+    seed::Seed,
+    Change, SignableTransactionBuilder, SpendableOutput, ViewPair,
+};
+use monero_rust::scanner::{
+    derive_address, derive_keys, scan_block_for_outputs_with_lookahead, Lookahead,
+};
+use monero_rust::wallet_compat::received_from_wallet_output;
+use zeroize::Zeroizing;
 
 /// Monero's own deterministic test seed, as used by the cold-signing vector generator.
 const SEED: &str = "velvet lymph giddy number token physics poetry unquoted nibs useful \
@@ -25,6 +35,14 @@ const NETWORK: &str = "mainnet";
 
 /// Coinbase needs 60 confirmations, so mine past that to end up with spendable outputs.
 const BLOCKS_TO_MINE: usize = 80;
+
+/// Minimum chain height for the spending test.
+///
+/// Decoy selection samples ages from a gamma distribution and limits retries.
+/// A short coinbase-only chain has too few unlocked candidates. Earlier runs
+/// failed around 165 blocks and succeeded around 650; allow additional depth
+/// to reduce sensitivity to random sampling.
+const MIN_HEIGHT_TO_SPEND: usize = 750;
 
 const LOOKAHEAD: Lookahead = Lookahead {
     account: 0,
@@ -129,4 +147,107 @@ async fn scanned_outputs_parse_back_in_the_stored_format() {
     }
 
     assert!(checked > 0, "expected to check at least one freshly scanned output");
+}
+
+/// Build and sign a real transaction spending what we mined, then have the daemon accept it.
+///
+/// This is the half the fixture-driven tests can only replay: decoys come from the live
+/// output distribution, and the daemon is the one judging whether the result is valid.
+#[tokio::test(flavor = "multi_thread")]
+async fn builds_signs_and_broadcasts_a_transaction() {
+    let Some(node) = common::regtest_node() else {
+        return;
+    };
+
+    let rpc = HttpRpc::new(node).expect("regtest RPC");
+    let address = derive_address(SEED, NETWORK, "").expect("derive address");
+
+    // Top the chain up rather than mining a fixed amount: the other tests in this binary
+    // share it, so its starting height depends on what already ran.
+    let height = rpc.get_height().await.expect("get_height");
+    if height < MIN_HEIGHT_TO_SPEND {
+        rpc.generate_blocks(&address, MIN_HEIGHT_TO_SPEND - height)
+            .await
+            .expect("generateblocks");
+    }
+    let height = rpc.get_height().await.expect("get_height");
+    assert!(height >= MIN_HEIGHT_TO_SPEND);
+
+    // Take the first mature output we can find.
+    let mature_before = height.saturating_sub(60);
+    let mut spendable = None;
+    for h in 1 .. mature_before {
+        let scanned =
+            scan_block_for_outputs_with_lookahead(&rpc, h as u64, SEED, NETWORK, LOOKAHEAD, "")
+                .await
+                .expect("scan");
+        if let Some(output) = scanned.outputs.first() {
+            let bytes = hex::decode(&output.received_output_bytes).expect("hex");
+            let wallet_output =
+                monero_wallet::WalletOutput::read(&mut bytes.as_slice()).expect("stored output");
+            let received = received_from_wallet_output(&wallet_output).expect("compat output");
+            spendable = Some(
+                SpendableOutput::from(&rpc, received)
+                    .await
+                    .expect("resolve the global index from the daemon"),
+            );
+            break;
+        }
+    }
+    let spendable = spendable.expect("no mature output to spend");
+    let input_amount = spendable.commitment().amount;
+
+    let keys = derive_keys(SEED, NETWORK, "").expect("derive keys");
+    let seed = Seed::from_string(Zeroizing::new(SEED.to_string())).expect("seed");
+    let spend_scalar = Scalar::from_bytes_mod_order(*seed.entropy());
+    let spend_point = &spend_scalar * ED25519_BASEPOINT_TABLE;
+    let view_scalar = Scalar::from_bytes_mod_order(
+        hex::decode(&keys.secret_view_key).expect("view hex")[.. 32]
+            .try_into()
+            .expect("32 bytes"),
+    );
+    let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
+
+    let protocol = rpc.get_protocol().await.expect("get_protocol");
+    let fee_rate = rpc.get_fee().await.expect("get_fee");
+
+    let mut builder = SignableTransactionBuilder::new(
+        protocol,
+        fee_rate,
+        Some(Change::new(&view_pair, false)),
+    );
+    builder.add_input(spendable);
+    let send_amount = 1_000_000_000u64;
+    builder.add_payment(
+        MoneroAddress::from_str(Network::Mainnet, &address).expect("address"),
+        send_amount,
+    );
+
+    let signable = builder.build().expect("build a signable transaction");
+    assert!(signable.fee() > 0, "a real transaction must carry a fee");
+    assert!(
+        signable.fee() + send_amount < input_amount,
+        "the input must cover the payment and the fee"
+    );
+
+    let tx = signable
+        .sign(&mut rand::rngs::OsRng, &rpc, &Zeroizing::new(spend_scalar))
+        .await
+        .expect("signing against live decoys must succeed");
+
+    assert_eq!(tx.prefix().inputs.len(), 1);
+    assert_eq!(tx.prefix().outputs.len(), 2, "payment plus change");
+
+    // Require daemon acceptance, including ring-signature and range-proof checks.
+    rpc.publish_transaction(&tx)
+        .await
+        .expect("the daemon must accept the transaction we built");
+
+    let mined_into = rpc.get_height().await.expect("get_height");
+    rpc.generate_blocks(&address, 1).await.expect("mine it in");
+    assert!(
+        rpc.get_height().await.expect("get_height") > mined_into,
+        "the chain must advance once our transaction is mined"
+    );
+    println!("daemon accepted transaction {}", hex::encode(tx.hash()));
 }
