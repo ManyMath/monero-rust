@@ -242,6 +242,7 @@ impl WalletStorage for MemoryStorage {
 mod tests {
     use super::*;
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[tokio::test]
     async fn test_memory_storage() {
         let storage = MemoryStorage::new();
@@ -263,6 +264,7 @@ mod tests {
         assert!(storage.load("key1").await.is_err());
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[tokio::test]
     async fn test_memory_storage_overwrite() {
         let storage = MemoryStorage::new();
@@ -277,6 +279,7 @@ mod tests {
         assert_eq!(loaded2, b"updated");
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[tokio::test]
     async fn test_memory_storage_load_nonexistent() {
         let storage = MemoryStorage::new();
@@ -286,6 +289,7 @@ mod tests {
         assert!(matches!(result.unwrap_err(), AbError::NotFound(_)));
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[tokio::test]
     async fn test_memory_storage_delete_nonexistent() {
         let storage = MemoryStorage::new();
@@ -294,6 +298,7 @@ mod tests {
         storage.delete("nonexistent").await.unwrap();
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[tokio::test]
     async fn test_memory_storage_empty_list() {
         let storage = MemoryStorage::new();
@@ -302,6 +307,7 @@ mod tests {
         assert_eq!(keys.len(), 0);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[tokio::test]
     async fn test_memory_storage_binary_data() {
         let storage = MemoryStorage::new();
@@ -313,6 +319,7 @@ mod tests {
         assert_eq!(loaded, binary_data);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[tokio::test]
     async fn test_memory_storage_large_data() {
         let storage = MemoryStorage::new();
@@ -325,6 +332,7 @@ mod tests {
         assert_eq!(loaded, large_data);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[tokio::test]
     async fn test_memory_storage_special_keys() {
         let storage = MemoryStorage::new();
