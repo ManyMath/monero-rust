@@ -192,3 +192,13 @@ fn test_multiple_accounts_have_different_addresses() {
     assert_ne!(account_2_addr.to_string(), account_3_addr.to_string());
     assert_ne!(account_1_addr.to_string(), account_3_addr.to_string());
 }
+
+/// The public `derive_address` entry point, which the rest of this file bypasses in favour
+/// of building addresses from keys directly. Kept from local_stagenet_test, whose other
+/// tests needed a stagenet chain and so never ran.
+#[test]
+fn derive_address_returns_the_standard_address() {
+    let address = monero_rust::scanner::derive_address(HONKED_BAGPIPE_MNEMONIC, "stagenet", "")
+        .expect("derive_address must succeed");
+    assert_eq!(address, EXPECTED_ACCOUNT_0_SUBADDRESS_0);
+}

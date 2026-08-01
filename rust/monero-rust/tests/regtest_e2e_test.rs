@@ -20,7 +20,8 @@ use monero_rust::monero_backend::wallet::{
     Change, SignableTransactionBuilder, SpendableOutput, ViewPair,
 };
 use monero_rust::scanner::{
-    derive_address, derive_keys, scan_block_for_outputs_with_lookahead, Lookahead,
+    derive_address, derive_keys, scan_block_for_outputs_with_lookahead, scan_blocks_batch,
+    Lookahead,
 };
 use monero_rust::wallet_compat::received_from_wallet_output;
 use zeroize::Zeroizing;
@@ -250,4 +251,66 @@ async fn builds_signs_and_broadcasts_a_transaction() {
         "the chain must advance once our transaction is mined"
     );
     println!("daemon accepted transaction {}", hex::encode(tx.hash()));
+}
+
+/// Scan locally mined blocks through the `getblocks.bin` batch sync path.
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_scans_the_chain_it_mined() {
+    let Some(node) = common::regtest_node() else {
+        return;
+    };
+
+    let rpc = HttpRpc::new(node).expect("regtest RPC");
+    let address = derive_address(SEED, NETWORK, "").expect("derive address");
+
+    let start = rpc.get_height().await.expect("get_height");
+    rpc.generate_blocks(&address, BLOCKS_TO_MINE)
+        .await
+        .expect("generateblocks");
+
+    let results = scan_blocks_batch(
+        &rpc,
+        start as u64,
+        SEED,
+        NETWORK,
+        LOOKAHEAD,
+        false,
+        "",
+    )
+    .await
+    .expect("batch scan must succeed");
+
+    assert!(!results.is_empty(), "a batch scan must return blocks");
+
+    let total_outputs: usize = results.iter().map(|r| r.outputs.len()).sum();
+    assert!(
+        total_outputs > 0,
+        "every block in the range paid our address, so the batch must find outputs"
+    );
+
+    // Heights must come back ascending and start where we asked, since the sync loop
+    // resumes from the last one it saw.
+    let heights: Vec<u64> = results.iter().map(|r| r.block_height).collect();
+    assert_eq!(heights[0], start as u64, "batch must start at the requested height");
+    assert!(
+        heights.windows(2).all(|w| w[0] < w[1]),
+        "batch heights must be strictly ascending, got {:?}",
+        &heights[.. heights.len().min(8)]
+    );
+
+    // A batch scan and a per-block scan of the same range must agree.
+    let mut per_block = 0usize;
+    for height in &heights {
+        per_block += scan_block_for_outputs_with_lookahead(
+            &rpc, *height, SEED, NETWORK, LOOKAHEAD, "",
+        )
+        .await
+        .expect("scan")
+        .outputs
+        .len();
+    }
+    assert_eq!(
+        total_outputs, per_block,
+        "batch scanning must find exactly what block-by-block scanning finds"
+    );
 }
