@@ -25,8 +25,6 @@ pub enum SeedError {
   UnknownLanguage,
   #[error("invalid checksum")]
   InvalidChecksum,
-  #[error("english old seeds don't support checksums")]
-  EnglishOldWithChecksum,
   #[error("invalid seed")]
   InvalidSeed,
   #[error("encrypted Polyseed is not supported; decrypt it with a Polyseed-compatible tool before importing")]

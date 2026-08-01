@@ -252,7 +252,6 @@ pub const ERR_SEED_INVALID_LENGTH: u32 = 3000;
 pub const ERR_SEED_INVALID_CHECKSUM: u32 = 3001;
 pub const ERR_SEED_UNKNOWN_LANGUAGE: u32 = 3002;
 pub const ERR_SEED_INVALID: u32 = 3003;
-pub const ERR_SEED_ENGLISH_OLD_CHECKSUM: u32 = 3004;
 pub const ERR_INVALID_KEY: u32 = 3005;
 
 // Internal (9000-9099)
@@ -306,9 +305,6 @@ impl From<SeedError> for ErrorResponse {
             SeedError::InvalidChecksum => {
                 ErrorResponse::new(ERR_SEED_INVALID_CHECKSUM, e.to_string())
                     .with_hint("Double-check the seed phrase for typos")
-            }
-            SeedError::EnglishOldWithChecksum => {
-                ErrorResponse::new(ERR_SEED_ENGLISH_OLD_CHECKSUM, e.to_string())
             }
             SeedError::InvalidSeed | SeedError::EncryptedPolyseed => ErrorResponse::new(ERR_SEED_INVALID, e.to_string())
                 .with_hint("The seed phrase could not be decoded"),
