@@ -1,10 +1,13 @@
 #!/bin/sh
-# Run every tier of this repo's tests, including the two that are opt-in.
+# Run every tier of this repo's tests, including the ones that are opt-in.
 #
-# Those two are opt-in for good reasons - one needs a feature flag, the other needs a
-# daemon - but the consequence is that nothing runs them. The fixture-driven send-path
-# tests broke at the oxide cutover and stayed broken for months because of that.
-# This exists so "run the tests" means all of them.
+# They are opt-in for good reasons - a feature flag, a daemon, a second toolchain - but the
+# consequence is that nothing runs them. The fixture-driven send-path tests broke at the
+# oxide cutover and stayed broken for months because of that, and the dart and
+# wasm tiers had never run at all. This exists so "run the tests" means all of them.
+#
+# A tier whose toolchain is missing or broken says so and is skipped; a tier that runs and
+# fails is reported as a failure. The two are never conflated.
 #
 #   scripts/test-all.sh              # everything
 #   scripts/test-all.sh --no-regtest # skip the tier that needs monerod
@@ -77,6 +80,28 @@ step "send path against recorded RPC (--features mock-rpc)"
 if ! cargo test -p monero-rust --features mock-rpc \
     --test tx_construction_test --test unsigned_tx_roundtrip_test --test sign_unsigned_unit_test; then
     record_failure "mock-rpc send path"
+fi
+
+step "flutter/web dart tests"
+if ! command -v flutter >/dev/null 2>&1; then
+    echo "flutter not on PATH - skipping the dart tests" >&2
+else
+    DART_LOG="$(mktemp)"
+    if (cd "$ROOT/flutter/web" && flutter test --no-pub) >"$DART_LOG" 2>&1; then
+        tail -n 3 "$DART_LOG"
+    elif grep -q '/packages/flutter/lib/' "$DART_LOG"; then
+        # The failures are inside the SDK's own framework, not our tests: a Flutter
+        # checkout whose framework revision and Dart SDK don't match can't compile
+        # itself. Report it, but don't blame the repo for it.
+        echo "SKIPPED: the Flutter SDK cannot compile its own framework, so no dart" >&2
+        echo "test could load. This is the toolchain, not this repo - check" >&2
+        echo "'flutter --version' (a detached user-branch checkout will do this) and" >&2
+        echo "repair with 'flutter channel stable && flutter upgrade'." >&2
+        echo "Full output: $DART_LOG" >&2
+    else
+        tail -n 20 "$DART_LOG" >&2
+        record_failure "dart tests"
+    fi
 fi
 
 if [ "$WITH_REGTEST" = 1 ]; then
