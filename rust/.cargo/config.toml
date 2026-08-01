@@ -2,3 +2,9 @@
 # Crypto operations (transaction signing, key derivation) overflow the default
 # 2 MB test-thread stack in debug builds.
 RUST_MIN_STACK = "8388608"
+
+# Run wasm32 unit tests with wasm-bindgen-cli. Its version must match the
+# wasm-bindgen dependency:
+#   cargo install -f wasm-bindgen-cli --version 0.2.126
+[target.wasm32-unknown-unknown]
+runner = "wasm-bindgen-test-runner"

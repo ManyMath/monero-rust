@@ -30,9 +30,19 @@ node_url() {
     echo "http://127.0.0.1:$(cat "$PORT_FILE")"
 }
 
-is_running() {
+# Process lifetime and RPC readiness are separate: shutdown must also stop
+# a daemon whose RPC server has not started or is no longer responding.
+process_running() {
     [ -f "$PID_FILE" ] || return 1
-    kill -0 "$(cat "$PID_FILE")" 2>/dev/null
+    node_pid="$(cat "$PID_FILE")"
+    case "$node_pid" in ''|*[!0-9]*|0|1) return 1 ;; esac
+    kill -0 "$node_pid" 2>/dev/null
+}
+
+is_running() {
+    process_running || return 1
+    [ -f "$PORT_FILE" ] || return 1
+    curl -s -m 3 "http://127.0.0.1:$(cat "$PORT_FILE")/get_info" | grep -q '"status"'
 }
 
 wait_for_rpc() {
@@ -55,6 +65,9 @@ cmd_start() {
         echo "export MONERO_REGTEST_RPC=$url"
         return 0
     fi
+
+    # Clean up any stale process state before starting.
+    cmd_stop >/dev/null || return 1
 
     command -v "$MONEROD" >/dev/null 2>&1 || {
         echo "monerod not found on PATH; set MONEROD to its location" >&2
@@ -86,13 +99,20 @@ cmd_start() {
 }
 
 cmd_stop() {
-    if is_running; then
-        kill "$(cat "$PID_FILE")" 2>/dev/null || true
+    if process_running; then
+        kill "$node_pid" 2>/dev/null || {
+            echo "could not stop monerod $node_pid; retaining process state" >&2
+            return 1
+        }
         i=0
-        while is_running && [ "$i" -lt 30 ]; do
+        while process_running && [ "$i" -lt 30 ]; do
             i=$((i + 1))
             sleep 1
         done
+        if process_running; then
+            echo "monerod $node_pid has not exited; retaining process state" >&2
+            return 1
+        fi
     fi
     rm -f "$PID_FILE" "$PORT_FILE"
     echo "stopped" >&2
@@ -108,7 +128,7 @@ cmd_status() {
 }
 
 cmd_reset() {
-    cmd_stop >/dev/null 2>&1 || true
+    cmd_stop >/dev/null || return 1
     rm -rf "$STATE_DIR/data"
     echo "chain discarded" >&2
 }

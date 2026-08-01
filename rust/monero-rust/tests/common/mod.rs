@@ -31,25 +31,36 @@ pub fn stagenet_available() -> bool {
     })
 }
 
-/// A private regtest node to run live tests against, if one was started for us.
+/// Find the regtest node configured for this test run.
 ///
-/// `scripts/regtest-node.sh start` takes a free port and exports it as
-/// `MONERO_REGTEST_RPC`. Nothing is hardcoded, so this can't collide with whatever else is
-/// on the machine - which is the failure the stagenet port kept producing.
+/// `scripts/regtest-node.sh start` chooses an available port and prints the
+/// `MONERO_REGTEST_RPC` assignment.
+/// Skip if `MONERO_REGTEST_RPC` is unset. If it is set, require a working
+/// regtest daemon so a startup failure cannot silently skip the tests.
 pub fn regtest_node() -> Option<String> {
-    let url = std::env::var("MONERO_REGTEST_RPC").ok()?;
-    let authority = url.trim_end_matches('/').rsplit("//").next()?.to_string();
+    let Ok(url) = std::env::var("MONERO_REGTEST_RPC") else {
+        eprintln!("Skipping regtest tests: MONERO_REGTEST_RPC is unset");
+        return None;
+    };
+
+    let authority = url
+        .trim_end_matches('/')
+        .rsplit("//")
+        .next()
+        .unwrap_or_default()
+        .to_string();
 
     match node_nettype_of(&authority) {
         Some(nettype) if nettype == "fakechain" => Some(url),
-        Some(nettype) => {
-            eprintln!("Skipping regtest tests: {} is a '{}' chain, not regtest", url, nettype);
-            None
-        }
-        None => {
-            eprintln!("Skipping regtest tests: nothing reachable at {}", url);
-            None
-        }
+        Some(nettype) => panic!(
+            "MONERO_REGTEST_RPC points at {}, which is serving a '{}' chain, not regtest",
+            url, nettype
+        ),
+        None => panic!(
+            "MONERO_REGTEST_RPC is set to {} but nothing there answers /get_info - \
+             a half-started daemon looks alive to `regtest-node.sh status` but cannot serve",
+            url
+        ),
     }
 }
 

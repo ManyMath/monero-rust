@@ -60,8 +60,20 @@ if ! (cd "$ROOT/flutter/web/native/monero_wasm" && cargo check --target wasm32-u
     record_failure "monero_wasm wasm32"
 fi
 
+step "wasm32 unit tests"
+# The runner from wasm-bindgen-cli must match the wasm-bindgen dependency.
+# Skip if the runner is missing; a failed run is an error. Only run library
+# tests on wasm32 because integration tests require native support.
+if ! command -v wasm-bindgen-test-runner >/dev/null 2>&1; then
+    echo "wasm-bindgen-test-runner not on PATH - skipping the wasm32 tests." >&2
+    echo "Install a CLI matching the wasm-bindgen crate version, e.g." >&2
+    echo "  cargo install -f wasm-bindgen-cli --version 0.2.126" >&2
+elif ! cargo test -p monero-rust --lib --target wasm32-unknown-unknown; then
+    record_failure "wasm32 unit tests"
+fi
+
 step "send path against recorded RPC (--features mock-rpc)"
-# Without the feature these want a live node and skip; with it they replay a transcript.
+# Enable recorded RPC responses for tests that otherwise require a live node.
 if ! cargo test -p monero-rust --features mock-rpc \
     --test tx_construction_test --test unsigned_tx_roundtrip_test --test sign_unsigned_unit_test; then
     record_failure "mock-rpc send path"
