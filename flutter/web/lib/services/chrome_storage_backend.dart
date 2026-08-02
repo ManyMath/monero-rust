@@ -1,24 +1,32 @@
-import 'dart:html' as html;
-import 'dart:js_util' as js_util;
+import 'dart:js_interop';
+import 'dart:js_interop_unsafe';
+
 import 'wallet_storage_service.dart';
 
-class ChromeStorageBackend implements AsyncStorageBackend {
-  static bool get isAvailable {
-    final chrome = js_util.getProperty<Object?>(html.window, 'chrome');
-    if (chrome == null) return false;
-    final storage = js_util.getProperty<Object?>(chrome, 'storage');
-    if (storage == null) return false;
-    return js_util.getProperty<Object?>(storage, 'local') != null;
-  }
+/// The extension `chrome` global, absent when the app is a plain web page.
+@JS('chrome')
+external _Chrome? get _chrome;
 
-  Object get _area {
-    final chrome = js_util.getProperty<Object?>(html.window, 'chrome');
-    final storage = chrome == null
-        ? null
-        : js_util.getProperty<Object?>(chrome, 'storage');
-    final local = storage == null
-        ? null
-        : js_util.getProperty<Object?>(storage, 'local');
+extension type _Chrome._(JSObject _) implements JSObject {
+  external _ChromeStorage? get storage;
+}
+
+extension type _ChromeStorage._(JSObject _) implements JSObject {
+  external _StorageArea? get local;
+}
+
+extension type _StorageArea._(JSObject _) implements JSObject {
+  /// `get(null)` asks for the whole area, so the key is nullable.
+  external JSPromise<JSObject> get(JSAny? key);
+  external JSPromise<JSAny?> set(JSObject items);
+  external JSPromise<JSAny?> remove(JSAny key);
+}
+
+class ChromeStorageBackend implements AsyncStorageBackend {
+  static bool get isAvailable => _chrome?.storage?.local != null;
+
+  _StorageArea get _area {
+    final local = _chrome?.storage?.local;
     if (local == null) {
       throw StateError('chrome.storage.local is not available');
     }
@@ -27,27 +35,21 @@ class ChromeStorageBackend implements AsyncStorageBackend {
 
   @override
   Future<String?> get(String key) async {
-    final result = await js_util.promiseToFuture<Object>(
-      js_util.callMethod(_area, 'get', [key]),
-    );
-    final value = js_util.getProperty<Object?>(result, key);
-    return value is String ? value : null;
+    final result = await _area.get(key.toJS).toDart;
+    final value = result.getProperty<JSAny?>(key.toJS);
+    return value.isA<JSString>() ? (value! as JSString).toDart : null;
   }
 
   @override
   Future<void> set(String key, String value) async {
-    final item = js_util.newObject();
-    js_util.setProperty(item, key, value);
-    await js_util.promiseToFuture<void>(
-      js_util.callMethod(_area, 'set', [item]),
-    );
+    final item = JSObject();
+    item.setProperty(key.toJS, value.toJS);
+    await _area.set(item).toDart;
   }
 
   @override
   Future<void> remove(String key) async {
-    await js_util.promiseToFuture<void>(
-      js_util.callMethod(_area, 'remove', [key]),
-    );
+    await _area.remove(key.toJS).toDart;
   }
 
   @override
@@ -55,10 +57,8 @@ class ChromeStorageBackend implements AsyncStorageBackend {
 
   @override
   Future<List<String>> getKeys() async {
-    final result = await js_util.promiseToFuture<Object>(
-      js_util.callMethod(_area, 'get', [null]),
-    );
-    return js_util.objectKeys(result).cast<String>();
+    final result = await _area.get(null).toDart;
+    return _objectKeys(result).toDart.map((key) => (key as JSString).toDart).toList();
   }
 
   @override
@@ -88,3 +88,7 @@ class ChromeStorageBackend implements AsyncStorageBackend {
     await remove(stagingKey);
   }
 }
+
+/// `Object.keys`, which `dart:js_interop` has no direct equivalent for.
+@JS('Object.keys')
+external JSArray<JSAny?> _objectKeys(JSObject object);

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:html' as html;
-import 'dart:js_util' as js_util;
+import 'dart:js_interop';
+import 'dart:js_interop_unsafe';
 import '../src/ffi/signal_types.dart';
 import '../models/wallet_transaction.dart';
 import 'chrome_storage_backend.dart';
@@ -157,38 +158,32 @@ class WalletPersistenceBrowser {
 
       bool usedSaveAsDialog = false;
       try {
-        if (js_util.hasProperty(html.window, 'showSaveFilePicker')) {
-          final options = js_util.newObject();
-          js_util.setProperty(options, 'suggestedName', filename);
+        // The File System Access API gives a real "save as" dialog, but only some
+        // browsers have it; the anchor-download path below is the fallback.
+        if (_showSaveFilePicker != null) {
+          final accept = JSObject()
+            ..setProperty(
+              'application/octet-stream'.toJS,
+              <String>['.monero-wallet'].map((e) => e.toJS).toList().toJS,
+            );
+          final types = JSObject()
+            ..setProperty('description'.toJS, 'Monero Wallet Files'.toJS)
+            ..setProperty('accept'.toJS, accept);
+          final options = JSObject()
+            ..setProperty('suggestedName'.toJS, filename.toJS)
+            ..setProperty('types'.toJS, <JSObject>[types].toJS);
 
-          final types = js_util.newObject();
-          js_util.setProperty(types, 'description', 'Monero Wallet Files');
-          final accept = js_util.newObject();
-          js_util.setProperty(accept, 'application/octet-stream', [
-            '.monero-wallet',
-          ]);
-          js_util.setProperty(types, 'accept', accept);
-          js_util.setProperty(options, 'types', [types]);
+          final handle = await (_showSaveFilePicker!.callAsFunction(null, options)!
+              as JSPromise<JSObject>)
+              .toDart;
 
-          final fileHandlePromise = js_util.callMethod(
-            html.window,
-            'showSaveFilePicker',
-            [options],
-          );
-          final fileHandle = await js_util.promiseToFuture(fileHandlePromise);
+          final writable = await (handle.callMethod<JSPromise<JSObject>>(
+            'createWritable'.toJS,
+          )).toDart;
 
-          final writablePromise = js_util.callMethod(
-            fileHandle,
-            'createWritable',
-            [],
-          );
-          final writable = await js_util.promiseToFuture(writablePromise);
-
-          final writePromise = js_util.callMethod(writable, 'write', [blob]);
-          await js_util.promiseToFuture(writePromise);
-
-          final closePromise = js_util.callMethod(writable, 'close', []);
-          await js_util.promiseToFuture(closePromise);
+          await (writable.callMethod<JSPromise<JSAny?>>('write'.toJS, blob as JSAny))
+              .toDart;
+          await (writable.callMethod<JSPromise<JSAny?>>('close'.toJS)).toDart;
 
           usedSaveAsDialog = true;
         }
@@ -258,3 +253,7 @@ class WalletPersistenceBrowser {
     }
   }
 }
+
+/// `window.showSaveFilePicker`, absent on browsers without the File System Access API.
+@JS('showSaveFilePicker')
+external JSFunction? get _showSaveFilePicker;
