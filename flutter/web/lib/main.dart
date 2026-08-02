@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'src/ffi/worker_bridge.dart';
 import 'src/ffi/signal_sender.dart';
 import 'src/ffi/signal_hub.dart';
+import 'src/platform/file_transfer_web.dart';
 import 'views/debug_view.dart';
 import 'services/wallet_lifecycle_manager.dart';
 import 'services/wallet_persistence_browser.dart';
@@ -17,6 +18,7 @@ Future<void> main() async {
   final bridge = WorkerBridge();
   await bridge.init();
   setSignalSender(bridge);
+  setWebFileTransfer();
   runApp(const AppStateHost(child: MyApp()));
 }
 

@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import '../src/ffi/signal_types.dart';
 import '../utils/offline_signing_import_utils.dart';
 import 'animated_qr_display.dart';
-import 'dart:html' as html;
+import '../src/platform/file_transfer.dart';
 
 enum OfflineSignStep {
   showUnsignedQr,
@@ -121,31 +121,12 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
   }
 
   void _downloadFile(String hex, String filename) {
-    final bytes = _hexDecode(hex);
-    final blob = html.Blob([bytes], 'application/octet-stream');
-    final url = html.Url.createObjectUrlFromBlob(blob);
-    html.AnchorElement(href: url)
-      ..setAttribute('download', filename)
-      ..click();
-    html.Url.revokeObjectUrl(url);
+    fileTransfer.download(filename, _hexDecode(hex));
   }
 
   Future<String?> _pickFile() async {
-    final upload = html.FileUploadInputElement();
-    upload.accept = '.bin,*';
-    upload.click();
-    try {
-      await upload.onChange.first.timeout(const Duration(seconds: 120));
-    } on TimeoutException {
-      return null;
-    }
-    final files = upload.files;
-    if (files == null || files.isEmpty) return null;
-    final reader = html.FileReader();
-    reader.readAsDataUrl(files[0]);
-    await reader.onLoad.first;
-    final dataUrl = reader.result as String;
-    final bytes = base64Decode(dataUrl.substring(dataUrl.indexOf(',') + 1));
+    final bytes = await fileTransfer.pickAndRead();
+    if (bytes == null) return null;
     return _hexEncode(Uint8List.fromList(bytes));
   }
 
