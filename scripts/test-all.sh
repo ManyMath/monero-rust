@@ -113,6 +113,23 @@ else
     fi
 fi
 
+step "flutter/web browser tests"
+# @TestOn('browser') files are skipped by `flutter test`, so they need their own
+# invocation. They went unrun long enough for ten of them to rot unnoticed.
+if ! command -v flutter >/dev/null 2>&1; then
+    echo "flutter not on PATH - skipping the browser tests" >&2
+elif [ ! -x "$(command -v google-chrome || command -v chromium || true)" ]; then
+    echo "no chrome on PATH - skipping the browser tests" >&2
+else
+    BROWSER_TESTS="test/widget_test.dart \
+        test/services/indexed_db_storage_backend_web_test.dart \
+        test/services/js_interop_bindings_web_test.dart"
+    # shellcheck disable=SC2086
+    if ! (cd "$ROOT/flutter/web" && flutter test --no-pub --platform chrome $BROWSER_TESTS); then
+        record_failure "browser tests"
+    fi
+fi
+
 if [ "$WITH_REGTEST" = 1 ]; then
     step "end to end against a regtest chain"
     if ! command -v "${MONEROD:-monerod}" >/dev/null 2>&1; then
