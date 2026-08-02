@@ -42,7 +42,7 @@ app.*.map.json
 /.cargo/
 /target/
 
-# Generated signals
-/lib/src/bincode
-/lib/src/serde
-/lib/src/bindings
+# lib/src/bindings held rinf's generated signals, and the whole directory was ignored
+# for it. rinf is gone; what lives there now is a hand-written re-export plus the ffigen
+# output, which is committed so a clone can analyse without the Rust toolchain.
+# Regenerate with scripts/generate-native-bindings.sh.
