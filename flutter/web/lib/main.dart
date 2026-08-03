@@ -75,6 +75,7 @@ class _AppStateHostState extends State<AppStateHost> {
       walletState: _walletState,
       outputState: _outputState,
       scanState: _scanState,
+      persistence: WalletPersistenceBrowser.defaultPersistence,
     );
 
     _transactionState.onBroadcastSuccess = _fileManagementState.autoSaveIfReady;

@@ -125,9 +125,9 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
   }
 
   Future<String?> _pickFile() async {
-    final bytes = await fileTransfer.pickAndRead();
-    if (bytes == null) return null;
-    return _hexEncode(Uint8List.fromList(bytes));
+    final picked = await fileTransfer.pick();
+    if (picked == null) return null;
+    return _hexEncode(Uint8List.fromList(picked.bytes));
   }
 
   void _signOffline(String unsignedHex) {

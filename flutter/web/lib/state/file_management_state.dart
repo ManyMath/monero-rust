@@ -1,11 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:html' as html;
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import '../src/ffi/signal_types.dart';
+import '../src/platform/file_transfer.dart';
 import '../models/wallet_instance.dart';
-import '../services/wallet_persistence_browser.dart';
+import '../services/wallet_persistence_service.dart';
 import '../services/wallet_scan_service.dart';
 import '../utils/output_utils.dart';
 import '../widgets/password_dialog.dart';
@@ -20,6 +19,13 @@ class FileManagementState extends ChangeNotifier {
   final WalletState _walletState;
   final OutputState _outputState;
   final ScanState _scanState;
+
+  /// Where wallets are saved and loaded.
+  ///
+  /// Injected rather than reached for: the browser facade that builds the real one imports
+  /// `dart:html`, which the Dart VM does not have, so naming it here would make every test
+  /// of this class a browser test.
+  final WalletPersistenceService _persistence;
 
   bool isSaving = false;
   bool isLoadingWallet = false;
@@ -43,9 +49,11 @@ class FileManagementState extends ChangeNotifier {
     required WalletState walletState,
     required OutputState outputState,
     required ScanState scanState,
+    required WalletPersistenceService persistence,
   }) : _walletState = walletState,
        _outputState = outputState,
-       _scanState = scanState;
+       _scanState = scanState,
+       _persistence = persistence;
 
   Future<void> saveWalletData(BuildContext context) async {
     isSaving = true;
@@ -148,7 +156,7 @@ class FileManagementState extends ChangeNotifier {
 
     final kim = _outputState.keyImageMap;
 
-    final saveResult = await WalletPersistenceBrowser.saveWalletData(
+    final saveResult = await _persistence.save(
       walletId: walletId,
       password: password,
       seed: _walletState.seedController.text.trim(),
@@ -180,7 +188,7 @@ class FileManagementState extends ChangeNotifier {
 
     // Derive encryption key for auto-save
     if (success) {
-      final derived = await WalletPersistenceBrowser.deriveEncryptionKey(
+      final derived = await _persistence.deriveKey(
         password,
       );
       if (derived != null) {
@@ -223,7 +231,7 @@ class FileManagementState extends ChangeNotifier {
           _walletState.lifecycle.activeWalletId = walletId;
         }
 
-        await WalletPersistenceBrowser.clearWalletData('temp_wallet');
+        await _persistence.clearAsync('temp_wallet');
       }
     }
 
@@ -261,7 +269,7 @@ class FileManagementState extends ChangeNotifier {
       }
     }
 
-    final loadResult = await WalletPersistenceBrowser.loadWalletData(
+    final loadResult = await _persistence.load(
       walletId: _walletState.walletId,
       password: password,
     );
@@ -361,7 +369,7 @@ class FileManagementState extends ChangeNotifier {
     _walletState.deriveAddress();
 
     // Cache encryption key so auto-save can work without a manual save
-    final derived = await WalletPersistenceBrowser.deriveEncryptionKey(
+    final derived = await _persistence.deriveKey(
       password,
     );
     if (derived != null) {
@@ -439,16 +447,13 @@ class FileManagementState extends ChangeNotifier {
         return;
       }
 
-      final fileBytes = _hexDecode(response.fileBytesHex!);
-      final blob = html.Blob([fileBytes], 'application/octet-stream');
-      final url = html.Url.createObjectUrlFromBlob(blob);
       final walletName = _walletState.walletId.isNotEmpty
           ? _walletState.walletId
           : 'wallet';
-      final anchor = html.AnchorElement(href: url)
-        ..setAttribute('download', '$walletName.keys')
-        ..click();
-      html.Url.revokeObjectUrl(url);
+      fileTransfer.download(
+        '$walletName.keys',
+        _hexDecode(response.fileBytesHex!),
+      );
 
       isExporting = false;
       exportError = null;
@@ -539,16 +544,13 @@ class FileManagementState extends ChangeNotifier {
         return;
       }
 
-      final fileBytes = _hexDecode(response.keyImagesHex!);
-      final blob = html.Blob([fileBytes], 'application/octet-stream');
-      final url = html.Url.createObjectUrlFromBlob(blob);
       final walletName = _walletState.walletId.isNotEmpty
           ? _walletState.walletId
           : 'wallet';
-      final anchor = html.AnchorElement(href: url)
-        ..setAttribute('download', '$walletName.key-images')
-        ..click();
-      html.Url.revokeObjectUrl(url);
+      fileTransfer.download(
+        '$walletName.key-images',
+        _hexDecode(response.keyImagesHex!),
+      );
 
       isExportingKeyImages = false;
       keyImageExportError = null;
@@ -597,34 +599,13 @@ class FileManagementState extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final uploadInput = html.FileUploadInputElement();
-      uploadInput.accept = '.key-images,.bin,*';
-      uploadInput.click();
-
-      try {
-        await uploadInput.onChange.first.timeout(const Duration(seconds: 120));
-      } on TimeoutException {
-        return;
-      }
-
-      final files = uploadInput.files;
-      if (files == null || files.isEmpty) return;
+      final picked = await fileTransfer.pick(accept: '.key-images,.bin,*');
+      if (picked == null) return;
 
       isImportingKeyImages = true;
       notifyListeners();
 
-      final reader = html.FileReader();
-      reader.readAsArrayBuffer(files[0]);
-      await reader.onLoadEnd.first;
-      final result = reader.result;
-      if (result == null) {
-        isImportingKeyImages = false;
-        keyImageImportError = 'Failed to read key image file';
-        notifyListeners();
-        return;
-      }
-
-      final bytes = Uint8List.view(result as ByteBuffer);
+      final bytes = picked.bytes;
       final completer = Completer<KeyImagesImportedResponse>();
       final sub = KeyImagesImportedResponse.stream.listen((response) {
         if (!completer.isCompleted) completer.complete(response);
@@ -702,23 +683,11 @@ class FileManagementState extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final uploadInput = html.FileUploadInputElement();
-      uploadInput.accept = '.keys,*';
-      uploadInput.click();
-
-      try {
-        await uploadInput.onChange.first.timeout(const Duration(seconds: 120));
-      } on TimeoutException {
-        return;
-      }
-
-      final files = uploadInput.files;
-      if (files == null || files.isEmpty) return;
+      final picked = await fileTransfer.pick(accept: '.keys,*');
+      if (picked == null) return;
 
       isImporting = true;
       notifyListeners();
-
-      final file = files[0];
 
       if (!context.mounted) return;
       final password = await showDialog<String>(
@@ -737,20 +706,7 @@ class FileManagementState extends ChangeNotifier {
         return;
       }
 
-      final reader = html.FileReader();
-      reader.readAsArrayBuffer(file);
-      await reader.onLoadEnd.first;
-      final result = reader.result;
-      if (result == null) {
-        isImporting = false;
-        importError = 'Failed to read file';
-        notifyListeners();
-        return;
-      }
-      final bytes = Uint8List.view(result as ByteBuffer);
-      final hexBytes = bytes
-          .map((b) => b.toRadixString(16).padLeft(2, '0'))
-          .join();
+      final hexBytes = _hexEncode(picked.bytes);
 
       final completer = Completer<ImportKeysFileResponse>();
       final sub = ImportKeysFileResponse.stream.listen((response) {
@@ -824,7 +780,7 @@ class FileManagementState extends ChangeNotifier {
         _scanState.isContinuousPaused = false;
       }
 
-      final walletName = file.name.replaceAll('.keys', '');
+      final walletName = picked.name.replaceAll('.keys', '');
       final network =
           response.network ??
           (_walletState.network.isNotEmpty ? _walletState.network : 'stagenet');
@@ -842,7 +798,7 @@ class FileManagementState extends ChangeNotifier {
       notifyListeners();
 
       _walletState.showSnackBar?.call(
-        'Imported ${response.watchOnly ? "view-only " : ""}wallet from ${file.name}',
+        'Imported ${response.watchOnly ? "view-only " : ""}wallet from ${picked.name}',
         seconds: 3,
       );
     } catch (e) {
@@ -865,7 +821,7 @@ class FileManagementState extends ChangeNotifier {
     if (confirmed != true || !context.mounted) return;
 
     final deletedWalletId = _walletState.walletId;
-    await WalletPersistenceBrowser.clearWalletData(deletedWalletId);
+    await _persistence.clearAsync(deletedWalletId);
     _outputState.invalidateStorageBytesCache();
     await _walletState.refreshAvailableWalletsAsync();
     _walletState.startNewWallet();
@@ -909,7 +865,7 @@ class FileManagementState extends ChangeNotifier {
           activeWallet?.activeAccount ?? _walletState.activeAccount;
       final scanningAccounts = activeWallet?.scanningAccounts ?? {0};
 
-      final saveResult = await WalletPersistenceBrowser.saveWithDerivedKey(
+      final saveResult = await _persistence.saveWithDerivedKey(
         walletId: _walletState.walletId,
         keyHex: _cachedKeyHex!,
         saltHex: _cachedSaltHex!,

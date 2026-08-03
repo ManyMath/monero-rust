@@ -22,11 +22,12 @@ class WebFileTransfer implements FileTransfer {
   }
 
   @override
-  Future<List<int>?> pickAndRead({
+  Future<PickedFile?> pick({
+    String accept = '.bin,*',
     Duration timeout = const Duration(seconds: 120),
   }) async {
     final upload = html.FileUploadInputElement();
-    upload.accept = '.bin,*';
+    upload.accept = accept;
     upload.click();
     try {
       await upload.onChange.first.timeout(timeout);
@@ -41,7 +42,8 @@ class WebFileTransfer implements FileTransfer {
     reader.readAsDataUrl(files[0]);
     await reader.onLoad.first;
     final dataUrl = reader.result as String;
-    return base64Decode(dataUrl.substring(dataUrl.indexOf(',') + 1));
+    final bytes = base64Decode(dataUrl.substring(dataUrl.indexOf(',') + 1));
+    return (name: files[0].name, bytes: bytes);
   }
 }
 

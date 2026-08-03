@@ -6,12 +6,19 @@ import 'dart:async';
 /// on web that means `dart:html` — a library the Dart VM does not have, so importing it
 /// anywhere in a widget's tree makes that widget untestable under `flutter test`. Keeping
 /// it behind this interface is the same trick [SignalSender] uses for the worker bridge.
+/// A file the user handed back: the name they had for it, and its contents.
+///
+/// The name matters to the caller that turns `alice.keys` into a wallet named `alice`.
+typedef PickedFile = ({String name, List<int> bytes});
+
 abstract class FileTransfer {
   /// Offer `bytes` to the user as a download named `filename`.
   void download(String filename, List<int> bytes);
 
-  /// Ask the user for a file and return its contents, or null if they didn't pick one.
-  Future<List<int>?> pickAndRead({Duration timeout});
+  /// Ask the user for a file, or return null if they didn't pick one.
+  ///
+  /// [accept] is a browser-style filter list, e.g. `'.keys,*'`.
+  Future<PickedFile?> pick({String accept, Duration timeout});
 }
 
 FileTransfer? _fileTransfer;
