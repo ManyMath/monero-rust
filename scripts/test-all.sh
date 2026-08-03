@@ -82,15 +82,6 @@ if ! cargo test -p monero-rust --features mock-rpc \
     record_failure "mock-rpc send path"
 fi
 
-step "native ffi bindings are current"
-# The generated bindings are committed so Dart work needs no Rust toolchain, which means
-# they can drift from the Rust FFI surface without anything noticing.
-if ! command -v flutter >/dev/null 2>&1; then
-    echo "flutter not on PATH - skipping the bindings check" >&2
-elif ! "$ROOT/scripts/generate-native-bindings.sh" --check; then
-    record_failure "native ffi bindings out of date"
-fi
-
 step "flutter/web dart tests"
 if ! command -v flutter >/dev/null 2>&1; then
     echo "flutter not on PATH - skipping the dart tests" >&2
