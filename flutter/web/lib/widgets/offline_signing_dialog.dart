@@ -279,6 +279,8 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
         fee: _fee,
         txKeyAdditional: const [],
         changeOutputs: const [],
+        spentKeyImages: const [],
+        transactions: const [],
       ),
     );
   }
@@ -335,6 +337,7 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
           txKeyAdditional: tx.txKeyAdditional,
           changeOutputs: const [],
           spentKeyImages: spentKeyImages,
+          transactions: const [],
         ),
       );
     });
@@ -570,6 +573,8 @@ class _OfflineSigningDialogState extends State<OfflineSigningDialog> {
                     fee: _fee,
                     txKeyAdditional: const [],
                     changeOutputs: const [],
+                    spentKeyImages: const [],
+                    transactions: const [],
                   ),
             );
           },

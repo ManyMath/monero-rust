@@ -75,6 +75,21 @@ elif ! cargo test -p monero-rust --lib --target wasm32-unknown-unknown; then
     record_failure "wasm32 unit tests"
 fi
 
+step "generated signal surface is current"
+# signals/mod.rs is the source of truth for the Dart <-> Rust signal surface, and codegen
+# emits signal_types.dart, ffi_web.rs and signal_ids.rs from it. Nothing ran this check, so
+# the generator fell six months behind the files it owns and regenerating would have
+# reverted shipping code. It only means anything while it runs.
+#
+# Both formatters are part of the comparison, so a missing one is a skip, not a failure.
+if ! command -v dart >/dev/null 2>&1; then
+    echo "dart not on PATH - skipping the codegen check (it formats the Dart output)" >&2
+elif ! command -v rustfmt >/dev/null 2>&1; then
+    echo "rustfmt not on PATH - skipping the codegen check (it formats the Rust output)" >&2
+elif ! (cd "$ROOT/flutter/web/native/codegen" && cargo run --quiet -- --check); then
+    record_failure "generated signal surface out of date"
+fi
+
 step "send path against recorded RPC (--features mock-rpc)"
 # Enable recorded RPC responses for tests that otherwise require a live node.
 if ! cargo test -p monero-rust --features mock-rpc \

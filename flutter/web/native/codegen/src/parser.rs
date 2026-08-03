@@ -111,6 +111,9 @@ fn parse_type(ty: &syn::Type) -> Result<RustType, Box<dyn std::error::Error>> {
                 "u8" => Ok(RustType::U8),
                 "u32" => Ok(RustType::U32),
                 "u64" => Ok(RustType::U64),
+                // usize serialises as a plain JSON number, same as u64 on the Dart side.
+                "usize" => Ok(RustType::U64),
+                "f64" => Ok(RustType::F64),
                 "bool" => Ok(RustType::Bool),
                 "Vec" | "Option" => {
                     let args = match &segment.arguments {

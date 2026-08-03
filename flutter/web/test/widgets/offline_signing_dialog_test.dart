@@ -98,6 +98,7 @@ void main() {
       'tx_key_additional': ['c' * 64],
       'change_outputs': [],
       'spent_key_images': ['ki_1', 'ki_2'],
+      'transactions': [],
     });
     await tester.pump();
 
@@ -162,6 +163,7 @@ void main() {
       'tx_key_additional': ['f' * 64],
       'change_outputs': [],
       'spent_key_images': ['wallet2_ki_0', 'wallet2_ki_20'],
+      'transactions': [],
     });
     await tester.pump();
 
@@ -234,6 +236,7 @@ void main() {
       'tx_key_additional': ['3' * 64],
       'change_outputs': [],
       'spent_key_images': ['d' * 64],
+      'transactions': [],
     });
     await tester.pump();
 

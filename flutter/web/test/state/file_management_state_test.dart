@@ -312,6 +312,8 @@ void main() {
         'error': 'key images do not match this wallet',
         'imported_count': 0,
         'spent_count': 0,
+        'key_images': <String>[],
+        'spent_key_images': <String>[],
       });
       await done;
 

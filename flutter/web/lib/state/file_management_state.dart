@@ -626,6 +626,8 @@ class FileManagementState extends ChangeNotifier {
           error: 'Timeout waiting for key image import',
           importedCount: 0,
           spentCount: 0,
+          keyImages: [],
+          spentKeyImages: [],
         ),
       );
       await sub.cancel();

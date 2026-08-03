@@ -77,7 +77,7 @@ macro_rules! dart_signal {
     };
 }
 
-// All DartSignal types
+// All 44 DartSignal types
 dart_signal!(MoneroTestRequest, monero_test_request);
 dart_signal!(CreateWalletRequest, create_wallet_request);
 dart_signal!(StartSyncRequest, start_sync_request);
@@ -120,8 +120,8 @@ dart_signal!(
     SignUnsignedTransactionRequest,
     sign_unsigned_transaction_request
 );
-dart_signal!(InspectUnsignedTxSetRequest, inspect_unsigned_txset_request);
 dart_signal!(ExtractSignedTxSetRequest, extract_signed_txset_request);
+dart_signal!(InspectUnsignedTxSetRequest, inspect_unsigned_txset_request);
 dart_signal!(BuildSignedTxSetRequest, build_signed_txset_request);
 dart_signal!(ExportKeyImagesRequest, export_key_images_request);
 dart_signal!(ImportKeyImagesRequest, import_key_images_request);

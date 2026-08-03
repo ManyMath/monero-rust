@@ -11,6 +11,7 @@ pub enum RustType {
     U8,
     U32,
     U64,
+    F64,
     Bool,
     Vec(Box<RustType>),
     Option(Box<RustType>),

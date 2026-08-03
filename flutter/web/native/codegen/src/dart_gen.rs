@@ -317,6 +317,7 @@ fn to_json_entry(f: &Field) -> String {
             }
             _ => format!("'{key}': {camel}"),
         },
+        RustType::Named(_) => format!("'{key}': {camel}.toJson()"),
         _ => format!("'{key}': {camel}"),
     }
 }
@@ -416,8 +417,11 @@ fn from_json_expr(f: &Field) -> String {
                     "{camel}:\n          si != null ? ((si as List)[0] as int, (si as List)[1] as int) : null"
                 )
             }
-            RustType::Named(n) => {
-                format!("{camel}: json['{key}'] as {n}?")
+            RustType::Named(n) => format!(
+                "{camel}: json['{key}'] != null\n            ? {n}.fromJson(json['{key}'] as Map<String, dynamic>)\n            : null"
+            ),
+            RustType::F64 => {
+                format!("{camel}: (json['{key}'] as num?)?.toDouble()")
             }
             other => {
                 let dt = dart_type_simple(other);
@@ -438,6 +442,11 @@ fn from_json_expr(f: &Field) -> String {
         RustType::Bool if f.has_serde_default => {
             format!("{camel}: json['{key}'] as bool? ?? false")
         }
+        // A nested signal struct arrives as a JSON object, not as a Dart instance.
+        RustType::Named(n) => format!(
+            "{camel}: {n}.fromJson(json['{key}'] as Map<String, dynamic>)"
+        ),
+        RustType::F64 => format!("{camel}: (json['{key}'] as num).toDouble()"),
         other => {
             let dt = dart_type_simple(other);
             format!("{camel}: json['{key}'] as {dt}")
@@ -445,17 +454,27 @@ fn from_json_expr(f: &Field) -> String {
     }
 }
 
+/// Every field is a parameter, rather than the handful someone needed first.
+///
+/// Which fields deserve a copyWith is not something a generator can judge, and picking a
+/// subset means the next caller edits the generated file instead of the generator.
 fn gen_owned_output_copy_with(fields: &[Field]) -> String {
-    let mut out =
-        String::from("  OwnedOutput copyWith({bool? spent, bool? frozen}) => OwnedOutput(\n");
+    let params: Vec<String> = fields
+        .iter()
+        .map(|f| {
+            let ty = dart_type(&f.ty);
+            let ty = ty.strip_suffix('?').unwrap_or(&ty);
+            format!("{}? {}", ty, to_camel(&f.name))
+        })
+        .collect();
+
+    let mut out = format!(
+        "  OwnedOutput copyWith({{{}}}) => OwnedOutput(\n",
+        params.join(", ")
+    );
     for f in fields {
         let camel = to_camel(&f.name);
-        let rhs = match f.name.as_str() {
-            "spent" => "spent ?? this.spent".to_string(),
-            "frozen" => "frozen ?? this.frozen".to_string(),
-            _ => camel.clone(),
-        };
-        out.push_str(&format!("    {}: {},\n", camel, rhs));
+        out.push_str(&format!("    {camel}: {camel} ?? this.{camel},\n"));
     }
     out.push_str("  );\n");
     out
@@ -475,6 +494,7 @@ pub fn dart_type(ty: &RustType) -> String {
     match ty {
         RustType::Str => "String".into(),
         RustType::U8 | RustType::U32 | RustType::U64 => "int".into(),
+        RustType::F64 => "double".into(),
         RustType::Bool => "bool".into(),
         RustType::Vec(inner) => format!("List<{}>", dart_type(inner)),
         RustType::Option(inner) => format!("{}?", dart_type(inner)),
@@ -498,6 +518,7 @@ fn dart_default_value(ty: &RustType) -> &'static str {
     match ty {
         RustType::Str => " = ''",
         RustType::U8 | RustType::U32 | RustType::U64 => " = 0",
+        RustType::F64 => " = 0",
         RustType::Bool => " = false",
         RustType::Vec(_) => " = const []",
         RustType::Option(_) => "",
@@ -508,6 +529,15 @@ fn dart_default_value(ty: &RustType) -> &'static str {
 // ---------------------------------------------------------------------------
 // Name conversion utilities
 // ---------------------------------------------------------------------------
+
+/// `TxSet` is a single word in snake_case, `txset`.
+///
+/// That is the convention the JSON keys (`signed_txset_hex`) and the wasm-bindgen
+/// exports (`send_extract_signed_txset_request`) already use, and the actors call those
+/// export names by hand, so the generator has to spell them the same way.
+fn fold_txset(s: &str) -> String {
+    s.replace("TxSet", "Txset")
+}
 
 /// Convert snake_case to camelCase
 pub fn to_camel(s: &str) -> String {
@@ -523,13 +553,13 @@ pub fn to_camel(s: &str) -> String {
             result.push(ch);
         }
     }
-    result
+    result.replace("Txset", "TxSet")
 }
 
 /// Convert PascalCase to snake_case
 pub fn pascal_to_snake(s: &str) -> String {
     let mut result = String::new();
-    for (i, ch) in s.chars().enumerate() {
+    for (i, ch) in fold_txset(s).chars().enumerate() {
         if ch.is_uppercase() && i > 0 {
             result.push('_');
         }

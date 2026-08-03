@@ -114,7 +114,7 @@ class OwnedOutput {
     this.spentHeight,
     required this.keyImage,
     required this.isCoinbase,
-    required this.frozen,
+    this.frozen = false,
   });
 
   Map<String, dynamic> toJson() => {
@@ -157,31 +157,43 @@ class OwnedOutput {
       spentHeight: json['spent_height'] as int?,
       keyImage: json['key_image'] as String,
       isCoinbase: json['is_coinbase'] as bool,
-      frozen: json['frozen'] as bool,
+      frozen: json['frozen'] as bool? ?? false,
     );
   }
 
   OwnedOutput copyWith({
+    String? txHash,
+    int? outputIndex,
+    int? amount,
+    String? amountXmr,
+    String? key,
+    String? keyOffset,
+    String? commitmentMask,
+    (int, int)? subaddressIndex,
+    String? paymentId,
+    String? receivedOutputBytes,
+    int? blockHeight,
     bool? spent,
-    bool? frozen,
-    String? keyImage,
     int? spentHeight,
+    String? keyImage,
+    bool? isCoinbase,
+    bool? frozen,
   }) => OwnedOutput(
-    txHash: txHash,
-    outputIndex: outputIndex,
-    amount: amount,
-    amountXmr: amountXmr,
-    key: key,
-    keyOffset: keyOffset,
-    commitmentMask: commitmentMask,
-    subaddressIndex: subaddressIndex,
-    paymentId: paymentId,
-    receivedOutputBytes: receivedOutputBytes,
-    blockHeight: blockHeight,
+    txHash: txHash ?? this.txHash,
+    outputIndex: outputIndex ?? this.outputIndex,
+    amount: amount ?? this.amount,
+    amountXmr: amountXmr ?? this.amountXmr,
+    key: key ?? this.key,
+    keyOffset: keyOffset ?? this.keyOffset,
+    commitmentMask: commitmentMask ?? this.commitmentMask,
+    subaddressIndex: subaddressIndex ?? this.subaddressIndex,
+    paymentId: paymentId ?? this.paymentId,
+    receivedOutputBytes: receivedOutputBytes ?? this.receivedOutputBytes,
+    blockHeight: blockHeight ?? this.blockHeight,
     spent: spent ?? this.spent,
     spentHeight: spentHeight ?? this.spentHeight,
     keyImage: keyImage ?? this.keyImage,
-    isCoinbase: isCoinbase,
+    isCoinbase: isCoinbase ?? this.isCoinbase,
     frozen: frozen ?? this.frozen,
   );
 }
@@ -261,6 +273,391 @@ class DoubleSpendConflict {
       );
 }
 
+class SignedOfflineTransaction {
+  final String txId;
+  final String txBlob;
+  final int fee;
+  final String txKey;
+  final List<String> txKeyAdditional;
+  final List<String> spentKeyImages;
+  final List<ChangeOutput> changeOutputs;
+
+  const SignedOfflineTransaction({
+    required this.txId,
+    required this.txBlob,
+    required this.fee,
+    required this.txKey,
+    required this.txKeyAdditional,
+    required this.spentKeyImages,
+    required this.changeOutputs,
+  });
+
+  factory SignedOfflineTransaction.fromJson(Map<String, dynamic> json) =>
+      SignedOfflineTransaction(
+        txId: json['tx_id'] as String,
+        txBlob: json['tx_blob'] as String,
+        fee: json['fee'] as int,
+        txKey: json['tx_key'] as String,
+        txKeyAdditional: (json['tx_key_additional'] as List).cast<String>(),
+        spentKeyImages: (json['spent_key_images'] as List).cast<String>(),
+        changeOutputs: (json['change_outputs'] as List)
+            .map((e) => ChangeOutput.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
+class ExtractedSignedTransaction {
+  final String txId;
+  final String txBlob;
+  final int txVersion;
+  final int txUnlockTime;
+  final int txInputCount;
+  final List<int> txInputRingSizes;
+  final int txOutputCount;
+  final int txExtraLen;
+  final int? rctType;
+  final int? rctFee;
+  final int dust;
+  final int fee;
+  final bool dustAddedToFee;
+  final int changeAmount;
+  final int selectedTransferCount;
+  final List<int> selectedTransferIndices;
+  final int keyImagesLen;
+  final String keyImagesBlobHex;
+  final bool txKeyIsZero;
+  final String? txKey;
+  final int additionalTxKeyCount;
+  final List<String> txKeyAdditional;
+  final int destinationCount;
+  final int destinationTotalAmount;
+  final int multisigSigCount;
+
+  const ExtractedSignedTransaction({
+    required this.txId,
+    required this.txBlob,
+    required this.txVersion,
+    required this.txUnlockTime,
+    required this.txInputCount,
+    required this.txInputRingSizes,
+    required this.txOutputCount,
+    required this.txExtraLen,
+    this.rctType,
+    this.rctFee,
+    required this.dust,
+    required this.fee,
+    required this.dustAddedToFee,
+    required this.changeAmount,
+    required this.selectedTransferCount,
+    required this.selectedTransferIndices,
+    required this.keyImagesLen,
+    required this.keyImagesBlobHex,
+    required this.txKeyIsZero,
+    this.txKey,
+    required this.additionalTxKeyCount,
+    required this.txKeyAdditional,
+    required this.destinationCount,
+    required this.destinationTotalAmount,
+    required this.multisigSigCount,
+  });
+
+  factory ExtractedSignedTransaction.fromJson(Map<String, dynamic> json) =>
+      ExtractedSignedTransaction(
+        txId: json['tx_id'] as String,
+        txBlob: json['tx_blob'] as String,
+        txVersion: json['tx_version'] as int,
+        txUnlockTime: json['tx_unlock_time'] as int,
+        txInputCount: json['tx_input_count'] as int,
+        txInputRingSizes: (json['tx_input_ring_sizes'] as List).cast<int>(),
+        txOutputCount: json['tx_output_count'] as int,
+        txExtraLen: json['tx_extra_len'] as int,
+        rctType: json['rct_type'] as int?,
+        rctFee: json['rct_fee'] as int?,
+        dust: json['dust'] as int,
+        fee: json['fee'] as int,
+        dustAddedToFee: json['dust_added_to_fee'] as bool,
+        changeAmount: json['change_amount'] as int,
+        selectedTransferCount: json['selected_transfer_count'] as int,
+        selectedTransferIndices: (json['selected_transfer_indices'] as List)
+            .cast<int>(),
+        keyImagesLen: json['key_images_len'] as int,
+        keyImagesBlobHex: json['key_images_blob_hex'] as String,
+        txKeyIsZero: json['tx_key_is_zero'] as bool,
+        txKey: json['tx_key'] as String?,
+        additionalTxKeyCount: json['additional_tx_key_count'] as int,
+        txKeyAdditional: (json['tx_key_additional'] as List).cast<String>(),
+        destinationCount: json['destination_count'] as int,
+        destinationTotalAmount: json['destination_total_amount'] as int,
+        multisigSigCount: json['multisig_sig_count'] as int,
+      );
+}
+
+class SignedTxSetKeyImageEntry {
+  final String publicKey;
+  final String keyImage;
+
+  const SignedTxSetKeyImageEntry({
+    required this.publicKey,
+    required this.keyImage,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'public_key': publicKey,
+    'key_image': keyImage,
+  };
+
+  factory SignedTxSetKeyImageEntry.fromJson(Map<String, dynamic> json) =>
+      SignedTxSetKeyImageEntry(
+        publicKey: json['public_key'] as String,
+        keyImage: json['key_image'] as String,
+      );
+}
+
+class UnsignedTxSetSourceRingEntry {
+  final int globalOutputIndex;
+  final String outputPublicKey;
+  final String commitment;
+
+  const UnsignedTxSetSourceRingEntry({
+    required this.globalOutputIndex,
+    required this.outputPublicKey,
+    required this.commitment,
+  });
+
+  factory UnsignedTxSetSourceRingEntry.fromJson(Map<String, dynamic> json) =>
+      UnsignedTxSetSourceRingEntry(
+        globalOutputIndex: json['global_output_index'] as int,
+        outputPublicKey: json['output_public_key'] as String,
+        commitment: json['commitment'] as String,
+      );
+}
+
+class UnsignedTxSetSourceSummary {
+  final int ringSize;
+  final List<UnsignedTxSetSourceRingEntry> ring;
+  final int realOutput;
+  final int realGlobalOutputIndex;
+  final String realOutputPublicKey;
+  final String realTxPublicKey;
+  final List<String> realOutAdditionalTxKeys;
+  final int realOutputInTxIndex;
+  final int amount;
+  final bool rct;
+  final String mask;
+
+  const UnsignedTxSetSourceSummary({
+    required this.ringSize,
+    required this.ring,
+    required this.realOutput,
+    required this.realGlobalOutputIndex,
+    required this.realOutputPublicKey,
+    required this.realTxPublicKey,
+    required this.realOutAdditionalTxKeys,
+    required this.realOutputInTxIndex,
+    required this.amount,
+    required this.rct,
+    required this.mask,
+  });
+
+  factory UnsignedTxSetSourceSummary.fromJson(Map<String, dynamic> json) =>
+      UnsignedTxSetSourceSummary(
+        ringSize: json['ring_size'] as int,
+        ring: (json['ring'] as List)
+            .map(
+              (e) => UnsignedTxSetSourceRingEntry.fromJson(
+                e as Map<String, dynamic>,
+              ),
+            )
+            .toList(),
+        realOutput: json['real_output'] as int,
+        realGlobalOutputIndex: json['real_global_output_index'] as int,
+        realOutputPublicKey: json['real_output_public_key'] as String,
+        realTxPublicKey: json['real_tx_public_key'] as String,
+        realOutAdditionalTxKeys: (json['real_out_additional_tx_keys'] as List)
+            .cast<String>(),
+        realOutputInTxIndex: json['real_output_in_tx_index'] as int,
+        amount: json['amount'] as int,
+        rct: json['rct'] as bool,
+        mask: json['mask'] as String,
+      );
+}
+
+class UnsignedTxSetDestinationSummary {
+  final String originalAddressHex;
+  final int amount;
+  final String spendPublicKey;
+  final String viewPublicKey;
+  final bool isSubaddress;
+  final bool isIntegrated;
+
+  const UnsignedTxSetDestinationSummary({
+    required this.originalAddressHex,
+    required this.amount,
+    required this.spendPublicKey,
+    required this.viewPublicKey,
+    required this.isSubaddress,
+    required this.isIntegrated,
+  });
+
+  factory UnsignedTxSetDestinationSummary.fromJson(Map<String, dynamic> json) =>
+      UnsignedTxSetDestinationSummary(
+        originalAddressHex: json['original_address_hex'] as String,
+        amount: json['amount'] as int,
+        spendPublicKey: json['spend_public_key'] as String,
+        viewPublicKey: json['view_public_key'] as String,
+        isSubaddress: json['is_subaddress'] as bool,
+        isIntegrated: json['is_integrated'] as bool,
+      );
+}
+
+class UnsignedTxSetConstructionSummary {
+  final int sourceCount;
+  final List<int> sourceRingSizes;
+  final List<UnsignedTxSetSourceSummary> sources;
+  final int changeAmount;
+  final UnsignedTxSetDestinationSummary change;
+  final int splitDestinationCount;
+  final int splitDestinationTotalAmount;
+  final List<UnsignedTxSetDestinationSummary> splitDestinations;
+  final List<int> selectedTransferIndices;
+  final String extraHex;
+  final int unlockTime;
+  final int constructionFlags;
+  final bool useRct;
+  final bool useViewTags;
+  final int rctRangeProofType;
+  final int rctBpVersion;
+  final int destinationCount;
+  final int destinationTotalAmount;
+  final List<UnsignedTxSetDestinationSummary> destinations;
+  final int subaddrAccount;
+  final List<int> subaddrIndices;
+
+  const UnsignedTxSetConstructionSummary({
+    required this.sourceCount,
+    required this.sourceRingSizes,
+    required this.sources,
+    required this.changeAmount,
+    required this.change,
+    required this.splitDestinationCount,
+    required this.splitDestinationTotalAmount,
+    required this.splitDestinations,
+    required this.selectedTransferIndices,
+    required this.extraHex,
+    required this.unlockTime,
+    required this.constructionFlags,
+    required this.useRct,
+    required this.useViewTags,
+    required this.rctRangeProofType,
+    required this.rctBpVersion,
+    required this.destinationCount,
+    required this.destinationTotalAmount,
+    required this.destinations,
+    required this.subaddrAccount,
+    required this.subaddrIndices,
+  });
+
+  factory UnsignedTxSetConstructionSummary.fromJson(
+    Map<String, dynamic> json,
+  ) => UnsignedTxSetConstructionSummary(
+    sourceCount: json['source_count'] as int,
+    sourceRingSizes: (json['source_ring_sizes'] as List).cast<int>(),
+    sources: (json['sources'] as List)
+        .map(
+          (e) => UnsignedTxSetSourceSummary.fromJson(e as Map<String, dynamic>),
+        )
+        .toList(),
+    changeAmount: json['change_amount'] as int,
+    change: UnsignedTxSetDestinationSummary.fromJson(
+      json['change'] as Map<String, dynamic>,
+    ),
+    splitDestinationCount: json['split_destination_count'] as int,
+    splitDestinationTotalAmount: json['split_destination_total_amount'] as int,
+    splitDestinations: (json['split_destinations'] as List)
+        .map(
+          (e) => UnsignedTxSetDestinationSummary.fromJson(
+            e as Map<String, dynamic>,
+          ),
+        )
+        .toList(),
+    selectedTransferIndices: (json['selected_transfer_indices'] as List)
+        .cast<int>(),
+    extraHex: json['extra_hex'] as String,
+    unlockTime: json['unlock_time'] as int,
+    constructionFlags: json['construction_flags'] as int,
+    useRct: json['use_rct'] as bool,
+    useViewTags: json['use_view_tags'] as bool,
+    rctRangeProofType: json['rct_range_proof_type'] as int,
+    rctBpVersion: json['rct_bp_version'] as int,
+    destinationCount: json['destination_count'] as int,
+    destinationTotalAmount: json['destination_total_amount'] as int,
+    destinations: (json['destinations'] as List)
+        .map(
+          (e) => UnsignedTxSetDestinationSummary.fromJson(
+            e as Map<String, dynamic>,
+          ),
+        )
+        .toList(),
+    subaddrAccount: json['subaddr_account'] as int,
+    subaddrIndices: (json['subaddr_indices'] as List).cast<int>(),
+  );
+}
+
+class UnsignedTxSetTransferSummary {
+  final String outputPublicKey;
+  final int internalOutputIndex;
+  final int globalOutputIndex;
+  final String txPublicKey;
+  final int flagsRaw;
+  final bool spent;
+  final bool frozen;
+  final bool rct;
+  final bool keyImageKnown;
+  final bool keyImageRequest;
+  final bool keyImagePartial;
+  final int amount;
+  final List<String> additionalTxKeys;
+  final int subaddressMajor;
+  final int subaddressMinor;
+
+  const UnsignedTxSetTransferSummary({
+    required this.outputPublicKey,
+    required this.internalOutputIndex,
+    required this.globalOutputIndex,
+    required this.txPublicKey,
+    required this.flagsRaw,
+    required this.spent,
+    required this.frozen,
+    required this.rct,
+    required this.keyImageKnown,
+    required this.keyImageRequest,
+    required this.keyImagePartial,
+    required this.amount,
+    required this.additionalTxKeys,
+    required this.subaddressMajor,
+    required this.subaddressMinor,
+  });
+
+  factory UnsignedTxSetTransferSummary.fromJson(Map<String, dynamic> json) =>
+      UnsignedTxSetTransferSummary(
+        outputPublicKey: json['output_public_key'] as String,
+        internalOutputIndex: json['internal_output_index'] as int,
+        globalOutputIndex: json['global_output_index'] as int,
+        txPublicKey: json['tx_public_key'] as String,
+        flagsRaw: json['flags_raw'] as int,
+        spent: json['spent'] as bool,
+        frozen: json['frozen'] as bool,
+        rct: json['rct'] as bool,
+        keyImageKnown: json['key_image_known'] as bool,
+        keyImageRequest: json['key_image_request'] as bool,
+        keyImagePartial: json['key_image_partial'] as bool,
+        amount: json['amount'] as int,
+        additionalTxKeys: (json['additional_tx_keys'] as List).cast<String>(),
+        subaddressMajor: json['subaddress_major'] as int,
+        subaddressMinor: json['subaddress_minor'] as int,
+      );
+}
+
 // ---------------------------------------------------------------------------
 // Helper: send a DartSignal to the worker
 // ---------------------------------------------------------------------------
@@ -270,7 +667,7 @@ void _send(String fnName, Map<String, dynamic> data) {
 }
 
 // ---------------------------------------------------------------------------
-// DartSignal types (Dart -> Rust)
+// DartSignal types (Dart -> Rust, 44 total)
 // Each has sendSignalToRust().
 // ---------------------------------------------------------------------------
 
@@ -548,6 +945,7 @@ class StartContinuousScanRequest {
   final List<int>? accountsToScan;
   final String passphrase;
   final int bip39AccountIndex;
+  final bool allowInsecureHttp;
   const StartContinuousScanRequest({
     required this.nodeUrl,
     required this.startHeight,
@@ -558,6 +956,7 @@ class StartContinuousScanRequest {
     this.accountsToScan,
     this.passphrase = '',
     this.bip39AccountIndex = 0,
+    this.allowInsecureHttp = false,
   });
 
   void sendSignalToRust() => _send('send_start_continuous_scan_request', {
@@ -570,6 +969,7 @@ class StartContinuousScanRequest {
     if (accountsToScan != null) 'accounts_to_scan': accountsToScan,
     'passphrase': passphrase,
     'bip39_account_index': bip39AccountIndex,
+    'allow_insecure_http': allowInsecureHttp,
   });
 }
 
@@ -862,7 +1262,6 @@ class SignUnsignedTransactionRequest {
 class ExtractSignedTxSetRequest {
   final String dataHex;
   final String viewKeyHex;
-
   const ExtractSignedTxSetRequest({
     required this.dataHex,
     required this.viewKeyHex,
@@ -877,7 +1276,6 @@ class ExtractSignedTxSetRequest {
 class InspectUnsignedTxSetRequest {
   final String dataHex;
   final String viewKeyHex;
-
   const InspectUnsignedTxSetRequest({
     required this.dataHex,
     required this.viewKeyHex,
@@ -896,7 +1294,6 @@ class BuildSignedTxSetRequest {
   final List<String> txBlobsHex;
   final List<String> keyImages;
   final List<SignedTxSetKeyImageEntry> txKeyImages;
-
   const BuildSignedTxSetRequest({
     required this.unsignedTxSetHex,
     required this.viewKeyHex,
@@ -912,7 +1309,7 @@ class BuildSignedTxSetRequest {
     'tx_blob_hex': txBlobHex,
     'tx_blobs_hex': txBlobsHex,
     'key_images': keyImages,
-    'tx_key_images': txKeyImages.map((entry) => entry.toJson()).toList(),
+    'tx_key_images': txKeyImages.map((e) => e.toJson()).toList(),
   });
 }
 
@@ -1028,7 +1425,7 @@ class ResetUrDecoderRequest {
 }
 
 // ---------------------------------------------------------------------------
-// RustSignal types (Rust -> Dart, 37 total)
+// RustSignal types (Rust -> Dart, 40 total)
 // Each has fromJson() and a static stream getter.
 // ---------------------------------------------------------------------------
 
@@ -1973,40 +2370,6 @@ class UnsignedTransactionCreatedResponse {
       .map(UnsignedTransactionCreatedResponse.fromJson);
 }
 
-class SignedOfflineTransaction {
-  final String txId;
-  final String txBlob;
-  final int fee;
-  final String txKey;
-  final List<String> txKeyAdditional;
-  final List<String> spentKeyImages;
-  final List<ChangeOutput> changeOutputs;
-
-  const SignedOfflineTransaction({
-    required this.txId,
-    required this.txBlob,
-    required this.fee,
-    required this.txKey,
-    required this.txKeyAdditional,
-    required this.spentKeyImages,
-    required this.changeOutputs,
-  });
-
-  factory SignedOfflineTransaction.fromJson(Map<String, dynamic> json) =>
-      SignedOfflineTransaction(
-        txId: json['tx_id'] as String,
-        txBlob: json['tx_blob'] as String,
-        fee: json['fee'] as int,
-        txKey: json['tx_key'] as String,
-        txKeyAdditional: (json['tx_key_additional'] as List).cast<String>(),
-        spentKeyImages: ((json['spent_key_images'] as List?) ?? const [])
-            .cast<String>(),
-        changeOutputs: ((json['change_outputs'] as List?) ?? const [])
-            .map((e) => ChangeOutput.fromJson(e as Map<String, dynamic>))
-            .toList(),
-      );
-}
-
 class TransactionSignedOfflineResponse {
   final bool success;
   final String? error;
@@ -2036,8 +2399,8 @@ class TransactionSignedOfflineResponse {
     this.txKey,
     required this.txKeyAdditional,
     required this.changeOutputs,
-    this.spentKeyImages = const [],
-    this.transactions = const [],
+    required this.spentKeyImages,
+    required this.transactions,
   });
 
   factory TransactionSignedOfflineResponse.fromJson(
@@ -2057,9 +2420,8 @@ class TransactionSignedOfflineResponse {
     changeOutputs: (json['change_outputs'] as List)
         .map((e) => ChangeOutput.fromJson(e as Map<String, dynamic>))
         .toList(),
-    spentKeyImages: ((json['spent_key_images'] as List?) ?? const [])
-        .cast<String>(),
-    transactions: ((json['transactions'] as List?) ?? const [])
+    spentKeyImages: (json['spent_key_images'] as List).cast<String>(),
+    transactions: (json['transactions'] as List)
         .map(
           (e) => SignedOfflineTransaction.fromJson(e as Map<String, dynamic>),
         )
@@ -2069,116 +2431,6 @@ class TransactionSignedOfflineResponse {
   static Stream<TransactionSignedOfflineResponse> get stream => signalSender
       .onRawSignal('TransactionSignedOfflineResponse')
       .map(TransactionSignedOfflineResponse.fromJson);
-}
-
-class ExtractedSignedTransaction {
-  final String txId;
-  final String txBlob;
-  final int txVersion;
-  final int txUnlockTime;
-  final int txInputCount;
-  final List<int> txInputRingSizes;
-  final int txOutputCount;
-  final int txExtraLen;
-  final int? rctType;
-  final int? rctFee;
-  final int dust;
-  final int fee;
-  final bool dustAddedToFee;
-  final int changeAmount;
-  final int selectedTransferCount;
-  final List<int> selectedTransferIndices;
-  final int keyImagesLen;
-  final String keyImagesBlobHex;
-  final bool txKeyIsZero;
-  final String? txKey;
-  final int additionalTxKeyCount;
-  final List<String> txKeyAdditional;
-  final int destinationCount;
-  final int destinationTotalAmount;
-  final int multisigSigCount;
-
-  const ExtractedSignedTransaction({
-    required this.txId,
-    required this.txBlob,
-    this.txVersion = 0,
-    this.txUnlockTime = 0,
-    this.txInputCount = 0,
-    this.txInputRingSizes = const [],
-    this.txOutputCount = 0,
-    this.txExtraLen = 0,
-    this.rctType,
-    this.rctFee,
-    this.dust = 0,
-    this.fee = 0,
-    this.dustAddedToFee = false,
-    this.changeAmount = 0,
-    this.selectedTransferCount = 0,
-    this.selectedTransferIndices = const [],
-    this.keyImagesLen = 0,
-    this.keyImagesBlobHex = '',
-    this.txKeyIsZero = false,
-    this.txKey,
-    this.additionalTxKeyCount = 0,
-    this.txKeyAdditional = const [],
-    this.destinationCount = 0,
-    this.destinationTotalAmount = 0,
-    this.multisigSigCount = 0,
-  });
-
-  factory ExtractedSignedTransaction.fromJson(Map<String, dynamic> json) =>
-      ExtractedSignedTransaction(
-        txId: json['tx_id'] as String,
-        txBlob: json['tx_blob'] as String,
-        txVersion: (json['tx_version'] as int?) ?? 0,
-        txUnlockTime: (json['tx_unlock_time'] as int?) ?? 0,
-        txInputCount: (json['tx_input_count'] as int?) ?? 0,
-        txInputRingSizes: ((json['tx_input_ring_sizes'] as List?) ?? const [])
-            .cast<int>(),
-        txOutputCount: (json['tx_output_count'] as int?) ?? 0,
-        txExtraLen: (json['tx_extra_len'] as int?) ?? 0,
-        rctType: json['rct_type'] as int?,
-        rctFee: json['rct_fee'] as int?,
-        dust: (json['dust'] as int?) ?? 0,
-        fee: (json['fee'] as int?) ?? 0,
-        dustAddedToFee: (json['dust_added_to_fee'] as bool?) ?? false,
-        changeAmount: (json['change_amount'] as int?) ?? 0,
-        selectedTransferCount: (json['selected_transfer_count'] as int?) ?? 0,
-        selectedTransferIndices:
-            ((json['selected_transfer_indices'] as List?) ?? const [])
-                .cast<int>(),
-        keyImagesLen: (json['key_images_len'] as int?) ?? 0,
-        keyImagesBlobHex: (json['key_images_blob_hex'] as String?) ?? '',
-        txKeyIsZero: (json['tx_key_is_zero'] as bool?) ?? false,
-        txKey: json['tx_key'] as String?,
-        additionalTxKeyCount: (json['additional_tx_key_count'] as int?) ?? 0,
-        txKeyAdditional: ((json['tx_key_additional'] as List?) ?? const [])
-            .cast<String>(),
-        destinationCount: (json['destination_count'] as int?) ?? 0,
-        destinationTotalAmount: (json['destination_total_amount'] as int?) ?? 0,
-        multisigSigCount: (json['multisig_sig_count'] as int?) ?? 0,
-      );
-}
-
-class SignedTxSetKeyImageEntry {
-  final String publicKey;
-  final String keyImage;
-
-  const SignedTxSetKeyImageEntry({
-    required this.publicKey,
-    required this.keyImage,
-  });
-
-  Map<String, dynamic> toJson() => {
-    'public_key': publicKey,
-    'key_image': keyImage,
-  };
-
-  factory SignedTxSetKeyImageEntry.fromJson(Map<String, dynamic> json) =>
-      SignedTxSetKeyImageEntry(
-        publicKey: json['public_key'] as String,
-        keyImage: json['key_image'] as String,
-      );
 }
 
 class SignedTxSetExtractedResponse {
@@ -2198,8 +2450,8 @@ class SignedTxSetExtractedResponse {
     this.errorHint,
     this.errorTransient,
     required this.transactions,
-    this.keyImages = const [],
-    this.txKeyImages = const [],
+    required this.keyImages,
+    required this.txKeyImages,
   });
 
   factory SignedTxSetExtractedResponse.fromJson(Map<String, dynamic> json) =>
@@ -2216,8 +2468,8 @@ class SignedTxSetExtractedResponse {
               ),
             )
             .toList(),
-        keyImages: ((json['key_images'] as List?) ?? const []).cast<String>(),
-        txKeyImages: ((json['tx_key_images'] as List?) ?? const [])
+        keyImages: (json['key_images'] as List).cast<String>(),
+        txKeyImages: (json['tx_key_images'] as List)
             .map(
               (e) =>
                   SignedTxSetKeyImageEntry.fromJson(e as Map<String, dynamic>),
@@ -2228,264 +2480,6 @@ class SignedTxSetExtractedResponse {
   static Stream<SignedTxSetExtractedResponse> get stream => signalSender
       .onRawSignal('SignedTxSetExtractedResponse')
       .map(SignedTxSetExtractedResponse.fromJson);
-}
-
-class UnsignedTxSetSourceRingEntry {
-  final int globalOutputIndex;
-  final String outputPublicKey;
-  final String commitment;
-
-  const UnsignedTxSetSourceRingEntry({
-    required this.globalOutputIndex,
-    required this.outputPublicKey,
-    required this.commitment,
-  });
-
-  factory UnsignedTxSetSourceRingEntry.fromJson(Map<String, dynamic> json) =>
-      UnsignedTxSetSourceRingEntry(
-        globalOutputIndex: json['global_output_index'] as int,
-        outputPublicKey: json['output_public_key'] as String,
-        commitment: json['commitment'] as String,
-      );
-}
-
-class UnsignedTxSetSourceSummary {
-  final int ringSize;
-  final List<UnsignedTxSetSourceRingEntry> ring;
-  final int realOutput;
-  final int realGlobalOutputIndex;
-  final String realOutputPublicKey;
-  final String realTxPublicKey;
-  final List<String> realOutAdditionalTxKeys;
-  final int realOutputInTxIndex;
-  final int amount;
-  final bool rct;
-  final String mask;
-
-  const UnsignedTxSetSourceSummary({
-    required this.ringSize,
-    this.ring = const [],
-    required this.realOutput,
-    required this.realGlobalOutputIndex,
-    required this.realOutputPublicKey,
-    required this.realTxPublicKey,
-    this.realOutAdditionalTxKeys = const [],
-    required this.realOutputInTxIndex,
-    required this.amount,
-    required this.rct,
-    this.mask = '',
-  });
-
-  factory UnsignedTxSetSourceSummary.fromJson(Map<String, dynamic> json) =>
-      UnsignedTxSetSourceSummary(
-        ringSize: json['ring_size'] as int,
-        ring: ((json['ring'] as List?) ?? const [])
-            .map(
-              (e) => UnsignedTxSetSourceRingEntry.fromJson(
-                e as Map<String, dynamic>,
-              ),
-            )
-            .toList(),
-        realOutput: json['real_output'] as int,
-        realGlobalOutputIndex: json['real_global_output_index'] as int,
-        realOutputPublicKey: json['real_output_public_key'] as String,
-        realTxPublicKey: json['real_tx_public_key'] as String,
-        realOutAdditionalTxKeys:
-            ((json['real_out_additional_tx_keys'] as List?) ?? const [])
-                .cast<String>(),
-        realOutputInTxIndex: json['real_output_in_tx_index'] as int,
-        amount: json['amount'] as int,
-        rct: json['rct'] as bool,
-        mask: (json['mask'] as String?) ?? '',
-      );
-}
-
-class UnsignedTxSetDestinationSummary {
-  final String originalAddressHex;
-  final int amount;
-  final String spendPublicKey;
-  final String viewPublicKey;
-  final bool isSubaddress;
-  final bool isIntegrated;
-
-  const UnsignedTxSetDestinationSummary({
-    required this.originalAddressHex,
-    required this.amount,
-    required this.spendPublicKey,
-    required this.viewPublicKey,
-    required this.isSubaddress,
-    required this.isIntegrated,
-  });
-
-  static const empty = UnsignedTxSetDestinationSummary(
-    originalAddressHex: '',
-    amount: 0,
-    spendPublicKey: '',
-    viewPublicKey: '',
-    isSubaddress: false,
-    isIntegrated: false,
-  );
-
-  factory UnsignedTxSetDestinationSummary.fromJson(Map<String, dynamic> json) =>
-      UnsignedTxSetDestinationSummary(
-        originalAddressHex: json['original_address_hex'] as String,
-        amount: json['amount'] as int,
-        spendPublicKey: json['spend_public_key'] as String,
-        viewPublicKey: json['view_public_key'] as String,
-        isSubaddress: json['is_subaddress'] as bool,
-        isIntegrated: json['is_integrated'] as bool,
-      );
-}
-
-class UnsignedTxSetConstructionSummary {
-  final int sourceCount;
-  final List<int> sourceRingSizes;
-  final List<UnsignedTxSetSourceSummary> sources;
-  final int changeAmount;
-  final UnsignedTxSetDestinationSummary change;
-  final int splitDestinationCount;
-  final int splitDestinationTotalAmount;
-  final List<UnsignedTxSetDestinationSummary> splitDestinations;
-  final List<int> selectedTransferIndices;
-  final String extraHex;
-  final int unlockTime;
-  final int constructionFlags;
-  final bool useRct;
-  final bool useViewTags;
-  final int rctRangeProofType;
-  final int rctBpVersion;
-  final int destinationCount;
-  final int destinationTotalAmount;
-  final List<UnsignedTxSetDestinationSummary> destinations;
-  final int subaddrAccount;
-  final List<int> subaddrIndices;
-
-  const UnsignedTxSetConstructionSummary({
-    required this.sourceCount,
-    required this.sourceRingSizes,
-    required this.sources,
-    required this.changeAmount,
-    required this.change,
-    required this.splitDestinationCount,
-    required this.splitDestinationTotalAmount,
-    required this.splitDestinations,
-    required this.selectedTransferIndices,
-    required this.extraHex,
-    required this.unlockTime,
-    this.constructionFlags = 0,
-    required this.useRct,
-    required this.useViewTags,
-    required this.rctRangeProofType,
-    required this.rctBpVersion,
-    required this.destinationCount,
-    required this.destinationTotalAmount,
-    required this.destinations,
-    required this.subaddrAccount,
-    required this.subaddrIndices,
-  });
-
-  factory UnsignedTxSetConstructionSummary.fromJson(
-    Map<String, dynamic> json,
-  ) => UnsignedTxSetConstructionSummary(
-    sourceCount: json['source_count'] as int,
-    sourceRingSizes: (json['source_ring_sizes'] as List).cast<int>(),
-    sources: (json['sources'] as List)
-        .map(
-          (e) => UnsignedTxSetSourceSummary.fromJson(e as Map<String, dynamic>),
-        )
-        .toList(),
-    changeAmount: json['change_amount'] as int,
-    change: json['change'] != null
-        ? UnsignedTxSetDestinationSummary.fromJson(
-            json['change'] as Map<String, dynamic>,
-          )
-        : UnsignedTxSetDestinationSummary.empty,
-    splitDestinationCount: json['split_destination_count'] as int,
-    splitDestinationTotalAmount: json['split_destination_total_amount'] as int,
-    splitDestinations: ((json['split_destinations'] as List?) ?? const [])
-        .map(
-          (e) => UnsignedTxSetDestinationSummary.fromJson(
-            e as Map<String, dynamic>,
-          ),
-        )
-        .toList(),
-    selectedTransferIndices: (json['selected_transfer_indices'] as List)
-        .cast<int>(),
-    extraHex: json['extra_hex'] as String,
-    unlockTime: json['unlock_time'] as int,
-    constructionFlags: (json['construction_flags'] as int?) ?? 0,
-    useRct: json['use_rct'] as bool,
-    useViewTags: json['use_view_tags'] as bool,
-    rctRangeProofType: json['rct_range_proof_type'] as int,
-    rctBpVersion: json['rct_bp_version'] as int,
-    destinationCount: json['destination_count'] as int,
-    destinationTotalAmount: json['destination_total_amount'] as int,
-    destinations: (json['destinations'] as List)
-        .map(
-          (e) => UnsignedTxSetDestinationSummary.fromJson(
-            e as Map<String, dynamic>,
-          ),
-        )
-        .toList(),
-    subaddrAccount: json['subaddr_account'] as int,
-    subaddrIndices: (json['subaddr_indices'] as List).cast<int>(),
-  );
-}
-
-class UnsignedTxSetTransferSummary {
-  final String outputPublicKey;
-  final int internalOutputIndex;
-  final int globalOutputIndex;
-  final String txPublicKey;
-  final int flagsRaw;
-  final bool spent;
-  final bool frozen;
-  final bool rct;
-  final bool keyImageKnown;
-  final bool keyImageRequest;
-  final bool keyImagePartial;
-  final int amount;
-  final List<String> additionalTxKeys;
-  final int subaddressMajor;
-  final int subaddressMinor;
-
-  const UnsignedTxSetTransferSummary({
-    required this.outputPublicKey,
-    required this.internalOutputIndex,
-    required this.globalOutputIndex,
-    required this.txPublicKey,
-    required this.flagsRaw,
-    required this.spent,
-    required this.frozen,
-    required this.rct,
-    required this.keyImageKnown,
-    required this.keyImageRequest,
-    required this.keyImagePartial,
-    required this.amount,
-    required this.additionalTxKeys,
-    required this.subaddressMajor,
-    required this.subaddressMinor,
-  });
-
-  factory UnsignedTxSetTransferSummary.fromJson(Map<String, dynamic> json) =>
-      UnsignedTxSetTransferSummary(
-        outputPublicKey: json['output_public_key'] as String,
-        internalOutputIndex: json['internal_output_index'] as int,
-        globalOutputIndex: json['global_output_index'] as int,
-        txPublicKey: json['tx_public_key'] as String,
-        flagsRaw: json['flags_raw'] as int,
-        spent: json['spent'] as bool,
-        frozen: json['frozen'] as bool,
-        rct: json['rct'] as bool,
-        keyImageKnown: json['key_image_known'] as bool,
-        keyImageRequest: json['key_image_request'] as bool,
-        keyImagePartial: json['key_image_partial'] as bool,
-        amount: json['amount'] as int,
-        additionalTxKeys: ((json['additional_tx_keys'] as List?) ?? const [])
-            .cast<String>(),
-        subaddressMajor: json['subaddress_major'] as int,
-        subaddressMinor: json['subaddress_minor'] as int,
-      );
 }
 
 class UnsignedTxSetInspectedResponse {
@@ -2510,10 +2504,10 @@ class UnsignedTxSetInspectedResponse {
     this.errorTransient,
     required this.archiveVersion,
     required this.transactionCount,
-    this.newTransferFirst = 0,
-    this.newTransferSecond = 0,
+    required this.newTransferFirst,
+    required this.newTransferSecond,
     required this.newTransferCount,
-    this.newTransfers = const [],
+    required this.newTransfers,
     required this.constructions,
   });
 
@@ -2527,10 +2521,10 @@ class UnsignedTxSetInspectedResponse {
     errorTransient: json['error_transient'] as bool?,
     archiveVersion: json['archive_version'] as int,
     transactionCount: json['transaction_count'] as int,
-    newTransferFirst: (json['new_transfer_first'] as int?) ?? 0,
-    newTransferSecond: (json['new_transfer_second'] as int?) ?? 0,
+    newTransferFirst: json['new_transfer_first'] as int,
+    newTransferSecond: json['new_transfer_second'] as int,
     newTransferCount: json['new_transfer_count'] as int,
-    newTransfers: ((json['new_transfers'] as List?) ?? const [])
+    newTransfers: (json['new_transfers'] as List)
         .map(
           (e) =>
               UnsignedTxSetTransferSummary.fromJson(e as Map<String, dynamic>),
@@ -2636,8 +2630,8 @@ class KeyImagesImportedResponse {
     this.errorTransient,
     required this.importedCount,
     required this.spentCount,
-    this.keyImages = const [],
-    this.spentKeyImages = const [],
+    required this.keyImages,
+    required this.spentKeyImages,
   });
 
   factory KeyImagesImportedResponse.fromJson(Map<String, dynamic> json) =>
@@ -2649,9 +2643,8 @@ class KeyImagesImportedResponse {
         errorTransient: json['error_transient'] as bool?,
         importedCount: json['imported_count'] as int,
         spentCount: json['spent_count'] as int,
-        keyImages: ((json['key_images'] as List?) ?? const []).cast<String>(),
-        spentKeyImages: ((json['spent_key_images'] as List?) ?? const [])
-            .cast<String>(),
+        keyImages: (json['key_images'] as List).cast<String>(),
+        spentKeyImages: (json['spent_key_images'] as List).cast<String>(),
       );
 
   static Stream<KeyImagesImportedResponse> get stream => signalSender
