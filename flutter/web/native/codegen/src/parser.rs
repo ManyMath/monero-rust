@@ -87,10 +87,12 @@ fn parse_fields(
                 .to_string();
             let ty = parse_type(&field.ty)?;
             let has_serde_default = check_serde_default(field);
+            let skips_serializing = check_skips_serializing(field);
             fields.push(Field {
                 name,
                 ty,
                 has_serde_default,
+                skips_serializing,
             });
         }
     }
@@ -141,6 +143,35 @@ fn parse_type(ty: &syn::Type) -> Result<RustType, Box<dyn std::error::Error>> {
         }
         _ => Err("unsupported type variant".into()),
     }
+}
+
+/// Return the serde attribute that lets Rust omit this key from the JSON, if any.
+///
+/// `skip` and `skip_serializing` drop it unconditionally; `skip_serializing_if` drops it
+/// for some values. All three mean Dart may not find the key. `skip_deserializing` is not
+/// one of them — it only affects Rust's own decoding of a Dart request.
+fn check_skips_serializing(field: &syn::Field) -> Option<String> {
+    for attr in &field.attrs {
+        if !attr.path().is_ident("serde") {
+            continue;
+        }
+        let Ok(list) = attr.meta.require_list() else {
+            continue;
+        };
+        let nested = list
+            .parse_args_with(
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+            )
+            .unwrap_or_default();
+        for meta in &nested {
+            for name in ["skip", "skip_serializing", "skip_serializing_if"] {
+                if meta.path().is_ident(name) {
+                    return Some(name.to_string());
+                }
+            }
+        }
+    }
+    None
 }
 
 fn check_serde_default(field: &syn::Field) -> bool {

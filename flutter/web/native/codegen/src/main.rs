@@ -2,6 +2,7 @@ mod dart_gen;
 mod model;
 mod parser;
 mod rust_gen;
+mod validate;
 
 use std::path::PathBuf;
 
@@ -33,6 +34,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         signals.iter().filter(|s| s.direction == model::Direction::Rust2Dart).count(),
         signals.iter().filter(|s| s.direction == model::Direction::Shared).count(),
     );
+
+    // Refuse to emit a surface whose two halves disagree, in either mode: --check is what
+    // runs in the test tier, and a plain run is what a person does after editing signals.
+    // Printed rather than returned, because `Box<dyn Error>` renders a multi-line message
+    // through Debug and turns every newline in it back into a literal `\n`.
+    if let Err(msg) = validate::check_serialization_skips(&signals) {
+        eprintln!("{msg}");
+        std::process::exit(1);
+    }
 
     // Generate
     let ffi_web = rust_fmt(rust_gen::generate_ffi_web(&signals))?;

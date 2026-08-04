@@ -22,7 +22,25 @@ message crossing the Dart/Rust boundary, and `codegen` derives three files from 
 cd flutter/web/native/codegen
 cargo run              # regenerate
 cargo run -- --check   # fail if the committed copies are stale
+cargo test             # the generator's own tests
 ```
+
+`cargo test` is a separate invocation because this crate is not in `rust/`'s workspace, so
+`cargo test --workspace` there never reaches it. `scripts/test-all.sh` runs both.
+
+### What the generator refuses
+
+Dart's `fromJson` casts a required field straight out of the map — `json['outputs'] as List`
+— so a key that isn't there throws, in a Web Worker, when the signal arrives. That
+strictness is deliberate: a response missing a field is a bug and defaulting it silently
+would bury it. It holds only while Rust never omits a field, so the generator enforces that
+directly and rejects `#[serde(skip)]`, `#[serde(skip_serializing)]` and
+`#[serde(skip_serializing_if = ...)]` on anything Dart deserialises.
+
+That covers the `Rust2Dart` signals and every sub-struct reachable from one. A shared struct
+nested only inside a `Request` travels the other way — Dart writes it, Rust reads it — so a
+skip there is harmless and allowed. `Option` fields are allowed everywhere, since Dart reads
+them as nullable; making the field `Option<T>` is the fix the error message suggests.
 
 **Edit `signals/mod.rs` and regenerate — never edit the three outputs by hand.** They were
 hand-edited for six months while nothing ran the check, and by the end running the

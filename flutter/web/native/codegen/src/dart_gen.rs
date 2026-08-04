@@ -406,6 +406,23 @@ fn gen_from_json_block(name: &str, fields: &[Field]) -> String {
     out
 }
 
+/// Whether the `fromJson` below survives the key being absent from the JSON.
+///
+/// Keep this in step with `from_json_expr` — it is the same match, read for whether the
+/// arm tolerates `null`. Only two arms do: every `Option` branch, which either tests for
+/// null or casts to a nullable type, and the `bool` + `#[serde(default)]` arm with its
+/// `?? false`. Everything else casts straight out of the map and throws.
+///
+/// `validate::check_serialization_skips` is the only caller; it exists so a field Rust may
+/// omit cannot reach a Dart cast that requires it.
+pub fn from_json_tolerates_missing(f: &Field) -> bool {
+    match &f.ty {
+        RustType::Option(_) => true,
+        RustType::Bool => f.has_serde_default,
+        _ => false,
+    }
+}
+
 fn from_json_expr(f: &Field) -> String {
     let key = &f.name;
     let camel = to_camel(key);

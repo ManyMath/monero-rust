@@ -24,6 +24,10 @@ pub struct Field {
     pub name: String,
     pub ty: RustType,
     pub has_serde_default: bool,
+    /// The serde attribute letting Rust leave this key out of the JSON, if any —
+    /// `skip`, `skip_serializing` or `skip_serializing_if`. Held as its spelling so the
+    /// error can quote it back. See `validate::check_serialization_skips`.
+    pub skips_serializing: Option<String>,
 }
 
 #[derive(Debug, Clone)]
