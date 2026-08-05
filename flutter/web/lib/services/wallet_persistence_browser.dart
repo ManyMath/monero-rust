@@ -3,6 +3,7 @@ import 'dart:html' as html;
 import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
 import '../src/ffi/signal_types.dart';
+import '../src/platform/web_blob.dart';
 import '../models/wallet_transaction.dart';
 import 'chrome_storage_backend.dart';
 import 'indexed_db_storage_backend.dart';
@@ -153,8 +154,7 @@ class WalletPersistenceBrowser {
           '${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}';
       final filename = '${walletId}_$timestamp.monero-wallet';
 
-      final bytes = utf8.encode(rawData);
-      final blob = html.Blob([bytes], 'application/octet-stream');
+      final blob = binaryBlob(utf8.encode(rawData));
 
       bool usedSaveAsDialog = false;
       try {
