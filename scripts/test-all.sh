@@ -75,6 +75,15 @@ elif ! cargo test -p monero-rust --lib --target wasm32-unknown-unknown; then
     record_failure "wasm32 unit tests"
 fi
 
+step "signal generator's own tests"
+# Its Cargo.toml is separate from rust/'s workspace, so `cargo test --workspace` above never
+# reaches these. They pin the checks the generator makes on signals/mod.rs - chiefly that
+# Rust cannot skip serialising a field the generated Dart casts as required, which no
+# compiler on either side would catch. They need neither formatter, so no skip applies.
+if ! (cd "$ROOT/flutter/web/native/codegen" && cargo test --quiet); then
+    record_failure "codegen unit tests"
+fi
+
 step "generated signal surface is current"
 # signals/mod.rs is the source of truth for the Dart <-> Rust signal surface, and codegen
 # emits signal_types.dart, ffi_web.rs and signal_ids.rs from it. Nothing ran this check, so
@@ -127,12 +136,24 @@ if ! command -v flutter >/dev/null 2>&1; then
 elif [ ! -x "$(command -v google-chrome || command -v chromium || true)" ]; then
     echo "no chrome on PATH - skipping the browser tests" >&2
 else
-    BROWSER_TESTS="test/widget_test.dart \
-        test/services/indexed_db_storage_backend_web_test.dart \
-        test/services/js_interop_bindings_web_test.dart"
-    # shellcheck disable=SC2086
-    if ! (cd "$ROOT/flutter/web" && flutter test --no-pub --platform chrome $BROWSER_TESTS); then
-        record_failure "browser tests"
+    # Discovered, not listed. A manual list is the same trap one level up: the file
+    # that gets forgotten is invisible, because a browser test omitted from it looks exactly
+    # like one that passed. Anything carrying the annotation runs.
+    # Either quote style, since missing a file is the whole failure this replaces. No
+    # backreference tying the two quotes together - ugrep, which is what `grep` is on this
+    # machine, rejects one in an ERE.
+    BROWSER_TESTS="$(cd "$ROOT/flutter/web" \
+        && grep -rlE "@TestOn\(['\"]browser['\"]\)" test | sort | tr '\n' ' ')"
+    if [ -z "$BROWSER_TESTS" ]; then
+        echo "no @TestOn('browser') files found - the browser tier has nothing to run," >&2
+        echo "which is itself suspicious; there were four." >&2
+        record_failure "browser tests vanished"
+    else
+        echo "browser tests: $BROWSER_TESTS"
+        # shellcheck disable=SC2086
+        if ! (cd "$ROOT/flutter/web" && flutter test --no-pub --platform chrome $BROWSER_TESTS); then
+            record_failure "browser tests"
+        fi
     fi
 fi
 
