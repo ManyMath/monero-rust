@@ -1,1 +1,0 @@
-int calculateMoneroWalletLocalStorageBytes() => 0;

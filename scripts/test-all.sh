@@ -1,13 +1,12 @@
 #!/bin/sh
-# Run every tier of this repo's tests, including the ones that are opt-in.
+# Run the Rust test suite, including feature-gated and regtest tests.
 #
-# They are opt-in for good reasons - a feature flag, a daemon, a second toolchain - but the
-# consequence is that nothing runs them. The fixture-driven send-path tests broke at the
-# oxide cutover and stayed broken for months because of that, and the dart and
-# wasm tiers had never run at all. This exists so "run the tests" means all of them.
+# Some tests require an additional toolchain or daemon; see the checks below.
 #
-# A tier whose toolchain is missing or broken says so and is skipped; a tier that runs and
-# fails is reported as a failure. The two are never conflated.
+# The Flutter app, signal generator, bindings checks, and browser tests live
+# in monero-extension. Run that repository's test script to check them too.
+#
+# Report missing optional tools as skips. Record failures from tests that run.
 #
 #   scripts/test-all.sh              # everything
 #   scripts/test-all.sh --no-regtest # skip the tier that needs monerod
@@ -55,12 +54,9 @@ if ! cargo test --workspace --no-fail-fast; then
     record_failure "default suite"
 fi
 
-step "wasm32 builds"
+step "wasm32 build"
 if ! cargo check -p monero-rust --target wasm32-unknown-unknown; then
     record_failure "monero-rust wasm32"
-fi
-if ! (cd "$ROOT/flutter/web/native/monero_wasm" && cargo check --target wasm32-unknown-unknown); then
-    record_failure "monero_wasm wasm32"
 fi
 
 step "wasm32 unit tests"
@@ -75,86 +71,11 @@ elif ! cargo test -p monero-rust --lib --target wasm32-unknown-unknown; then
     record_failure "wasm32 unit tests"
 fi
 
-step "signal generator's own tests"
-# Its Cargo.toml is separate from rust/'s workspace, so `cargo test --workspace` above never
-# reaches these. They pin the checks the generator makes on signals/mod.rs - chiefly that
-# Rust cannot skip serialising a field the generated Dart casts as required, which no
-# compiler on either side would catch. They need neither formatter, so no skip applies.
-if ! (cd "$ROOT/flutter/web/native/codegen" && cargo test --quiet); then
-    record_failure "codegen unit tests"
-fi
-
-step "generated signal surface is current"
-# signals/mod.rs is the source of truth for the Dart <-> Rust signal surface, and codegen
-# emits signal_types.dart, ffi_web.rs and signal_ids.rs from it. Nothing ran this check, so
-# the generator fell six months behind the files it owns and regenerating would have
-# reverted shipping code. It only means anything while it runs.
-#
-# Both formatters are part of the comparison, so a missing one is a skip, not a failure.
-if ! command -v dart >/dev/null 2>&1; then
-    echo "dart not on PATH - skipping the codegen check (it formats the Dart output)" >&2
-elif ! command -v rustfmt >/dev/null 2>&1; then
-    echo "rustfmt not on PATH - skipping the codegen check (it formats the Rust output)" >&2
-elif ! (cd "$ROOT/flutter/web/native/codegen" && cargo run --quiet -- --check); then
-    record_failure "generated signal surface out of date"
-fi
-
 step "send path against recorded RPC (--features mock-rpc)"
 # Enable recorded RPC responses for tests that otherwise require a live node.
 if ! cargo test -p monero-rust --features mock-rpc \
     --test tx_construction_test --test unsigned_tx_roundtrip_test --test sign_unsigned_unit_test; then
     record_failure "mock-rpc send path"
-fi
-
-step "flutter/web dart tests"
-if ! command -v flutter >/dev/null 2>&1; then
-    echo "flutter not on PATH - skipping the dart tests" >&2
-else
-    DART_LOG="$(mktemp)"
-    if (cd "$ROOT/flutter/web" && flutter test --no-pub) >"$DART_LOG" 2>&1; then
-        tail -n 3 "$DART_LOG"
-    elif grep -q '/packages/flutter/lib/' "$DART_LOG"; then
-        # The failures are inside the SDK's own framework, not our tests: a Flutter
-        # checkout whose framework revision and Dart SDK don't match can't compile
-        # itself. Report it, but don't blame the repo for it.
-        echo "SKIPPED: the Flutter SDK cannot compile its own framework, so no dart" >&2
-        echo "test could load. This is the toolchain, not this repo - check" >&2
-        echo "'flutter --version' (a detached user-branch checkout will do this) and" >&2
-        echo "repair with 'flutter channel stable && flutter upgrade'." >&2
-        echo "Full output: $DART_LOG" >&2
-    else
-        tail -n 20 "$DART_LOG" >&2
-        record_failure "dart tests"
-    fi
-fi
-
-step "flutter/web browser tests"
-# @TestOn('browser') files are skipped by `flutter test`, so they need their own
-# invocation. They went unrun long enough for ten of them to rot unnoticed.
-if ! command -v flutter >/dev/null 2>&1; then
-    echo "flutter not on PATH - skipping the browser tests" >&2
-elif [ ! -x "$(command -v google-chrome || command -v chromium || true)" ]; then
-    echo "no chrome on PATH - skipping the browser tests" >&2
-else
-    # Discovered, not listed. A manual list is the same trap one level up: the file
-    # that gets forgotten is invisible, because a browser test omitted from it looks exactly
-    # like one that passed. Anything carrying the annotation runs.
-    # Either quote style, since missing a file is the whole failure this replaces. No
-    # backreference tying the two quotes together - ugrep, which is what `grep` is on this
-    # machine, rejects one in an ERE.
-    BROWSER_TESTS="$(cd "$ROOT/flutter/web" \
-        && grep -rlE "@TestOn\(['\"]browser['\"]\)" test | sort | tr '\n' ' ')"
-    if [ -z "$BROWSER_TESTS" ]; then
-        echo "no @TestOn('browser') files found - the browser tier has nothing to run," >&2
-        echo "which is itself suspicious; there were four." >&2
-        record_failure "browser tests vanished"
-    else
-        echo "browser tests: $BROWSER_TESTS"
-        # shellcheck disable=SC2086
-        if ! (cd "$ROOT/flutter/web" && flutter test --no-pub --platform chrome $BROWSER_TESTS); then
-            record_failure "browser tests"
-        fi
-    fi
 fi
 
 if [ "$WITH_REGTEST" = 1 ]; then

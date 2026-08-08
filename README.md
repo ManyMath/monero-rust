@@ -1,48 +1,34 @@
 # monero-rust
-Rust Monero wallet tooling compiled to WebAssembly, with a Flutter web extension example.
+Rust Monero wallet tooling compiled to WebAssembly.
 
 ## Requirements
-- Flutter 3.24.3+
-- Rust 1.89.0+
-- rinf CLI: `cargo install rinf`
+- Rust 1.89.0+, with the `wasm32-unknown-unknown` target
 
 ## Structure
 ### rust/monero-rust
 WebAssembly library providing Monero wallet primitives for browser environments. Abstracts networking, storage, and time for web platform constraints.
 
-Test:
+Test everything, in one command:
+```sh
+scripts/test-all.sh              # --no-regtest skips the tier that needs monerod
+```
+
+Five tiers: the default suite, the wasm32 build, the wasm32 unit tests, the mock-rpc
+send path and the regtest end-to-end tests. A missing or broken toolchain is reported
+as a **skip**; a tier that runs and fails is a **failure**. The two are never conflated.
+
+Or just the library's own unit tests:
 ```sh
 cd rust/monero-rust
 cargo test --lib
 ```
 
-### flutter/web
-Flutter web extension demonstrating monero-rust. See `flutter/web/README.md` for details.
-
-Build:
-```sh
-cd flutter/web
-flutter pub get
-rinf gen
-rinf wasm
-dart run tool/build_extension.dart
-```
-
-Output goes to `build/extension/` (unpacked) and `build/monero-extension.zip`.
-
-Load in Chrome: open `chrome://extensions`, enable Developer mode, click "Load unpacked", select `build/extension/`.
-
-Test:
-```sh
-cd flutter/web
-flutter test
-npm install
-npm run test:signal-e2e -- test/e2e/multi_wallet_scan.test.js
-npm test
-```
-
-`npm run test:signal-e2e -- <jest paths...>` is the dedicated Puppeteer/Jest signal entrypoint.
-`npm test` remains the broader repo-style path and still runs the Rust test suite before signal E2E, so unrelated Rust regressions can still fail that path.
+### The Flutter extension
+The example browser extension lives in its own repository now, and consumes this one as a
+submodule at `vendor/monero-rust`. It carries the five tiers that need it - the
+`monero_wasm` wasm32 build, the signal generator's tests, the generated-signal-surface
+check, and the dart and browser suites - in its own `scripts/test-all.sh`. Neither
+runner covers the other.
 
 ### Constraints
 The example app runs as a browser extension because Monero RPC nodes don't typically send CORS headers allowing arbitrary web origins.  Running as an extension bypasses these restrictions, enabling direct communication with nodes for testing.  This is one of monero-rust's several web- or extension-based constraints:
