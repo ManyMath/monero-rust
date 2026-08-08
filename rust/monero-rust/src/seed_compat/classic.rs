@@ -171,7 +171,9 @@ pub(crate) fn seed_to_bytes(words: &str) -> Result<(Language, Zeroizing<[u8; 32]
   // get seed words
   let words = words.split_whitespace().map(|w| Zeroizing::new(w.to_string())).collect::<Vec<_>>();
   if (words.len() != CLASSIC_SEED_LENGTH) && (words.len() != CLASSIC_SEED_LENGTH_WITH_CHECKSUM) {
-    panic!("invalid seed passed to seed_to_bytes");
+    // Seed::from_string filters the length before reaching here, so this is an internal
+    // invariant - but it is one a parser should report rather than abort on.
+    Err(SeedError::InvalidSeedLength)?;
   }
 
   // find the language
@@ -234,30 +236,38 @@ pub(crate) fn seed_to_bytes(words: &str) -> Result<(Language, Zeroizing<[u8; 32]
 
   // convert to bytes
   let mut res = Zeroizing::new([0; 32]);
-  let mut indices = Zeroizing::new([0; 4]);
+  // u64, not usize. monero decodes each triple into a `uint32_t`, so the arithmetic wraps,
+  // and its `val % word_list_length == w1` test is what detects the wrap. At usize width
+  // that test cannot fail - `w1 + a*L + b*L^2` always reduces to `w1` - and on wasm32 the
+  // sum would wrap somewhere else again. A fixed 64-bit accumulator makes the range check
+  // below mean the same thing on every target.
+  let mut indices = Zeroizing::new([0u64; 4]);
+  let list_len = lang.word_list.len() as u64;
   for i in 0 .. 8 {
     // read 3 indices at a time
     let i3 = i * 3;
-    indices[1] = matched_indices[i3];
-    indices[2] = matched_indices[i3 + 1];
-    indices[3] = matched_indices[i3 + 2];
+    indices[1] = matched_indices[i3] as u64;
+    indices[2] = matched_indices[i3 + 1] as u64;
+    indices[3] = matched_indices[i3 + 2] as u64;
 
-    let inner = |i| {
-      let mut base = (lang.word_list.len() - indices[i] + indices[i + 1]) % lang.word_list.len();
+    let inner = |i: usize| {
+      let mut base = (list_len - indices[i] + indices[i + 1]) % list_len;
       // Shift the index over
       for _ in 0 .. i {
-        base *= lang.word_list.len();
+        base *= list_len;
       }
       base
     };
     // set the last index
     indices[0] = indices[1] + inner(1) + inner(2);
-    if (indices[0] % lang.word_list.len()) != indices[1] {
-      Err(SeedError::InvalidSeed)?;
-    }
+
+    // The values that do not fit a u32 are exactly the ones monero's wrapped check
+    // rejects, so this stands in for it. It used to reach `u32::try_from(..).unwrap()`
+    // instead, which panicked the parser on a crafted seed.
+    let word = u32::try_from(indices[0]).map_err(|_| SeedError::InvalidSeed)?;
 
     let pos = i * 4;
-    let mut bytes = u32::try_from(indices[0]).unwrap().to_le_bytes();
+    let mut bytes = word.to_le_bytes();
     res[pos .. (pos + 4)].copy_from_slice(&bytes);
     bytes.zeroize();
   }

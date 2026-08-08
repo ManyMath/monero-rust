@@ -186,8 +186,29 @@ fn vector_view_keys_are_the_hash_of_the_spend_key() {
     }
 }
 
-/// A seed must not parse as the wrong language's wordlist, and corruption must be caught
-/// by the checksum rather than yielding a different key.
+/// Reject a word triple whose decoded value exceeds u32 without panicking.
+///
+/// With `w3 == w2 - 1 (mod 1626)`, the third term alone is
+/// `1625 * 1626^2 = 4_296_298_500`, above `u32::MAX`. Set words 2 and 3 to
+/// "abducts" and "abbey", then recompute the checksum so language detection
+/// reaches the numeric decoder.
+#[test]
+fn rejects_a_seed_whose_word_triple_exceeds_u32() {
+    let crafted = "hemlock abducts abbey hacksaw boil superior inroads epoxy exhale orders \
+                   cavernous second brunt saved richly lower upgrade hitched launching \
+                   deepest mostly playful layout lower hemlock";
+    assert_eq!(crafted.split_whitespace().count(), 25, "must be a checksummed seed");
+
+    match Seed::from_string(Zeroizing::new(crafted.to_string())) {
+        Ok(seed) => panic!(
+            "an out-of-range seed parsed to {} instead of being rejected",
+            hex::encode(&*seed.entropy())
+        ),
+        Err(e) => assert_eq!(e, monero_rust::seed_compat::SeedError::InvalidSeed),
+    }
+}
+
+/// Reject word swaps that invalidate a checksummed mnemonic.
 #[test]
 fn rejects_corrupted_seeds() {
     let fixture = load();
