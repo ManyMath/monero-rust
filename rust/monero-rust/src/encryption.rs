@@ -7,7 +7,7 @@ use chacha20poly1305::{
     ChaCha20Poly1305, Nonce,
 };
 use rand::RngCore;
-use zeroize::Zeroize;
+use zeroize::Zeroizing;
 
 const NONCE_SIZE: usize = 12; // 96 bits for ChaCha20Poly1305
 
@@ -67,10 +67,12 @@ pub fn encrypt(plaintext: &[u8], password: &str) -> Result<Vec<u8>, EncryptionEr
     let mut salt = [0u8; 16];
     OsRng.fill_bytes(&mut salt);
 
-    let mut key = derive_key(password, &salt)?;
+    // Zeroizing, not a manual key.zeroize() at the end: every `?` below is an early
+    // return that would skip the wipe and leave the derived key in freed memory.
+    let key = Zeroizing::new(derive_key(password, &salt)?);
 
     let cipher =
-        ChaCha20Poly1305::new_from_slice(&key).map_err(|_| EncryptionError::EncryptionFailed)?;
+        ChaCha20Poly1305::new_from_slice(&*key).map_err(|_| EncryptionError::EncryptionFailed)?;
 
     let mut nonce_bytes = [0u8; NONCE_SIZE];
     OsRng.fill_bytes(&mut nonce_bytes);
@@ -79,8 +81,6 @@ pub fn encrypt(plaintext: &[u8], password: &str) -> Result<Vec<u8>, EncryptionEr
     let ciphertext = cipher
         .encrypt(nonce, plaintext)
         .map_err(|_| EncryptionError::EncryptionFailed)?;
-
-    key.zeroize();
 
     let mut result = Vec::with_capacity(16 + NONCE_SIZE + ciphertext.len());
     result.extend_from_slice(&salt);
@@ -136,18 +136,16 @@ pub fn decrypt(encrypted_data: &[u8], password: &str) -> Result<Vec<u8>, Encrypt
     let (salt, rest) = encrypted_data.split_at(16);
     let (nonce_bytes, ciphertext) = rest.split_at(NONCE_SIZE);
 
-    let mut key = derive_key(password, salt)?;
+    let key = Zeroizing::new(derive_key(password, salt)?);
 
     let cipher =
-        ChaCha20Poly1305::new_from_slice(&key).map_err(|_| EncryptionError::DecryptionFailed)?;
+        ChaCha20Poly1305::new_from_slice(&*key).map_err(|_| EncryptionError::DecryptionFailed)?;
 
     let nonce = Nonce::from_slice(nonce_bytes);
 
     let plaintext = cipher
         .decrypt(nonce, ciphertext)
         .map_err(|_| EncryptionError::DecryptionFailed)?;
-
-    key.zeroize();
 
     Ok(plaintext)
 }

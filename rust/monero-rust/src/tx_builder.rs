@@ -1573,6 +1573,7 @@ pub mod native {
         seed_phrase: &str,
         unsigned_tx_hex: &str,
         network_str: &str,
+        approval: &SigningApproval,
     ) -> Result<OfflineSignResult, String> {
         let seed = resolve_seed(seed_phrase)?;
         let entropy = seed.entropy();
@@ -1584,6 +1585,7 @@ pub mod native {
             view_secret_key,
             unsigned_tx_hex,
             network_str,
+            approval,
         )
     }
 
@@ -1592,7 +1594,20 @@ pub mod native {
         view_secret_key: [u8; 32],
         unsigned_tx_hex: &str,
         network_str: &str,
+        approval: &SigningApproval,
     ) -> Result<OfflineSignResult, String> {
+        let reviewed = preview_unsigned_transaction(
+            spend_secret_key,
+            view_secret_key,
+            unsigned_tx_hex,
+            network_str,
+        )?;
+        if reviewed != approval.reviewed {
+            return Err(
+                "Refusing to sign: transaction or wallet differs from the approved review".into(),
+            );
+        }
+        reviewed.check_limits(approval.max_total_fee, approval.max_wallet_debit)?;
         let unsigned_bytes = hex::decode(unsigned_tx_hex)
             .map_err(|e| format!("Invalid unsigned tx hex: {:?}", e))?;
         if let Some(kind) = crate::epee_compat::detect_monero_txset(&unsigned_bytes) {
@@ -1666,7 +1681,7 @@ pub mod native {
 
     /// Collect the address identities this wallet owns within `lookahead`.
     ///
-    /// Signing uses this set to determine address ownership.
+    /// Signing and preview use the same set to determine address ownership.
     pub(crate) fn own_address_identities(
         view_pair: &ViewPair,
         network: Network,
@@ -1694,6 +1709,267 @@ pub mod native {
         own_address_identities(view_pair, network, lookahead)
             .iter()
             .any(|candidate| *candidate == target)
+    }
+
+    /// A destination and amount for the user to review before signing.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct DestinationPreview {
+        pub address: String,
+        pub amount: u64,
+        /// Whether the unsigned transaction labels this output as change.
+        pub is_change: bool,
+        /// Whether this wallet owns `address` within the lookahead.
+        /// Signing rejects change sent to an address outside this set.
+        pub is_ours: bool,
+    }
+
+    /// One transaction boundary in the reviewed container. Amounts are piconero.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct TransactionSummary {
+        pub destinations: Vec<DestinationPreview>,
+        /// Total of inputs whose one-time keys were verified against this wallet.
+        pub input_total: u64,
+        pub fee: u64,
+        /// Input total minus all outputs recoverable by this wallet (including self-payments).
+        pub wallet_debit: u64,
+    }
+
+    /// Complete review of exact unsigned bytes for one wallet and network.
+    /// Display all transaction summaries and aggregate totals before approval.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct TransactionPreview {
+        pub transactions: Vec<TransactionSummary>,
+        pub transaction_count: usize,
+        pub input_total: u64,
+        pub fee: u64,
+        pub wallet_debit: u64,
+        binding: [u8; 32],
+    }
+
+    /// Explicit approval of an exact review and independently selected spending limits.
+    /// Construct with `TransactionPreview::approve` only after the user reviews it.
+    #[derive(Debug, Clone)]
+    pub struct SigningApproval {
+        reviewed: TransactionPreview,
+        max_total_fee: u64,
+        max_wallet_debit: u64,
+    }
+
+    impl TransactionPreview {
+        fn check_limits(&self, max_total_fee: u64, max_wallet_debit: u64) -> Result<(), String> {
+            if self.fee > max_total_fee {
+                return Err("Refusing to sign: total fee exceeds the approved limit".into());
+            }
+            if self.wallet_debit > max_wallet_debit {
+                return Err("Refusing to sign: wallet debit exceeds the approved limit".into());
+            }
+            Ok(())
+        }
+
+        /// Record approval after review. Limits must come from the user's policy,
+        /// not an unchecked fee or amount supplied by the online wallet.
+        pub fn approve(
+            &self,
+            max_total_fee: u64,
+            max_wallet_debit: u64,
+        ) -> Result<SigningApproval, String> {
+            self.check_limits(max_total_fee, max_wallet_debit)?;
+            Ok(SigningApproval {
+                reviewed: self.clone(),
+                max_total_fee,
+                max_wallet_debit,
+            })
+        }
+    }
+
+    fn finish_preview(
+        transactions: Vec<TransactionSummary>,
+        unsigned_bytes: &[u8],
+        spend_secret_key: [u8; 32],
+        view_secret_key: [u8; 32],
+        network_str: &str,
+    ) -> Result<TransactionPreview, String> {
+        use sha3::{Digest, Keccak256};
+        parse_network(network_str)?;
+        let mut digest = Keccak256::new();
+        digest.update(b"monero-rust offline transaction approval v1");
+        digest.update((network_str.len() as u64).to_le_bytes());
+        digest.update(network_str.as_bytes());
+        // Bind public identities, never retain secret key bytes in the review.
+        for secret in [spend_secret_key, view_secret_key] {
+            digest.update(
+                (&Scalar::from_bytes_mod_order(secret) * ED25519_BASEPOINT_TABLE)
+                    .compress()
+                    .to_bytes(),
+            );
+        }
+        digest.update(unsigned_bytes);
+        let sum = |values: Vec<u64>| {
+            (values).into_iter().try_fold(0u64, u64::checked_add)
+                .ok_or_else(|| "unsigned transaction summary amounts overflow".to_string())
+        };
+        Ok(TransactionPreview {
+            transaction_count: transactions.len(),
+            input_total: sum(transactions.iter().map(|t| t.input_total).collect())?,
+            fee: sum(transactions.iter().map(|t| t.fee).collect())?,
+            wallet_debit: sum(transactions.iter().map(|t| t.wallet_debit).collect())?,
+            transactions,
+            binding: digest.finalize().into(),
+        })
+    }
+
+    /// Preview an unsigned transaction using a seed phrase.
+    ///
+    /// Derive keys as in `sign_unsigned_transaction` so preview and signing use
+    /// the same wallet.
+    pub fn preview_unsigned_transaction_from_seed(
+        seed_phrase: &str,
+        unsigned_tx_hex: &str,
+        network_str: &str,
+    ) -> Result<TransactionPreview, String> {
+        let seed = resolve_seed(seed_phrase)?;
+        let entropy = seed.entropy();
+        let mut spend_secret_key = [0u8; 32];
+        spend_secret_key.copy_from_slice(&entropy[..]);
+        let view_secret_key: [u8; 32] = Keccak256::digest(spend_secret_key).into();
+        preview_unsigned_transaction(
+            spend_secret_key,
+            view_secret_key,
+            unsigned_tx_hex,
+            network_str,
+        )
+    }
+
+    /// Review destinations, fees, owned inputs, wallet debit, and transaction boundaries.
+    ///
+    /// The online wallet supplies the transaction and is untrusted. Before signing,
+    /// show the user every destination and whether the claimed change belongs to
+    /// this wallet. Ownership checks use the same helper as signing.
+    ///
+    /// Accepts wallet2 unsigned txsets and the app's unsigned transaction format.
+    pub fn preview_unsigned_transaction(
+        spend_secret_key: [u8; 32],
+        view_secret_key: [u8; 32],
+        unsigned_tx_hex: &str,
+        network_str: &str,
+    ) -> Result<TransactionPreview, String> {
+        let unsigned_bytes = hex::decode(unsigned_tx_hex)
+            .map_err(|e| format!("Invalid unsigned tx hex: {:?}", e))?;
+
+        if let Some(kind) = crate::epee_compat::detect_monero_txset(&unsigned_bytes) {
+            match kind {
+                crate::epee_compat::MoneroTxSetKind::Unsigned => {
+                    let converted = create_unsigned_transactions_from_wallet2_txset_keys(
+                        spend_secret_key,
+                        view_secret_key,
+                        &unsigned_bytes,
+                        network_str,
+                    )
+                    .map_err(|e| format!("Failed to convert wallet2 unsigned txset: {e}"))?;
+                    let mut all = Vec::new();
+                    for unsigned in converted {
+                        all.push(preview_app_unsigned_transaction(
+                            spend_secret_key,
+                            view_secret_key,
+                            &unsigned.unsigned_tx_hex,
+                            network_str,
+                        )?);
+                    }
+                    return finish_preview(
+                        all,
+                        &unsigned_bytes,
+                        spend_secret_key,
+                        view_secret_key,
+                        network_str,
+                    );
+                }
+                _ => {
+                    return Err(format!(
+                        "{} wallet2 containers are signed/import artifacts, not unsigned signer inputs",
+                        kind.label()
+                    ));
+                }
+            }
+        }
+
+        let transaction = preview_app_unsigned_transaction(
+            spend_secret_key,
+            view_secret_key,
+            unsigned_tx_hex,
+            network_str,
+        )?;
+        finish_preview(
+            vec![transaction],
+            &unsigned_bytes,
+            spend_secret_key,
+            view_secret_key,
+            network_str,
+        )
+    }
+
+    fn preview_app_unsigned_transaction(
+        spend_secret_key: [u8; 32],
+        view_secret_key: [u8; 32],
+        unsigned_tx_hex: &str,
+        network_str: &str,
+    ) -> Result<TransactionSummary, String> {
+        let unsigned_bytes = hex::decode(unsigned_tx_hex)
+            .map_err(|e| format!("Invalid unsigned tx hex: {:?}", e))?;
+        let mut cursor = std::io::Cursor::new(&unsigned_bytes);
+        let unsigned = UnsignedTransaction::read(&mut cursor)
+            .map_err(|e| format!("Failed to parse unsigned tx: {:?}", e))?;
+        if cursor.position() != unsigned_bytes.len() as u64 {
+            return Err("unsigned transaction has trailing bytes".into());
+        }
+        let spend_key = Zeroizing::new(Scalar::from_bytes_mod_order(spend_secret_key));
+        let spend_point = &*spend_key * ED25519_BASEPOINT_TABLE;
+        let view_scalar = Scalar::from_bytes_mod_order(view_secret_key);
+        let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
+        let network = parse_network(network_str)?;
+        let lookahead = signer_lookahead();
+        if unsigned.inputs.is_empty() {
+            return Err("unsigned transaction has no inputs".into());
+        }
+        for input in &unsigned.inputs {
+            if (&(*spend_key + input.output.key_offset()) * ED25519_BASEPOINT_TABLE)
+                != input.output.key()
+            {
+                return Err(
+                    "Refusing to sign: unsigned input does not belong to this wallet".into(),
+                );
+            }
+        }
+        let destinations: Vec<_> = unsigned
+            .payments
+            .iter()
+            .map(|payment| {
+                let (address, amount) = payment.address_and_amount();
+                DestinationPreview {
+                    address: address.to_string(),
+                    amount,
+                    is_change: matches!(payment, InternalPayment::Change(_, _)),
+                    is_ours: address_is_ours(address, &view_pair, network, lookahead),
+                }
+            })
+            .collect();
+        let input_total = (unsigned.inputs.iter().map(|i| i.output.commitment().amount)).into_iter().try_fold(0u64, u64::checked_add)
+        .ok_or_else(|| "unsigned input amounts overflow".to_string())?;
+        let output_total =
+            (destinations.iter().map(|d| d.amount)).into_iter().try_fold(0u64, u64::checked_add)
+                .ok_or_else(|| "unsigned output amounts overflow".to_string())?;
+        if output_total.checked_add(unsigned.fee) != Some(input_total) {
+            return Err("unsigned transaction fee doesn't match its amounts".into());
+        }
+        let returned = (destinations.iter().filter(|d| d.is_ours).map(|d| d.amount)).into_iter().try_fold(0u64, u64::checked_add)
+        .ok_or_else(|| "unsigned owned output amounts overflow".to_string())?;
+        Ok(TransactionSummary {
+            destinations,
+            input_total,
+            fee: unsigned.fee,
+            wallet_debit: input_total
+                .checked_sub(returned)
+                .ok_or_else(|| "unsigned wallet debit underflow".to_string())?,
+        })
     }
 
     fn sign_app_unsigned_transaction_with_private_keys(

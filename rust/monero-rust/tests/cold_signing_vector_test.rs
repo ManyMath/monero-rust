@@ -716,7 +716,7 @@ fn cold_signing_wallet2_unsigned_txset_signs_with_imported_cold_wallet_keys() {
     )
     .expect("key-image RPC fixture should parse");
 
-    let signed = monero_rust::native::sign_unsigned_transaction_with_private_keys(
+    let signed = sign_reviewed_keys(
         cold.spend_secret_key,
         cold.view_secret_key,
         &unsigned_hex,
@@ -746,10 +746,11 @@ fn cold_signing_wallet2_unsigned_txset_fails_app_signer_for_wrong_seed() {
         .expect("unsigned txset should be readable");
     let unsigned_hex = hex::encode(unsigned);
 
-    let err = monero_rust::native::sign_unsigned_transaction(
+    let err = sign_reviewed_seed(
         "honked bagpipe alpine juicy faked afoot jostle claim cowl tunnel orphans negative pheasants feast jetting quote frown teeming cycling tribal womanly hills cottage daytime daytime",
         &unsigned_hex,
         "mainnet",
+        "",
     )
     .expect_err("wrong seed should not sign wallet2 unsigned txset");
 
@@ -1050,4 +1051,68 @@ fn cold_signing_full_export_imports_through_view_only_sentinel() {
     assert_eq!(updated, 2);
     assert_eq!(outputs[0].key_image, earlier_ki);
     assert_eq!(outputs[1].key_image, later_ki);
+}
+
+// Explicit test policy, independent of amounts supplied by the fixture.
+fn sign_reviewed_seed(
+    seed: &str,
+    encoded: &str,
+    network: &str,
+    _passphrase: &str,
+) -> Result<monero_rust::native::OfflineSignResult, String> {
+    let preview = monero_rust::native::preview_unsigned_transaction_from_seed(
+        seed, encoded, network,
+    )?;
+    let approval = preview.approve(10_000_000_000, 100_000_000_000_000)?;
+    monero_rust::native::sign_unsigned_transaction(seed, encoded, network, &approval)
+}
+
+fn sign_reviewed_keys(
+    spend: [u8; 32],
+    view: [u8; 32],
+    encoded: &str,
+    network: &str,
+) -> Result<monero_rust::native::OfflineSignResult, String> {
+    let preview = monero_rust::native::preview_unsigned_transaction(spend, view, encoded, network)?;
+    let approval = preview.approve(10_000_000_000, 100_000_000_000_000)?;
+    monero_rust::native::sign_unsigned_transaction_with_private_keys(
+        spend, view, encoded, network, &approval,
+    )
+}
+
+#[test]
+fn wallet2_review_is_bound_to_the_original_container() {
+    use monero_rust::native;
+    let cold = read_keys_file(&vector_path("cold_full.keys"), "").unwrap();
+    let bytes = std::fs::read(vector_path("unsigned_monero_tx")).unwrap();
+    let encoded = hex::encode(&bytes);
+    let preview = native::preview_unsigned_transaction(
+        cold.spend_secret_key,
+        cold.view_secret_key,
+        &encoded,
+        "mainnet",
+    )
+    .unwrap();
+    assert_eq!(preview.transaction_count, 1);
+    assert_eq!(preview.transactions.len(), 1);
+    assert_eq!(preview.fee, 2_599_200_000);
+    assert_eq!(preview.input_total, preview.transactions[0].input_total);
+    assert_eq!(preview.wallet_debit, preview.transactions[0].wallet_debit);
+    let approval = preview.approve(3_000_000_000, 100_000_000_000_000).unwrap();
+    let converted = native::create_unsigned_transaction_from_wallet2_txset_keys(
+        cold.spend_secret_key,
+        cold.view_secret_key,
+        &bytes,
+        "mainnet",
+    )
+    .unwrap();
+    let error = native::sign_unsigned_transaction_with_private_keys(
+        cold.spend_secret_key,
+        cold.view_secret_key,
+        &converted.unsigned_tx_hex,
+        "mainnet",
+        &approval,
+    )
+    .unwrap_err();
+    assert!(error.contains("differs from the approved review"));
 }

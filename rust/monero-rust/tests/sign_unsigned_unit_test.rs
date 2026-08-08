@@ -157,9 +157,8 @@ fn test_sign_unsigned_transaction_synthetic() {
     );
 
     let unsigned_hex = hex::encode(&unsigned_bytes);
-    let result =
-        monero_rust::native::sign_unsigned_transaction(TEST_SEED, &unsigned_hex, NETWORK_STR)
-            .expect("sign_unsigned_transaction should succeed with synthetic input");
+    let result = sign_reviewed_seed(TEST_SEED, &unsigned_hex, NETWORK_STR, "")
+        .expect("sign_unsigned_transaction should succeed with synthetic input");
 
     // 9. Assert results on OfflineSignResult
     assert_eq!(result.tx_id.len(), 64, "tx_id must be 64 hex chars");
@@ -438,8 +437,30 @@ fn refuses_to_sign_a_transaction_whose_change_is_redirected() {
     };
 
     let unsigned_hex = hex::encode(unsigned_tx.serialize());
-    let result =
-        monero_rust::native::sign_unsigned_transaction(TEST_SEED, &unsigned_hex, NETWORK_STR);
+
+    // The preview must report that the declared change address is not ours
+    // so the user can see the problem before signing.
+    let mut spend_bytes_preview = [0u8; 32];
+    spend_bytes_preview.copy_from_slice(&entropy[..]);
+    let view_bytes_preview: [u8; 32] = Keccak256::digest(spend_bytes_preview).into();
+    let preview = monero_rust::native::preview_unsigned_transaction(
+        spend_bytes_preview,
+        view_bytes_preview,
+        &unsigned_hex,
+        NETWORK_STR,
+    )
+    .expect("preview should parse the same transaction the signer refuses");
+    let change = preview.transactions[0]
+        .destinations
+        .iter()
+        .find(|d| d.is_change)
+        .expect("preview must surface the change destination");
+    assert!(
+        !change.is_ours,
+        "preview claimed the redirected change belongs to this wallet: {change:?}"
+    );
+
+    let result = sign_reviewed_seed(TEST_SEED, &unsigned_hex, NETWORK_STR, "");
 
     let error = match result {
         Err(error) => error,
@@ -480,13 +501,16 @@ fn change_ownership_requires_the_correct_address_derivation_mode() {
         unsigned.payments[1] =
             InternalPayment::Change(Change::from_raw(owned.clone(), None), amount);
         let encoded = hex::encode(unsigned.serialize());
-        let signed = monero_rust::native::sign_unsigned_transaction_with_private_keys(
+        let preview = monero_rust::native::preview_unsigned_transaction(
             spend.to_bytes(),
             view.to_bytes(),
             &encoded,
             NETWORK_STR,
         )
         .unwrap();
+        assert!(preview.transactions[0].destinations[1].is_ours);
+        let signed =
+            sign_reviewed_keys(spend.to_bytes(), view.to_bytes(), &encoded, NETWORK_STR).unwrap();
         assert_eq!(
             signed.change_outputs.iter().map(|o| o.amount).sum::<u64>(),
             999_900_000_000
@@ -495,13 +519,19 @@ fn change_ownership_requires_the_correct_address_derivation_mode() {
         unsigned.payments[1] =
             InternalPayment::Change(Change::from_raw(hostile.clone(), None), amount);
         let encoded = hex::encode(unsigned.serialize());
-        let error = monero_rust::native::sign_unsigned_transaction_with_private_keys(
+        let preview = monero_rust::native::preview_unsigned_transaction(
             spend.to_bytes(),
             view.to_bytes(),
             &encoded,
             NETWORK_STR,
         )
-        .unwrap_err();
+        .unwrap();
+        assert!(
+            !preview.transactions[0].destinations[1].is_ours,
+            "relabeling owned keys must not imply ownership"
+        );
+        let error = sign_reviewed_keys(spend.to_bytes(), view.to_bytes(), &encoded, NETWORK_STR)
+            .unwrap_err();
         assert!(error.contains("Refusing to sign"));
 
         // A valid first change entry must not hide a malformed second entry
@@ -511,7 +541,7 @@ fn change_ownership_requires_the_correct_address_derivation_mode() {
             Change::from_raw(hostile, None),
             amount - amount / 2,
         ));
-        let error = monero_rust::native::sign_unsigned_transaction_with_private_keys(
+        let error = sign_reviewed_keys(
             spend.to_bytes(),
             view.to_bytes(),
             &hex::encode(unsigned.serialize()),
@@ -527,18 +557,30 @@ fn ordinary_change_is_recovered_and_guaranteed_claim_is_rejected() {
     let spend = Scalar::from(2345678u64);
     let view = Scalar::from_bytes_mod_order(Keccak256::digest(spend.to_bytes()).into());
     let ours = ViewPair::new(&spend * ED25519_BASEPOINT_TABLE, Zeroizing::new(view));
-    let other = ViewPair::new(&Scalar::from(777u64) * ED25519_BASEPOINT_TABLE,
-        Zeroizing::new(Scalar::from(888u64)));
+    let other = ViewPair::new(
+        &Scalar::from(777u64) * ED25519_BASEPOINT_TABLE,
+        Zeroizing::new(Scalar::from(888u64)),
+    );
     let (encoded, _) = synthetic_unsigned_hex_for(spend);
     let bytes = hex::decode(encoded).unwrap();
     let mut unsigned = UnsignedTransaction::read(&mut bytes.as_slice()).unwrap();
     unsigned.payments[0] = InternalPayment::Payment((
-        other.address(Network::Stagenet, AddressSpec::Standard), 800_000_000_000));
+        other.address(Network::Stagenet, AddressSpec::Standard),
+        800_000_000_000,
+    ));
     for guaranteed in [false, true] {
-        unsigned.payments[1] = InternalPayment::Change(Change::new(&ours, guaranteed), 199_900_000_000);
+        unsigned.payments[1] =
+            InternalPayment::Change(Change::new(&ours, guaranteed), 199_900_000_000);
         let encoded = hex::encode(unsigned.serialize());
-        let signed = monero_rust::native::sign_unsigned_transaction_with_private_keys(
-            spend.to_bytes(), view.to_bytes(), &encoded, NETWORK_STR);
+        let preview = monero_rust::native::preview_unsigned_transaction(
+            spend.to_bytes(),
+            view.to_bytes(),
+            &encoded,
+            NETWORK_STR,
+        )
+        .unwrap();
+        assert_eq!(preview.transactions[0].destinations[1].is_ours, !guaranteed);
+        let signed = sign_reviewed_keys(spend.to_bytes(), view.to_bytes(), &encoded, NETWORK_STR);
         if guaranteed {
             assert!(signed.unwrap_err().contains("Refusing to sign"));
         } else {
@@ -547,4 +589,171 @@ fn ordinary_change_is_recovered_and_guaranteed_claim_is_rejected() {
             assert_eq!(signed.change_outputs[0].amount, 199_900_000_000);
         }
     }
+}
+
+// Explicit test policy, independent of amounts supplied by the fixture.
+fn sign_reviewed_seed(
+    seed: &str,
+    encoded: &str,
+    network: &str,
+    _passphrase: &str,
+) -> Result<monero_rust::native::OfflineSignResult, String> {
+    let preview = monero_rust::native::preview_unsigned_transaction_from_seed(
+        seed, encoded, network,
+    )?;
+    let approval = preview.approve(10_000_000_000, 100_000_000_000_000)?;
+    monero_rust::native::sign_unsigned_transaction(seed, encoded, network, &approval)
+}
+
+fn sign_reviewed_keys(
+    spend: [u8; 32],
+    view: [u8; 32],
+    encoded: &str,
+    network: &str,
+) -> Result<monero_rust::native::OfflineSignResult, String> {
+    let preview = monero_rust::native::preview_unsigned_transaction(spend, view, encoded, network)?;
+    let approval = preview.approve(10_000_000_000, 100_000_000_000_000)?;
+    monero_rust::native::sign_unsigned_transaction_with_private_keys(
+        spend, view, encoded, network, &approval,
+    )
+}
+
+#[test]
+fn approval_binds_full_review_and_independent_fee_and_debit_limits() {
+    use monero_rust::native::{
+        preview_unsigned_transaction, sign_unsigned_transaction_with_private_keys,
+    };
+    let spend = Scalar::from(123456789u64);
+    let view = Scalar::from_bytes_mod_order(Keccak256::digest(spend.to_bytes()).into());
+    let other = ViewPair::new(
+        &Scalar::from(777u64) * ED25519_BASEPOINT_TABLE,
+        Zeroizing::new(Scalar::from(888u64)),
+    );
+    let (encoded, _) = synthetic_unsigned_hex_for(spend);
+    let bytes = hex::decode(encoded).unwrap();
+    let mut original = UnsignedTransaction::read(&mut bytes.as_slice()).unwrap();
+    original.payments[0] = InternalPayment::Payment((
+        other.address(Network::Stagenet, AddressSpec::Standard),
+        800_000_000_000,
+    ));
+    let encoded = hex::encode(original.serialize());
+    let preview =
+        preview_unsigned_transaction(spend.to_bytes(), view.to_bytes(), &encoded, NETWORK_STR)
+            .unwrap();
+    assert_eq!(preview.transaction_count, 1);
+    assert_eq!(preview.transactions.len(), 1);
+    assert_eq!(preview.input_total, 1_000_000_000_000);
+    assert_eq!(preview.fee, 100_000_000);
+    assert_eq!(preview.wallet_debit, 800_100_000_000);
+    assert_eq!(preview.transactions[0].wallet_debit, preview.wallet_debit);
+    assert!(preview
+        .approve(99_999_999, 900_000_000_000)
+        .unwrap_err()
+        .contains("fee"));
+    assert!(preview
+        .approve(100_000_000, 800_099_999_999)
+        .unwrap_err()
+        .contains("debit"));
+    let approval = preview.approve(100_000_000, 800_100_000_000).unwrap();
+    let signed = sign_unsigned_transaction_with_private_keys(
+        spend.to_bytes(),
+        view.to_bytes(),
+        &encoded,
+        NETWORK_STR,
+        &approval,
+    )
+    .unwrap();
+    assert_eq!(signed.fee, preview.fee);
+
+    // Identical destinations can conceal an extra owned input burned entirely as fee.
+    let mut high = original.clone();
+    let mut input = high.inputs[0].clone();
+    let offset = Scalar::from(131313u64);
+    input.output.output.data.key_offset = offset;
+    input.output.output.data.key = &(spend + offset) * ED25519_BASEPOINT_TABLE;
+    input.output.output.data.commitment =
+        Commitment::new(Scalar::from(515151u64), 10_000_000_000_000);
+    input.output.output.absolute.tx = [0xBB; 32];
+    input.output.global_index = 60000;
+    input.decoys.offsets[0] = 60000;
+    input.decoys.ring[0] = [input.output.key(), input.output.commitment().calculate()];
+    high.fee += input.output.commitment().amount;
+    high.inputs.push(input);
+    let high_encoded = hex::encode(high.serialize());
+    let high_preview = preview_unsigned_transaction(
+        spend.to_bytes(),
+        view.to_bytes(),
+        &high_encoded,
+        NETWORK_STR,
+    )
+    .unwrap();
+    assert_eq!(
+        preview.transactions[0].destinations,
+        high_preview.transactions[0].destinations
+    );
+    assert_eq!(high_preview.fee, 10_000_100_000_000);
+    assert_eq!(high_preview.input_total, 11_000_000_000_000);
+    assert_eq!(high_preview.wallet_debit, 10_800_100_000_000);
+    assert!(high_preview.approve(100_000_000, 800_100_000_000).is_err());
+
+    let mut recipient = original.clone();
+    recipient.payments[0] = InternalPayment::Payment((
+        other.address(
+            Network::Stagenet,
+            AddressSpec::Subaddress(monero_wallet::address::SubaddressIndex::new(0, 1).unwrap()),
+        ),
+        800_000_000_000,
+    ));
+    let mut seed = original.clone();
+    seed.r_seed[0] ^= 1;
+    let mut ring = original.clone();
+    ring.inputs[0].decoys.offsets[1] += 1;
+    let mut fee = original.clone();
+    fee.fee += 1;
+    let change = fee.payments[1].address_and_amount().1;
+    if let InternalPayment::Change(_, amount) = &mut fee.payments[1] {
+        *amount = change - 1;
+    }
+    for modified in [high, recipient, seed, ring, fee] {
+        let error = sign_unsigned_transaction_with_private_keys(
+            spend.to_bytes(),
+            view.to_bytes(),
+            &hex::encode(modified.serialize()),
+            NETWORK_STR,
+            &approval,
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("differs from the approved review"),
+            "{error}"
+        );
+    }
+    assert!(sign_unsigned_transaction_with_private_keys(
+        spend.to_bytes(),
+        view.to_bytes(),
+        &encoded,
+        "mainnet",
+        &approval
+    )
+    .is_err());
+    // A caller editing displayed totals cannot approve a misleading review.
+    let mut misleading = preview.clone();
+    misleading.fee = 0;
+    let misleading = misleading.approve(0, 800_100_000_000).unwrap();
+    assert!(sign_unsigned_transaction_with_private_keys(
+        spend.to_bytes(),
+        view.to_bytes(),
+        &encoded,
+        NETWORK_STR,
+        &misleading
+    )
+    .is_err());
+    // Trailing bytes are never silently signed as a shorter reviewed transaction.
+    assert!(preview_unsigned_transaction(
+        spend.to_bytes(),
+        view.to_bytes(),
+        &(encoded + "00"),
+        NETWORK_STR
+    )
+    .is_err());
 }

@@ -1430,6 +1430,11 @@ fn key_image_sort(x: &[u8; 32], y: &[u8; 32]) -> std::cmp::Ordering {
 /// Sign a prepared `UnsignedTransaction` with the private spend key,
 /// entirely offline.
 ///
+/// Low-level cryptographic primitive: this does not authorize destinations, change,
+/// or fees. For untrusted signer input use `native::preview_unsigned_transaction`
+/// and `native::sign_unsigned_transaction_with_private_keys`, which require an
+/// explicit approval bound to the exact transaction and spending limits.
+///
 /// Returns the signed transaction plus the transaction key (and additional
 /// keys, when payments to subaddresses require them) for payment proofs.
 pub fn sign_offline<R: rand_core::RngCore + rand_core::CryptoRng>(

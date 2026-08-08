@@ -159,8 +159,7 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
     );
 
     // --- Step 4: Sign the unsigned TX via the high-level offline signing function ---
-    let result =
-        monero_rust::native::sign_unsigned_transaction(TEST_SEED, &unsigned_tx_hex, NETWORK_STR)?;
+    let result = sign_reviewed_seed(TEST_SEED, &unsigned_tx_hex, NETWORK_STR, "")?;
 
     // --- Step 5: Verify the signed result ---
     assert!(!result.tx_id.is_empty(), "tx_id must not be empty");
@@ -257,4 +256,18 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
     }
 
     Ok(())
+}
+
+// Explicit test policy, independent of amounts supplied by the fixture.
+fn sign_reviewed_seed(
+    seed: &str,
+    encoded: &str,
+    network: &str,
+    _passphrase: &str,
+) -> Result<monero_rust::native::OfflineSignResult, String> {
+    let preview = monero_rust::native::preview_unsigned_transaction_from_seed(
+        seed, encoded, network,
+    )?;
+    let approval = preview.approve(10_000_000_000, 100_000_000_000_000)?;
+    monero_rust::native::sign_unsigned_transaction(seed, encoded, network, &approval)
 }
