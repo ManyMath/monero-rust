@@ -275,3 +275,276 @@ fn test_sign_unsigned_transaction_synthetic() {
         );
     }
 }
+
+/// A tampered unsigned transaction whose change is redirected to an address the signer
+/// does not control must be rejected.
+///
+/// This is the attack offline signing exists to prevent. The online, view-only
+/// half is untrusted and it chooses every destination in the unsigned transaction. Here
+/// the inputs are really ours and the amount equation really balances - the two
+/// things sign_offline() checks - so without an explicit change check the signer hands
+/// back a valid signature that pays the wallet's balance to somebody else.
+/// Build an unsigned transaction owned by `spend_scalar`, including its ring
+/// and change. Return the serialized hex and declared fee.
+fn synthetic_unsigned_hex_for(spend_scalar: Scalar) -> (String, u64) {
+    let spend_point = &spend_scalar * ED25519_BASEPOINT_TABLE;
+    let view_bytes: [u8; 32] = Keccak256::digest(spend_scalar.to_bytes()).into();
+    let view_pair = ViewPair::new(
+        spend_point,
+        Zeroizing::new(Scalar::from_bytes_mod_order(view_bytes)),
+    );
+
+    let key_offset = Scalar::from_bytes_mod_order([0x01; 32]);
+    let output_key = &(spend_scalar + key_offset) * ED25519_BASEPOINT_TABLE;
+    let mask_scalar = Scalar::from_bytes_mod_order([0x05; 32]);
+    let input_amount: u64 = 1_000_000_000_000;
+    let commitment_point = Commitment::new(mask_scalar, input_amount).calculate();
+
+    let global_index: u64 = 50000;
+    let spendable = build_spendable_output(
+        output_key,
+        key_offset,
+        mask_scalar,
+        input_amount,
+        [0xAA; 32],
+        0,
+        global_index,
+    );
+
+    let ring_len = 16usize;
+    let mut ring: Vec<[curve25519_dalek::edwards::EdwardsPoint; 2]> = Vec::with_capacity(ring_len);
+    ring.push([output_key, commitment_point]);
+    for i in 1..ring_len {
+        ring.push([
+            &Scalar::from_bytes_mod_order([i as u8 + 0x10; 32]) * ED25519_BASEPOINT_TABLE,
+            &Scalar::from_bytes_mod_order([i as u8 + 0x80; 32]) * ED25519_BASEPOINT_TABLE,
+        ]);
+    }
+    let mut offsets: Vec<u64> = Vec::with_capacity(ring_len);
+    offsets.push(global_index);
+    for _ in 1..ring_len {
+        offsets.push(100);
+    }
+
+    let fee: u64 = 100_000_000;
+    let payment_amount: u64 = 800_000_000_000;
+    let unsigned_tx = UnsignedTransaction {
+        protocol: Protocol::v16,
+        r_seed: Zeroizing::new([0x42; 32]),
+        fee,
+        payments: vec![
+            InternalPayment::Payment((
+                view_pair.address(Network::Stagenet, AddressSpec::Standard),
+                payment_amount,
+            )),
+            InternalPayment::Change(
+                Change::new(&view_pair, false),
+                input_amount - payment_amount - fee,
+            ),
+        ],
+        data: vec![],
+        inputs: vec![UnsignedInput {
+            output: spendable,
+            decoys: Decoys {
+                i: 0,
+                offsets,
+                ring,
+            },
+        }],
+    };
+
+    (hex::encode(unsigned_tx.serialize()), fee)
+}
+
+#[test]
+fn refuses_to_sign_a_transaction_whose_change_is_redirected() {
+    let seed = Seed::from_string(Zeroizing::new(TEST_SEED.to_string())).unwrap();
+    let entropy = seed.entropy();
+    let mut spend_bytes = [0u8; 32];
+    spend_bytes.copy_from_slice(&entropy[..]);
+    let spend_scalar = Scalar::from_bytes_mod_order(spend_bytes);
+    let spend_point = &spend_scalar * ED25519_BASEPOINT_TABLE;
+
+    let view_bytes: [u8; 32] = Keccak256::digest(spend_bytes).into();
+    let view_scalar = Scalar::from_bytes_mod_order(view_bytes);
+    let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
+
+    // Use an owned input so `sign_offline()` passes its ownership check.
+    let key_offset = Scalar::from_bytes_mod_order([0x01; 32]);
+    let output_key = &(spend_scalar + key_offset) * ED25519_BASEPOINT_TABLE;
+    let mask_scalar = Scalar::from_bytes_mod_order([0x05; 32]);
+    let input_amount: u64 = 1_000_000_000_000;
+    let commitment = Commitment::new(mask_scalar, input_amount);
+    let commitment_point = commitment.calculate();
+
+    let global_index: u64 = 50000;
+    let spendable = build_spendable_output(
+        output_key,
+        key_offset,
+        mask_scalar,
+        input_amount,
+        [0xAA; 32],
+        0,
+        global_index,
+    );
+
+    let ring_len = 16usize;
+    let mut ring: Vec<[curve25519_dalek::edwards::EdwardsPoint; 2]> = Vec::with_capacity(ring_len);
+    ring.push([output_key, commitment_point]);
+    for i in 1..ring_len {
+        let decoy_key =
+            &Scalar::from_bytes_mod_order([i as u8 + 0x10; 32]) * ED25519_BASEPOINT_TABLE;
+        let decoy_commitment =
+            &Scalar::from_bytes_mod_order([i as u8 + 0x80; 32]) * ED25519_BASEPOINT_TABLE;
+        ring.push([decoy_key, decoy_commitment]);
+    }
+    let mut offsets: Vec<u64> = Vec::with_capacity(ring_len);
+    offsets.push(global_index);
+    for _ in 1..ring_len {
+        offsets.push(100);
+    }
+    let decoys = Decoys {
+        i: 0,
+        offsets,
+        ring,
+    };
+
+    // Use an unrelated key pair for the attacker's wallet.
+    let attacker_spend = Scalar::from_bytes_mod_order([0x77; 32]);
+    let attacker_point = &attacker_spend * ED25519_BASEPOINT_TABLE;
+    let attacker_view = Scalar::from_bytes_mod_order([0x88; 32]);
+    let attacker_pair = ViewPair::new(attacker_point, Zeroizing::new(attacker_view));
+    let attacker_address = attacker_pair.address(Network::Stagenet, AddressSpec::Standard);
+
+    let dest_address = view_pair.address(Network::Stagenet, AddressSpec::Standard);
+    let fee: u64 = 100_000_000;
+    let payment_amount: u64 = 800_000_000_000;
+    let change_amount: u64 = input_amount - payment_amount - fee;
+
+    let unsigned_tx = UnsignedTransaction {
+        protocol: Protocol::v16,
+        r_seed: Zeroizing::new([0x42; 32]),
+        fee,
+        payments: vec![
+            InternalPayment::Payment((dest_address, payment_amount)),
+            // Label the attacker's destination as change.
+            InternalPayment::Change(Change::from_raw(attacker_address, None), change_amount),
+        ],
+        data: vec![],
+        inputs: vec![UnsignedInput {
+            output: spendable,
+            decoys,
+        }],
+    };
+
+    let unsigned_hex = hex::encode(unsigned_tx.serialize());
+    let result =
+        monero_rust::native::sign_unsigned_transaction(TEST_SEED, &unsigned_hex, NETWORK_STR);
+
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!(
+            "signed a transaction whose change goes to an address this wallet cannot spend - \
+             the offline signer would hand an attacker the wallet's balance"
+        ),
+    };
+    assert!(
+        error.contains("Refusing to sign"),
+        "expected a refusal naming the redirected change, got: {error}"
+    );
+}
+
+#[test]
+fn change_ownership_requires_the_correct_address_derivation_mode() {
+    use monero_wallet::address::{AddressType, MoneroAddress, SubaddressIndex};
+
+    let spend = Scalar::from(2345678u64);
+    let view = Scalar::from_bytes_mod_order(Keccak256::digest(spend.to_bytes()).into());
+    let pair = ViewPair::new(&spend * ED25519_BASEPOINT_TABLE, Zeroizing::new(view));
+    let (original, _) = synthetic_unsigned_hex_for(spend);
+    let bytes = hex::decode(original).unwrap();
+    for spec in [
+        AddressSpec::Standard,
+        AddressSpec::Subaddress(SubaddressIndex::new(0, 1).unwrap()),
+    ] {
+        // A different network prefix does not change ownership.
+        let owned = pair.address(Network::Mainnet, spec);
+        let wrong_type = if owned.is_subaddress() {
+            AddressType::Legacy
+        } else {
+            AddressType::Subaddress
+        };
+        let hostile = MoneroAddress::new(Network::Mainnet, wrong_type, owned.spend(), owned.view());
+        let mut unsigned = UnsignedTransaction::read(&mut bytes.as_slice()).unwrap();
+        let amount = unsigned.payments[1].address_and_amount().1;
+        unsigned.payments[1] =
+            InternalPayment::Change(Change::from_raw(owned.clone(), None), amount);
+        let encoded = hex::encode(unsigned.serialize());
+        let signed = monero_rust::native::sign_unsigned_transaction_with_private_keys(
+            spend.to_bytes(),
+            view.to_bytes(),
+            &encoded,
+            NETWORK_STR,
+        )
+        .unwrap();
+        assert_eq!(
+            signed.change_outputs.iter().map(|o| o.amount).sum::<u64>(),
+            999_900_000_000
+        );
+
+        unsigned.payments[1] =
+            InternalPayment::Change(Change::from_raw(hostile.clone(), None), amount);
+        let encoded = hex::encode(unsigned.serialize());
+        let error = monero_rust::native::sign_unsigned_transaction_with_private_keys(
+            spend.to_bytes(),
+            view.to_bytes(),
+            &encoded,
+            NETWORK_STR,
+        )
+        .unwrap_err();
+        assert!(error.contains("Refusing to sign"));
+
+        // A valid first change entry must not hide a malformed second entry
+        // carrying the same public keys. Keep the transaction balanced.
+        unsigned.payments[1] = InternalPayment::Change(Change::from_raw(owned, None), amount / 2);
+        unsigned.payments.push(InternalPayment::Change(
+            Change::from_raw(hostile, None),
+            amount - amount / 2,
+        ));
+        let error = monero_rust::native::sign_unsigned_transaction_with_private_keys(
+            spend.to_bytes(),
+            view.to_bytes(),
+            &hex::encode(unsigned.serialize()),
+            NETWORK_STR,
+        )
+        .unwrap_err();
+        assert!(error.contains("Refusing to sign"));
+    }
+}
+
+#[test]
+fn ordinary_change_is_recovered_and_guaranteed_claim_is_rejected() {
+    let spend = Scalar::from(2345678u64);
+    let view = Scalar::from_bytes_mod_order(Keccak256::digest(spend.to_bytes()).into());
+    let ours = ViewPair::new(&spend * ED25519_BASEPOINT_TABLE, Zeroizing::new(view));
+    let other = ViewPair::new(&Scalar::from(777u64) * ED25519_BASEPOINT_TABLE,
+        Zeroizing::new(Scalar::from(888u64)));
+    let (encoded, _) = synthetic_unsigned_hex_for(spend);
+    let bytes = hex::decode(encoded).unwrap();
+    let mut unsigned = UnsignedTransaction::read(&mut bytes.as_slice()).unwrap();
+    unsigned.payments[0] = InternalPayment::Payment((
+        other.address(Network::Stagenet, AddressSpec::Standard), 800_000_000_000));
+    for guaranteed in [false, true] {
+        unsigned.payments[1] = InternalPayment::Change(Change::new(&ours, guaranteed), 199_900_000_000);
+        let encoded = hex::encode(unsigned.serialize());
+        let signed = monero_rust::native::sign_unsigned_transaction_with_private_keys(
+            spend.to_bytes(), view.to_bytes(), &encoded, NETWORK_STR);
+        if guaranteed {
+            assert!(signed.unwrap_err().contains("Refusing to sign"));
+        } else {
+            let signed = signed.unwrap();
+            assert_eq!(signed.change_outputs.len(), 1);
+            assert_eq!(signed.change_outputs[0].amount, 199_900_000_000);
+        }
+    }
+}

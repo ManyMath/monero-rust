@@ -281,7 +281,7 @@ fn calculate_key_image(spend_scalar: &Scalar, key_offset: &Scalar) -> EdwardsPoi
     hash_point * *one_time_key_scalar
 }
 
-fn build_subaddress_indices(lookahead: Lookahead) -> Vec<SubaddressIndex> {
+pub fn build_subaddress_indices(lookahead: Lookahead) -> Vec<SubaddressIndex> {
     let mut indices = Vec::new();
     for account in 0..=lookahead.account {
         for address in 0..=lookahead.subaddress {

@@ -4,7 +4,7 @@ pub mod native {
     use crate::monero_backend::rpc::{Rpc, RpcConnection, DEFAULT_MAX_FEE_PER_BYTE};
     use crate::seed_compat::Seed;
     use crate::wallet_compat::{
-        sign_offline, transaction_fee_weight, Change, Decoys, Fee, InternalPayment, Protocol,
+        sign_offline, AddressSpec, transaction_fee_weight, Change, Decoys, Fee, InternalPayment, Protocol,
         ReceivedOutput, SignableTransactionBuilder, SpendableOutput, UnsignedInput,
         UnsignedTransaction, ViewPair,
     };
@@ -647,7 +647,7 @@ pub mod native {
         }
 
         let change_opt = match change_decision {
-            ChangeDecision::IncludeChange => Some(Change::new(&view_pair, true)),
+            ChangeDecision::IncludeChange => Some(Change::new(&view_pair, false)),
             ChangeDecision::AbsorbDust => None,
             ChangeDecision::DustError => unreachable!(),
         };
@@ -1531,7 +1531,7 @@ pub mod native {
         }
 
         let change_opt = match change_decision {
-            ChangeDecision::IncludeChange => Some(Change::new(&view_pair, true)),
+            ChangeDecision::IncludeChange => Some(Change::new(&view_pair, false)),
             ChangeDecision::AbsorbDust => None,
             ChangeDecision::DustError => unreachable!(),
         };
@@ -1635,6 +1635,67 @@ pub mod native {
         offline_sign_result_from_transactions(vec![signed])
     }
 
+    /// Convert an oxide `Point` to a dalek `EdwardsPoint`.
+    fn addr_point(p: monero_wallet::ed25519::Point) -> EdwardsPoint {
+        p.into()
+    }
+
+    /// Extract the public keys and derivation mode used to determine ownership.
+    ///
+    /// The unsigned transaction supplies the network prefix too, but ownership
+    /// depends on the keys, subaddress flag, and guaranteed flag. These flags change the sender's
+    /// key derivation, so relabeling owned keys can make funds unreceivable.
+    /// Comparing encoded addresses would reject our own
+    /// change address if it carried a different network prefix.
+    pub(crate) fn address_identity(address: &MoneroAddress) -> ([u8; 32], [u8; 32], bool, bool) {
+        (
+            addr_point(address.spend()).compress().to_bytes(),
+            addr_point(address.view()).compress().to_bytes(),
+            address.is_subaddress(),
+            address.is_guaranteed(),
+        )
+    }
+
+    /// Choose the offline signer's lookahead without stored account metadata.
+    pub(crate) fn signer_lookahead() -> Lookahead {
+        Lookahead {
+            account: 0,
+            subaddress: DEFAULT_LOOKAHEAD.subaddress,
+        }
+    }
+
+    /// Collect the address identities this wallet owns within `lookahead`.
+    ///
+    /// Signing uses this set to determine address ownership.
+    pub(crate) fn own_address_identities(
+        view_pair: &ViewPair,
+        network: Network,
+        lookahead: Lookahead,
+    ) -> Vec<([u8; 32], [u8; 32], bool, bool)> {
+        let mut keys = vec![address_identity(
+            &view_pair.address(network, AddressSpec::Standard),
+        )];
+        for index in crate::scanner::build_subaddress_indices(lookahead) {
+            keys.push(address_identity(
+                &view_pair.address(network, AddressSpec::Subaddress(index)),
+            ));
+        }
+        keys
+    }
+
+    /// Check whether this wallet owns `address` within its lookahead.
+    pub(crate) fn address_is_ours(
+        address: &MoneroAddress,
+        view_pair: &ViewPair,
+        network: Network,
+        lookahead: Lookahead,
+    ) -> bool {
+        let target = address_identity(address);
+        own_address_identities(view_pair, network, lookahead)
+            .iter()
+            .any(|candidate| *candidate == target)
+    }
+
     fn sign_app_unsigned_transaction_with_private_keys(
         spend_secret_key: [u8; 32],
         view_secret_key: [u8; 32],
@@ -1649,6 +1710,50 @@ pub mod native {
             .map_err(|e| format!("Failed to parse unsigned tx: {:?}", e))?;
 
         let fee = unsigned.fee;
+
+        // The online wallet chooses every destination, including change.
+        // `sign_offline()` checks input ownership and balanced amounts, but those
+        // checks also pass if the change is redirected to an attacker.
+        //
+        // Require the change address to belong to this wallet. Comparing the total
+        // value returned to us is insufficient: a payment to us could satisfy that
+        // comparison while the separately declared change goes elsewhere.
+        // Compare keys and derivation modes; see `address_identity`.
+        let change_addresses = unsigned
+            .payments
+            .iter()
+            .filter_map(|payment| match payment {
+                InternalPayment::Change(change, _) => Some(change.address().clone()),
+                InternalPayment::Payment(_) => None,
+            })
+            .collect::<Vec<_>>();
+        let mut distinct = change_addresses
+            .iter()
+            .map(address_identity)
+            .collect::<Vec<_>>();
+        distinct.sort();
+        distinct.dedup();
+        if distinct.len() > 1 {
+            return Err(
+                "Refusing to sign: the unsigned transaction splits change across more than one \
+                 address, which a wallet building its own transaction never does."
+                    .to_string(),
+            );
+        }
+
+        let network = parse_network(network_str)?;
+        for change_address in &change_addresses {
+            if !address_is_ours(change_address, &view_pair, network, signer_lookahead()) {
+                return Err(format!(
+                    "Refusing to sign: this transaction sends its change to {change_address}, \
+                     which is not an address this wallet can spend from. An unsigned \
+                     transaction is built by the online, view-only wallet, and a tampered one \
+                     redirects the change while still balancing its amounts. (A change address \
+                     outside the signer's subaddress lookahead also lands here - it fails \
+                     closed.)"
+                ));
+            }
+        }
 
         let mut rng = rand::rngs::OsRng;
         let (tx, tx_key, tx_key_additional) = sign_offline(&mut rng, &spend_key, unsigned)
@@ -1666,7 +1771,6 @@ pub mod native {
         };
         let change_outputs = scan_transaction_outputs(&tx, &tx_id, view_pair, spend_key, lookahead);
 
-        let _ = parse_network(network_str)?;
 
         Ok(OfflineSignedTransaction {
             tx_id,
