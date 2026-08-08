@@ -304,21 +304,26 @@ pub mod native {
     }
 
     fn spend_key_from_seed(seed: &Seed) -> Zeroizing<Scalar> {
-        let entropy = seed.entropy();
+        // key_bytes(), not entropy(): for a polyseed the spend key is PBKDF2-derived from
+        // the entropy rather than being it. They coincide for a classic seed, which is the
+        // only kind the tests here used, so deriving from entropy looked correct.
+        let entropy = seed.key_bytes();
         let mut spend_bytes = [0u8; 32];
         spend_bytes.copy_from_slice(&entropy[..]);
         Zeroizing::new(Scalar::from_bytes_mod_order(spend_bytes))
     }
 
     fn view_pair_from_seed(seed: &Seed) -> ViewPair {
-        let entropy = seed.entropy();
+        let entropy = seed.key_bytes();
         let mut spend_bytes = [0u8; 32];
         spend_bytes.copy_from_slice(&entropy[..]);
 
         let spend_scalar = Scalar::from_bytes_mod_order(spend_bytes);
         let spend_point = &spend_scalar * ED25519_BASEPOINT_TABLE;
 
-        let view: [u8; 32] = Keccak256::digest(spend_bytes).into();
+        // Hash the reduced spend scalar to derive the view key, matching the scanner
+        // and key-image signer. A polyseed's PBKDF2 output may not be canonical.
+        let view: [u8; 32] = Keccak256::digest(spend_scalar.to_bytes()).into();
         let view_scalar = Scalar::from_bytes_mod_order(view);
 
         ViewPair::new(spend_point, Zeroizing::new(view_scalar))
@@ -1182,9 +1187,9 @@ pub mod native {
         unsigned_txset: &[u8],
     ) -> Result<Wallet2SourceKeyOffsetsResult, String> {
         let seed = resolve_seed(seed_phrase)?;
-        let entropy = seed.entropy();
-        let mut spend_secret_key = [0u8; 32];
-        spend_secret_key.copy_from_slice(&entropy[..]);
+        // Reduce before hashing: the view key is H(reduced spend scalar) everywhere else
+        // in the crate, and a polyseed's key is not canonical to begin with.
+        let spend_secret_key = Scalar::from_bytes_mod_order(*seed.key_bytes()).to_bytes();
         let view_secret_key: [u8; 32] = Keccak256::digest(spend_secret_key).into();
         derive_wallet2_unsigned_source_key_offsets_from_keys(
             spend_secret_key,
@@ -1576,9 +1581,9 @@ pub mod native {
         approval: &SigningApproval,
     ) -> Result<OfflineSignResult, String> {
         let seed = resolve_seed(seed_phrase)?;
-        let entropy = seed.entropy();
-        let mut spend_secret_key = [0u8; 32];
-        spend_secret_key.copy_from_slice(&entropy[..]);
+        // Reduce before hashing: the view key is H(reduced spend scalar) everywhere else
+        // in the crate, and a polyseed's key is not canonical to begin with.
+        let spend_secret_key = Scalar::from_bytes_mod_order(*seed.key_bytes()).to_bytes();
         let view_secret_key: [u8; 32] = Keccak256::digest(spend_secret_key).into();
         sign_unsigned_transaction_with_private_keys(
             spend_secret_key,
@@ -1828,9 +1833,9 @@ pub mod native {
         network_str: &str,
     ) -> Result<TransactionPreview, String> {
         let seed = resolve_seed(seed_phrase)?;
-        let entropy = seed.entropy();
-        let mut spend_secret_key = [0u8; 32];
-        spend_secret_key.copy_from_slice(&entropy[..]);
+        // Reduce before hashing: the view key is H(reduced spend scalar) everywhere else
+        // in the crate, and a polyseed's key is not canonical to begin with.
+        let spend_secret_key = Scalar::from_bytes_mod_order(*seed.key_bytes()).to_bytes();
         let view_secret_key: [u8; 32] = Keccak256::digest(spend_secret_key).into();
         preview_unsigned_transaction(
             spend_secret_key,
@@ -2133,6 +2138,44 @@ pub mod native {
             let weight = extra_weight(2, false, &[10]);
             // base (33) + additional (66) + data (1 + 1 + 1 + 10 = 13) = 112
             assert_eq!(weight, 112);
+        }
+
+        /// Derive the same polyseed wallet as the scanner and key-image signer.
+        ///
+        /// Polyseed derives its spend key from entropy through PBKDF2. Using the
+        /// entropy directly would select a different wallet; classic seeds do not
+        /// expose that mistake because their entropy is the spend key.
+        #[test]
+        fn seed_derivation_matches_derive_keys_for_a_polyseed() {
+            use rand_core::SeedableRng;
+
+            let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(3);
+            let seed = Seed::new_polyseed(&mut rng);
+            assert_ne!(
+                seed.entropy(),
+                seed.key_bytes(),
+                "premise: a polyseed's key is not its entropy"
+            );
+
+            let words = seed.to_string();
+            let expected = crate::scanner::derive_keys(&words, "stagenet", "")
+                .expect("derive_keys must accept a polyseed");
+
+            let spend = spend_key_from_seed(&seed);
+            assert_eq!(
+                hex::encode((&*spend * ED25519_BASEPOINT_TABLE).compress().to_bytes()),
+                expected.public_spend_key,
+                "signer's spend key must be the wallet's spend key"
+            );
+
+            let view_pair = view_pair_from_seed(&seed);
+            assert_eq!(
+                view_pair
+                    .address(Network::Stagenet, AddressSpec::Standard)
+                    .to_string(),
+                expected.address,
+                "signer's view pair must be the wallet's view pair"
+            );
         }
 
         #[test]
