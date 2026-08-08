@@ -137,6 +137,24 @@ fn bit_exact_hemlock_view_only() {
     assert_bit_exact("hemlock_view_only.keys");
 }
 
+/// Reject a ciphertext length that overflows when added to the data offset.
+/// An untrusted LEB128 length must return a parse error before slicing, in
+/// both debug and release builds.
+#[test]
+fn rejects_a_keys_file_whose_length_overflows() {
+    // Write the 8-byte outer IV followed by u64::MAX encoded as LEB128.
+    let mut file = vec![0u8; 8];
+    file.extend_from_slice(&[0xFF; 9]);
+    file.push(0x01);
+
+    let err = monero_rust::wallet_keys_file::decrypt_keys_data(&file, "")
+        .expect_err("an out-of-range ciphertext length must be rejected");
+    assert!(
+        err.contains("ciphertext length"),
+        "unexpected error: {err}"
+    );
+}
+
 #[test]
 fn independent_view_key_does_not_offer_incomplete_mnemonic_backup() {
     use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};

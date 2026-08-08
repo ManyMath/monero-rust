@@ -260,12 +260,16 @@ pub fn decrypt_keys_data(
 
     let outer_iv: [u8; 8] = file_bytes[..8].try_into().unwrap();
     let mut offset: usize = 8;
-    let ciphertext_len = read_leb128(file_bytes, &mut offset)? as usize;
-    if offset + ciphertext_len > file_bytes.len() {
-        return Err("ciphertext length exceeds file size".into());
-    }
+    // Check the addition: the file's length varint may overflow before the
+    // bounds check or the slice below.
+    let ciphertext_len = read_leb128(file_bytes, &mut offset)?;
+    let end = usize::try_from(ciphertext_len)
+        .ok()
+        .and_then(|len| offset.checked_add(len))
+        .filter(|end| *end <= file_bytes.len())
+        .ok_or("ciphertext length exceeds file size")?;
 
-    let mut buf = file_bytes[offset..offset + ciphertext_len].to_vec();
+    let mut buf = file_bytes[offset..end].to_vec();
     let key: [u8; 32] = cryptonight_hash_v0(password.as_bytes());
     let mut cipher = ChaCha20Legacy::new((&key).into(), (&outer_iv).into());
     cipher.apply_keystream(&mut buf);
