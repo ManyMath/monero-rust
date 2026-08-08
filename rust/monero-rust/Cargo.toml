@@ -11,8 +11,9 @@ mock-rpc = []
 [dependencies]
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0"
-wasm-bindgen = "0.2.100"
-getrandom = { version = "0.2", features = ["js"] }
+# Key-image signing uses getrandom on every target. Enable its "js" feature only
+# for wasm32 so native builds do not pull in wasm-bindgen and js-sys.
+getrandom = "0.2"
 thiserror = "1.0"
 async-trait = "0.1"
 futures = "0.3"
@@ -51,7 +52,12 @@ rand = { version = "0.8", default-features = false, features = ["getrandom"] }
 rand_distr = { version = "0.4", default-features = false, features = ["std"] }
 
 # WASM
+# Every non-test use of wasm_bindgen in this crate is already behind
+# cfg(target_arch = "wasm32"), so it belongs here rather than in [dependencies], where it
+# was a direct normal dependency of native builds that nothing used.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2.100"
+getrandom = { version = "0.2", features = ["js"] }
 js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Window", "Storage", "Request", "RequestInit", "RequestMode", "RequestCredentials", "Response", "Headers", "console"] }
 wasm-bindgen-futures = "0.4"
@@ -71,8 +77,11 @@ digest_auth = "0.3"
 [dev-dependencies]
 reqwest = "0.12"
 tempfile = "3"
-wasm-bindgen-test = "0.3"
 rand_chacha = "0.3"
+
+# Only wasm32 tests use wasm-bindgen-test.
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
 
 # Tokio is only needed for native tests
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
