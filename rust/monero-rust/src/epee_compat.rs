@@ -523,6 +523,7 @@ pub fn strip_magic<'a>(magic: &[u8], data: &'a [u8]) -> Result<&'a [u8], String>
 struct BinaryArchiveReader<'a> {
     bytes: &'a [u8],
     offset: usize,
+    allocation_budget: usize,
 }
 
 struct BinaryArchiveWriter {
@@ -683,7 +684,53 @@ impl BinaryArchiveWriter {
 
 impl<'a> BinaryArchiveReader<'a> {
     fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, offset: 0 }
+        Self {
+            bytes,
+            offset: 0,
+            // Varint indices can expand 8-fold and geometric vector growth can
+            // double that. Allow additional record metadata and duplicate summaries.
+            // This scales with actual input, without limiting valid wallet size.
+            allocation_budget: bytes.len().saturating_mul(32).saturating_add(4096),
+        }
+    }
+
+    /// Grow only after an element has been parsed. Never multiply an untrusted
+    /// count by the in-memory record size before validating its records.
+    fn push<T>(&mut self, values: &mut Vec<T>, value: T) -> Result<(), String> {
+        if values.len() == values.capacity() {
+            let additional = values.capacity().max(1);
+            self.reserve(values, additional)?;
+        }
+        values.push(value);
+        Ok(())
+    }
+
+    fn reserve<T>(&mut self, values: &mut Vec<T>, additional: usize) -> Result<(), String> {
+        let bytes = additional
+            .checked_mul(std::mem::size_of::<T>())
+            .ok_or("Binary archive allocation size overflow")?;
+        if bytes > self.allocation_budget {
+            return Err("Binary archive allocation budget exceeded".into());
+        }
+        let old_capacity = values.capacity();
+        values
+            .try_reserve_exact(additional)
+            .map_err(|_| "Unable to allocate binary archive records")?;
+        let allocated = (values.capacity() - old_capacity)
+            .checked_mul(std::mem::size_of::<T>())
+            .ok_or("Binary archive allocation size overflow")?;
+        self.allocation_budget = self
+            .allocation_budget
+            .checked_sub(allocated)
+            .ok_or("Binary archive allocation budget exceeded")?;
+        Ok(())
+    }
+
+    fn copy_bytes(&mut self, start: usize, end: usize) -> Result<Vec<u8>, String> {
+        let mut bytes = Vec::new();
+        self.reserve(&mut bytes, end - start)?;
+        bytes.extend_from_slice(&self.bytes[start..end]);
+        Ok(bytes)
     }
 
     fn read_output_export_body(
@@ -701,12 +748,12 @@ impl<'a> BinaryArchiveReader<'a> {
             .try_into()
             .map_err(|_| "Output export record count exceeds usize".to_string())?;
 
-        let mut outputs = Vec::with_capacity(output_count);
+        let mut outputs = Vec::new();
         for index in 0..output_count {
-            outputs.push(
-                self.read_exported_transfer_details()
-                    .map_err(|e| format!("Failed to parse output export record #{index}: {e}"))?,
-            );
+            let value = self
+                .read_exported_transfer_details()
+                .map_err(|e| format!("Failed to parse output export record #{index}: {e}"))?;
+            self.push(&mut outputs, value)?;
         }
 
         if self.offset != self.bytes.len() {
@@ -748,13 +795,12 @@ impl<'a> BinaryArchiveReader<'a> {
         let tx_count_usize: usize = tx_count
             .try_into()
             .map_err(|_| "Unsigned txset transaction count exceeds usize".to_string())?;
-        let mut txes = Vec::with_capacity(tx_count_usize);
+        let mut txes = Vec::new();
         for index in 0..tx_count_usize {
-            txes.push(
-                self.read_tx_construction_data_summary().map_err(|e| {
-                    format!("Failed to parse unsigned tx construction #{index}: {e}")
-                })?,
-            );
+            let value = self
+                .read_tx_construction_data_summary()
+                .map_err(|e| format!("Failed to parse unsigned tx construction #{index}: {e}"))?;
+            self.push(&mut txes, value)?;
         }
 
         let tuple_size = self.read_varint()?;
@@ -769,11 +815,12 @@ impl<'a> BinaryArchiveReader<'a> {
         let transfer_count_usize: usize = transfer_count
             .try_into()
             .map_err(|_| "Unsigned txset new transfer count exceeds usize".to_string())?;
-        let mut new_transfers = Vec::with_capacity(transfer_count_usize);
+        let mut new_transfers = Vec::new();
         for index in 0..transfer_count_usize {
-            new_transfers.push(self.read_exported_transfer_details().map_err(|e| {
+            let value = self.read_exported_transfer_details().map_err(|e| {
                 format!("Failed to parse unsigned txset new transfer #{index}: {e}")
-            })?);
+            })?;
+            self.push(&mut new_transfers, value)?;
         }
 
         if self.offset != self.bytes.len() {
@@ -804,28 +851,29 @@ impl<'a> BinaryArchiveReader<'a> {
         let ptx_count_usize: usize = ptx_count
             .try_into()
             .map_err(|_| "Signed txset pending transaction count exceeds usize".to_string())?;
-        let mut ptxes = Vec::with_capacity(ptx_count_usize);
+        let mut ptxes = Vec::new();
         for index in 0..ptx_count_usize {
-            ptxes.push(
-                self.read_pending_tx_summary()
-                    .map_err(|e| format!("Failed to parse signed pending tx #{index}: {e}"))?,
-            );
+            let value = self
+                .read_pending_tx_summary()
+                .map_err(|e| format!("Failed to parse signed pending tx #{index}: {e}"))?;
+            self.push(&mut ptxes, value)?;
         }
 
         let key_image_count = self.read_varint()?;
         let key_image_count_usize: usize = key_image_count
             .try_into()
             .map_err(|_| "Signed txset key image count exceeds usize".to_string())?;
-        let mut key_images = Vec::with_capacity(key_image_count_usize);
+        let mut key_images = Vec::new();
         for _ in 0..key_image_count_usize {
-            key_images.push(self.read_fixed()?);
+            let value = self.read_fixed()?;
+            self.push(&mut key_images, value)?;
         }
 
         let tx_key_image_count = self.read_varint()?;
         let tx_key_image_count_usize: usize = tx_key_image_count
             .try_into()
             .map_err(|_| "Signed txset tx key image count exceeds usize".to_string())?;
-        let mut tx_key_images = Vec::with_capacity(tx_key_image_count_usize);
+        let mut tx_key_images = Vec::new();
         for index in 0..tx_key_image_count_usize {
             let pair_size = self.read_varint()?;
             if pair_size != 2 {
@@ -833,10 +881,11 @@ impl<'a> BinaryArchiveReader<'a> {
                     "Unexpected signed txset tx key image pair size at #{index}: {pair_size}"
                 ));
             }
-            tx_key_images.push(SignedTxSetKeyImagePair {
+            let value = SignedTxSetKeyImagePair {
                 public_key: self.read_fixed()?,
                 key_image: self.read_fixed()?,
-            });
+            };
+            self.push(&mut tx_key_images, value)?;
         }
 
         if self.offset != self.bytes.len() {
@@ -875,9 +924,10 @@ impl<'a> BinaryArchiveReader<'a> {
         let selected_transfer_count_usize: usize = selected_transfer_count
             .try_into()
             .map_err(|_| "Signed tx selected transfer count exceeds usize".to_string())?;
-        let mut selected_transfer_indices = Vec::with_capacity(selected_transfer_count_usize);
+        let mut selected_transfer_indices = Vec::new();
         for _ in 0..selected_transfer_count_usize {
-            selected_transfer_indices.push(self.read_varint()?);
+            let value = self.read_varint()?;
+            self.push(&mut selected_transfer_indices, value)?;
         }
 
         let key_images_blob = self.read_var_bytes()?;
@@ -889,9 +939,10 @@ impl<'a> BinaryArchiveReader<'a> {
         let additional_tx_key_count_usize: usize = additional_tx_key_count
             .try_into()
             .map_err(|_| "Additional tx key count exceeds usize".to_string())?;
-        let mut additional_tx_keys = Vec::with_capacity(additional_tx_key_count_usize);
+        let mut additional_tx_keys = Vec::new();
         for _ in 0..additional_tx_key_count_usize {
-            additional_tx_keys.push(self.read_fixed()?);
+            let value = self.read_fixed()?;
+            self.push(&mut additional_tx_keys, value)?;
         }
 
         let destination_count = self.read_varint()?;
@@ -899,7 +950,7 @@ impl<'a> BinaryArchiveReader<'a> {
             .try_into()
             .map_err(|_| "Signed tx destination count exceeds usize".to_string())?;
         let mut destination_total_amount = 0u64;
-        let mut destinations = Vec::with_capacity(destination_count_usize);
+        let mut destinations = Vec::new();
         for index in 0..destination_count_usize {
             let amount = self
                 .read_tx_destination_entry_summary()
@@ -907,7 +958,8 @@ impl<'a> BinaryArchiveReader<'a> {
             destination_total_amount = destination_total_amount
                 .checked_add(amount.amount)
                 .ok_or_else(|| "Signed tx destination total amount overflow".to_string())?;
-            destinations.push(amount);
+            let value = amount;
+            self.push(&mut destinations, value)?;
         }
 
         let construction = self.read_tx_construction_data_summary()?;
@@ -966,12 +1018,12 @@ impl<'a> BinaryArchiveReader<'a> {
         let input_count_usize: usize = input_count
             .try_into()
             .map_err(|_| "Transaction input count exceeds usize".to_string())?;
-        let mut input_ring_sizes = Vec::with_capacity(input_count_usize);
+        let mut input_ring_sizes = Vec::new();
         for index in 0..input_count_usize {
-            input_ring_sizes.push(
-                self.read_tx_input_summary()
-                    .map_err(|e| format!("Failed to parse transaction input #{index}: {e}"))?,
-            );
+            let value = self
+                .read_tx_input_summary()
+                .map_err(|e| format!("Failed to parse transaction input #{index}: {e}"))?;
+            self.push(&mut input_ring_sizes, value)?;
         }
 
         let output_count = self.read_varint()?;
@@ -1010,7 +1062,7 @@ impl<'a> BinaryArchiveReader<'a> {
             (Some(rct_type), rct_fee)
         };
 
-        let tx_blob = self.bytes[tx_start..self.offset].to_vec();
+        let tx_blob = self.copy_bytes(tx_start, self.offset)?;
         let mut cursor = Cursor::new(tx_blob.as_slice());
         let tx = Transaction::<NotPruned>::read(&mut cursor)
             .map_err(|e| format!("Parsed signed txset transaction is not valid: {e:?}"))?;
@@ -1207,14 +1259,16 @@ impl<'a> BinaryArchiveReader<'a> {
         let source_count_usize: usize = source_count
             .try_into()
             .map_err(|_| "Source count exceeds usize".to_string())?;
-        let mut source_ring_sizes = Vec::with_capacity(source_count_usize);
-        let mut sources = Vec::with_capacity(source_count_usize);
+        let mut source_ring_sizes = Vec::new();
+        let mut sources = Vec::new();
         for index in 0..source_count_usize {
             let source = self
                 .read_tx_source_entry_summary()
                 .map_err(|e| format!("Failed to parse source #{index}: {e}"))?;
-            source_ring_sizes.push(source.ring.len() as u64);
-            sources.push(source);
+            let value = source.ring.len() as u64;
+            self.push(&mut source_ring_sizes, value)?;
+            let value = source;
+            self.push(&mut sources, value)?;
         }
 
         let change = self.read_tx_destination_entry_summary()?;
@@ -1224,7 +1278,7 @@ impl<'a> BinaryArchiveReader<'a> {
             .try_into()
             .map_err(|_| "Split destination count exceeds usize".to_string())?;
         let mut split_destination_total_amount = 0u64;
-        let mut split_destinations = Vec::with_capacity(split_destination_count_usize);
+        let mut split_destinations = Vec::new();
         for index in 0..split_destination_count_usize {
             let destination = self
                 .read_tx_destination_entry_summary()
@@ -1232,16 +1286,18 @@ impl<'a> BinaryArchiveReader<'a> {
             split_destination_total_amount = split_destination_total_amount
                 .checked_add(destination.amount)
                 .ok_or_else(|| "Split destination total amount overflow".to_string())?;
-            split_destinations.push(destination);
+            let value = destination;
+            self.push(&mut split_destinations, value)?;
         }
 
         let selected_transfer_count = self.read_varint()?;
         let selected_transfer_count_usize: usize = selected_transfer_count
             .try_into()
             .map_err(|_| "Selected transfer count exceeds usize".to_string())?;
-        let mut selected_transfer_indices = Vec::with_capacity(selected_transfer_count_usize);
+        let mut selected_transfer_indices = Vec::new();
         for _ in 0..selected_transfer_count_usize {
-            selected_transfer_indices.push(self.read_varint()?);
+            let value = self.read_varint()?;
+            self.push(&mut selected_transfer_indices, value)?;
         }
 
         let extra = self.read_var_bytes()?;
@@ -1263,7 +1319,7 @@ impl<'a> BinaryArchiveReader<'a> {
             .try_into()
             .map_err(|_| "Destination count exceeds usize".to_string())?;
         let mut destination_total_amount = 0u64;
-        let mut destinations = Vec::with_capacity(destination_count_usize);
+        let mut destinations = Vec::new();
         for index in 0..destination_count_usize {
             let destination = self
                 .read_tx_destination_entry_summary()
@@ -1271,7 +1327,8 @@ impl<'a> BinaryArchiveReader<'a> {
             destination_total_amount = destination_total_amount
                 .checked_add(destination.amount)
                 .ok_or_else(|| "Destination total amount overflow".to_string())?;
-            destinations.push(destination);
+            let value = destination;
+            self.push(&mut destinations, value)?;
         }
 
         let subaddr_account = self.read_u32_le()?;
@@ -1279,14 +1336,13 @@ impl<'a> BinaryArchiveReader<'a> {
         let subaddr_count_usize: usize = subaddr_count
             .try_into()
             .map_err(|_| "Subaddress index count exceeds usize".to_string())?;
-        let mut subaddr_indices = Vec::with_capacity(subaddr_count_usize);
+        let mut subaddr_indices = Vec::new();
         for _ in 0..subaddr_count_usize {
             let index = self.read_varint()?;
-            subaddr_indices.push(
-                index
-                    .try_into()
-                    .map_err(|_| "Subaddress index exceeds u32".to_string())?,
-            );
+            let value = index
+                .try_into()
+                .map_err(|_| "Subaddress index exceeds u32".to_string())?;
+            self.push(&mut subaddr_indices, value)?;
         }
 
         Ok(TxConstructionDataSummary {
@@ -1321,8 +1377,8 @@ impl<'a> BinaryArchiveReader<'a> {
         let outputs_count_usize: usize = outputs_count
             .try_into()
             .map_err(|_| "Source output count exceeds usize".to_string())?;
-        let mut ring = Vec::with_capacity(outputs_count_usize);
-        for _ in 0..outputs_count {
+        let mut ring = Vec::new();
+        for _ in 0..outputs_count_usize {
             let pair_size = self.read_varint()?;
             if pair_size != 2 {
                 return Err(format!("Unexpected source output pair size: {pair_size}"));
@@ -1330,11 +1386,12 @@ impl<'a> BinaryArchiveReader<'a> {
             let global_output_index = self.read_varint()?;
             let output_public_key = self.read_fixed()?;
             let commitment = self.read_fixed()?;
-            ring.push(TxSourceOutputSummary {
+            let value = TxSourceOutputSummary {
                 global_output_index,
                 output_public_key,
                 commitment,
-            });
+            };
+            self.push(&mut ring, value)?;
         }
 
         let real_output = self.read_u64_le()?;
@@ -1349,9 +1406,10 @@ impl<'a> BinaryArchiveReader<'a> {
         let additional_key_count_usize: usize = additional_key_count
             .try_into()
             .map_err(|_| "Source additional tx key count exceeds usize".to_string())?;
-        let mut real_out_additional_tx_keys = Vec::with_capacity(additional_key_count_usize);
-        for _ in 0..additional_key_count {
-            real_out_additional_tx_keys.push(self.read_fixed()?);
+        let mut real_out_additional_tx_keys = Vec::new();
+        for _ in 0..additional_key_count_usize {
+            let value = self.read_fixed()?;
+            self.push(&mut real_out_additional_tx_keys, value)?;
         }
 
         let real_output_in_tx_index = self.read_u64_le()?;
@@ -1409,9 +1467,10 @@ impl<'a> BinaryArchiveReader<'a> {
         let additional_count: usize = additional_count
             .try_into()
             .map_err(|_| "Additional tx key count exceeds usize".to_string())?;
-        let mut additional_tx_keys = Vec::with_capacity(additional_count);
+        let mut additional_tx_keys = Vec::new();
         for _ in 0..additional_count {
-            additional_tx_keys.push(self.read_fixed()?);
+            let value = self.read_fixed()?;
+            self.push(&mut additional_tx_keys, value)?;
         }
         let subaddress_major = self.read_varint()?;
         let subaddress_minor = self.read_varint()?;
@@ -1487,7 +1546,7 @@ impl<'a> BinaryArchiveReader<'a> {
         if end > self.bytes.len() {
             return Err("Unexpected end of binary archive".to_string());
         }
-        let bytes = self.bytes[self.offset..end].to_vec();
+        let bytes = self.copy_bytes(self.offset, end)?;
         self.offset = end;
         Ok(bytes)
     }
@@ -1873,6 +1932,91 @@ mod tests {
         assert!(output.flags.key_image_known);
         assert!(output.flags.key_image_request);
         assert!(!output.flags.key_image_partial);
+    }
+
+    /// Encode a varint for `BinaryArchiveReader`.
+    fn archive_varint(mut value: u64, out: &mut Vec<u8>) {
+        loop {
+            let mut byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value != 0 {
+                byte |= 0x80;
+            }
+            out.push(byte);
+            if value == 0 {
+                break;
+            }
+        }
+    }
+
+    fn seal_output_export(archive_body: &[u8], view_secret_key: &[u8; 32]) -> Vec<u8> {
+        let mut plaintext = vec![1u8; 32]; // public spend key
+        plaintext.extend_from_slice(&[2u8; 32]); // public view key
+        plaintext.extend_from_slice(archive_body);
+        wrap_with_magic(
+            OUTPUT_EXPORT_MAGIC,
+            &crate::key_image_signing::encrypt_with_view_key(&plaintext, view_secret_key),
+        )
+    }
+
+    // Archive counts are untrusted even when the file is authenticated: the online
+    // wallet has the view key and can create these files. Large counts with no
+    // records must return parse errors without reserving the declared capacity.
+
+    #[test]
+    fn output_export_record_count_does_not_drive_the_allocation() {
+        let view_secret_key = [7u8; 32];
+        let mut archive_body = Vec::new();
+        archive_varint(3, &mut archive_body); // tuple size
+        archive_varint(2, &mut archive_body); // offset
+        archive_varint(9, &mut archive_body); // total outputs
+        archive_varint(u64::MAX, &mut archive_body); // output count, and not one record follows
+
+        let err = parse_output_export(&seal_output_export(&archive_body, &view_secret_key), &view_secret_key)
+            .expect_err("an output export claiming u64::MAX records should be rejected");
+        assert!(
+            err.contains("Unexpected end of binary archive"),
+            "expected the read of record #0 to run off the end, got: {err}"
+        );
+    }
+
+    #[test]
+    fn unsigned_txset_transaction_count_does_not_drive_the_allocation() {
+        let view_secret_key = [7u8; 32];
+        let mut archive = Vec::new();
+        archive_varint(2, &mut archive); // archive version
+        archive_varint(u64::MAX, &mut archive); // transaction count, with no transactions after it
+
+        let txset = wrap_with_magic(
+            UNSIGNED_TX_MAGIC,
+            &crate::key_image_signing::encrypt_with_view_key(&archive, &view_secret_key),
+        );
+        let err = parse_unsigned_monero_txset_summary(&txset, &view_secret_key)
+            .expect_err("an unsigned txset claiming u64::MAX transactions should be rejected");
+        assert!(
+            err.contains("Unexpected end of binary archive"),
+            "expected the read of transaction #0 to run off the end, got: {err}"
+        );
+    }
+
+    #[test]
+    fn signed_txset_key_image_count_does_not_drive_the_allocation() {
+        let view_secret_key = [7u8; 32];
+        let mut archive = Vec::new();
+        archive_varint(0, &mut archive); // archive version
+        archive_varint(0, &mut archive); // pending transaction count
+        archive_varint(u64::MAX, &mut archive); // key image count, with no key images after it
+
+        let txset = wrap_with_magic(
+            SIGNED_TX_MAGIC,
+            &crate::key_image_signing::encrypt_with_view_key(&archive, &view_secret_key),
+        );
+        let err = parse_signed_monero_txset_summary(&txset, &view_secret_key)
+            .expect_err("a signed txset claiming u64::MAX key images should be rejected");
+        assert!(
+            err.contains("Unexpected end of binary archive"),
+            "expected the read of key image #0 to run off the end, got: {err}"
+        );
     }
 
     #[test]
