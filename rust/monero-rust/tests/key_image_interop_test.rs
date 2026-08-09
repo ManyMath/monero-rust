@@ -390,3 +390,50 @@ fn test_key_image_pairs_fixture_signatures() {
         );
     }
 }
+
+/// Reject a v3 export whose header names another account.
+///
+/// The view key authenticates the file, but both header public keys must match
+/// the destination wallet. Exercise `import_key_images_from_seed` to check that
+/// the account validation reaches the public import API.
+#[test]
+fn refuses_key_images_exported_for_a_different_account() {
+    use monero_rust::seed_compat::Seed;
+
+    let mnemonic = "hemlock jubilee eden hacksaw boil superior inroads epoxy exhale orders \
+                    cavernous second brunt saved richly lower upgrade hitched launching \
+                    deepest mostly playful layout lower eden";
+    let seed = Seed::from_string(Zeroizing::new(mnemonic.to_string())).expect("vector seed");
+    let spend_scalar = Scalar::from_bytes_mod_order(*seed.key_bytes_with_passphrase(""));
+    let pub_spend = (&spend_scalar * ED25519_BASEPOINT_TABLE)
+        .compress()
+        .to_bytes();
+    let view_bytes: [u8; 32] = Keccak256::digest(spend_scalar.to_bytes()).into();
+    let view_scalar = Scalar::from_bytes_mod_order(view_bytes);
+    let pub_view = (&view_scalar * ED25519_BASEPOINT_TABLE).compress().to_bytes();
+    let view_secret = view_scalar.to_bytes();
+
+    // Encrypted with this wallet's view key, so it authenticates - but declaring someone
+    // else's spend key, which is the part nothing was checking.
+    let foreign_spend = (&Scalar::from(9_999u64) * ED25519_BASEPOINT_TABLE)
+        .compress()
+        .to_bytes();
+    assert_ne!(foreign_spend, pub_spend, "the fixture must name another account");
+
+    let exported = export_key_images_v3(
+        &test_entries(&spend_scalar, 2),
+        &spend_scalar,
+        &foreign_spend,
+        &pub_view,
+        &view_secret,
+        0,
+    )
+    .expect("export should succeed");
+
+    let err = monero_rust::key_image_signing::import_key_images_from_seed(mnemonic, "", &exported)
+        .expect_err("key images naming another account must be refused");
+    assert!(
+        err.contains("different account"),
+        "unexpected error: {err}"
+    );
+}

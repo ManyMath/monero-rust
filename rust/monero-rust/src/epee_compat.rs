@@ -1587,14 +1587,52 @@ pub fn export_key_images(key_images: &[ExportedKeyImage]) -> Result<Vec<u8>, Str
 /// Import key images from either old EPEE format or new v3 encrypted format.
 ///
 /// - If `view_secret_key` is `None`, only old EPEE format is supported.
-/// - If `view_secret_key` is `Some`, tries old EPEE format first, then v3.
+/// - With `view_secret_key`, try v3 before the legacy Epee format.
+///
+/// This function does not check the account. Use `import_key_images_for_account`
+/// when the destination wallet is known.
 pub fn import_key_images(
     data: &[u8],
     view_secret_key: Option<&[u8; 32]>,
 ) -> Result<Vec<String>, String> {
+    import_key_images_for_account(data, view_secret_key, None)
+}
+
+/// `import_key_images`, rejecting a v3 export that names an account other than
+/// `expected_keys` - `(public_spend_key, public_view_key)`.
+///
+/// monero does the same in `wallet2::import_key_images`, which rejects a file whose
+/// header keys are not the wallet's own ("are for a different account"). It matters here
+/// because key images are matched to outputs *positionally*: another account's file does
+/// not fail to apply, it applies to the wrong outputs and marks them spent.
+///
+/// The old EPEE format carries no account keys, so there is nothing to bind it to.
+pub fn import_key_images_for_account(
+    data: &[u8],
+    view_secret_key: Option<&[u8; 32]>,
+    expected_keys: Option<(&[u8; 32], &[u8; 32])>,
+) -> Result<Vec<String>, String> {
     let payload = strip_magic(KEY_IMAGES_MAGIC, data)?;
 
-    // Try old EPEE format first.
+    // v3 first when we can read it: it is the only one of the two that authenticates, and
+    // it is what monero and this crate both write. Falling back to the unauthenticated
+    // format only once v3 has failed keeps a well-formed export from being downgraded.
+    let mut v3_error = None;
+    if let Some(vsk) = view_secret_key {
+        match crate::key_image_signing::import_key_images_v3(data, vsk) {
+            Ok((key_images, pub_spend, pub_view)) => {
+                if let Some((expected_spend, expected_view)) = expected_keys {
+                    if (&pub_spend != expected_spend) || (&pub_view != expected_view) {
+                        return Err("key images are for a different account".to_string());
+                    }
+                }
+                return Ok(key_images.iter().map(hex::encode).collect());
+            }
+            Err(e) => v3_error = Some(e),
+        }
+    }
+
+    // Fall back to legacy Epee.
     // Note: EPEE serializes Vec<u8> as a byte array, so we must use
     // serde_bytes::ByteBuf for deserialization to handle this correctly.
     #[derive(Deserialize)]
@@ -1616,13 +1654,9 @@ pub fn import_key_images(
             .collect());
     }
 
-    // EPEE failed; try v3 encrypted format if view key is provided
-    match view_secret_key {
-        Some(vsk) => {
-            let (key_images, _pub_spend, _pub_view) =
-                crate::key_image_signing::import_key_images_v3(data, vsk)?;
-            Ok(key_images.iter().map(hex::encode).collect())
-        }
+    // Neither format read. Report why v3 failed when it was the one we could have used.
+    match v3_error {
+        Some(e) => Err(e),
         None => Err(
             "Data is not in old EPEE format and no view secret key provided for v3 decryption"
                 .to_string(),

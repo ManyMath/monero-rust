@@ -416,9 +416,18 @@ pub fn import_key_images_from_seed(
     passphrase: &str,
     data: &[u8],
 ) -> Result<Vec<String>, String> {
-    if let Some((view_scalar, _)) = crate::scanner::parse_view_only_keys(seed_phrase) {
+    // Bind the import to this wallet: a v3 export names the account it was made for, and
+    // key images are applied to outputs positionally, so another account's file would mark
+    // the wrong outputs spent rather than fail.
+    if let Some((view_scalar, spend_point)) = crate::scanner::parse_view_only_keys(seed_phrase) {
         let view_secret_key = view_scalar.to_bytes();
-        return crate::epee_compat::import_key_images(data, Some(&view_secret_key));
+        let pub_spend = spend_point.compress().to_bytes();
+        let pub_view = (&view_scalar * ED25519_BASEPOINT_TABLE).compress().to_bytes();
+        return crate::epee_compat::import_key_images_for_account(
+            data,
+            Some(&view_secret_key),
+            Some((&pub_spend, &pub_view)),
+        );
     }
 
     let seed = crate::scanner::resolve_seed(seed_phrase)?;
@@ -427,7 +436,13 @@ pub fn import_key_images_from_seed(
     let view_bytes: [u8; 32] = Keccak256::digest(spend_scalar.to_bytes()).into();
     let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(view_bytes));
     let view_secret_key = view_scalar.to_bytes();
-    crate::epee_compat::import_key_images(data, Some(&view_secret_key))
+    let pub_spend = (&*spend_scalar * ED25519_BASEPOINT_TABLE).compress().to_bytes();
+    let pub_view = (&*view_scalar * ED25519_BASEPOINT_TABLE).compress().to_bytes();
+    crate::epee_compat::import_key_images_for_account(
+        data,
+        Some(&view_secret_key),
+        Some((&pub_spend, &pub_view)),
+    )
 }
 
 #[cfg(test)]
