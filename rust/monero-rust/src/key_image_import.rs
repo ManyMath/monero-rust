@@ -113,12 +113,11 @@ pub fn verify_key_image_signature(
     key_image: &EdwardsPoint,
     signature: &[u8; 64],
 ) -> bool {
-    // Subgroup check: key image must be in the prime-order subgroup.
-    // Ed25519 has cofactor 8, so we check 8 * (l * I) but since
-    // curve25519-dalek uses the Ristretto-free Ed25519, we can just
-    // check that the point is not small-order by verifying it's not identity
-    // and that it decompresses to a valid point (already guaranteed by caller).
-    if key_image.is_identity() {
+    // Require a key image in the prime-order subgroup, as Monero does with
+    // `l * I == identity`. An identity check alone would accept `x*Hp(P) + T`
+    // for nonzero torsion `T` whenever the challenge cancels `T`. A signer can
+    // choose nonces until that happens, producing multiple key images for one output.
+    if key_image.is_identity() || !key_image.is_torsion_free() {
         return false;
     }
 
@@ -313,6 +312,64 @@ mod tests {
         let json =
             r#"{"result":{"offset":0,"signed_key_images":[{"key_image":"zz","signature":"00"}]}}"#;
         assert!(parse_rpc_export(json).is_err());
+    }
+
+    /// Reject a key image with torsion even if its signature verifies.
+    ///
+    /// For `I' = x*Hp(P) + T` with order-8 `T`, the verifier computes
+    /// `R' = r*Hp + c*I' = k*Hp + c*T`. The extra term vanishes when `8 | c`.
+    /// Trying nonces finds such a challenge in about eight attempts, so signature
+    /// verification alone does not enforce one key image per output.
+    #[test]
+    fn test_verify_rejects_a_torsioned_key_image_whose_signature_verifies() {
+        // Use an order-8 torsion point.
+        let torsion = CompressedEdwardsY(
+            hex::decode("c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+        )
+        .decompress()
+        .expect("small-order point must decompress");
+        assert!(!torsion.is_identity());
+        assert!(!torsion.is_torsion_free(), "fixture must carry torsion");
+
+        let x = Scalar::from(1234567u64);
+        let output_key = &x * ED25519_BASEPOINT_TABLE;
+        let hp = hash_to_point(output_key);
+        let forged = (x * hp) + torsion;
+        assert!(!forged.is_torsion_free(), "the forged key image must be torsioned");
+
+        // Grind the nonce until the challenge is divisible by 8, so c*T vanishes.
+        let mut signature = [0u8; 64];
+        let mut found = false;
+        for nonce in 1u64 .. 256 {
+            let k = Scalar::from(nonce);
+            let l_point = &k * ED25519_BASEPOINT_TABLE;
+            let r_point = k * hp;
+
+            let mut hasher = Keccak256::new();
+            hasher.update(forged.compress().to_bytes());
+            hasher.update(l_point.compress().to_bytes());
+            hasher.update(r_point.compress().to_bytes());
+            let c = Scalar::from_bytes_mod_order(hasher.finalize().into());
+
+            // The low three bits of the little-endian scalar give `c mod 8`.
+            if (c.to_bytes()[0] & 7) != 0 {
+                continue;
+            }
+            let r = k - (c * x);
+            signature[..32].copy_from_slice(&c.to_bytes());
+            signature[32..].copy_from_slice(&r.to_bytes());
+            found = true;
+            break;
+        }
+        assert!(found, "a divisible-by-8 challenge should turn up within 256 nonces");
+
+        assert!(
+            !verify_key_image_signature(&output_key, &forged, &signature),
+            "a key image outside the prime-order subgroup must be rejected"
+        );
     }
 
     #[test]
