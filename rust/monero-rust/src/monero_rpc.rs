@@ -82,6 +82,22 @@ pub enum RpcError {
 /// on congested networks or unusual fee conditions.
 pub const DEFAULT_MAX_FEE_PER_BYTE: u64 = 100_000;
 
+/// Require a nondecreasing cumulative RingCT output distribution.
+///
+/// Decoy selection subtracts adjacent entries to count outputs per block and
+/// uses an earlier cumulative count to bound eligible output indices. A decrease
+/// would underflow that subtraction and invalidate the sampling bound.
+fn check_distribution_is_monotonic(distribution: &[u64]) -> Result<(), RpcError> {
+    let mut previous = 0u64;
+    for entry in distribution {
+        if *entry < previous {
+            return Err(RpcError::InvalidNode);
+        }
+        previous = *entry;
+    }
+    Ok(())
+}
+
 fn rpc_hex(value: &str) -> Result<Vec<u8>, RpcError> {
     hex::decode(value).map_err(|_| RpcError::InvalidNode)
 }
@@ -422,6 +438,11 @@ impl<R: RpcConnection> Rpc<R> {
             ))?;
         }
 
+        // Callers match timelocks to transactions by position, so the counts must agree.
+        if txs.txs.len() != hashes.len() {
+            return Err(RpcError::InvalidNode);
+        }
+
         txs.txs
             .iter()
             .map(|res| {
@@ -568,7 +589,13 @@ impl<R: RpcConnection> Rpc<R> {
             )
             .await?;
 
-        Ok(distributions.distributions.swap_remove(0).distribution)
+        // Check the count before `swap_remove(0)` so an empty reply returns an error.
+        if distributions.distributions.is_empty() {
+            return Err(RpcError::InvalidNode);
+        }
+        let distribution = distributions.distributions.swap_remove(0).distribution;
+        check_distribution_is_monotonic(&distribution)?;
+        Ok(distribution)
     }
 
     /// Get the specified outputs from the RingCT (zero-amount) pool, but only
@@ -604,6 +631,12 @@ impl<R: RpcConnection> Rpc<R> {
                 })),
             )
             .await?;
+
+        // Decoy selection pairs entry `i` with `indexes[i]`. Require the requested
+        // number of outputs before callers index or zip these lists.
+        if outs.outs.len() != indexes.len() {
+            return Err(RpcError::InvalidNode);
+        }
 
         let timelocks = self
             .get_transaction_timelocks(
