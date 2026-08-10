@@ -24,6 +24,36 @@ pub struct MockRpc {
     binary_files: Arc<HashMap<String, Vec<u8>>>,
 }
 
+/// Resize a recorded `get_outs` reply to match the requested output count.
+///
+/// Decoy selection is random, so requests vary between runs. The fixture
+/// contains only one output, which this helper repeats as needed to preserve
+/// the daemon's one-entry-per-requested-index contract. This does not make the
+/// recorded keys match the randomly selected global indices.
+fn resize_outs(mut call: RpcCall, wanted: usize) -> RpcCall {
+    let Ok(mut resp) = serde_json::from_str::<serde_json::Value>(&call.response) else {
+        return call;
+    };
+    let Some(outs) = resp.get_mut("outs").and_then(|v| v.as_array_mut()) else {
+        return call;
+    };
+    if outs.len() == wanted || outs.is_empty() {
+        return call;
+    }
+
+    if outs.len() > wanted {
+        outs.truncate(wanted);
+    } else {
+        let recorded = outs.clone();
+        while outs.len() < wanted {
+            let next = recorded[outs.len() % recorded.len()].clone();
+            outs.push(next);
+        }
+    }
+    call.response = serde_json::to_string(&resp).expect("re-serialising a parsed response");
+    call
+}
+
 impl MockRpc {
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
         let data = std::fs::read_to_string(path)?;
@@ -180,7 +210,7 @@ impl MockRpc {
                             .map(|a| a.len());
 
                         if stored_len == Some(req_arr.len()) {
-                            return Some(call.clone());
+                            return Some(resize_outs(call.clone(), req_arr.len()));
                         }
                     }
                 }
@@ -240,31 +270,8 @@ impl MockRpc {
                         }
                     }
 
-                    if let Some(mut matched_call) = best_call {
-                        if let Ok(mut resp) =
-                            serde_json::from_str::<serde_json::Value>(&matched_call.response)
-                        {
-                            if let Some(resp_outs) =
-                                resp.get_mut("outs").and_then(|v| v.as_array_mut())
-                            {
-                                let original_len = resp_outs.len();
-
-                                if original_len != req_count {
-                                    if original_len > req_count {
-                                        resp_outs.truncate(req_count);
-                                    } else {
-                                        let original_outs = resp_outs.clone();
-                                        while resp_outs.len() < req_count {
-                                            let idx = resp_outs.len() % original_outs.len();
-                                            resp_outs.push(original_outs[idx].clone());
-                                        }
-                                    }
-                                    matched_call.response = serde_json::to_string(&resp).unwrap();
-                                }
-
-                                return Some(matched_call);
-                            }
-                        }
+                    if let Some(matched_call) = best_call {
+                        return Some(resize_outs(matched_call, req_count));
                     }
                 }
             }
