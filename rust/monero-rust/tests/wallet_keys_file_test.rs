@@ -155,6 +155,82 @@ fn rejects_a_keys_file_whose_length_overflows() {
     );
 }
 
+/// Read a vector's plaintext along with the key material `parse_decrypted_keys` needs, so a
+/// test can tamper with the JSON between decryption and parsing.
+fn decrypt_vector(name: &str) -> (Vec<u8>, [u8; 32], [u8; 8]) {
+    let bytes = std::fs::read(vector_path(name)).expect("failed to read vector");
+    monero_rust::wallet_keys_file::decrypt_keys_data(&bytes, "")
+        .or_else(|_| monero_rust::wallet_keys_file::decrypt_keys_data(&bytes, "1"))
+        .expect("failed to decrypt vector")
+}
+
+/// Change one ASCII digit without changing the plaintext length.
+fn retarget_int_field(plaintext: &[u8], field: &str, from: u8, to: u8) -> Vec<u8> {
+    let needle = format!("\"{field}\":{}", from as char);
+    let pos = plaintext
+        .windows(needle.len())
+        .position(|w| w == needle.as_bytes())
+        .unwrap_or_else(|| panic!("{needle} not found in the decrypted keys file"));
+    let mut tampered = plaintext.to_vec();
+    tampered[pos + needle.len() - 1] = to;
+    tampered
+}
+
+/// Reject secret keys that do not match the file's public keys.
+///
+/// Change `encrypted_secret_keys` without changing the stored key data. The
+/// file still parses as JSON, but the flag makes the importer interpret encrypted
+/// bytes as plaintext keys. As in `wallet2::load_keys`, key verification must
+/// catch the mismatch before returning an incorrect wallet.
+#[test]
+fn rejects_a_keys_file_whose_secret_keys_do_not_match_its_public_keys() {
+    let (plaintext, key, outer_iv) = decrypt_vector("honked.keys");
+
+    let honest = monero_rust::wallet_keys_file::parse_decrypted_keys(&plaintext, &key, outer_iv)
+        .expect("the untampered vector should parse");
+    assert_eq!(honest.mnemonic.as_deref(), Some(HONKED_MNEMONIC));
+
+    // Clear the flag even though the secret keys remain encrypted.
+    let tampered = retarget_int_field(&plaintext, "encrypted_secret_keys", b'1', b'0');
+
+    let err = monero_rust::wallet_keys_file::parse_decrypted_keys(&tampered, &key, outer_iv)
+        .expect_err("secret keys that do not match the file's public keys must be rejected");
+    assert!(
+        err.contains("do not match"),
+        "unexpected error: {err}"
+    );
+}
+
+/// The same check must not fire on a view-only file, whose spend secret key is all zeroes by
+/// construction. monero verifies the view key always and the spend key only when the wallet
+/// is not watch-only, and a guard that cannot tell those apart would reject every view-only
+/// wallet we import.
+#[test]
+fn accepts_a_view_only_keys_file_whose_spend_secret_key_is_absent() {
+    let (plaintext, key, outer_iv) = decrypt_vector("hemlock_view_only.keys");
+    let imported = monero_rust::wallet_keys_file::parse_decrypted_keys(&plaintext, &key, outer_iv)
+        .expect("a view-only keys file must still parse");
+    assert!(imported.watch_only);
+    assert_eq!(imported.spend_secret_key, [0u8; 32]);
+}
+
+/// The spend-key half of the check is skipped for a watch-only wallet, which would be a hole
+/// rather than a concession if the view-key half did not still bite. A view-only file is the
+/// one an untrusted online wallet hands over, so it is the case that most needs to fail
+/// closed: tamper with the same flag and the import must be rejected.
+#[test]
+fn rejects_a_view_only_keys_file_whose_view_key_does_not_match() {
+    let (plaintext, key, outer_iv) = decrypt_vector("hemlock_view_only.keys");
+    let tampered = retarget_int_field(&plaintext, "encrypted_secret_keys", b'1', b'0');
+
+    let err = monero_rust::wallet_keys_file::parse_decrypted_keys(&tampered, &key, outer_iv)
+        .expect_err("a view-only file whose view key does not match must be rejected");
+    assert!(
+        err.contains("view secret and public keys do not match"),
+        "the view-key half of the check must be what rejected it, got: {err}"
+    );
+}
+
 #[test]
 fn independent_view_key_does_not_offer_incomplete_mnemonic_backup() {
     use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};

@@ -13,10 +13,45 @@ use crate::seed_compat::{Language, Seed};
 use chacha20::ChaCha20Legacy;
 use cipher::{KeyIvInit, StreamCipher};
 use cuprate_cryptonight::cryptonight_hash_v0;
+use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 use serde::{Deserialize, Serialize};
-use curve25519_dalek::scalar::Scalar;
 use sha3::{Digest, Keccak256};
 use zeroize::Zeroizing;
+
+/// Derive a public key only from a canonical scalar, matching Monero's
+/// `crypto::secret_key_to_public_key` and its `sc_check`.
+fn public_key_for(secret_key: &[u8; 32]) -> Option<[u8; 32]> {
+    let scalar: Option<Scalar> = Scalar::from_canonical_bytes(*secret_key).into();
+    Some((&scalar? * ED25519_BASEPOINT_TABLE).compress().to_bytes())
+}
+
+/// Verify decrypted secret keys against the public keys stored in the file.
+///
+/// Check the view key for every wallet and the spend key for full wallets, as
+/// `wallet2::load_keys` does. The file's `encrypted_secret_keys` flag controls
+/// decryption, and recognizing a JSON prefix does not establish that decryption
+/// succeeded. A key mismatch must fail the import before deriving an address
+/// or mnemonic from incorrect keys.
+fn verify_secret_keys_match_public_keys(
+    spend_secret_key: &[u8; 32],
+    view_secret_key: &[u8; 32],
+    spend_public_key: &[u8; 32],
+    view_public_key: &[u8; 32],
+    watch_only: bool,
+) -> Result<(), String> {
+    if public_key_for(view_secret_key).as_ref() != Some(view_public_key) {
+        return Err(
+            "keys file is invalid: its view secret and public keys do not match".to_string(),
+        );
+    }
+    // Watch-only files store zeroes in place of a secret spend key. Skip its check.
+    if !watch_only && public_key_for(spend_secret_key).as_ref() != Some(spend_public_key) {
+        return Err(
+            "keys file is invalid: its spend secret and public keys do not match".to_string(),
+        );
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone)]
 pub struct ImportedKeysFile {
@@ -523,6 +558,15 @@ pub fn parse_decrypted_keys(
     }
 
     let watch_only = find_json_int_value(plaintext, "watch_only").unwrap_or(0) != 0;
+
+    verify_secret_keys_match_public_keys(
+        &spend_secret_key,
+        &view_secret_key,
+        &spend_public_key,
+        &view_public_key,
+        watch_only,
+    )?;
+
     let nettype = find_json_int_value(plaintext, "nettype").unwrap_or(0) as u8;
     let seed_language = find_json_string_value(plaintext, "seed_language").and_then(|(s, e)| {
         std::str::from_utf8(&plaintext[s..e])
