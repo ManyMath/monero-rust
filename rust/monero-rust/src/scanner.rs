@@ -1192,6 +1192,67 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
     })
 }
 
+/// Reject a batch that starts after the requested height.
+///
+/// An earlier start is valid when the daemon reports a fork point. A later start
+/// would let the wallet advance past blocks it has never scanned. Checking each
+/// block's declared height is insufficient: the daemon supplies both the blocks
+/// and the response height, and this scanner does not verify proof of work.
+fn check_batch_start_height(
+    returned_start_height: u64,
+    requested_start_height: u64,
+) -> Result<(), String> {
+    if returned_start_height > requested_start_height {
+        return Err(format!(
+            "Node returned a batch starting at {} when {} was requested; \
+             a daemon may rewind to a fork point but never skip forward",
+            returned_start_height, requested_start_height
+        ));
+    }
+    Ok(())
+}
+
+/// Check that consecutive parsed blocks link through their parent hashes.
+///
+/// Height checks alone do not prevent blocks from different chains being combined
+/// in one batch. Pre-RingCT entries are not parsed, so they interrupt this check.
+fn check_block_follows_parent(
+    block: &OxideBlock,
+    block_height: u64,
+    previous_hash: Option<[u8; 32]>,
+) -> Result<(), String> {
+    if let Some(expected) = previous_hash {
+        if block.header.previous != expected {
+            return Err(format!(
+                "Block at height {} does not follow the block before it in the batch: \
+                 expected parent {}, got {}",
+                block_height,
+                hex::encode(expected),
+                hex::encode(block.header.previous)
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Require one transaction blob per hash listed in the block. Extra blobs must
+/// not be scanned as though they belonged to the block.
+fn check_block_transaction_count(
+    block: &OxideBlock,
+    blob_count: usize,
+    block_height: u64,
+) -> Result<(), String> {
+    if blob_count != block.transactions.len() {
+        return Err(format!(
+            "Block at height {} lists {} transactions but {} blobs were sent with it",
+            block_height,
+            block.transactions.len(),
+            blob_count
+        ));
+    }
+    Ok(())
+}
+
 /// Scan a batch of blocks fetched via `/getblocks.bin` for outputs belonging to the wallet.
 ///
 /// This is dramatically faster than scanning one block at a time because it fetches
@@ -1219,9 +1280,16 @@ pub async fn scan_blocks_batch<R: RpcConnection>(
         .await
         .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
 
-    let (results, _cached) =
-        process_batch_response(response, mnemonic, network_str, lookahead, None, passphrase)
-            .await?;
+    let (results, _cached) = process_batch_response(
+        response,
+        start_height,
+        mnemonic,
+        network_str,
+        lookahead,
+        None,
+        passphrase,
+    )
+    .await?;
     Ok(results)
 }
 
@@ -1230,14 +1298,19 @@ pub async fn scan_blocks_batch<R: RpcConnection>(
 /// This is the core scanning logic, separated from the RPC layer for testability.
 /// When `cached` is provided and its fingerprint + lookahead match the current wallet,
 /// the expensive `register_subaddresses` step is skipped entirely.
+///
+/// `requested_start_height` records the request independently of the daemon's
+/// response. `check_batch_start_height` compares the two before scanning.
 pub async fn process_batch_response(
     response: GetBlocksFastResponse,
+    requested_start_height: u64,
     mnemonic: &str,
     network_str: &str,
     lookahead: Lookahead,
     cached: Option<CachedScanner>,
     passphrase: &str,
 ) -> Result<(Vec<BlockScanResult>, CachedScanner), String> {
+    check_batch_start_height(response.start_height, requested_start_height)?;
     let _network = parse_network(network_str)?;
 
     let view_only = parse_view_only_keys(mnemonic);
@@ -1293,6 +1366,9 @@ pub async fn process_batch_response(
 
     let daemon_height = response.current_height;
     let mut results = Vec::with_capacity(response.blocks.len());
+    // Track the previous parsed block's hash. Clear it after a pre-RingCT entry,
+    // which cannot participate in the parent-hash check.
+    let mut previous_block_hash: Option<[u8; 32]> = None;
 
     #[cfg(target_arch = "wasm32")]
     let mut last_yield_ms = js_sys::Date::now();
@@ -1307,6 +1383,7 @@ pub async fn process_batch_response(
             // compute the proper block ID. Use raw blob hash as a
             // placeholder; these blocks are deep in history and won't
             // appear in reorg detection.
+            previous_block_hash = None;
             let block_hash = hex::encode(Keccak256::digest(&block_entry.block));
             results.push(BlockScanResult {
                 block_height,
@@ -1331,6 +1408,9 @@ pub async fn process_batch_response(
                 block.number()
             ));
         }
+        check_block_follows_parent(&block, block_height, previous_block_hash)?;
+        check_block_transaction_count(&block, block_entry.txs.len(), block_height)?;
+        previous_block_hash = Some(block.hash());
 
         let block_timestamp = block.header.timestamp;
         let block_hash = hex::encode(block.hash());
@@ -1550,7 +1630,7 @@ pub async fn scan_blocks_batch_multi_wallet<R: RpcConnection>(
         .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
 
     let (results, _cached) =
-        process_batch_multi_wallet_response(response, wallet_configs, None).await?;
+        process_batch_multi_wallet_response(response, start_height, wallet_configs, None).await?;
     Ok(results)
 }
 
@@ -1561,12 +1641,14 @@ pub async fn scan_blocks_batch_multi_wallet<R: RpcConnection>(
 /// subaddress registration is skipped.
 pub async fn process_batch_multi_wallet_response(
     response: GetBlocksFastResponse,
+    requested_start_height: u64,
     wallet_configs: Vec<WalletScanConfig>,
     cached: Option<CachedScanners>,
 ) -> Result<(Vec<MultiWalletScanResult>, CachedScanners), String> {
     if wallet_configs.is_empty() {
         return Err("No wallet configurations provided".to_string());
     }
+    check_batch_start_height(response.start_height, requested_start_height)?;
 
     let daemon_height = response.current_height;
 
@@ -1647,6 +1729,7 @@ pub async fn process_batch_multi_wallet_response(
     };
 
     let mut results = Vec::with_capacity(response.blocks.len());
+    let mut previous_block_hash: Option<[u8; 32]> = None;
 
     #[cfg(target_arch = "wasm32")]
     let mut last_yield_ms = js_sys::Date::now();
@@ -1661,6 +1744,7 @@ pub async fn process_batch_multi_wallet_response(
             // compute the proper block ID. Use raw blob hash as a
             // placeholder; these blocks are deep in history and won't
             // appear in reorg detection.
+            previous_block_hash = None;
             let block_hash = hex::encode(Keccak256::digest(&block_entry.block));
             let mut wallet_results = HashMap::new();
             for entry in &cached_scanners.entries {
@@ -1695,6 +1779,9 @@ pub async fn process_batch_multi_wallet_response(
                 block.number()
             ));
         }
+        check_block_follows_parent(&block, block_height, previous_block_hash)?;
+        check_block_transaction_count(&block, block_entry.txs.len(), block_height)?;
+        previous_block_hash = Some(block.hash());
 
         let block_timestamp = block.header.timestamp;
         let block_hash = hex::encode(block.hash());
@@ -1885,9 +1972,39 @@ pub async fn scan_blocks_batch_multi_wallet_with_url(
 /// use `GetBlocksFastResponse` directly.
 pub struct FetchedBlocks {
     response: GetBlocksFastResponse,
+    /// Requested start height, retained for validation against the daemon's response.
+    requested_start_height: u64,
+    /// Wallet-supplied anchors for the zero-height history negotiation sentinel.
+    requested_history: Vec<(u64, [u8; 32])>,
 }
 
 impl FetchedBlocks {
+    /// Resolve the wire sentinel only after authenticating the common block against
+    /// the wallet's supplied history. Never derive a logical bound from an
+    /// unanchored daemon height.
+    fn validated_start_height(&self) -> Result<u64, String> {
+        if self.requested_start_height != 0 || self.requested_history.is_empty() {
+            check_batch_start_height(self.response.start_height, self.requested_start_height)?;
+            return Ok(self.requested_start_height);
+        }
+        let entry = self.response.blocks.first().ok_or_else(|| {
+            "History-negotiated batch is missing its common starting block".to_string()
+        })?;
+        let mut bytes = entry.block.as_slice();
+        let block = OxideBlock::read(&mut bytes)
+            .map_err(|e| format!("Failed to parse history anchor block: {e}"))?;
+        if !bytes.is_empty() || block.number() as u64 != self.response.start_height {
+            return Err("History anchor block height or encoding mismatch".to_string());
+        }
+        let anchor = (self.response.start_height, block.hash());
+        if !self.requested_history.contains(&anchor) {
+            return Err(
+                "Returned common starting block is not in the supplied wallet history".to_string(),
+            );
+        }
+        Ok(anchor.0)
+    }
+
     pub fn block_count(&self) -> usize {
         self.response.blocks.len()
     }
@@ -1919,7 +2036,11 @@ pub async fn fetch_blocks_batch_with_url(
             .get_blocks_fast(&[known_hash], start_height, prune)
             .await
             .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
-        Ok(FetchedBlocks { response })
+        Ok(FetchedBlocks {
+            response,
+            requested_start_height: start_height,
+            requested_history: Vec::new(),
+        })
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1934,7 +2055,11 @@ pub async fn fetch_blocks_batch_with_url(
             .get_blocks_fast(&[known_hash], start_height, prune)
             .await
             .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
-        Ok(FetchedBlocks { response })
+        Ok(FetchedBlocks {
+            response,
+            requested_start_height: start_height,
+            requested_history: Vec::new(),
+        })
     }
 }
 
@@ -1946,8 +2071,10 @@ pub async fn process_fetched_batch(
     lookahead: Lookahead,
     passphrase: &str,
 ) -> Result<Vec<BlockScanResult>, String> {
+    let validated_start_height = fetched.validated_start_height()?;
     let (results, _cached) = process_batch_response(
         fetched.response,
+        validated_start_height,
         mnemonic,
         network_str,
         lookahead,
@@ -1967,8 +2094,10 @@ pub async fn process_fetched_batch_cached(
     cached: Option<CachedScanner>,
     passphrase: &str,
 ) -> Result<(Vec<BlockScanResult>, CachedScanner), String> {
+    let validated_start_height = fetched.validated_start_height()?;
     process_batch_response(
         fetched.response,
+        validated_start_height,
         mnemonic,
         network_str,
         lookahead,
@@ -1996,7 +2125,10 @@ fn hex_to_hash(hex_str: &str) -> Result<[u8; 32], String> {
 /// can detect forks further back in the chain.
 ///
 /// Returns `(results, actual_start_height)`; the daemon may return blocks
-/// starting earlier than `start_height` if a fork was detected.
+/// starting earlier than `start_height` if a fork was detected. With nonempty
+/// history, `start_height = 0` asks the daemon to select a common starting block;
+/// its hash and height must match an entry in `known_hashes`. Empty history keeps
+/// zero as a literal genesis request.
 pub async fn scan_blocks_batch_with_history<R: RpcConnection>(
     rpc: &Rpc<R>,
     start_height: u64,
@@ -2007,29 +2139,9 @@ pub async fn scan_blocks_batch_with_history<R: RpcConnection>(
     prune: bool,
     passphrase: &str,
 ) -> Result<(Vec<BlockScanResult>, u64), String> {
-    let block_ids: Vec<[u8; 32]> = if known_hashes.is_empty() {
-        // Fallback: single hash like the old behavior
-        let hash = rpc
-            .get_block_hash(start_height as usize)
-            .await
-            .map_err(|e| format!("Failed to get block hash at {}: {:?}", start_height, e))?;
-        vec![hash]
-    } else {
-        known_hashes
-            .iter()
-            .map(|(_, h)| hex_to_hash(h))
-            .collect::<Result<Vec<_>, _>>()?
-    };
-
-    let response = rpc
-        .get_blocks_fast(&block_ids, start_height, prune)
-        .await
-        .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
-
-    let actual_start = response.start_height;
-    let (results, _cached) =
-        process_batch_response(response, mnemonic, network_str, lookahead, None, passphrase)
-            .await?;
+    let (fetched, actual_start) =
+        fetch_blocks_batch_with_history(rpc, start_height, known_hashes, prune).await?;
+    let results = process_fetched_batch(fetched, mnemonic, network_str, lookahead, passphrase).await?;
     Ok((results, actual_start))
 }
 
@@ -2083,6 +2195,39 @@ pub async fn scan_blocks_batch_with_history_url(
 /// Fetch a batch of blocks using known hash history, without scanning.
 ///
 /// This is the fetch-only half for double-buffered pipelining with reorg awareness.
+pub async fn fetch_blocks_batch_with_history<R: RpcConnection>(
+    rpc: &Rpc<R>,
+    start_height: u64,
+    known_hashes: &[(u64, String)],
+    prune: bool,
+) -> Result<(FetchedBlocks, u64), String> {
+    let requested_history = known_hashes
+        .iter()
+        .map(|(height, hash)| Ok((*height, hex_to_hash(hash)?)))
+        .collect::<Result<Vec<_>, String>>()?;
+    let block_ids: Vec<[u8; 32]> = if requested_history.is_empty() {
+        let hash = rpc
+            .get_block_hash(start_height as usize)
+            .await
+            .map_err(|e| format!("Failed to get block hash at {}: {:?}", start_height, e))?;
+        vec![hash]
+    } else {
+        requested_history.iter().map(|(_, hash)| *hash).collect()
+    };
+    let response = rpc
+        .get_blocks_fast(&block_ids, start_height, prune)
+        .await
+        .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
+    let actual_start = response.start_height;
+    let fetched = FetchedBlocks {
+        response,
+        requested_start_height: start_height,
+        requested_history,
+    };
+    fetched.validated_start_height()?;
+    Ok((fetched, actual_start))
+}
+
 pub async fn fetch_blocks_batch_with_history_url(
     node_url: &str,
     start_height: u64,
@@ -2094,48 +2239,14 @@ pub async fn fetch_blocks_batch_with_history_url(
         use crate::monero_backend::rpc::HttpRpc;
         let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
-        let block_ids: Vec<[u8; 32]> = if known_hashes.is_empty() {
-            let hash = rpc
-                .get_block_hash(start_height as usize)
-                .await
-                .map_err(|e| format!("Failed to get block hash at {}: {:?}", start_height, e))?;
-            vec![hash]
-        } else {
-            known_hashes
-                .iter()
-                .map(|(_, h)| hex_to_hash(h))
-                .collect::<Result<Vec<_>, _>>()?
-        };
-        let response = rpc
-            .get_blocks_fast(&block_ids, start_height, prune)
-            .await
-            .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
-        let actual_start = response.start_height;
-        Ok((FetchedBlocks { response }, actual_start))
+        fetch_blocks_batch_with_history(&rpc, start_height, known_hashes, prune).await
     }
 
     #[cfg(target_arch = "wasm32")]
     {
         use crate::rpc_serai::WasmRpcConnection;
         let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
-        let block_ids: Vec<[u8; 32]> = if known_hashes.is_empty() {
-            let hash = rpc
-                .get_block_hash(start_height as usize)
-                .await
-                .map_err(|e| format!("Failed to get block hash at {}: {:?}", start_height, e))?;
-            vec![hash]
-        } else {
-            known_hashes
-                .iter()
-                .map(|(_, h)| hex_to_hash(h))
-                .collect::<Result<Vec<_>, _>>()?
-        };
-        let response = rpc
-            .get_blocks_fast(&block_ids, start_height, prune)
-            .await
-            .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
-        let actual_start = response.start_height;
-        Ok((FetchedBlocks { response }, actual_start))
+        fetch_blocks_batch_with_history(&rpc, start_height, known_hashes, prune).await
     }
 }
 
@@ -2144,8 +2255,14 @@ pub async fn process_fetched_batch_multi_wallet(
     fetched: FetchedBlocks,
     wallet_configs: Vec<WalletScanConfig>,
 ) -> Result<Vec<MultiWalletScanResult>, String> {
-    let (results, _cached) =
-        process_batch_multi_wallet_response(fetched.response, wallet_configs, None).await?;
+    let validated_start_height = fetched.validated_start_height()?;
+    let (results, _cached) = process_batch_multi_wallet_response(
+        fetched.response,
+        validated_start_height,
+        wallet_configs,
+        None,
+    )
+    .await?;
     Ok(results)
 }
 
@@ -2155,7 +2272,14 @@ pub async fn process_fetched_batch_multi_wallet_cached(
     wallet_configs: Vec<WalletScanConfig>,
     cached: Option<CachedScanners>,
 ) -> Result<(Vec<MultiWalletScanResult>, CachedScanners), String> {
-    process_batch_multi_wallet_response(fetched.response, wallet_configs, cached).await
+    let validated_start_height = fetched.validated_start_height()?;
+    process_batch_multi_wallet_response(
+        fetched.response,
+        validated_start_height,
+        wallet_configs,
+        cached,
+    )
+    .await
 }
 
 /// Scan a single block for outputs belonging to multiple wallets simultaneously.

@@ -10,7 +10,7 @@ use monero_rust::scanner::{
 
 const STAGENET_SEED: &str = "vocal either anvil films dolphin zeal bacon cuisine quote syndrome rejoices envy okay pancakes tulips lair greater petals organs enmity dedicated oust thwart tomorrow tomorrow";
 
-fn make_coinbase_block(height: u64) -> Block {
+fn make_coinbase_block(height: u64, previous: [u8; 32]) -> Block {
     use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
     use monero_oxide::ed25519::CompressedPoint;
     use monero_rust::monero_backend::transaction::*;
@@ -20,7 +20,7 @@ fn make_coinbase_block(height: u64) -> Block {
             hardfork_version: 16,
             hardfork_signal: 16,
             timestamp: 1600000000 + height * 120,
-            previous: [0u8; 32],
+            previous,
             nonce: 0,
         },
         Transaction::V2 {
@@ -44,20 +44,25 @@ fn make_coinbase_block(height: u64) -> Block {
     .expect("synthetic coinbase block should be valid")
 }
 
+/// Build a batch whose blocks link through their parent hashes, so tests reach
+/// scanning after the chain-consistency checks.
 fn make_response(start_height: u64, count: usize, daemon_height: u64) -> GetBlocksFastResponse {
+    let mut blocks = Vec::with_capacity(count);
+    let mut previous = [0u8; 32];
+    for i in 0..count {
+        let block = make_coinbase_block(start_height + i as u64, previous);
+        previous = block.hash();
+        blocks.push(BlockCompleteEntry {
+            block: block.serialize(),
+            txs: vec![],
+            pruned: false,
+            block_weight: 0,
+        });
+    }
+
     GetBlocksFastResponse {
         status: "OK".to_string(),
-        blocks: (0..count)
-            .map(|i| {
-                let block = make_coinbase_block(start_height + i as u64);
-                BlockCompleteEntry {
-                    block: block.serialize(),
-                    txs: vec![],
-                    pruned: false,
-                    block_weight: 0,
-                }
-            })
-            .collect(),
+        blocks,
         start_height,
         current_height: daemon_height,
         output_indices: vec![],
@@ -80,7 +85,7 @@ fn lookahead() -> Lookahead {
 #[tokio::test]
 async fn test_invalid_seed_rejected() {
     let resp = make_response(100, 1, 101);
-    let err = process_batch_response(resp, "bad seed", "stagenet", lookahead(), None, "")
+    let err = process_batch_response(resp, 100, "bad seed", "stagenet", lookahead(), None, "")
         .await
         .unwrap_err();
     assert!(err.contains("mnemonic") || err.contains("seed"), "{err}");
@@ -89,7 +94,7 @@ async fn test_invalid_seed_rejected() {
 #[tokio::test]
 async fn test_invalid_network_rejected() {
     let resp = make_response(100, 1, 101);
-    let err = process_batch_response(resp, STAGENET_SEED, "badnet", lookahead(), None, "")
+    let err = process_batch_response(resp, 100, STAGENET_SEED, "badnet", lookahead(), None, "")
         .await
         .unwrap_err();
     assert!(err.contains("network") || err.contains("Network"), "{err}");
@@ -98,7 +103,7 @@ async fn test_invalid_network_rejected() {
 #[tokio::test]
 async fn test_empty_configs_rejected() {
     let resp = make_response(100, 1, 101);
-    let err = process_batch_multi_wallet_response(resp, vec![], None)
+    let err = process_batch_multi_wallet_response(resp, 100, vec![], None)
         .await
         .unwrap_err();
     assert!(err.contains("No wallet"));
@@ -121,7 +126,7 @@ async fn test_one_bad_seed_fails_multi_wallet_batch() {
             passphrase: String::new(),
         },
     ];
-    assert!(process_batch_multi_wallet_response(resp, configs, None)
+    assert!(process_batch_multi_wallet_response(resp, 100, configs, None)
         .await
         .is_err());
 }
@@ -132,7 +137,7 @@ async fn test_one_bad_seed_fails_multi_wallet_batch() {
 async fn test_empty_batch_returns_empty() {
     let resp = make_response(100, 0, 100);
     assert!(
-        process_batch_response(resp, STAGENET_SEED, "stagenet", lookahead(), None, "")
+        process_batch_response(resp, 100, STAGENET_SEED, "stagenet", lookahead(), None, "")
             .await
             .unwrap()
             .0
@@ -142,7 +147,7 @@ async fn test_empty_batch_returns_empty() {
 
 #[tokio::test]
 async fn test_height_mismatch_detected() {
-    let block = make_coinbase_block(999);
+    let block = make_coinbase_block(999, [0u8; 32]);
     let resp = GetBlocksFastResponse {
         status: "OK".to_string(),
         blocks: vec![BlockCompleteEntry {
@@ -159,7 +164,7 @@ async fn test_height_mismatch_detected() {
         top_hash: String::new(),
         daemon_time: 0,
     };
-    let err = process_batch_response(resp, STAGENET_SEED, "stagenet", lookahead(), None, "")
+    let err = process_batch_response(resp, 100, STAGENET_SEED, "stagenet", lookahead(), None, "")
         .await
         .unwrap_err();
     assert!(err.contains("mismatch"), "{err}");
@@ -185,11 +190,334 @@ async fn test_multi_wallet_produces_entry_per_wallet() {
             passphrase: String::new(),
         },
     ];
-    let (results, _) = process_batch_multi_wallet_response(resp, configs, None)
+    let (results, _) = process_batch_multi_wallet_response(resp, 100, configs, None)
         .await
         .unwrap();
     assert_eq!(results.len(), 3);
     for r in &results {
         assert_eq!(r.wallet_results.len(), 2);
     }
+}
+
+// Batch range and chain validation
+//
+// The daemon supplies both `response.start_height` and the blocks. Internally
+// consistent heights alone cannot establish that the requested range was returned.
+
+#[tokio::test]
+async fn rejects_a_batch_that_starts_later_than_the_one_requested() {
+    // Internally consistent throughout: the blocks really are at 5000-5002 and say so. The
+    // only lie is that 100 was asked for. Left unchecked, the wallet records 5000-5002 as
+    // scanned and never looks at 100-4999 again - where its outputs were.
+    let resp = make_response(5_000, 3, 10_000);
+    let err = process_batch_response(resp, 100, STAGENET_SEED, "stagenet", lookahead(), None, "")
+        .await
+        .expect_err("a batch starting past the requested height must be rejected");
+    assert!(err.contains("skip forward"), "{err}");
+}
+
+#[tokio::test]
+async fn accepts_a_batch_rewound_to_an_earlier_fork_point() {
+    // The negative control, and the reason the guard is one-sided. A daemon that finds our
+    // known hash off-chain answers from the split point, which is *below* what we asked for;
+    // `scan_blocks_batch_with_history` exists to use that. Rejecting it would break reorg
+    // recovery, which is the opposite of the bug.
+    let resp = make_response(90, 3, 10_000);
+    let (results, _) =
+        process_batch_response(resp, 100, STAGENET_SEED, "stagenet", lookahead(), None, "")
+            .await
+            .expect("a rewound batch is how a fork point is reported and must be accepted");
+    assert_eq!(results.len(), 3);
+    assert_eq!(results[0].block_height, 90);
+}
+
+#[tokio::test]
+async fn rejects_a_block_that_does_not_follow_the_one_before_it() {
+    // Each block passes its own height check, but block 101 does not name
+    // block 100 as its parent.
+    let mut resp = make_response(100, 3, 10_000);
+    let spliced = make_coinbase_block(101, [0u8; 32]);
+    resp.blocks[1] = BlockCompleteEntry {
+        block: spliced.serialize(),
+        txs: vec![],
+        pruned: false,
+        block_weight: 0,
+    };
+
+    let err = process_batch_response(resp, 100, STAGENET_SEED, "stagenet", lookahead(), None, "")
+        .await
+        .expect_err("a block that does not follow its predecessor must be rejected");
+    assert!(err.contains("does not follow"), "{err}");
+}
+
+#[tokio::test]
+async fn rejects_transaction_blobs_the_block_does_not_list() {
+    // Supply an extra transaction blob when the block lists no transactions.
+    // It must not be scanned or credited to the wallet.
+    let mut resp = make_response(100, 1, 10_000);
+    resp.blocks[0].txs = vec![vec![0u8; 32]];
+
+    let err = process_batch_response(resp, 100, STAGENET_SEED, "stagenet", lookahead(), None, "")
+        .await
+        .expect_err("transaction blobs the block does not list must be rejected");
+    assert!(err.contains("blobs were sent with it"), "{err}");
+}
+
+#[tokio::test]
+async fn multi_wallet_batches_are_bound_to_the_requested_range_too() {
+    // Check the separate multi-wallet loop too.
+    let resp = make_response(5_000, 2, 10_000);
+    let configs = vec![WalletScanConfig {
+        mnemonic: STAGENET_SEED.to_string(),
+        network: "stagenet".to_string(),
+        lookahead: lookahead(),
+        passphrase: String::new(),
+    }];
+    let err = process_batch_multi_wallet_response(resp, 100, configs, None)
+        .await
+        .expect_err("a multi-wallet batch starting past the requested height must be rejected");
+    assert!(err.contains("skip forward"), "{err}");
+}
+
+#[tokio::test]
+async fn multi_wallet_batches_reject_an_unlinked_block_too() {
+    let mut resp = make_response(100, 3, 10_000);
+    let spliced = make_coinbase_block(101, [0u8; 32]);
+    resp.blocks[1] = BlockCompleteEntry {
+        block: spliced.serialize(),
+        txs: vec![],
+        pruned: false,
+        block_weight: 0,
+    };
+    let configs = vec![WalletScanConfig {
+        mnemonic: STAGENET_SEED.to_string(),
+        network: "stagenet".to_string(),
+        lookahead: lookahead(),
+        passphrase: String::new(),
+    }];
+    let err = process_batch_multi_wallet_response(resp, 100, configs, None)
+        .await
+        .expect_err("a multi-wallet batch with an unlinked block must be rejected");
+    assert!(err.contains("does not follow"), "{err}");
+}
+
+#[derive(Clone, Debug)]
+struct HistoryNode {
+    response: Vec<u8>,
+}
+
+#[async_trait::async_trait]
+impl monero_rust::monero_rpc::RpcConnection for HistoryNode {
+    async fn post(
+        &self,
+        route: &str,
+        body: Vec<u8>,
+    ) -> Result<Vec<u8>, monero_rust::monero_rpc::RpcError> {
+        if route == "json_rpc" {
+            return Ok(serde_json::to_vec(&serde_json::json!({
+                "result": {"block_header": {"hash": hex::encode(make_coinbase_block(0, [0; 32]).hash())}}
+            }))
+            .unwrap());
+        }
+        assert_eq!(route, "getblocks.bin");
+        #[derive(serde::Deserialize)]
+        struct Request {
+            start_height: u64,
+            #[serde(with = "serde_bytes")]
+            block_ids: Vec<u8>,
+        }
+        let request: Request = monero_epee_bin_serde::from_bytes(&body).unwrap();
+        assert_eq!(request.start_height, 0, "preserve the protocol sentinel");
+        assert!(!request.block_ids.is_empty());
+        Ok(self.response.clone())
+    }
+}
+
+fn history_node(response: GetBlocksFastResponse) -> monero_rust::monero_rpc::Rpc<HistoryNode> {
+    #[derive(serde::Serialize)]
+    struct Entry {
+        block: Vec<u8>,
+    }
+    #[derive(serde::Serialize)]
+    struct Response {
+        status: String,
+        blocks: Vec<Entry>,
+        start_height: u64,
+        current_height: u64,
+    }
+    let response = Response {
+        status: response.status,
+        blocks: response
+            .blocks
+            .into_iter()
+            .map(|b| Entry { block: b.block })
+            .collect(),
+        start_height: response.start_height,
+        current_height: response.current_height,
+    };
+    monero_rust::monero_rpc::Rpc::new_with_connection(HistoryNode {
+        response: monero_epee_bin_serde::to_bytes(&response).unwrap(),
+    })
+}
+
+fn history_configs() -> Vec<WalletScanConfig> {
+    vec![WalletScanConfig {
+        mnemonic: STAGENET_SEED.into(),
+        network: "stagenet".into(),
+        lookahead: lookahead(),
+        passphrase: String::new(),
+    }]
+}
+
+#[tokio::test]
+async fn history_zero_negotiates_a_known_common_block_on_all_processing_routes() {
+    use monero_rust::scanner::*;
+    let rpc = history_node(make_response(100, 3, 103));
+    // Daemon chooses an older common ancestor, not necessarily the first history entry.
+    let history = vec![
+        (120, hex::encode([9; 32])),
+        (100, hex::encode(make_coinbase_block(100, [0; 32]).hash())),
+    ];
+    let (direct, start) = scan_blocks_batch_with_history(
+        &rpc,
+        0,
+        &history,
+        STAGENET_SEED,
+        "stagenet",
+        lookahead(),
+        false,
+        "",
+    )
+    .await
+    .unwrap();
+    assert_eq!(start, 100);
+    assert_eq!(
+        direct.iter().map(|b| b.block_height).collect::<Vec<_>>(),
+        [100, 101, 102]
+    );
+    let fetch = || fetch_blocks_batch_with_history(&rpc, 0, &history, false);
+    let (fetched, _) = fetch().await.unwrap();
+    let (single, cache) = process_fetched_batch_cached(
+        fetched,
+        STAGENET_SEED,
+        "stagenet",
+        lookahead(),
+        None,
+        "",
+    )
+    .await
+    .unwrap();
+    assert_eq!(single.len(), 3);
+    let (fetched, _) = fetch().await.unwrap();
+    let (single, _) = process_fetched_batch_cached(
+        fetched,
+        STAGENET_SEED,
+        "stagenet",
+        lookahead(),
+        Some(cache),
+        "",
+    )
+    .await
+    .unwrap();
+    assert_eq!(single[0].block_hash, direct[0].block_hash);
+    let (fetched, _) = fetch().await.unwrap();
+    assert_eq!(
+        process_fetched_batch_multi_wallet(fetched, history_configs())
+            .await
+            .unwrap()
+            .len(),
+        3
+    );
+    let (fetched, _) = fetch().await.unwrap();
+    let (_, cache) = process_fetched_batch_multi_wallet_cached(fetched, history_configs(), None)
+        .await
+        .unwrap();
+    let (fetched, _) = fetch().await.unwrap();
+    assert_eq!(
+        process_fetched_batch_multi_wallet_cached(fetched, history_configs(), Some(cache))
+            .await
+            .unwrap()
+            .0
+            .len(),
+        3
+    );
+}
+
+#[tokio::test]
+async fn history_zero_rejects_unanchored_and_mislabelled_starts() {
+    use monero_rust::scanner::fetch_blocks_batch_with_history;
+    let good_hash = hex::encode(make_coinbase_block(100, [0; 32]).hash());
+    for history in [
+        vec![(100, hex::encode([9; 32]))],
+        vec![(101, good_hash.clone())],
+    ] {
+        let rpc = history_node(make_response(100, 3, 103));
+        let error = fetch_blocks_batch_with_history(&rpc, 0, &history, false)
+            .await
+            .err()
+            .unwrap();
+        assert!(
+            error.contains("not in the supplied wallet history"),
+            "{error}"
+        );
+    }
+    let mut response = make_response(100, 3, 103);
+    response.start_height = 101;
+    let rpc = history_node(response);
+    let error = fetch_blocks_batch_with_history(&rpc, 0, &[(101, good_hash.clone())], false)
+        .await
+        .err()
+        .unwrap();
+    assert!(error.contains("mismatch"), "{error}");
+    let rpc = history_node(make_response(100, 0, 100));
+    assert!(
+        fetch_blocks_batch_with_history(&rpc, 0, &[(100, good_hash)], false)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn history_empty_and_ordinary_zero_remain_literal_genesis_requests() {
+    use monero_rust::scanner::*;
+    let rpc = history_node(make_response(100, 3, 103));
+    let error = fetch_blocks_batch_with_history(&rpc, 0, &[], false)
+        .await
+        .err()
+        .unwrap();
+    assert!(error.contains("never skip forward"), "{error}");
+    let error = process_batch_response(
+        make_response(100, 3, 103),
+        0,
+        STAGENET_SEED,
+        "stagenet",
+        lookahead(),
+        None,
+        "",
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("never skip forward"), "{error}");
+}
+
+#[tokio::test]
+async fn history_anchor_does_not_bypass_parent_linkage() {
+    use monero_rust::scanner::*;
+    let mut response = make_response(100, 3, 103);
+    response.blocks[1].block = make_coinbase_block(101, [9; 32]).serialize();
+    let rpc = history_node(response);
+    let history = [(100, hex::encode(make_coinbase_block(100, [0; 32]).hash()))];
+    let error = scan_blocks_batch_with_history(
+        &rpc,
+        0,
+        &history,
+        STAGENET_SEED,
+        "stagenet",
+        lookahead(),
+        false,
+        "",
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("does not follow"), "{error}");
 }
