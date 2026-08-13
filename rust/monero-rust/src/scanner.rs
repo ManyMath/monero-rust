@@ -668,6 +668,22 @@ pub fn derive_keys(
     })
 }
 
+/// Require one spent status per requested key image.
+///
+/// Callers pair statuses with key images by position. A short reply would leave
+/// outputs unchecked and apparently unspent; a long reply has unrequested entries.
+/// Monero's wallet2 rejects both cases.
+fn check_spent_status(requested: usize, statuses: Vec<u32>) -> Result<Vec<u32>, String> {
+    if statuses.len() != requested {
+        return Err(format!(
+            "daemon returned wrong response for is_key_image_spent: {} statuses for {} key images",
+            statuses.len(),
+            requested
+        ));
+    }
+    Ok(statuses)
+}
+
 pub async fn is_key_image_spent(node_url: &str, key_images: &[String]) -> Result<Vec<u32>, String> {
     crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
 
@@ -693,7 +709,7 @@ pub async fn is_key_image_spent(node_url: &str, key_images: &[String]) -> Result
             .rpc_call("is_key_image_spent", Some(params))
             .await
             .map_err(|e| format!("RPC error: {:?}", e))?;
-        Ok(resp.spent_status)
+        check_spent_status(key_images.len(), resp.spent_status)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -704,7 +720,7 @@ pub async fn is_key_image_spent(node_url: &str, key_images: &[String]) -> Result
             .rpc_call("is_key_image_spent", Some(params))
             .await
             .map_err(|e| format!("RPC error: {:?}", e))?;
-        Ok(resp.spent_status)
+        check_spent_status(key_images.len(), resp.spent_status)
     }
 }
 
@@ -3463,5 +3479,24 @@ mod tests {
         // Without passphrase: different keys
         let keys_no_pass = derive_keys(seed, "mainnet", "").unwrap();
         assert_ne!(keys_no_pass.address, keys.address);
+    }
+
+    /// Reject a short reply before `zip` can silently leave key images unchecked.
+    #[test]
+    fn spent_status_shorter_than_the_request_is_refused() {
+        let err = check_spent_status(3, vec![0, 1]).expect_err("a short reply must be refused");
+        assert!(err.contains("2 statuses for 3 key images"), "{err}");
+    }
+
+    #[test]
+    fn spent_status_longer_than_the_request_is_refused() {
+        assert!(check_spent_status(1, vec![0, 1]).is_err());
+    }
+
+    /// Accept a response with exactly one status per requested key image.
+    #[test]
+    fn spent_status_matching_the_request_is_accepted() {
+        assert_eq!(check_spent_status(2, vec![0, 1]).unwrap(), vec![0, 1]);
+        assert_eq!(check_spent_status(0, vec![]).unwrap(), Vec::<u32>::new());
     }
 }
