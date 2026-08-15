@@ -30,7 +30,10 @@ pub mod tx_proof;
 pub mod tx_utils;
 pub mod ur_codec;
 pub use tx_builder::native;
-pub use tx_prepare::{prepare_send_inputs, prepare_sweep_inputs, PreparedInputs};
+pub use tx_prepare::{
+    prepare_send_inputs, prepare_send_inputs_at, prepare_sweep_inputs, prepare_sweep_inputs_at,
+    PreparedInputs,
+};
 pub use tx_utils::{adjust_recipients_for_fee, classify_broadcast_error};
 
 // RPC
@@ -39,8 +42,8 @@ pub mod rpc_serai;
 // -- Wallet state & output types --
 pub use wallet_output::WalletOutput;
 pub use wallet_state::{
-    is_spendable, Balance, BlockHashChain, ChangeOutputRef, PendingSpend, RollbackResult,
-    SpentConflict, TrackedTransaction, TxStatus, WalletState, MAX_REORG_DEPTH,
+    is_spendable, is_spendable_at, Balance, BlockHashChain, ChangeOutputRef, PendingSpend,
+    RollbackResult, SpentConflict, TrackedTransaction, TxStatus, WalletState, MAX_REORG_DEPTH,
     PENDING_SPEND_TTL_SECS,
 };
 

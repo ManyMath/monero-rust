@@ -386,8 +386,14 @@ impl WalletState {
         self.balance_at_height(self.current_height)
     }
 
-    /// Calculate balance at a specific height.
+    /// Calculate balance at a specific height using the current system time.
     pub fn balance_at_height(&self, height: u64) -> Balance {
+        self.balance_at(height, current_time_secs())
+    }
+
+    /// Calculate balance with an explicit Unix clock (for example, adjusted
+    /// network time). With no clock, timestamp-locked outputs remain locked.
+    pub fn balance_at(&self, height: u64, now_secs: Option<u64>) -> Balance {
         let mut bal = Balance::default();
         for output in &self.outputs {
             if output.spent {
@@ -397,13 +403,9 @@ impl WalletState {
                 bal.pending_spend += output.amount;
                 continue;
             }
-            let confirmations = height.saturating_sub(output.block_height);
-            let required = if output.is_coinbase {
-                CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW
-            } else {
-                CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE
-            };
-            if output.block_height > 0 && confirmations >= required {
+            // Use the coin-selection predicate for confirmed balance too. Outputs
+            // with an unsatisfied additional timelock count as unconfirmed.
+            if is_spendable_at(output, height, now_secs) {
                 bal.confirmed += output.amount;
             } else {
                 bal.unconfirmed += output.amount;
@@ -417,22 +419,39 @@ impl WalletState {
         self.spendable_outputs_at_height(self.daemon_height)
     }
 
-    /// Get spendable outputs at a specific height.
+    /// Get spendable outputs at a specific height using the current system time.
     pub fn spendable_outputs_at_height(&self, height: u64) -> Vec<&WalletOutput> {
+        self.spendable_outputs_at(height, current_time_secs())
+    }
+
+    /// Get spendable outputs using an explicit Unix clock. With no clock,
+    /// timestamp-locked outputs remain locked.
+    pub fn spendable_outputs_at(&self, height: u64, now_secs: Option<u64>) -> Vec<&WalletOutput> {
         self.outputs
             .iter()
             .filter(|o| {
                 !o.spent
                     && !o.frozen
                     && !self.pending_spends.contains_key(&o.key_image)
-                    && is_spendable(o, height)
+                    && is_spendable_at(o, height, now_secs)
             })
             .collect()
     }
 
     /// Get spendable outputs filtered to specific accounts.
     pub fn spendable_outputs_for_accounts(&self, accounts: &[u32]) -> Vec<&WalletOutput> {
-        self.spendable_outputs()
+        self.spendable_outputs_for_accounts_at(accounts, self.daemon_height, current_time_secs())
+    }
+
+    /// Get spendable outputs for specific accounts using an explicit height and
+    /// Unix clock, with the same timelock rules as `spendable_outputs_at`.
+    pub fn spendable_outputs_for_accounts_at(
+        &self,
+        accounts: &[u32],
+        height: u64,
+        now_secs: Option<u64>,
+    ) -> Vec<&WalletOutput> {
+        self.spendable_outputs_at(height, now_secs)
             .into_iter()
             .filter(|o| {
                 let account = o.subaddress_index.map(|(a, _)| a).unwrap_or(0);
@@ -976,7 +995,38 @@ impl WalletState {
     }
 }
 
+/// Read the platform clock once per balance/selection query. Keep unavailable
+/// clocks explicit so time-locked funds fail closed on every target.
+pub(crate) fn current_time_secs() -> Option<u64> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|duration| duration.as_secs())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let millis = js_sys::Date::now();
+        if millis.is_finite() && millis >= 0.0 {
+            Some((millis / 1000.0) as u64)
+        } else {
+            None
+        }
+    }
+}
+
+/// Check spendability at `height` using the current system time.
+/// Use `is_spendable_at` to supply adjusted network time or an unavailable clock.
 pub fn is_spendable(output: &WalletOutput, height: u64) -> bool {
+    is_spendable_at(output, height, current_time_secs())
+}
+
+/// Check spendability using an optional clock for time-based locks.
+/// Without a clock, a time-based lock remains unsatisfied.
+pub fn is_spendable_at(output: &WalletOutput, height: u64, now_secs: Option<u64>) -> bool {
+    use monero_wallet::transaction::Timelock;
+
     // The scanner uses zero for unconfirmed pool outputs, not their age.
     if output.block_height == 0 {
         return false;
@@ -987,7 +1037,21 @@ pub fn is_spendable(output: &WalletOutput, height: u64) -> bool {
     } else {
         CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE
     };
-    confirmations >= required
+    if confirmations < required {
+        return false;
+    }
+
+    // In addition to spendable age, enforce the transaction's `unlock_time`,
+    // as Monero's `is_transfer_unlocked` does. Selecting a still-locked output
+    // would produce a transaction the daemon rejects.
+    match output.additional_timelock() {
+        Timelock::None => true,
+        // Monero allows one block of slack against `height - 1`,
+        // which is equivalent to `height >= unlock`.
+        Timelock::Block(unlock) => height >= unlock as u64,
+        // Monero allows 120 seconds of slack against adjusted time.
+        Timelock::Time(unlock) => now_secs.is_some_and(|now| now.saturating_add(120) >= unlock),
+    }
 }
 
 #[cfg(test)]
@@ -1013,6 +1077,54 @@ mod tests {
             is_coinbase: false,
             frozen: false,
         }
+    }
+
+    /// Serialize a test output with the requested timelock.
+    ///
+    /// Assemble the `monero-wallet` fields directly because they are private.
+    /// Read the fixture back to check its layout before using it in tests.
+    fn output_bytes_with_timelock(timelock: monero_wallet::transaction::Timelock) -> String {
+        use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
+
+        let point = ED25519_BASEPOINT_POINT.compress().to_bytes();
+        let scalar = [0u8; 32];
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&[0u8; 32]); // absolute_id.transaction
+        bytes.extend_from_slice(&0u64.to_le_bytes()); // absolute_id.index_in_transaction
+        bytes.extend_from_slice(&0u64.to_le_bytes()); // relative_id.index_on_blockchain
+        bytes.extend_from_slice(&point); // data.key
+        bytes.extend_from_slice(&scalar); // data.key_offset
+        bytes.extend_from_slice(&scalar); // data.commitment.mask
+        bytes.extend_from_slice(&1u64.to_le_bytes()); // data.commitment.amount
+        bytes.extend_from_slice(&timelock.serialize()); // metadata.additional_timelock
+        bytes.push(0); // metadata.subaddress: None
+        bytes.push(0); // metadata.payment_id: None
+        bytes.push(0); // metadata.arbitrary_data: varint 0
+
+        let hex_bytes = hex::encode(&bytes);
+
+        // Verify the serialized timelock before using this fixture.
+        let parsed = monero_wallet::WalletOutput::read(&mut bytes.as_slice())
+            .expect("the hand-assembled fixture must parse with oxide's reader");
+        assert_eq!(
+            parsed.additional_timelock(),
+            timelock,
+            "the fixture must carry the timelock it was built with"
+        );
+
+        hex_bytes
+    }
+
+    fn make_timelocked_output(
+        amount: u64,
+        height: u64,
+        key_image: &str,
+        timelock: monero_wallet::transaction::Timelock,
+    ) -> WalletOutput {
+        let mut o = make_output(amount, height, key_image);
+        o.received_output_bytes = output_bytes_with_timelock(timelock);
+        o
     }
 
     fn make_coinbase_output(amount: u64, height: u64, key_image: &str) -> WalletOutput {
@@ -1084,21 +1196,43 @@ mod tests {
 
     #[test]
     fn mempool_outputs_remain_unconfirmed_and_unselectable() {
+        use crate::tx_prepare::{prepare_send_inputs_at, prepare_sweep_inputs_at};
         for is_coinbase in [false, true] {
             let mut pool = make_output(1_000_000_000_000, 0, "pool");
             pool.is_coinbase = is_coinbase;
             let mut state = WalletState::new();
             state.add_outputs(vec![pool.clone()]);
             for height in [10, 60, 3_000_000, u64::MAX] {
-                assert!(!is_spendable(&pool, height));
+                assert!(!is_spendable_at(&pool, height, Some(u64::MAX)));
                 assert_eq!(
-                    state.balance_at_height(height).unconfirmed,
+                    state.balance_at(height, Some(u64::MAX)).unconfirmed,
                     pool.amount
                 );
-                assert_eq!(state.balance_at_height(height).confirmed, 0);
+                assert_eq!(state.balance_at(height, Some(u64::MAX)).confirmed, 0);
                 assert!(state
-                    .spendable_outputs_at_height(height)
+                    .spendable_outputs_at(height, Some(u64::MAX))
                     .is_empty());
+                let selected = [pool.output_key()];
+                for manual in [None, Some(selected.as_slice())] {
+                    assert!(prepare_send_inputs_at(
+                        state.outputs(),
+                        height,
+                        Some(u64::MAX),
+                        1,
+                        1,
+                        manual,
+                        None
+                    )
+                    .is_err());
+                    assert!(prepare_sweep_inputs_at(
+                        state.outputs(),
+                        height,
+                        Some(u64::MAX),
+                        manual,
+                        None
+                    )
+                    .is_err());
+                }
             }
         }
     }
@@ -1335,14 +1469,14 @@ mod tests {
         assert!(state.outputs()[0].frozen);
         assert_eq!(state.outputs()[0].key_image, "known-first");
         assert_eq!(state.outputs()[1].spent_height, Some(115));
-        assert_eq!(state.balance_at_height(200).confirmed, first.amount);
+        assert_eq!(state.balance_at(200, None).confirmed, first.amount);
 
         // Restoring a cache merges duplicate records without losing local state.
         let mut persisted = state.outputs().to_vec();
         persisted.extend([first, second]);
         state.replace_outputs(persisted);
         assert_eq!(state.outputs().len(), 2);
-        assert_eq!(state.balance_at_height(200).confirmed, 1_000_000_000_000);
+        assert_eq!(state.balance_at(200, None).confirmed, 1_000_000_000_000);
     }
 
     #[test]
@@ -1387,13 +1521,13 @@ mod tests {
         second.frozen = true;
         state.add_outputs(vec![first.clone(), second.clone()]);
         assert_eq!(state.outputs().len(), 1);
-        assert_eq!(state.balance_at_height(200).confirmed, first.amount);
+        assert_eq!(state.balance_at(200, None).confirmed, first.amount);
         assert!(state.outputs()[0].frozen);
         state.mark_spent_by_key_images_at_height(&["shared".into()], 150);
-        assert_eq!(state.balance_at_height(200).confirmed, 0);
+        assert_eq!(state.balance_at(200, None).confirmed, 0);
         state.add_outputs(vec![first, second]);
         assert_eq!(state.outputs().len(), 1);
-        assert_eq!(state.balance_at_height(200).confirmed, 0);
+        assert_eq!(state.balance_at(200, None).confirmed, 0);
     }
 
     #[test]
@@ -2647,4 +2781,202 @@ mod tests {
         assert_eq!(state.outputs()[0].key_image, "first");
     }
 
+    // Additional timelocks
+
+    /// An additional timelock prevents spending even after the normal age
+    /// requirement has been met.
+    #[test]
+    fn a_future_block_timelock_makes_an_aged_output_unspendable() {
+        use monero_wallet::transaction::Timelock;
+
+        let output = make_timelocked_output(
+            1_000_000_000_000,
+            100,
+            "ki_locked",
+            Timelock::Block(5_000),
+        );
+
+        // 900 confirmations: the age requirement is long satisfied.
+        assert!(
+            !is_spendable(&output, 1_000),
+            "an output under a future timelock must not be spendable"
+        );
+    }
+
+    #[test]
+    fn a_block_timelock_that_has_elapsed_is_spendable() {
+        use monero_wallet::transaction::Timelock;
+
+        let output =
+            make_timelocked_output(1_000_000_000_000, 100, "ki_unlocked", Timelock::Block(500));
+
+        // The output becomes spendable at the unlock height.
+        assert!(!is_spendable(&output, 499));
+        assert!(is_spendable(&output, 500));
+        assert!(is_spendable(&output, 501));
+    }
+
+    /// Accept mature outputs without an additional timelock.
+    #[test]
+    fn an_output_without_an_additional_timelock_is_unaffected() {
+        use monero_wallet::transaction::Timelock;
+
+        let output =
+            make_timelocked_output(1_000_000_000_000, 100, "ki_plain", Timelock::None);
+        assert!(!is_spendable(&output, 105), "the 10-block age still applies");
+        assert!(is_spendable(&output, 110));
+    }
+
+    /// Keep a time-locked output unspendable until a clock is supplied and
+    /// the unlock time is reached.
+    #[test]
+    fn a_time_timelock_needs_a_clock_to_be_satisfied() {
+        use monero_wallet::transaction::Timelock;
+
+        let unlock = 2_000_000_000u64;
+        let output =
+            make_timelocked_output(1_000_000_000_000, 100, "ki_timed", Timelock::Time(unlock));
+
+        assert!(
+            !is_spendable_at(&output, 1_000, None),
+            "without a clock a time lock must be treated as unsatisfied"
+        );
+        assert!(!is_spendable_at(&output, 1_000, Some(unlock - 1_000)));
+        // Account for Monero's 120-second allowance.
+        assert!(is_spendable_at(&output, 1_000, Some(unlock - 120)));
+        assert!(is_spendable_at(&output, 1_000, Some(unlock + 1)));
+    }
+
+    #[test]
+    fn timestamp_locks_mature_through_balance_and_transaction_preparation() {
+        use crate::tx_prepare::{prepare_send_inputs_at, prepare_sweep_inputs_at};
+        use monero_wallet::transaction::Timelock;
+
+        let unlock = 2_000_000_000;
+        let amount = 5_000_000_000_000;
+        let mut state = WalletState::new();
+        state.replace_outputs(vec![make_timelocked_output(
+            amount,
+            100,
+            "timed",
+            Timelock::Time(unlock),
+        )]);
+        let selected = vec![state.outputs()[0].output_key()];
+        for (clock, expected_unlocked) in [
+            (None, false),
+            (Some(unlock - 121), false),
+            (Some(unlock - 120), true),
+            (Some(unlock + 1), true),
+        ] {
+            let balance = state.balance_at(200, clock);
+            assert_eq!(
+                balance.confirmed,
+                if expected_unlocked { amount } else { 0 }
+            );
+            assert_eq!(
+                balance.unconfirmed,
+                if expected_unlocked { 0 } else { amount }
+            );
+            assert_eq!(
+                !state.spendable_outputs_at(200, clock).is_empty(),
+                expected_unlocked
+            );
+            assert_eq!(
+                !state
+                    .spendable_outputs_for_accounts_at(&[0], 200, clock)
+                    .is_empty(),
+                expected_unlocked
+            );
+            for manual in [None, Some(selected.as_slice())] {
+                assert_eq!(
+                    prepare_send_inputs_at(
+                        state.outputs(),
+                        200,
+                        clock,
+                        1_000_000_000_000,
+                        1,
+                        manual,
+                        None
+                    )
+                    .is_ok(),
+                    expected_unlocked
+                );
+                assert_eq!(
+                    prepare_sweep_inputs_at(state.outputs(), 200, clock, manual, None).is_ok(),
+                    expected_unlocked
+                );
+            }
+        }
+        // A matured timestamp must not bypass confirmations or other exclusions.
+        let clock = Some(unlock);
+        assert!(prepare_sweep_inputs_at(state.outputs(), 109, clock, None, None).is_err());
+        let excluded = HashSet::from(["timed".to_string()]);
+        assert!(
+            prepare_send_inputs_at(state.outputs(), 200, clock, 1, 1, None, Some(&excluded))
+                .is_err()
+        );
+        assert!(
+            prepare_sweep_inputs_at(state.outputs(), 200, clock, None, Some(&excluded)).is_err()
+        );
+        state.freeze_output("timed");
+        assert!(state.spendable_outputs_at(200, clock).is_empty());
+        assert!(prepare_sweep_inputs_at(state.outputs(), 200, clock, None, None).is_err());
+    }
+
+    #[test]
+    fn default_wallet_apis_use_the_platform_clock_for_timestamp_locks() {
+        use crate::tx_prepare::{prepare_send_inputs, prepare_sweep_inputs};
+        use monero_wallet::transaction::Timelock;
+
+        let now = current_time_secs().expect("the test host must provide a Unix clock");
+        let amount = 5_000_000_000_000;
+        let mut state = WalletState::new();
+        state.replace_outputs(vec![
+            make_timelocked_output(amount, 100, "mature", Timelock::Time(now - 3600)),
+            make_timelocked_output(amount, 100, "future", Timelock::Time(now + 86400)),
+        ]);
+        state.current_height = 200;
+        state.daemon_height = 200;
+        assert!(is_spendable(&state.outputs()[0], 200));
+        assert!(!is_spendable(&state.outputs()[1], 200));
+        assert_eq!(state.balance().confirmed, amount);
+        assert_eq!(state.balance_at_height(200).unconfirmed, amount);
+        for outputs in [
+            state.spendable_outputs(),
+            state.spendable_outputs_at_height(200),
+            state.spendable_outputs_for_accounts(&[0]),
+        ] {
+            assert_eq!(outputs.len(), 1);
+            assert_eq!(outputs[0].key_image, "mature");
+        }
+        let send =
+            prepare_send_inputs(state.outputs(), 200, 1_000_000_000_000, 1, None, None).unwrap();
+        let sweep = prepare_sweep_inputs(state.outputs(), 200, None, None).unwrap();
+        assert_eq!(
+            send.spent_output_keys,
+            vec![state.outputs()[0].output_key()]
+        );
+        assert_eq!(sweep.spent_output_keys, send.spent_output_keys);
+        assert_eq!(sweep.total_input, amount);
+    }
+
+    /// Balance and coin selection must use the same spendability rules.
+    #[test]
+    fn a_timelocked_output_is_not_counted_as_confirmed_balance() {
+        use monero_wallet::transaction::Timelock;
+
+        let mut state = WalletState::new();
+        state.replace_outputs(vec![
+            make_timelocked_output(7, 100, "ki_locked", Timelock::Block(5_000)),
+            make_timelocked_output(3, 100, "ki_plain", Timelock::None),
+        ]);
+
+        let bal = state.balance_at_height(1_000);
+        assert_eq!(bal.confirmed, 3, "only the unlocked output is spendable");
+        assert_eq!(bal.unconfirmed, 7);
+        assert!(state
+            .spendable_outputs_at_height(1_000)
+            .iter()
+            .all(|o| o.key_image == "ki_plain"));
+    }
 }

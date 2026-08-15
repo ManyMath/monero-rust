@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use crate::coin_selection::{estimate_fee, select_inputs, CoinSelectionResult};
 use crate::tx_builder::native::StoredOutputData;
 use crate::wallet_output::WalletOutput;
-use crate::wallet_state::is_spendable;
+use crate::wallet_state::{current_time_secs, is_spendable_at};
 
 /// Prepared inputs ready for transaction building.
 #[derive(Debug, Clone)]
@@ -18,10 +18,32 @@ pub struct PreparedInputs {
 ///
 /// Filters wallet outputs to spendable ones, runs coin selection for the
 /// requested amount, and converts to `StoredOutputData` ready for
-/// `create_transaction()`.
+/// `create_transaction()`. Uses the current system time for timestamp locks.
 pub fn prepare_send_inputs(
     wallet_outputs: &[WalletOutput],
     daemon_height: u64,
+    total_amount: u64,
+    num_recipients: usize,
+    manual_selection: Option<&[String]>,
+    excluded_key_images: Option<&HashSet<String>>,
+) -> Result<PreparedInputs, String> {
+    prepare_send_inputs_at(
+        wallet_outputs,
+        daemon_height,
+        current_time_secs(),
+        total_amount,
+        num_recipients,
+        manual_selection,
+        excluded_key_images,
+    )
+}
+
+/// Prepare a send using an explicit Unix clock, such as adjusted network time.
+/// With no clock, timestamp-locked outputs remain locked.
+pub fn prepare_send_inputs_at(
+    wallet_outputs: &[WalletOutput],
+    daemon_height: u64,
+    now_secs: Option<u64>,
     total_amount: u64,
     num_recipients: usize,
     manual_selection: Option<&[String]>,
@@ -32,7 +54,7 @@ pub fn prepare_send_inputs(
         .filter(|o| {
             !o.spent
                 && !o.frozen
-                && is_spendable(o, daemon_height)
+                && is_spendable_at(o, daemon_height, now_secs)
                 && !excluded_key_images.map_or(false, |exc| exc.contains(&o.key_image))
         })
         .cloned()
@@ -59,10 +81,28 @@ pub fn prepare_send_inputs(
 ///
 /// Takes all spendable outputs (optionally filtered by output keys for
 /// account-level sweeps) and converts to `StoredOutputData` ready for
-/// `sweep_all()`.
+/// `sweep_all()`. Uses the current system time for timestamp locks.
 pub fn prepare_sweep_inputs(
     wallet_outputs: &[WalletOutput],
     daemon_height: u64,
+    selected_output_keys: Option<&[String]>,
+    excluded_key_images: Option<&HashSet<String>>,
+) -> Result<PreparedInputs, String> {
+    prepare_sweep_inputs_at(
+        wallet_outputs,
+        daemon_height,
+        current_time_secs(),
+        selected_output_keys,
+        excluded_key_images,
+    )
+}
+
+/// Prepare a sweep using an explicit Unix clock, such as adjusted network time.
+/// With no clock, timestamp-locked outputs remain locked.
+pub fn prepare_sweep_inputs_at(
+    wallet_outputs: &[WalletOutput],
+    daemon_height: u64,
+    now_secs: Option<u64>,
     selected_output_keys: Option<&[String]>,
     excluded_key_images: Option<&HashSet<String>>,
 ) -> Result<PreparedInputs, String> {
@@ -71,7 +111,7 @@ pub fn prepare_sweep_inputs(
         .filter(|o| {
             !o.spent
                 && !o.frozen
-                && is_spendable(o, daemon_height)
+                && is_spendable_at(o, daemon_height, now_secs)
                 && !excluded_key_images.map_or(false, |exc| exc.contains(&o.key_image))
         })
         .cloned()

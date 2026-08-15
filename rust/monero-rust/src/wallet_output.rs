@@ -67,6 +67,33 @@ impl WalletOutput {
     pub fn output_key(&self) -> String {
         format!("{}:{}", self.tx_hash, self.output_index)
     }
+
+    /// The output's *additional* timelock, over and above the 10-block spendable age.
+    ///
+    /// monero keeps this as the transaction's `unlock_time` and gates spending on it in
+    /// `is_transfer_unlocked` (wallet2.cpp:7310). It is recovered from
+    /// `received_output_bytes` rather than stored in a field of its own: the scanner writes
+    /// the whole `monero-wallet` output there, its `Metadata` already carries the timelock,
+    /// and reading it back means the value remains the Dart round trip without a new
+    /// signal field to keep in step.
+    ///
+    /// `Timelock::None` when the output carries no extra lock. Also `Timelock::None` when
+    /// there are no output bytes to read - synthetic fixtures leave that field empty, and
+    /// there is nothing to check in that case.
+    pub fn additional_timelock(&self) -> monero_wallet::transaction::Timelock {
+        use monero_wallet::transaction::Timelock;
+
+        if self.received_output_bytes.is_empty() {
+            return Timelock::None;
+        }
+        let Ok(bytes) = hex::decode(&self.received_output_bytes) else {
+            return Timelock::None;
+        };
+        match monero_wallet::WalletOutput::read(&mut bytes.as_slice()) {
+            Ok(output) => output.additional_timelock(),
+            Err(_) => Timelock::None,
+        }
+    }
 }
 
 #[cfg(test)]
