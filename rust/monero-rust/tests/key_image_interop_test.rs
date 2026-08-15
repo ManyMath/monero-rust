@@ -56,6 +56,41 @@ fn test_entries(spend_scalar: &Scalar, count: usize) -> Vec<KeyImageExportEntry>
         .collect()
 }
 
+/// Build view-only wallet outputs for `entries` in export order.
+fn test_outputs(entries: &[KeyImageExportEntry]) -> Vec<monero_rust::WalletOutput> {
+    entries
+        .iter()
+        .enumerate()
+        .map(|(i, entry)| monero_rust::WalletOutput {
+            tx_hash: format!("{i:064x}"),
+            output_index: 0,
+            amount: 1,
+            amount_xmr: "0.000000000001".to_string(),
+            key: hex::encode(entry.pub_key.compress().to_bytes()),
+            key_offset: hex::encode(entry.key_offset.to_bytes()),
+            commitment_mask: String::new(),
+            subaddress_index: Some((0, 0)),
+            payment_id: None,
+            received_output_bytes: String::new(),
+            block_height: 10 + i as u64,
+            spent: false,
+            spent_height: None,
+            key_image: String::new(),
+            is_coinbase: false,
+            frozen: false,
+        })
+        .collect()
+}
+
+/// Encode keys in the import API's `viewonly:` sentinel format.
+fn view_only_sentinel(view_secret: &[u8; 32], pub_spend: &[u8; 32]) -> String {
+    format!(
+        "viewonly:{}:{}",
+        hex::encode(view_secret),
+        hex::encode(pub_spend)
+    )
+}
+
 // Test 1: v3 export magic bytes
 #[test]
 fn test_v3_export_magic_bytes() {
@@ -96,9 +131,11 @@ fn test_v3_roundtrip() {
     )
     .expect("Export should succeed");
 
-    let (imported_kis, imported_spend, imported_view) =
+    let (imported, imported_spend, imported_view) =
         import_key_images_v3(&exported, &view_secret).expect("Import should succeed");
 
+    assert_eq!(imported.offset, 0, "exported with offset 0");
+    let imported_kis = &imported.key_images;
     assert_eq!(imported_kis.len(), 5, "Should import 5 key images");
     assert_eq!(imported_spend, pub_spend, "Public spend key mismatch");
     assert_eq!(imported_view, pub_view, "Public view key mismatch");
@@ -454,40 +491,14 @@ fn refuses_key_images_exported_for_a_different_account() {
 #[test]
 fn refuses_key_images_paired_with_the_wrong_outputs() {
     use monero_rust::key_image_signing::encrypt_with_view_key;
-    use monero_rust::{WalletOutput, WalletState};
+    use monero_rust::WalletState;
 
     let (spend_scalar, pub_spend, pub_view, view_secret) = test_keys();
     let entries = test_entries(&spend_scalar, 2);
 
-    // A view-only wallet holding exactly these two outputs, in export order.
-    let outputs: Vec<WalletOutput> = entries
-        .iter()
-        .enumerate()
-        .map(|(i, entry)| WalletOutput {
-            tx_hash: format!("{i:064x}"),
-            output_index: 0,
-            amount: 1,
-            amount_xmr: "0.000000000001".to_string(),
-            key: hex::encode(entry.pub_key.compress().to_bytes()),
-            key_offset: hex::encode(entry.key_offset.to_bytes()),
-            commitment_mask: String::new(),
-            subaddress_index: Some((0, 0)),
-            payment_id: None,
-            received_output_bytes: String::new(),
-            block_height: 10 + i as u64,
-            spent: false,
-            spent_height: None,
-            key_image: String::new(),
-            is_coinbase: false,
-            frozen: false,
-        })
-        .collect();
-
-    let sentinel = format!(
-        "viewonly:{}:{}",
-        hex::encode(view_secret),
-        hex::encode(pub_spend)
-    );
+    // Set up the two corresponding outputs in export order.
+    let outputs = test_outputs(&entries);
+    let sentinel = view_only_sentinel(&view_secret, &pub_spend);
 
     let exported = export_key_images_v3(
         &entries,
@@ -535,7 +546,7 @@ fn refuses_key_images_paired_with_the_wrong_outputs() {
         &sentinel, "", &tampered,
     )
     .expect("a reordered file still authenticates and names the right account");
-    assert_eq!(mispaired.len(), 2);
+    assert_eq!(mispaired.key_images.len(), 2);
 
     let mut state = WalletState::new();
     state.replace_outputs(outputs);
@@ -554,10 +565,182 @@ fn refuses_key_images_paired_with_the_wrong_outputs() {
     );
 }
 
+/// Apply partial exports at the offset recorded in their header.
+///
+/// `monero-wallet-cli export_key_images` can skip leading outputs. Entry `n`
+/// belongs to output `n + offset`; starting at zero would pair signatures with
+/// the wrong outputs and reject a valid file.
+///
+/// Exercise `import_signed_key_images_from_seed` so the public API preserves
+/// the offset through parsing and assignment.
+#[test]
+fn honours_the_offset_of_a_partial_export() {
+    use monero_rust::WalletState;
+
+    let (spend_scalar, pub_spend, pub_view, view_secret) = test_keys();
+    let entries = test_entries(&spend_scalar, 4);
+    let outputs = test_outputs(&entries);
+
+    // Export the final two entries with offset 2, as a partial export would.
+    let exported = export_key_images_v3(
+        &entries[2..],
+        &spend_scalar,
+        &pub_spend,
+        &pub_view,
+        &view_secret,
+        2,
+    )
+    .expect("export should succeed");
+
+    let import = monero_rust::key_image_signing::import_signed_key_images_from_seed(
+        &view_only_sentinel(&view_secret, &pub_spend),
+        "",
+        &exported,
+    )
+    .expect("a genuine partial export should import");
+    assert_eq!(import.offset, 2, "the header's offset must survive the parse");
+    assert_eq!(import.key_images.len(), 2);
+
+    let mut state = WalletState::new();
+    state.replace_outputs(outputs);
+    assert_eq!(
+        state
+            .assign_verified_key_images_in_export_order(&import)
+            .expect("a genuine partial export should verify at its own offset"),
+        2
+    );
+
+    // Only the two outputs starting at the header's offset receive key images.
+    let applied: Vec<&str> = state
+        .outputs()
+        .iter()
+        .map(|o| o.key_image.as_str())
+        .collect();
+    assert_eq!(applied[0], "", "output 0 was not covered by this export");
+    assert_eq!(applied[1], "", "output 1 was not covered by this export");
+    assert_eq!(applied[2], hex::encode(entries[2].key_image));
+    assert_eq!(applied[3], hex::encode(entries[3].key_image));
+}
+
+/// Reject an offset beyond the known outputs even when the export is empty.
+/// Check the offset separately so this reports the same error as Monero.
+#[test]
+fn refuses_an_offset_past_the_end_of_the_wallet() {
+    use monero_rust::WalletState;
+
+    let (spend_scalar, pub_spend, pub_view, view_secret) = test_keys();
+    let entries = test_entries(&spend_scalar, 2);
+
+    let exported = export_key_images_v3(&[], &spend_scalar, &pub_spend, &pub_view, &view_secret, 5)
+        .expect("export should succeed");
+
+    let import = monero_rust::key_image_signing::import_signed_key_images_from_seed(
+        &view_only_sentinel(&view_secret, &pub_spend),
+        "",
+        &exported,
+    )
+    .expect("the file itself is well-formed");
+    assert_eq!(import.offset, 5);
+    assert!(import.key_images.is_empty());
+
+    let mut state = WalletState::new();
+    state.replace_outputs(test_outputs(&entries));
+    let err = state
+        .assign_verified_key_images_in_export_order(&import)
+        .expect_err("an offset past the end must be refused, not quietly ignored");
+    assert!(
+        err.contains("starts at output 5"),
+        "the error must name the offset, not the entries: {err}"
+    );
+}
+
+/// Check the entry count against the outputs remaining after the offset.
+/// A count that fits the whole wallet may still run past its end.
+#[test]
+fn refuses_a_partial_export_that_runs_past_the_last_output() {
+    use monero_rust::WalletState;
+
+    let (spend_scalar, pub_spend, pub_view, view_secret) = test_keys();
+    let entries = test_entries(&spend_scalar, 4);
+
+    // Two entries at offset 2 do not fit a wallet with three outputs.
+    let exported = export_key_images_v3(
+        &entries[2..],
+        &spend_scalar,
+        &pub_spend,
+        &pub_view,
+        &view_secret,
+        2,
+    )
+    .expect("export should succeed");
+
+    let import = monero_rust::key_image_signing::import_signed_key_images_from_seed(
+        &view_only_sentinel(&view_secret, &pub_spend),
+        "",
+        &exported,
+    )
+    .expect("a genuine partial export should import");
+
+    let mut state = WalletState::new();
+    state.replace_outputs(test_outputs(&entries[..3]));
+    let err = state
+        .assign_verified_key_images_in_export_order(&import)
+        .expect_err("an import reaching past the last output must be refused");
+    assert!(
+        err.contains("outputs 2..4") && err.contains("holds 3"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        state.outputs().iter().all(|o| o.key_image.is_empty()),
+        "a refused import must leave the wallet untouched"
+    );
+}
+
+/// Reject partial exports through the API that returns a bare hex list.
+/// That return type cannot preserve the offset needed for assignment.
+#[test]
+fn the_bare_hex_import_refuses_a_partial_export() {
+    let (spend_scalar, pub_spend, pub_view, view_secret) = test_keys();
+    let entries = test_entries(&spend_scalar, 4);
+
+    // The same API still accepts a whole-wallet export at offset zero.
+    let whole = export_key_images_v3(
+        &entries,
+        &spend_scalar,
+        &pub_spend,
+        &pub_view,
+        &view_secret,
+        0,
+    )
+    .expect("export should succeed");
+    assert_eq!(
+        epee_compat::import_key_images(&whole, Some(&view_secret))
+            .expect("a whole-wallet export has nothing to offset")
+            .len(),
+        4
+    );
+
+    let partial = export_key_images_v3(
+        &entries[2..],
+        &spend_scalar,
+        &pub_spend,
+        &pub_view,
+        &view_secret,
+        2,
+    )
+    .expect("export should succeed");
+    let err = epee_compat::import_key_images(&partial, Some(&view_secret))
+        .expect_err("a bare hex list cannot carry an offset, so it must refuse one");
+    assert!(
+        err.contains("starts at output 2"),
+        "unexpected error: {err}"
+    );
+}
+
 #[test]
 fn key_image_import_preserves_transaction_order_within_a_block() {
     use monero_rust::key_image_signing::generate_key_image_ring_signature;
-    use monero_rust::{SignedKeyImage, WalletState};
+    use monero_rust::{SignedKeyImage, SignedKeyImageImport, WalletState};
 
     let (spend, _, _, _) = test_keys();
     let entries = test_entries(&spend, 4);
@@ -590,22 +773,52 @@ fn key_image_import_preserves_transaction_order_within_a_block() {
     // Persistence must preserve the scanner's within-block order.
     outputs.insert(0, pool);
     let json = serde_json::to_string(&outputs).unwrap();
-    let mut state = WalletState::new();
-    state.replace_outputs(serde_json::from_str(&json).unwrap());
-    assert_eq!(state.assign_verified_key_images_in_export_order(&signatures).unwrap(), 4);
-    for (i, output) in state.outputs()[..4].iter().enumerate() {
-        assert_eq!(output.key_image, hex::encode(entries[i].key_image));
+    for offset in [0, 1] {
+        let mut state = WalletState::new();
+        state.replace_outputs(serde_json::from_str(&json).unwrap());
+        let import = SignedKeyImageImport {
+            offset,
+            key_images: signatures[offset as usize..].to_vec(),
+        };
+        assert_eq!(
+            state
+                .assign_verified_key_images_in_export_order(&import)
+                .unwrap(),
+            4 - offset as usize
+        );
+        for (i, output) in state.outputs()[..4].iter().enumerate() {
+            if i < offset as usize {
+                assert!(output.key_image.is_empty());
+            } else {
+                assert_eq!(output.key_image, hex::encode(entries[i].key_image));
+            }
+        }
+        assert_eq!(state.outputs()[4].tx_hash, "pool");
+        assert!(state.outputs()[4].key_image.is_empty());
+        assert!(state.freeze_output(&hex::encode(entries[2].key_image)));
+        assert_eq!(state.outputs()[2].output_index, 0);
+        assert!(state.outputs()[2].frozen);
+
+        // Neither an entry nor an empty import may extend into pool outputs.
+        assert!(state
+            .assign_verified_key_images_in_export_order(&SignedKeyImageImport {
+                offset: 4,
+                key_images: signatures[..1].to_vec(),
+            })
+            .is_err());
+        assert!(state
+            .assign_verified_key_images_in_export_order(&SignedKeyImageImport {
+                offset: 5,
+                key_images: vec![],
+            })
+            .is_err());
     }
-    assert_eq!(state.outputs()[4].tx_hash, "pool");
-    assert!(state.outputs()[4].key_image.is_empty());
-    assert!(state.freeze_output(&hex::encode(entries[2].key_image)));
-    assert_eq!(state.outputs()[2].output_index, 0);
-    assert!(state.outputs()[2].frozen);
-    let mut too_many = signatures.clone();
-    too_many.push(signatures[0].clone());
-    assert!(state.assign_verified_key_images_in_export_order(&too_many).is_err());
+    let mut state = WalletState::new();
+    state.replace_outputs(outputs);
     let images: Vec<_> = entries.iter().map(|e| hex::encode(e.key_image)).collect();
     assert_eq!(state.assign_key_images_in_export_order(&images).unwrap(), 4);
     assert!(state.outputs()[4].key_image.is_empty());
-    assert!(state.assign_key_images_in_export_order(&vec!["extra".into(); 5]).is_err());
+    assert!(state
+        .assign_key_images_in_export_order(&vec!["extra".into(); 5])
+        .is_err());
 }

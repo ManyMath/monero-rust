@@ -68,7 +68,7 @@ pub use encryption::{decrypt, derive_key_fresh, encrypt, encrypt_with_key, Encry
 // -- Key image import --
 pub use key_image_import::{
     extract_key_image_hex, parse_rpc_export, verify_and_extract, verify_key_image_signature,
-    KeyImageImportResult, SignedKeyImage,
+    KeyImageImportResult, SignedKeyImage, SignedKeyImageImport,
 };
 
 // -- Scanning --

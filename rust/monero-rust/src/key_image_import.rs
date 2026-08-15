@@ -34,6 +34,30 @@ pub struct SignedKeyImage {
     pub signature: [u8; 64],
 }
 
+/// Signed key images and their starting position in Monero export order.
+///
+/// Entry `n` belongs to output `n + offset`. A partial export, such as one made by
+/// `monero-wallet-cli export_key_images` without `all`, may skip leading outputs.
+/// Keep the offset with the entries so they can be assigned to the correct outputs.
+#[derive(Debug, Clone)]
+pub struct SignedKeyImageImport {
+    /// Position of the first entry in Monero export order.
+    pub offset: u32,
+    /// Key images and their signatures, in export order.
+    pub key_images: Vec<SignedKeyImage>,
+}
+
+impl SignedKeyImageImport {
+    /// Return the key images as hex, in export order. The caller must retain
+    /// `self.offset` separately to assign them to outputs.
+    pub fn key_images_hex(&self) -> Vec<String> {
+        self.key_images
+            .iter()
+            .map(|ski| hex::encode(ski.key_image))
+            .collect()
+    }
+}
+
 /// Result of importing key images into a set of outputs.
 #[derive(Debug, Clone)]
 pub struct KeyImageImportResult {

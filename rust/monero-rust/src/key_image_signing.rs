@@ -286,17 +286,16 @@ pub fn export_key_images_v3(
 
 /// Imports key images from Monero's v3 binary format.
 ///
-/// Returns `(signed_key_images, pub_spend_key, pub_view_key)`. Each entry keeps its ring
-/// signature: that proof is the only thing binding a key image to the output it belongs
-/// to, and key images are applied *positionally*, so dropping it here leaves nothing
-/// downstream able to tell a real export from one whose entries were reordered or
-/// replaced. Verify with `WalletState::assign_verified_key_images_in_export_order`, which
-/// checks each against the public key of the output it lands on, as monero does
-/// (wallet2.cpp:13362-13368).
+/// Return `(import, pub_spend_key, pub_view_key)`. The import retains each ring
+/// signature and the starting offset.
+///
+/// Verify entries with `WalletState::assign_verified_key_images_in_export_order`
+/// before assignment. It uses the offset to locate each output and checks the
+/// signature against that output's public key, as `wallet2::import_key_images` does.
 pub fn import_key_images_v3(
     data: &[u8],
     view_secret_key: &[u8; 32],
-) -> Result<(Vec<SignedKeyImage>, [u8; 32], [u8; 32]), String> {
+) -> Result<(crate::key_image_import::SignedKeyImageImport, [u8; 32], [u8; 32]), String> {
     // Strip magic bytes
     let payload = crate::epee_compat::strip_magic(KEY_IMAGES_MAGIC, data)?;
 
@@ -308,8 +307,7 @@ pub fn import_key_images_v3(
         return Err("Decrypted payload too short for header".to_string());
     }
 
-    // offset (skip, we don't use it currently)
-    let _offset = u32::from_le_bytes(
+    let offset = u32::from_le_bytes(
         plaintext[..4]
             .try_into()
             .map_err(|_| "offset parse error")?,
@@ -345,7 +343,11 @@ pub fn import_key_images_v3(
         });
     }
 
-    Ok((key_images, pub_spend, pub_view))
+    Ok((
+        crate::key_image_import::SignedKeyImageImport { offset, key_images },
+        pub_spend,
+        pub_view,
+    ))
 }
 
 /// Derives keys from `seed_phrase`/`passphrase` and exports wallet outputs as v3 key images.
@@ -413,8 +415,9 @@ pub fn export_key_images_from_outputs(
 
 /// Derives the view key from `seed_phrase`/`passphrase` and imports key images (EPEE or v3).
 ///
-/// Drops each entry's ring signature, so the result cannot be checked against the outputs
-/// it will be applied to. Prefer `import_signed_key_images_from_seed`.
+/// This discards ring signatures and rejects partial exports, whose offset cannot
+/// be represented by a bare list. Use `import_signed_key_images_from_seed` to
+/// retain the data needed to verify and assign entries.
 pub fn import_key_images_from_seed(
     seed_phrase: &str,
     passphrase: &str,
@@ -428,13 +431,13 @@ pub fn import_key_images_from_seed(
     )
 }
 
-/// `import_key_images_from_seed`, keeping each entry's ring signature so the caller can
-/// prove it belongs to the output it will be paired with.
+/// Import key images from a seed, retaining signatures and the offset needed
+/// to verify each entry against its corresponding output.
 pub fn import_signed_key_images_from_seed(
     seed_phrase: &str,
     passphrase: &str,
     data: &[u8],
-) -> Result<Vec<SignedKeyImage>, String> {
+) -> Result<crate::key_image_import::SignedKeyImageImport, String> {
     let (view_secret_key, pub_spend, pub_view) = import_account_keys(seed_phrase, passphrase)?;
     crate::epee_compat::import_signed_key_images_for_account(
         data,
@@ -747,9 +750,11 @@ mod tests {
         )
         .expect("Export should succeed");
 
-        let (imported_kis, imported_spend, imported_view) =
+        let (imported, imported_spend, imported_view) =
             import_key_images_v3(&exported, &view_secret_bytes).expect("Import should succeed");
 
+        assert_eq!(imported.offset, 0, "exported with offset 0");
+        let imported_kis = &imported.key_images;
         assert_eq!(imported_kis.len(), 3);
         assert_eq!(imported_spend, pub_spend_bytes);
         assert_eq!(imported_view, pub_view_bytes);

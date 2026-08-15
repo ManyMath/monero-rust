@@ -1657,40 +1657,47 @@ pub fn import_key_images(
     import_key_images_for_account(data, view_secret_key, None)
 }
 
-/// `import_key_images`, rejecting a v3 export that names an account other than
-/// `expected_keys` - `(public_spend_key, public_view_key)`.
+/// Import key images and check the v3 header against `expected_keys`, supplied as
+/// `(public_spend_key, public_view_key)`.
 ///
-/// monero does the same in `wallet2::import_key_images`, which rejects a file whose
-/// header keys are not the wallet's own ("are for a different account"). It matters here
-/// because key images are matched to outputs *positionally*: another account's file does
-/// not fail to apply, it applies to the wrong outputs and marks them spent.
+/// Key images are assigned to outputs by position. Rejecting another account
+/// prevents its key images from being assigned to this wallet, as in
+/// `wallet2::import_key_images`. Legacy Epee exports contain no account keys
+/// and cannot be checked this way.
 ///
-/// The old EPEE format carries no account keys, so there is nothing to bind it to.
+/// Partial exports are rejected because this hex list cannot preserve their offset.
+/// Use `import_signed_key_images_for_account` to retain the offset and signatures.
 pub fn import_key_images_for_account(
     data: &[u8],
     view_secret_key: Option<&[u8; 32]>,
     expected_keys: Option<(&[u8; 32], &[u8; 32])>,
 ) -> Result<Vec<String>, String> {
-    Ok(
-        parse_key_image_export(data, view_secret_key, expected_keys)?
-            .into_iter()
-            .map(|(key_image, _)| hex::encode(key_image))
-            .collect(),
-    )
+    let (offset, entries) = parse_key_image_export(data, view_secret_key, expected_keys)?;
+    if offset != 0 {
+        return Err(format!(
+            "this export starts at output {offset}, and a bare key-image list has nowhere to \
+             carry that: applying it would pair every key image with the wrong output. Re-export \
+             with `all` set, or import through the verifying path."
+        ));
+    }
+    Ok(entries
+        .into_iter()
+        .map(|(key_image, _)| hex::encode(key_image))
+        .collect())
 }
 
-/// `import_key_images_for_account`, keeping each entry's ring signature.
+/// Import key images with their ring signatures and check the account.
 ///
-/// The signature is what binds a key image to one particular output, so this is the only
-/// import that can be checked - see
-/// `WalletState::assign_verified_key_images_in_export_order`. A format that carries no
-/// proof is rejected here rather than returning unprovable entries.
+/// Use `WalletState::assign_verified_key_images_in_export_order` to verify each
+/// signature against its output before assignment. Exports without signatures
+/// are rejected.
 pub fn import_signed_key_images_for_account(
     data: &[u8],
     view_secret_key: Option<&[u8; 32]>,
     expected_keys: Option<(&[u8; 32], &[u8; 32])>,
-) -> Result<Vec<crate::key_image_import::SignedKeyImage>, String> {
-    parse_key_image_export(data, view_secret_key, expected_keys)?
+) -> Result<crate::key_image_import::SignedKeyImageImport, String> {
+    let (offset, entries) = parse_key_image_export(data, view_secret_key, expected_keys)?;
+    let key_images = entries
         .into_iter()
         .enumerate()
         .map(|(i, (key_image, signature))| {
@@ -1705,36 +1712,40 @@ pub fn import_signed_key_images_for_account(
                 signature,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(crate::key_image_import::SignedKeyImageImport { offset, key_images })
 }
 
-/// The one parser behind both views of a key-image export.
+/// Parse either supported key-image export format.
 ///
-/// Returns each entry's key image with its ring signature when the format carries one.
-/// The old EPEE container predates this crate writing signatures, so its entries may not.
+/// Return the offset and key images, including signatures when present. Legacy
+/// Epee exports have no offset and may omit signatures; their offset is zero.
 fn parse_key_image_export(
     data: &[u8],
     view_secret_key: Option<&[u8; 32]>,
     expected_keys: Option<(&[u8; 32], &[u8; 32])>,
-) -> Result<Vec<([u8; 32], Option<[u8; 64]>)>, String> {
+) -> Result<(u32, Vec<([u8; 32], Option<[u8; 64]>)>), String> {
     let payload = strip_magic(KEY_IMAGES_MAGIC, data)?;
 
-    // v3 first when we can read it: it is the only one of the two that authenticates, and
-    // it is what monero and this crate both write. Falling back to the unauthenticated
-    // format only once v3 has failed keeps a well-formed export from being downgraded.
+    // Try authenticated v3 exports first when a view key is available. Monero and
+    // this crate both write v3; legacy Epee exports are unauthenticated.
     let mut v3_error = None;
     if let Some(vsk) = view_secret_key {
         match crate::key_image_signing::import_key_images_v3(data, vsk) {
-            Ok((key_images, pub_spend, pub_view)) => {
+            Ok((import, pub_spend, pub_view)) => {
                 if let Some((expected_spend, expected_view)) = expected_keys {
                     if (&pub_spend != expected_spend) || (&pub_view != expected_view) {
                         return Err("key images are for a different account".to_string());
                     }
                 }
-                return Ok(key_images
-                    .into_iter()
-                    .map(|ski| (ski.key_image, Some(ski.signature)))
-                    .collect());
+                return Ok((
+                    import.offset,
+                    import
+                        .key_images
+                        .into_iter()
+                        .map(|ski| (ski.key_image, Some(ski.signature)))
+                        .collect(),
+                ));
             }
             Err(e) => v3_error = Some(e),
         }
@@ -1773,10 +1784,11 @@ fn parse_key_image_export(
             };
             entries.push((key_image, signature));
         }
-        return Ok(entries);
+        // Legacy exports describe the whole wallet and start at offset zero.
+        return Ok((0, entries));
     }
 
-    // Neither format read. Report why v3 failed when it was the one we could have used.
+    // Both parsers failed. Prefer the v3 error if a view key was supplied.
     match v3_error {
         Some(e) => Err(e),
         None => Err(

@@ -911,45 +911,59 @@ impl WalletState {
         self.try_import_key_images(0, key_images)
     }
 
-    /// `assign_key_images_in_export_order`, proving each key image belongs to the output
-    /// it lands on before applying any of them.
+    /// Verify each key image against its output before assigning any entries.
     ///
-    /// This is the check monero performs at wallet2.cpp:13362-13368 - the key-image
-    /// validity domain, then `check_ring_signature` against the output's own one-time
-    /// public key. It is what makes a positional import safe: the export is authenticated
-    /// with the *view* key, which the online wallet holds by design, so whoever hands us
-    /// the file is who we do not trust. Without it a file whose entries are
-    /// reordered, or invented outright, marks the wrong outputs spent - and an output
-    /// wrongly marked spent drops out of the balance, while the one whose key image was
-    /// taken stays spendable and is reselected into a transaction the network rejects.
+    /// Check the key-image subgroup and ring signature against the output's
+    /// one-time public key, as Monero does. File authentication alone is
+    /// insufficient: an untrusted online wallet has the view key and can reorder
+    /// or replace entries.
     ///
-    /// All or nothing: a single unprovable entry rejects the whole list, as monero throws.
+    /// Reject the entire import if any entry fails verification.
+    ///
+    /// Apply entry `n` to output `n + offset`. Partial exports from
+    /// `monero-wallet-cli export_key_images` record skipped leading outputs in
+    /// this offset; ignoring it would pair signatures with the wrong outputs.
     pub fn assign_verified_key_images_in_export_order(
         &mut self,
-        signed: &[crate::key_image_import::SignedKeyImage],
+        import: &crate::key_image_import::SignedKeyImageImport,
     ) -> Result<usize, String> {
         use curve25519_dalek::edwards::CompressedEdwardsY;
 
         let confirmed = self.sort_into_export_order();
 
-        if signed.len() > confirmed {
+        let offset = import.offset as usize;
+        let signed = &import.key_images;
+
+        // Check the offset before the count, as Monero does. Even an empty
+        // export must not start beyond the wallet's known outputs.
+        if offset > confirmed {
             return Err(format!(
-                "import covers {} outputs but the wallet holds {}; rescan before importing",
-                signed.len(),
+                "the import starts at output {offset} but the wallet holds {}; rescan before \
+                 importing",
+                confirmed
+            ));
+        }
+
+        if signed.len() > confirmed - offset {
+            return Err(format!(
+                "import covers outputs {}..{} but the wallet holds {}; rescan before importing",
+                offset,
+                offset + signed.len(),
                 confirmed
             ));
         }
 
         for (i, ski) in signed.iter().enumerate() {
-            let output = &self.outputs[i];
+            let at = offset + i;
+            let output = &self.outputs[at];
 
             let key_bytes: [u8; 32] = hex::decode(&output.key)
-                .map_err(|e| format!("output {i} has an unreadable public key: {e}"))?
+                .map_err(|e| format!("output {at} has an unreadable public key: {e}"))?
                 .try_into()
-                .map_err(|_| format!("output {i}'s public key is not 32 bytes"))?;
+                .map_err(|_| format!("output {at}'s public key is not 32 bytes"))?;
             let output_key = CompressedEdwardsY(key_bytes)
                 .decompress()
-                .ok_or_else(|| format!("output {i}'s public key is not a curve point"))?;
+                .ok_or_else(|| format!("output {at}'s public key is not a curve point"))?;
 
             let key_image = CompressedEdwardsY(ski.key_image)
                 .decompress()
@@ -961,16 +975,12 @@ impl WalletState {
                 &ski.signature,
             ) {
                 return Err(format!(
-                    "key image {i} does not belong to the output it was paired with"
+                    "key image {i} does not belong to the output it was paired with (output {at})"
                 ));
             }
         }
 
-        let key_images: Vec<String> = signed
-            .iter()
-            .map(|ski| hex::encode(ski.key_image))
-            .collect();
-        self.try_import_key_images(0, &key_images)
+        self.try_import_key_images(offset, &import.key_images_hex())
     }
 
     /// Stable sorting preserves transaction and output order supplied by the
