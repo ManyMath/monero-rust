@@ -339,6 +339,7 @@ impl WalletState {
     }
 
     /// Replace all outputs (used when restoring from persistence).
+    /// Preserve blockchain scan order within each height for key-image imports.
     pub fn replace_outputs(&mut self, outputs: Vec<WalletOutput>) {
         self.outputs.clear();
         self.rebuild_key_image_index();
@@ -445,9 +446,14 @@ impl WalletState {
         &self.outputs
     }
 
-    /// Get mutable access to outputs.
-    pub fn outputs_mut(&mut self) -> &mut Vec<WalletOutput> {
-        &mut self.outputs
+    /// Modify outputs and rebuild `key_image_index` afterwards.
+    ///
+    /// Reordering outputs or changing a key image invalidates the index. Rebuild
+    /// it before freeze, spend, or confirmation operations can use stale entries.
+    pub fn with_outputs_mut<R>(&mut self, f: impl FnOnce(&mut Vec<WalletOutput>) -> R) -> R {
+        let result = f(&mut self.outputs);
+        self.rebuild_key_image_index();
+        result
     }
 
     /// Mark outputs as spent, recording the height at which the spend occurred.
@@ -808,27 +814,154 @@ impl WalletState {
     /// `offset` and the ordered array of key image hex strings correspond to
     /// the wallet's internal transfer list (chronological output order).
     ///
-    /// Returns the number of outputs that were updated.
+    /// Return the number of updated outputs, or zero on rejection.
+    /// Use `try_import_key_images` to receive the error.
     pub fn import_key_images(&mut self, offset: usize, key_images: &[String]) -> usize {
+        self.try_import_key_images(offset, key_images).unwrap_or(0)
+    }
+
+    /// Import key images, returning an error if the list is invalid.
+    pub fn try_import_key_images(
+        &mut self,
+        offset: usize,
+        key_images: &[String],
+    ) -> Result<usize, String> {
+        // Reject an export longer than the known output list, as Monero does.
+        // The wallet may need to sync before it can apply the entire export.
+        if offset.saturating_add(key_images.len()) > self.outputs.len() {
+            return Err(format!(
+                "import covers {} outputs but the wallet holds {}; rescan before importing",
+                offset.saturating_add(key_images.len()),
+                self.outputs.len()
+            ));
+        }
+
+        // Reject duplicate key images. Sharing one image between two outputs
+        // would leave only one reachable through the index when marking spends.
+        let mut incoming: HashSet<&str> = HashSet::new();
+        for ki in key_images.iter().filter(|k| !k.is_empty()) {
+            if !incoming.insert(ki.as_str()) {
+                return Err(format!("key image {ki} appears more than once in the import"));
+            }
+        }
+        let end = offset + key_images.len();
+        for (idx, output) in self.outputs.iter().enumerate() {
+            if (offset..end).contains(&idx) || output.key_image.is_empty() {
+                continue;
+            }
+            if incoming.contains(output.key_image.as_str()) {
+                return Err(format!(
+                    "key image {} is already held by an output the import does not cover",
+                    output.key_image
+                ));
+            }
+        }
+
         let mut count = 0;
         for (i, ki) in key_images.iter().enumerate() {
-            let idx = offset + i;
-            if idx >= self.outputs.len() {
-                break;
-            }
             if ki.is_empty() {
                 continue;
             }
-            // Remove old (possibly empty) entry from the index.
-            let old = &self.outputs[idx].key_image;
-            if !old.is_empty() {
-                self.key_image_index.remove(old);
-            }
-            self.outputs[idx].key_image = ki.clone();
-            self.key_image_index.insert(ki.clone(), idx);
+            self.outputs[offset + i].key_image = ki.clone();
             count += 1;
         }
-        count
+
+        // Rebuild after all assignments. Incremental removal could erase an
+        // entry just inserted for another output when the images are permuted.
+        self.rebuild_key_image_index();
+        Ok(count)
+    }
+
+    /// Assign key images in confirmed blockchain scan order, then rebuild the
+    /// index. Outputs within each height must retain their original scan order;
+    /// an output index is only a position within its own transaction.
+    ///
+    /// This list has no signatures, so ownership cannot be verified. Prefer
+    /// `assign_verified_key_images_in_export_order` for signed imports.
+    pub fn assign_key_images_in_export_order(
+        &mut self,
+        key_images: &[String],
+    ) -> Result<usize, String> {
+        let confirmed = self.sort_into_export_order();
+        if key_images.len() > confirmed {
+            return Err(format!(
+                "import covers {} outputs but the wallet holds {confirmed} confirmed outputs; rescan before importing",
+                key_images.len()
+            ));
+        }
+        self.try_import_key_images(0, key_images)
+    }
+
+    /// `assign_key_images_in_export_order`, proving each key image belongs to the output
+    /// it lands on before applying any of them.
+    ///
+    /// This is the check monero performs at wallet2.cpp:13362-13368 - the key-image
+    /// validity domain, then `check_ring_signature` against the output's own one-time
+    /// public key. It is what makes a positional import safe: the export is authenticated
+    /// with the *view* key, which the online wallet holds by design, so whoever hands us
+    /// the file is who we do not trust. Without it a file whose entries are
+    /// reordered, or invented outright, marks the wrong outputs spent - and an output
+    /// wrongly marked spent drops out of the balance, while the one whose key image was
+    /// taken stays spendable and is reselected into a transaction the network rejects.
+    ///
+    /// All or nothing: a single unprovable entry rejects the whole list, as monero throws.
+    pub fn assign_verified_key_images_in_export_order(
+        &mut self,
+        signed: &[crate::key_image_import::SignedKeyImage],
+    ) -> Result<usize, String> {
+        use curve25519_dalek::edwards::CompressedEdwardsY;
+
+        let confirmed = self.sort_into_export_order();
+
+        if signed.len() > confirmed {
+            return Err(format!(
+                "import covers {} outputs but the wallet holds {}; rescan before importing",
+                signed.len(),
+                confirmed
+            ));
+        }
+
+        for (i, ski) in signed.iter().enumerate() {
+            let output = &self.outputs[i];
+
+            let key_bytes: [u8; 32] = hex::decode(&output.key)
+                .map_err(|e| format!("output {i} has an unreadable public key: {e}"))?
+                .try_into()
+                .map_err(|_| format!("output {i}'s public key is not 32 bytes"))?;
+            let output_key = CompressedEdwardsY(key_bytes)
+                .decompress()
+                .ok_or_else(|| format!("output {i}'s public key is not a curve point"))?;
+
+            let key_image = CompressedEdwardsY(ski.key_image)
+                .decompress()
+                .ok_or_else(|| format!("key image {i} is not a curve point"))?;
+
+            if !crate::key_image_import::verify_key_image_signature(
+                &output_key,
+                &key_image,
+                &ski.signature,
+            ) {
+                return Err(format!(
+                    "key image {i} does not belong to the output it was paired with"
+                ));
+            }
+        }
+
+        let key_images: Vec<String> = signed
+            .iter()
+            .map(|ski| hex::encode(ski.key_image))
+            .collect();
+        self.try_import_key_images(0, &key_images)
+    }
+
+    /// Stable sorting preserves transaction and output order supplied by the
+    /// scanner. Pool outputs are not wallet2 transfers: keep them after the
+    /// confirmed prefix and exclude them from export offsets and counts.
+    fn sort_into_export_order(&mut self) -> usize {
+        self.outputs
+            .sort_by_key(|o| (o.block_height == 0, o.block_height));
+        self.rebuild_key_image_index();
+        self.outputs.partition_point(|o| o.block_height != 0)
     }
 
     fn rebuild_key_image_index(&mut self) {
@@ -1181,6 +1314,63 @@ mod tests {
         let mut output = make_output(1_000_000_000_000, height, identity);
         output.key_image.clear();
         output
+    }
+
+    #[test]
+    fn scan_and_import_keep_stable_output_identity() {
+        let first = output_without_key_image("first", 100);
+        let second = output_without_key_image("second", 100);
+        let mut state = WalletState::new();
+        state.add_outputs(vec![first.clone(), second.clone()]);
+        assert_eq!(state.outputs().len(), 2);
+        assert!(!state.freeze_output(""));
+        assert_eq!(state.mark_spent_by_key_images(&[String::new()]), 0);
+        state
+            .try_import_key_images(0, &["known-first".into(), "known-second".into()])
+            .unwrap();
+        state.freeze_output("known-first");
+        state.mark_spent_by_key_images_at_height(&["known-second".into()], 115);
+        state.add_outputs(vec![first.clone(), second.clone()]);
+        assert_eq!(state.outputs().len(), 2);
+        assert!(state.outputs()[0].frozen);
+        assert_eq!(state.outputs()[0].key_image, "known-first");
+        assert_eq!(state.outputs()[1].spent_height, Some(115));
+        assert_eq!(state.balance_at_height(200).confirmed, first.amount);
+
+        // Restoring a cache merges duplicate records without losing local state.
+        let mut persisted = state.outputs().to_vec();
+        persisted.extend([first, second]);
+        state.replace_outputs(persisted);
+        assert_eq!(state.outputs().len(), 2);
+        assert_eq!(state.balance_at_height(200).confirmed, 1_000_000_000_000);
+    }
+
+    #[test]
+    fn empty_image_confirmations_preserve_scan_order_and_local_state() {
+        let first = output_without_key_image("first", 0);
+        let second = output_without_key_image("second", 0);
+        let mut state = WalletState::new();
+        state.add_outputs(vec![second.clone(), first.clone()]);
+        state
+            .try_import_key_images(0, &["second-ki".into(), "first-ki".into()])
+            .unwrap();
+        state.freeze_output("first-ki");
+        state.mark_spent_by_key_images_at_height(&["second-ki".into()], 111);
+        let mut first = first;
+        let mut second = second;
+        first.block_height = 100;
+        second.block_height = 100;
+        state.add_outputs(vec![first.clone(), second]);
+        assert_eq!(state.outputs().len(), 2);
+        assert_eq!(state.outputs()[0].output_key(), first.output_key());
+        assert!(state.outputs()[0].frozen);
+        assert_eq!(state.outputs()[1].spent_height, Some(111));
+        assert!(state.freeze_output("second-ki"));
+        assert!(state.outputs()[1].frozen);
+        state.rollback_to_height(100);
+        assert!(state.outputs().is_empty());
+        state.add_outputs(vec![first]);
+        assert_eq!(state.outputs().len(), 1);
     }
 
     #[test]
@@ -2361,4 +2551,100 @@ mod tests {
             state.mark_spent_detecting_conflicts(&["ki1".to_string()], &["tx_b".to_string()], 300);
         assert!(conflicts2.is_empty());
     }
+
+    // Key-image import and index consistency
+
+    /// Reimporting permuted key images must preserve both index entries.
+    /// Incremental updates could remove an entry inserted by the previous iteration.
+    #[test]
+    fn import_key_images_keeps_every_output_findable_after_a_permuted_reimport() {
+        let mut state = WalletState::new();
+        state.replace_outputs(vec![
+            make_output(1_000_000_000_000, 10, "A"),
+            make_output(2_000_000_000_000, 20, "B"),
+        ]);
+
+        // Reverse the key-image order on the second import.
+        let updated = state.import_key_images(0, &["B".to_string(), "A".to_string()]);
+        assert_eq!(updated, 2);
+
+        // Both images must still resolve to outputs when marking them spent.
+        assert_eq!(state.mark_spent_by_key_images(&["B".to_string()]), 1);
+        assert_eq!(state.mark_spent_by_key_images(&["A".to_string()]), 1);
+        assert!(state.outputs().iter().all(|o| o.spent));
+    }
+
+    /// Reject duplicate key images so every image identifies one output in the index.
+    #[test]
+    fn import_key_images_refuses_a_duplicated_key_image() {
+        let mut state = WalletState::new();
+        state.replace_outputs(vec![
+            output_without_key_image("first", 10),
+            output_without_key_image("second", 20),
+        ]);
+
+        let updated = state.import_key_images(0, &["Z".to_string(), "Z".to_string()]);
+
+        assert_eq!(updated, 0, "a duplicated key image must be refused outright");
+        assert!(
+            state.outputs().iter().all(|o| o.key_image.is_empty()),
+            "a refused import must not half-apply"
+        );
+    }
+
+    /// Assigning key images in export order sorts the outputs. Rebuild the index
+    /// as part of that operation so lookups follow the new positions.
+    #[test]
+    fn assign_key_images_in_export_order_reindexes_after_sorting() {
+        let mut state = WalletState::new();
+        // Put the later output first to exercise sorting.
+        state.replace_outputs(vec![
+            make_output(2_000_000_000_000, 20, "later"),
+            make_output(1_000_000_000_000, 10, "earlier"),
+        ]);
+
+        let updated = state
+            .assign_key_images_in_export_order(&["ki_earlier".to_string(), "ki_later".to_string()])
+            .expect("a well-formed list should apply");
+        assert_eq!(updated, 2);
+
+        let outputs = state.outputs();
+        assert_eq!(outputs[0].block_height, 10);
+        assert_eq!(outputs[0].key_image, "ki_earlier");
+        assert_eq!(outputs[1].key_image, "ki_later");
+
+        // Check that key-image lookups find the correct outputs after sorting.
+        assert!(state.freeze_output("ki_earlier"));
+        let frozen: Vec<u64> = state
+            .outputs()
+            .iter()
+            .filter(|o| o.frozen)
+            .map(|o| o.block_height)
+            .collect();
+        assert_eq!(frozen, vec![10], "freeze must hit the output it named");
+    }
+    #[test]
+    fn confirmations_replace_mempool_arrival_order_with_scan_order() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(3, 0, "third"), make_output(1, 0, "first")]);
+        state.add_outputs(vec![
+            make_output(1, 100, "first"),
+            make_output(2, 100, "second"),
+            make_output(3, 100, "third"),
+        ]);
+        state
+            .assign_key_images_in_export_order(&["first".into(), "second".into(), "third".into()])
+            .unwrap();
+        assert_eq!(
+            state.outputs().iter().map(|o| o.amount).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        assert!(state.freeze_output("third"));
+        assert!(state.outputs()[2].frozen);
+        // Rescans must neither duplicate nor move existing confirmed outputs.
+        state.add_outputs(vec![make_output(1, 100, "first")]);
+        assert_eq!(state.outputs().len(), 3);
+        assert_eq!(state.outputs()[0].key_image, "first");
+    }
+
 }

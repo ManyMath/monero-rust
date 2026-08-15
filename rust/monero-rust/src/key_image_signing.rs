@@ -12,13 +12,13 @@ use cipher::{KeyIvInit, StreamCipher};
 use cuprate_cryptonight::cryptonight_hash_v0;
 use curve25519_dalek::{
     constants::ED25519_BASEPOINT_TABLE, edwards::EdwardsPoint, scalar::Scalar,
-    traits::VartimeMultiscalarMul,
 };
 use getrandom::getrandom;
 use sha3::{Digest, Keccak256};
 use zeroize::Zeroizing;
 
 use crate::epee_compat::KEY_IMAGES_MAGIC;
+use crate::key_image_import::SignedKeyImage;
 use crate::wallet_output::WalletOutput;
 
 /// Monero's biased hash-to-point, `H_p(key)`.
@@ -79,6 +79,10 @@ pub fn generate_key_image_ring_signature(
 }
 
 /// Verifies a 1-of-1 ring signature produced by `generate_key_image_ring_signature`.
+///
+/// Use `key_image_import::verify_key_image_signature` for the 1-of-1 ring
+/// signature check, including the key-image subgroup check. Keep that validation
+/// in one place so both import paths enforce the same rules.
 pub fn verify_key_image_ring_signature(
     key_image: &[u8; 32],
     pub_key: &EdwardsPoint,
@@ -86,30 +90,17 @@ pub fn verify_key_image_ring_signature(
     c: &[u8; 32],
     r: &[u8; 32],
 ) -> bool {
-    let c_scalar = Scalar::from_bytes_mod_order(*c);
-    let r_scalar = Scalar::from_bytes_mod_order(*r);
+    // Monero uses the key image as both the prefix hash and the ring image.
+    // Require these two representations to agree before checking the signature.
+    if *key_image != key_image_point.compress().to_bytes() {
+        return false;
+    }
 
-    // a' = r * G + c * pub_key
-    let a_prime = EdwardsPoint::vartime_double_scalar_mul_basepoint(&c_scalar, pub_key, &r_scalar);
+    let mut signature = [0u8; 64];
+    signature[..32].copy_from_slice(c);
+    signature[32..].copy_from_slice(r);
 
-    // Hp = hash_to_point(pub_key)
-    let hp = hash_to_point(*pub_key);
-
-    // b' = r * Hp + c * key_image_point
-    let b_prime =
-        EdwardsPoint::vartime_multiscalar_mul(&[r_scalar, c_scalar], &[hp, *key_image_point]);
-
-    // Build buffer: [key_image: 32 || a': 32 || b': 32]
-    let mut buf = [0u8; 96];
-    buf[..32].copy_from_slice(key_image);
-    buf[32..64].copy_from_slice(&a_prime.compress().to_bytes());
-    buf[64..96].copy_from_slice(&b_prime.compress().to_bytes());
-
-    // h' = hash_to_scalar(buf)
-    let hash: [u8; 32] = Keccak256::digest(&buf).into();
-    let h_prime = Scalar::from_bytes_mod_order(hash);
-
-    h_prime == c_scalar
+    crate::key_image_import::verify_key_image_signature(pub_key, key_image_point, &signature)
 }
 
 /// Schnorr signature (Monero's `generate_signature`) over `msg_hash`.
@@ -295,11 +286,17 @@ pub fn export_key_images_v3(
 
 /// Imports key images from Monero's v3 binary format.
 ///
-/// Returns `(key_images, pub_spend_key, pub_view_key)`. Ring signatures are not verified.
+/// Returns `(signed_key_images, pub_spend_key, pub_view_key)`. Each entry keeps its ring
+/// signature: that proof is the only thing binding a key image to the output it belongs
+/// to, and key images are applied *positionally*, so dropping it here leaves nothing
+/// downstream able to tell a real export from one whose entries were reordered or
+/// replaced. Verify with `WalletState::assign_verified_key_images_in_export_order`, which
+/// checks each against the public key of the output it lands on, as monero does
+/// (wallet2.cpp:13362-13368).
 pub fn import_key_images_v3(
     data: &[u8],
     view_secret_key: &[u8; 32],
-) -> Result<(Vec<[u8; 32]>, [u8; 32], [u8; 32]), String> {
+) -> Result<(Vec<SignedKeyImage>, [u8; 32], [u8; 32]), String> {
     // Strip magic bytes
     let payload = crate::epee_compat::strip_magic(KEY_IMAGES_MAGIC, data)?;
 
@@ -338,10 +335,14 @@ pub fn import_key_images_v3(
 
     for i in 0..n {
         let base = i * 96;
-        let mut ki = [0u8; 32];
-        ki.copy_from_slice(&records_data[base..base + 32]);
-        // Skip signature bytes (base+32..base+96) -- not verified on import
-        key_images.push(ki);
+        let mut key_image = [0u8; 32];
+        key_image.copy_from_slice(&records_data[base..base + 32]);
+        let mut signature = [0u8; 64];
+        signature.copy_from_slice(&records_data[base + 32..base + 96]);
+        key_images.push(SignedKeyImage {
+            key_image,
+            signature,
+        });
     }
 
     Ok((key_images, pub_spend, pub_view))
@@ -411,23 +412,50 @@ pub fn export_key_images_from_outputs(
 }
 
 /// Derives the view key from `seed_phrase`/`passphrase` and imports key images (EPEE or v3).
+///
+/// Drops each entry's ring signature, so the result cannot be checked against the outputs
+/// it will be applied to. Prefer `import_signed_key_images_from_seed`.
 pub fn import_key_images_from_seed(
     seed_phrase: &str,
     passphrase: &str,
     data: &[u8],
 ) -> Result<Vec<String>, String> {
-    // Bind the import to this wallet: a v3 export names the account it was made for, and
-    // key images are applied to outputs positionally, so another account's file would mark
-    // the wrong outputs spent rather than fail.
+    let (view_secret_key, pub_spend, pub_view) = import_account_keys(seed_phrase, passphrase)?;
+    crate::epee_compat::import_key_images_for_account(
+        data,
+        Some(&view_secret_key),
+        Some((&pub_spend, &pub_view)),
+    )
+}
+
+/// `import_key_images_from_seed`, keeping each entry's ring signature so the caller can
+/// prove it belongs to the output it will be paired with.
+pub fn import_signed_key_images_from_seed(
+    seed_phrase: &str,
+    passphrase: &str,
+    data: &[u8],
+) -> Result<Vec<SignedKeyImage>, String> {
+    let (view_secret_key, pub_spend, pub_view) = import_account_keys(seed_phrase, passphrase)?;
+    crate::epee_compat::import_signed_key_images_for_account(
+        data,
+        Some(&view_secret_key),
+        Some((&pub_spend, &pub_view)),
+    )
+}
+
+/// Derive `(view_secret, pub_spend, pub_view)` for checking the import's account.
+///
+/// View-only wallets supply a `viewonly:` sentinel in place of a seed.
+fn import_account_keys(
+    seed_phrase: &str,
+    passphrase: &str,
+) -> Result<([u8; 32], [u8; 32], [u8; 32]), String> {
     if let Some((view_scalar, spend_point)) = crate::scanner::parse_view_only_keys(seed_phrase) {
-        let view_secret_key = view_scalar.to_bytes();
-        let pub_spend = spend_point.compress().to_bytes();
-        let pub_view = (&view_scalar * ED25519_BASEPOINT_TABLE).compress().to_bytes();
-        return crate::epee_compat::import_key_images_for_account(
-            data,
-            Some(&view_secret_key),
-            Some((&pub_spend, &pub_view)),
-        );
+        return Ok((
+            view_scalar.to_bytes(),
+            spend_point.compress().to_bytes(),
+            (&view_scalar * ED25519_BASEPOINT_TABLE).compress().to_bytes(),
+        ));
     }
 
     let seed = crate::scanner::resolve_seed(seed_phrase)?;
@@ -435,14 +463,11 @@ pub fn import_key_images_from_seed(
     let spend_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(*key_bytes));
     let view_bytes: [u8; 32] = Keccak256::digest(spend_scalar.to_bytes()).into();
     let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(view_bytes));
-    let view_secret_key = view_scalar.to_bytes();
-    let pub_spend = (&*spend_scalar * ED25519_BASEPOINT_TABLE).compress().to_bytes();
-    let pub_view = (&*view_scalar * ED25519_BASEPOINT_TABLE).compress().to_bytes();
-    crate::epee_compat::import_key_images_for_account(
-        data,
-        Some(&view_secret_key),
-        Some((&pub_spend, &pub_view)),
-    )
+    Ok((
+        view_scalar.to_bytes(),
+        (&*spend_scalar * ED25519_BASEPOINT_TABLE).compress().to_bytes(),
+        (&*view_scalar * ED25519_BASEPOINT_TABLE).compress().to_bytes(),
+    ))
 }
 
 #[cfg(test)]
@@ -730,7 +755,23 @@ mod tests {
         assert_eq!(imported_view, pub_view_bytes);
 
         for (i, entry) in entries.iter().enumerate() {
-            assert_eq!(imported_kis[i], entry.key_image, "Key image {} mismatch", i);
+            assert_eq!(
+                imported_kis[i].key_image, entry.key_image,
+                "Key image {} mismatch",
+                i
+            );
+            // The round trip must preserve the signature needed to verify the import.
+            assert!(
+                crate::key_image_import::verify_key_image_signature(
+                    &entry.pub_key,
+                    &curve25519_dalek::edwards::CompressedEdwardsY(imported_kis[i].key_image)
+                        .decompress()
+                        .expect("an exported key image must be a curve point"),
+                    &imported_kis[i].signature,
+                ),
+                "Signature {} did not survive the roundtrip",
+                i
+            );
         }
     }
 
@@ -772,6 +813,126 @@ mod tests {
         for (i, entry) in entries.iter().enumerate() {
             assert_eq!(imported[i], hex::encode(entry.key_image));
         }
+    }
+
+    /// Reject torsioned key images through this verification entry point too.
+    ///
+    /// For `I' = x*Hp(P) + T` with order-8 `T`, the extra term in verification is
+    /// `c*T`. Trying nonces until `8 | c` makes the signature verify. The subgroup
+    /// check must still reject it; see the corresponding test in `key_image_import`.
+    #[test]
+    fn ring_sig_verify_rejects_a_torsioned_key_image_whose_signature_verifies() {
+        use curve25519_dalek::{edwards::CompressedEdwardsY, traits::IsIdentity};
+
+        let torsion = CompressedEdwardsY(
+            hex::decode("c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+        )
+        .decompress()
+        .expect("small-order point must decompress");
+        assert!(!torsion.is_identity());
+        assert!(!torsion.is_torsion_free(), "fixture must carry torsion");
+
+        let x = Scalar::from(1234567u64);
+        let pub_key = &x * ED25519_BASEPOINT_TABLE;
+        let hp = hash_to_point(pub_key);
+        let forged = (x * hp) + torsion;
+        assert!(!forged.is_torsion_free());
+        let forged_bytes = forged.compress().to_bytes();
+
+        let mut c_bytes = [0u8; 32];
+        let mut r_bytes = [0u8; 32];
+        let mut found = false;
+        for nonce in 1u64..256 {
+            let k = Scalar::from(nonce);
+            let a = (&k * ED25519_BASEPOINT_TABLE).compress().to_bytes();
+            let b = (k * hp).compress().to_bytes();
+
+            let mut buf = [0u8; 96];
+            buf[..32].copy_from_slice(&forged_bytes);
+            buf[32..64].copy_from_slice(&a);
+            buf[64..96].copy_from_slice(&b);
+            let c = Scalar::from_bytes_mod_order(Keccak256::digest(&buf).into());
+
+            // The low three bits determine whether `c*T` vanishes.
+            if (c.to_bytes()[0] & 7) != 0 {
+                continue;
+            }
+            c_bytes = c.to_bytes();
+            r_bytes = (k - (c * x)).to_bytes();
+            found = true;
+            break;
+        }
+        assert!(found, "a divisible-by-8 challenge should turn up within 256 nonces");
+
+        assert!(
+            !verify_key_image_ring_signature(
+                &forged_bytes,
+                &pub_key,
+                &forged,
+                &c_bytes,
+                &r_bytes
+            ),
+            "a key image outside the prime-order subgroup must be rejected"
+        );
+    }
+
+    /// Reject disagreement between the key-image bytes and point. Monero passes
+    /// the same value for both; this API must enforce that explicitly.
+    #[test]
+    fn ring_sig_verify_rejects_key_image_bytes_that_disagree_with_the_point() {
+        let (spend_scalar, _, _, _, _, _) = test_keys();
+        let (key_offset, pub_key, key_image) = test_output_keys(&spend_scalar);
+
+        let ephemeral_sec = spend_scalar + &key_offset;
+        let (c, r) = generate_key_image_ring_signature(&key_image, &pub_key, &ephemeral_sec);
+
+        let ephemeral_sec2 = Zeroizing::new(spend_scalar + &key_offset);
+        let key_image_point = generate_key_image(&ephemeral_sec2);
+
+        let mut other_bytes = key_image;
+        other_bytes[0] ^= 0x01;
+
+        assert!(
+            !verify_key_image_ring_signature(&other_bytes, &pub_key, &key_image_point, &c, &r),
+            "bytes that are not the point's own encoding must be refused"
+        );
+    }
+
+    /// Reject an identity key image even though it is torsion-free. If the output
+    /// key is also the identity, both `c*P` and `c*I` vanish. A forged signature can
+    /// then choose `r` freely and compute `c` from the resulting commitments.
+    #[test]
+    fn ring_sig_verify_rejects_an_identity_key_image_it_would_otherwise_accept() {
+        let identity = EdwardsPoint::default();
+        assert!(identity.is_torsion_free(), "the torsion check cannot catch this");
+
+        let identity_bytes = identity.compress().to_bytes();
+        let hp = hash_to_point(identity);
+
+        // With identity points, the equations reduce to `a' = r*G` and `b' = r*Hp`.
+        let r = Scalar::from(42u64);
+        let a = (&r * ED25519_BASEPOINT_TABLE).compress().to_bytes();
+        let b = (r * hp).compress().to_bytes();
+
+        let mut buf = [0u8; 96];
+        buf[..32].copy_from_slice(&identity_bytes);
+        buf[32..64].copy_from_slice(&a);
+        buf[64..96].copy_from_slice(&b);
+        let c = Scalar::from_bytes_mod_order(Keccak256::digest(&buf).into());
+
+        assert!(
+            !verify_key_image_ring_signature(
+                &identity_bytes,
+                &identity,
+                &identity,
+                &c.to_bytes(),
+                &r.to_bytes()
+            ),
+            "an identity key image must be rejected"
+        );
     }
 
     #[test]

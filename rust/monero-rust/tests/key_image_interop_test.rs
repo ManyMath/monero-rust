@@ -105,7 +105,7 @@ fn test_v3_roundtrip() {
 
     for (i, entry) in entries.iter().enumerate() {
         assert_eq!(
-            imported_kis[i], entry.key_image,
+            imported_kis[i].key_image, entry.key_image,
             "Key image {} mismatch on roundtrip",
             i
         );
@@ -436,4 +436,176 @@ fn refuses_key_images_exported_for_a_different_account() {
         err.contains("different account"),
         "unexpected error: {err}"
     );
+}
+
+/// The account binding says *whose* wallet a file is for. It says nothing about which
+/// output each key image belongs to, and key images are applied positionally - so a file
+/// for the right account, encrypted with the right view key, whose entries are in
+/// the wrong order, marked the wrong outputs spent.
+///
+/// The per-key-image ring signature is what rules that out, and monero checks it against
+/// the output's own one-time public key (wallet2.cpp:13362-13368). This builds a real
+/// export, swaps its two records - every key image and every signature still authentic,
+/// only mispaired - and requires the import to reject it.
+///
+/// The swap is within the attacker's means by construction: the file is authenticated with
+/// the *view* key, which the untrusted online wallet holds by design, so it can decrypt,
+/// rewrite and re-encrypt at will.
+#[test]
+fn refuses_key_images_paired_with_the_wrong_outputs() {
+    use monero_rust::key_image_signing::encrypt_with_view_key;
+    use monero_rust::{WalletOutput, WalletState};
+
+    let (spend_scalar, pub_spend, pub_view, view_secret) = test_keys();
+    let entries = test_entries(&spend_scalar, 2);
+
+    // A view-only wallet holding exactly these two outputs, in export order.
+    let outputs: Vec<WalletOutput> = entries
+        .iter()
+        .enumerate()
+        .map(|(i, entry)| WalletOutput {
+            tx_hash: format!("{i:064x}"),
+            output_index: 0,
+            amount: 1,
+            amount_xmr: "0.000000000001".to_string(),
+            key: hex::encode(entry.pub_key.compress().to_bytes()),
+            key_offset: hex::encode(entry.key_offset.to_bytes()),
+            commitment_mask: String::new(),
+            subaddress_index: Some((0, 0)),
+            payment_id: None,
+            received_output_bytes: String::new(),
+            block_height: 10 + i as u64,
+            spent: false,
+            spent_height: None,
+            key_image: String::new(),
+            is_coinbase: false,
+            frozen: false,
+        })
+        .collect();
+
+    let sentinel = format!(
+        "viewonly:{}:{}",
+        hex::encode(view_secret),
+        hex::encode(pub_spend)
+    );
+
+    let exported = export_key_images_v3(
+        &entries,
+        &spend_scalar,
+        &pub_spend,
+        &pub_view,
+        &view_secret,
+        0,
+    )
+    .expect("export should succeed");
+
+    // Accept the unchanged export before checking the tampered version.
+    let honest = monero_rust::key_image_signing::import_signed_key_images_from_seed(
+        &sentinel, "", &exported,
+    )
+    .expect("a genuine export should import");
+    let mut state = WalletState::new();
+    state.replace_outputs(outputs.clone());
+    assert_eq!(
+        state
+            .assign_verified_key_images_in_export_order(&honest)
+            .expect("a genuine export should verify"),
+        2
+    );
+    for (output, entry) in state.outputs().iter().zip(&entries) {
+        assert_eq!(output.key_image, hex::encode(entry.key_image));
+    }
+
+    // Swap the two 96-byte records and reauthenticate the payload.
+    let payload = &exported[KEY_IMAGES_MAGIC.len()..];
+    let plaintext =
+        decrypt_with_view_key(payload, &view_secret).expect("we hold the view key by assumption");
+    assert_eq!(plaintext.len(), 68 + 2 * 96, "header plus two records");
+
+    let mut swapped = plaintext.clone();
+    swapped[68..68 + 96].copy_from_slice(&plaintext[68 + 96..68 + 192]);
+    swapped[68 + 96..68 + 192].copy_from_slice(&plaintext[68..68 + 96]);
+    assert_ne!(swapped, plaintext, "the fixture must actually be reordered");
+
+    let mut tampered = KEY_IMAGES_MAGIC.to_vec();
+    tampered.extend_from_slice(&encrypt_with_view_key(&swapped, &view_secret));
+
+    // Confirm that file authentication and account validation still pass.
+    let mispaired = monero_rust::key_image_signing::import_signed_key_images_from_seed(
+        &sentinel, "", &tampered,
+    )
+    .expect("a reordered file still authenticates and names the right account");
+    assert_eq!(mispaired.len(), 2);
+
+    let mut state = WalletState::new();
+    state.replace_outputs(outputs);
+    let err = state
+        .assign_verified_key_images_in_export_order(&mispaired)
+        .expect_err("key images paired with the wrong outputs must be refused");
+    assert!(
+        err.contains("does not belong to the output"),
+        "unexpected error: {err}"
+    );
+
+    // A rejected import must leave all outputs unchanged.
+    assert!(
+        state.outputs().iter().all(|o| o.key_image.is_empty()),
+        "a refused import must leave the wallet untouched"
+    );
+}
+
+#[test]
+fn key_image_import_preserves_transaction_order_within_a_block() {
+    use monero_rust::key_image_signing::generate_key_image_ring_signature;
+    use monero_rust::{SignedKeyImage, WalletState};
+
+    let (spend, _, _, _) = test_keys();
+    let entries = test_entries(&spend, 4);
+    let mut outputs = test_outputs(&entries);
+    // Two owned outputs in transaction A, then output zero of transaction B.
+    // Sorting by (height, output_index) incorrectly moves B ahead of A.
+    outputs[0].output_index = 1;
+    outputs[1].tx_hash = outputs[0].tx_hash.clone();
+    outputs[1].output_index = 2;
+    outputs[1].block_height = outputs[0].block_height;
+    outputs[2].block_height = outputs[0].block_height;
+    let signatures: Vec<_> = entries
+        .iter()
+        .map(|entry| {
+            let secret = spend + entry.key_offset;
+            let (c, r) =
+                generate_key_image_ring_signature(&entry.key_image, &entry.pub_key, &secret);
+            let mut signature = [0; 64];
+            signature[..32].copy_from_slice(&c);
+            signature[32..].copy_from_slice(&r);
+            SignedKeyImage {
+                key_image: entry.key_image,
+                signature,
+            }
+        })
+        .collect();
+    let mut pool = outputs[3].clone();
+    pool.tx_hash = "pool".into();
+    pool.block_height = 0;
+    // Persistence must preserve the scanner's within-block order.
+    outputs.insert(0, pool);
+    let json = serde_json::to_string(&outputs).unwrap();
+    let mut state = WalletState::new();
+    state.replace_outputs(serde_json::from_str(&json).unwrap());
+    assert_eq!(state.assign_verified_key_images_in_export_order(&signatures).unwrap(), 4);
+    for (i, output) in state.outputs()[..4].iter().enumerate() {
+        assert_eq!(output.key_image, hex::encode(entries[i].key_image));
+    }
+    assert_eq!(state.outputs()[4].tx_hash, "pool");
+    assert!(state.outputs()[4].key_image.is_empty());
+    assert!(state.freeze_output(&hex::encode(entries[2].key_image)));
+    assert_eq!(state.outputs()[2].output_index, 0);
+    assert!(state.outputs()[2].frozen);
+    let mut too_many = signatures.clone();
+    too_many.push(signatures[0].clone());
+    assert!(state.assign_verified_key_images_in_export_order(&too_many).is_err());
+    let images: Vec<_> = entries.iter().map(|e| hex::encode(e.key_image)).collect();
+    assert_eq!(state.assign_key_images_in_export_order(&images).unwrap(), 4);
+    assert!(state.outputs()[4].key_image.is_empty());
+    assert!(state.assign_key_images_in_export_order(&vec!["extra".into(); 5]).is_err());
 }

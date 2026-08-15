@@ -1671,6 +1671,52 @@ pub fn import_key_images_for_account(
     view_secret_key: Option<&[u8; 32]>,
     expected_keys: Option<(&[u8; 32], &[u8; 32])>,
 ) -> Result<Vec<String>, String> {
+    Ok(
+        parse_key_image_export(data, view_secret_key, expected_keys)?
+            .into_iter()
+            .map(|(key_image, _)| hex::encode(key_image))
+            .collect(),
+    )
+}
+
+/// `import_key_images_for_account`, keeping each entry's ring signature.
+///
+/// The signature is what binds a key image to one particular output, so this is the only
+/// import that can be checked - see
+/// `WalletState::assign_verified_key_images_in_export_order`. A format that carries no
+/// proof is rejected here rather than returning unprovable entries.
+pub fn import_signed_key_images_for_account(
+    data: &[u8],
+    view_secret_key: Option<&[u8; 32]>,
+    expected_keys: Option<(&[u8; 32], &[u8; 32])>,
+) -> Result<Vec<crate::key_image_import::SignedKeyImage>, String> {
+    parse_key_image_export(data, view_secret_key, expected_keys)?
+        .into_iter()
+        .enumerate()
+        .map(|(i, (key_image, signature))| {
+            let signature = signature.ok_or_else(|| {
+                format!(
+                    "key image {i} carries no ring signature: this export format cannot be \
+                     verified against the outputs it names. Re-export from the signing wallet."
+                )
+            })?;
+            Ok(crate::key_image_import::SignedKeyImage {
+                key_image,
+                signature,
+            })
+        })
+        .collect()
+}
+
+/// The one parser behind both views of a key-image export.
+///
+/// Returns each entry's key image with its ring signature when the format carries one.
+/// The old EPEE container predates this crate writing signatures, so its entries may not.
+fn parse_key_image_export(
+    data: &[u8],
+    view_secret_key: Option<&[u8; 32]>,
+    expected_keys: Option<(&[u8; 32], &[u8; 32])>,
+) -> Result<Vec<([u8; 32], Option<[u8; 64]>)>, String> {
     let payload = strip_magic(KEY_IMAGES_MAGIC, data)?;
 
     // v3 first when we can read it: it is the only one of the two that authenticates, and
@@ -1685,7 +1731,10 @@ pub fn import_key_images_for_account(
                         return Err("key images are for a different account".to_string());
                     }
                 }
-                return Ok(key_images.iter().map(hex::encode).collect());
+                return Ok(key_images
+                    .into_iter()
+                    .map(|ski| (ski.key_image, Some(ski.signature)))
+                    .collect());
             }
             Err(e) => v3_error = Some(e),
         }
@@ -1703,14 +1752,28 @@ pub fn import_key_images_for_account(
     struct KeyImageEntry {
         #[serde(with = "serde_bytes")]
         key_image: Vec<u8>,
+        /// The deprecated exporter omits this field.
+        #[serde(default)]
+        signature: Option<serde_bytes::ByteBuf>,
     }
 
     if let Ok(export) = monero_epee_bin_serde::from_bytes::<KeyImageExport, _>(payload) {
-        return Ok(export
-            .key_images
-            .into_iter()
-            .map(|e| hex::encode(e.key_image))
-            .collect());
+        let mut entries = Vec::with_capacity(export.key_images.len());
+        for (i, entry) in export.key_images.into_iter().enumerate() {
+            let key_image: [u8; 32] = entry
+                .key_image
+                .try_into()
+                .map_err(|_| format!("key image {i} is not 32 bytes"))?;
+            let signature = match entry.signature {
+                Some(sig) => Some(
+                    <[u8; 64]>::try_from(sig.into_vec())
+                        .map_err(|_| format!("signature {i} is not 64 bytes"))?,
+                ),
+                None => None,
+            };
+            entries.push((key_image, signature));
+        }
+        return Ok(entries);
     }
 
     // Neither format read. Report why v3 failed when it was the one we could have used.
