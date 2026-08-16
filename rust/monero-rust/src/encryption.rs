@@ -1,7 +1,4 @@
-use argon2::{
-    password_hash::{PasswordHasher, SaltString},
-    Argon2, Version,
-};
+use argon2::{password_hash::SaltString, Argon2, Version};
 use chacha20poly1305::{
     aead::{Aead, KeyInit, OsRng},
     ChaCha20Poly1305, Nonce,
@@ -34,8 +31,13 @@ impl std::fmt::Display for EncryptionError {
 
 impl std::error::Error for EncryptionError {}
 
-/// Derive a 256-bit encryption key from a password using Argon2id
-pub fn derive_key(password: &str, salt: &[u8]) -> Result<[u8; 32], EncryptionError> {
+/// Derive a 256-bit key with Argon2id and clear it on drop.
+///
+/// Write directly into a `Zeroizing` buffer. The `hash_password` API returns an
+/// immutable `password_hash::Output` that cannot be cleared after use.
+/// Compatibility tests check that both APIs derive the same key, since changing
+/// the result would prevent existing wallets from being decrypted.
+pub fn derive_key(password: &str, salt: &[u8]) -> Result<Zeroizing<[u8; 32]>, EncryptionError> {
     let params = argon2::Params::new(
         65536, // m_cost: 64 MiB memory
         3,     // t_cost: 3 iterations
@@ -46,18 +48,18 @@ pub fn derive_key(password: &str, salt: &[u8]) -> Result<[u8; 32], EncryptionErr
 
     let argon2 = Argon2::new(argon2::Algorithm::Argon2id, Version::V0x13, params);
 
+    // Keep the existing salt validation through `SaltString`.
     let salt_string =
         SaltString::encode_b64(salt).map_err(|_| EncryptionError::KeyDerivationFailed)?;
-
-    let hash = argon2
-        .hash_password(password.as_bytes(), &salt_string)
+    let mut salt_bytes = [0u8; 64];
+    let salt_bytes = salt_string
+        .decode_b64(&mut salt_bytes)
         .map_err(|_| EncryptionError::KeyDerivationFailed)?;
 
-    let hash_bytes = hash.hash.ok_or(EncryptionError::KeyDerivationFailed)?;
-    let hash_slice = hash_bytes.as_bytes();
-
-    let mut key = [0u8; 32];
-    key.copy_from_slice(&hash_slice[..32]);
+    let mut key = Zeroizing::new([0u8; 32]);
+    argon2
+        .hash_password_into(password.as_bytes(), salt_bytes, &mut *key)
+        .map_err(|_| EncryptionError::KeyDerivationFailed)?;
     Ok(key)
 }
 
@@ -67,9 +69,8 @@ pub fn encrypt(plaintext: &[u8], password: &str) -> Result<Vec<u8>, EncryptionEr
     let mut salt = [0u8; 16];
     OsRng.fill_bytes(&mut salt);
 
-    // Zeroizing, not a manual key.zeroize() at the end: every `?` below is an early
-    // return that would skip the wipe and leave the derived key in freed memory.
-    let key = Zeroizing::new(derive_key(password, &salt)?);
+    // The key is cleared on drop, including when decryption returns an error.
+    let key = derive_key(password, &salt)?;
 
     let cipher =
         ChaCha20Poly1305::new_from_slice(&*key).map_err(|_| EncryptionError::EncryptionFailed)?;
@@ -92,7 +93,12 @@ pub fn encrypt(plaintext: &[u8], password: &str) -> Result<Vec<u8>, EncryptionEr
 
 /// Derive a key from a password using a fresh random salt.
 /// Returns (key, salt) so the caller can cache the key and reuse it.
-pub fn derive_key_fresh(password: &str) -> Result<([u8; 32], [u8; 16]), EncryptionError> {
+///
+/// Callers can retain the key in its zeroizing buffer for reuse. They must also
+/// protect the password and any copies of the key.
+pub fn derive_key_fresh(
+    password: &str,
+) -> Result<(Zeroizing<[u8; 32]>, [u8; 16]), EncryptionError> {
     let mut salt = [0u8; 16];
     OsRng.fill_bytes(&mut salt);
     let key = derive_key(password, &salt)?;
@@ -136,7 +142,7 @@ pub fn decrypt(encrypted_data: &[u8], password: &str) -> Result<Vec<u8>, Encrypt
     let (salt, rest) = encrypted_data.split_at(16);
     let (nonce_bytes, ciphertext) = rest.split_at(NONCE_SIZE);
 
-    let key = Zeroizing::new(derive_key(password, salt)?);
+    let key = derive_key(password, salt)?;
 
     let cipher =
         ChaCha20Poly1305::new_from_slice(&*key).map_err(|_| EncryptionError::DecryptionFailed)?;
@@ -153,6 +159,8 @@ pub fn decrypt(encrypted_data: &[u8], password: &str) -> Result<Vec<u8>, Encrypt
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Compare against the original `hash_password` API in the compatibility test.
+    use argon2::password_hash::PasswordHasher;
 
     #[test]
     fn test_encrypt_decrypt_roundtrip() {
@@ -199,6 +207,41 @@ mod tests {
         let decrypted = decrypt(&encrypted, password).expect("Decryption failed");
 
         assert_eq!(plaintext, decrypted.as_slice());
+    }
+
+    /// Check the derived key against a vector from the original implementation.
+    /// Existing encrypted wallets must remain readable after changes to the KDF.
+    #[test]
+    fn derive_key_matches_the_captured_vector() {
+        assert_eq!(
+            hex::encode(&*derive_key("test_password_123", &[0u8; 16]).unwrap()),
+            "3b69d3759a1eed1ef9876add0fd2e097f1752d0431f02c1dda5e8dbaf1852183",
+            "the KDF's output changed; every stored wallet is encrypted under the old one"
+        );
+    }
+
+    /// Check that both Argon2 APIs still produce the same key after dependency updates.
+    #[test]
+    fn derive_key_matches_the_password_hash_api_it_replaced() {
+        for (password, salt) in [
+            ("test_password_123", [0u8; 16]),
+            ("", [1u8; 16]),
+            ("a much longer password with spaces and ünïcödé", [0xABu8; 16]),
+        ] {
+            let params = argon2::Params::new(65536, 3, 1, Some(32)).unwrap();
+            let argon2 = Argon2::new(argon2::Algorithm::Argon2id, Version::V0x13, params);
+            let salt_string = SaltString::encode_b64(&salt).unwrap();
+            let hash = argon2
+                .hash_password(password.as_bytes(), &salt_string)
+                .unwrap();
+            let expected = hash.hash.unwrap();
+
+            assert_eq!(
+                &*derive_key(password, &salt).unwrap(),
+                &expected.as_bytes()[..32],
+                "password={password:?}"
+            );
+        }
     }
 
     #[test]
