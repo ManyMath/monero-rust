@@ -82,6 +82,93 @@ impl UrEncoder {
     }
 }
 
+/// Maximum fragment count accepted from a UR frame.
+///
+/// 8192 leaves room beyond the few hundred fragments typically needed for an
+/// unsigned transaction while bounding the fountain decoder's allocations.
+const MAX_SEQUENCE_COUNT: u32 = 8192;
+
+/// Validate the fountain header before passing a frame to the UR decoder.
+///
+/// The decoder allocates arrays proportional to the CBOR `sequence_count`.
+/// The count in the URI text is parsed separately and discarded, so checking
+/// that text cannot bound the allocation.
+///
+/// Also reject sequence zero: `choose_fragments` subtracts one from the sequence
+/// without checking for underflow.
+fn check_declared_fragment_count(uri: &str) -> Result<(), String> {
+    let Some(after_scheme) = uri.strip_prefix("ur:") else {
+        // Let the UR decoder report unsupported URI syntax.
+        return Ok(());
+    };
+    let Some((_ur_type, rest)) = after_scheme.split_once('/') else {
+        return Ok(());
+    };
+    // Single-part URs have no sequence numbers or fountain header.
+    let Some((_indices, payload)) = rest.rsplit_once('/') else {
+        return Ok(());
+    };
+
+    let cbor = ur::bytewords::decode(payload, ur::bytewords::Style::Minimal)
+        .map_err(|e| format!("UR decode error: {:?}", e))?;
+
+    let (sequence, sequence_count) = read_fountain_header(&cbor)
+        .ok_or_else(|| "UR frame header is not a fountain part".to_string())?;
+
+    if sequence == 0 {
+        return Err("UR frame declares sequence 0, which no encoder emits".to_string());
+    }
+    if sequence_count == 0 || sequence_count > MAX_SEQUENCE_COUNT {
+        return Err(format!(
+            "UR frame declares {sequence_count} fragments; refusing more than \
+             {MAX_SEQUENCE_COUNT}"
+        ));
+    }
+    Ok(())
+}
+
+/// Read `(sequence, sequence_count)` from a fountain part's CBOR header.
+///
+/// The header is `[sequence, sequence_count, message_length, checksum, data]`.
+/// Only the first two unsigned integers are needed here. Return `None` for
+/// unsupported encodings and let the UR decoder report the error.
+fn read_fountain_header(cbor: &[u8]) -> Option<(u32, u32)> {
+    let mut rest = cbor;
+    // Expect a definite-length CBOR array with five elements.
+    if *rest.first()? != 0x85 {
+        return None;
+    }
+    rest = &rest[1..];
+    let sequence = read_cbor_u32(&mut rest)?;
+    let sequence_count = read_cbor_u32(&mut rest)?;
+    Some((sequence, sequence_count))
+}
+
+/// Read a CBOR unsigned integer into `u32` and advance `rest`.
+fn read_cbor_u32(rest: &mut &[u8]) -> Option<u32> {
+    let initial = *rest.first()?;
+    // Require CBOR major type 0: an unsigned integer.
+    if initial >> 5 != 0 {
+        return None;
+    }
+    let (value, consumed) = match initial & 0x1f {
+        immediate @ 0..=23 => (u32::from(immediate), 1),
+        24 => (u32::from(*rest.get(1)?), 2),
+        25 => (
+            u32::from(u16::from_be_bytes([*rest.get(1)?, *rest.get(2)?])),
+            3,
+        ),
+        26 => (
+            u32::from_be_bytes([*rest.get(1)?, *rest.get(2)?, *rest.get(3)?, *rest.get(4)?]),
+            5,
+        ),
+        // The UR decoder also rejects 64-bit encodings for these u32 fields.
+        _ => return None,
+    };
+    *rest = &rest[consumed..];
+    Some(value)
+}
+
 /// Progress of UR decoding.
 #[derive(Clone, Debug)]
 pub struct DecodeProgress {
@@ -107,6 +194,10 @@ impl UrDecoder {
 
     /// Feed a scanned UR URI string into the decoder.
     pub fn receive(&mut self, uri: &str) -> Result<DecodeProgress, String> {
+        // Before the crate sees it: the declared fragment count drives allocations inside
+        // the fountain decoder and nothing in the crate bounds it.
+        check_declared_fragment_count(uri)?;
+
         match self.inner.receive(uri) {
             Ok(()) => {}
             Err(e) => {
@@ -286,6 +377,96 @@ mod tests {
         assert_eq!(parse_sequence_total("ur:bytes/3-10/abcdef"), Some(10));
         assert_eq!(parse_sequence_total("ur:bytes/abcdef"), None);
         assert_eq!(parse_sequence_total("not-a-ur"), None);
+    }
+
+    /// Build a frame with caller-supplied CBOR sequence values.
+    ///
+    /// Keep the URI's text indices different from the CBOR values to check that
+    /// validation reads the header used for fountain decoding.
+    fn hostile_frame(sequence: u32, sequence_count: u32) -> String {
+        let mut cbor = vec![0x85]; // array(5)
+        for value in [sequence, sequence_count, 1024u32, 0u32] {
+            cbor.push(0x1a); // unsigned integer, 4 bytes big-endian
+            cbor.extend_from_slice(&value.to_be_bytes());
+        }
+        cbor.extend_from_slice(&[0x41, 0x00]); // bytes(1) = [0]
+
+        format!(
+            "ur:{}/1-2/{}",
+            UR_TYPE_UNSIGNED_TX,
+            ur::bytewords::encode(&cbor, ur::bytewords::Style::Minimal)
+        )
+    }
+
+    /// Reject an excessive CBOR fragment count before the UR decoder allocates
+    /// its fragment and degree arrays. One frame can otherwise request enough
+    /// memory to abort a wasm instance.
+    #[test]
+    fn refuses_a_frame_declaring_an_absurd_fragment_count() {
+        // Check that the header parses so the test exercises the count limit.
+        let honest = hostile_frame(1, 2);
+        assert_eq!(
+            read_fountain_header(
+                &ur::bytewords::decode(
+                    honest.rsplit_once('/').unwrap().1,
+                    ur::bytewords::Style::Minimal
+                )
+                .unwrap()
+            ),
+            Some((1, 2)),
+            "the fixture must produce a header this code can read"
+        );
+        UrDecoder::new()
+            .receive(&honest)
+            .expect("a well-formed frame within the bound must still be accepted");
+
+        // This sequence selects the branch that allocates fragment arrays.
+        let uri = hostile_frame(4_000_000_001, 4_000_000_000);
+        let err = UrDecoder::new()
+            .receive(&uri)
+            .expect_err("a frame declaring four billion fragments must be refused");
+        assert!(
+            err.contains("4000000000 fragments"),
+            "the refusal must name the declared count: {err}"
+        );
+    }
+
+    /// Reject sequence zero before `choose_fragments` subtracts one from it.
+    /// The underlying decoder checks for a zero count but not a zero sequence.
+    #[test]
+    fn refuses_a_frame_declaring_sequence_zero() {
+        let err = UrDecoder::new()
+            .receive(&hostile_frame(0, 4))
+            .expect_err("sequence 0 must be refused before the crate subtracts one from it");
+        assert!(err.contains("sequence 0"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn read_fountain_header_reads_every_integer_width() {
+        // Cover immediate values through 23 and the 1-, 2-, and 4-byte encodings.
+        let build = |a: &[u8], b: &[u8]| {
+            let mut cbor = vec![0x85];
+            cbor.extend_from_slice(a);
+            cbor.extend_from_slice(b);
+            cbor.extend_from_slice(&[0x00, 0x00, 0x41, 0x00]);
+            cbor
+        };
+        assert_eq!(read_fountain_header(&build(&[23], &[1])), Some((23, 1)));
+        assert_eq!(
+            read_fountain_header(&build(&[0x18, 200], &[0x19, 0x01, 0x00])),
+            Some((200, 256))
+        );
+        assert_eq!(
+            read_fountain_header(&build(&[0x1a, 0, 0, 1, 0], &[0x1a, 0xff, 0xff, 0xff, 0xff])),
+            Some((256, u32::MAX))
+        );
+        // Reject the wrong array length, a 64-bit integer, and a truncated header.
+        assert_eq!(read_fountain_header(&[0x84, 1, 2, 3, 4]), None);
+        assert_eq!(
+            read_fountain_header(&build(&[0x1b, 0, 0, 0, 0, 0, 0, 0, 1], &[1])),
+            None
+        );
+        assert_eq!(read_fountain_header(&[0x85, 0x1a, 0, 0]), None);
     }
 
     #[test]
