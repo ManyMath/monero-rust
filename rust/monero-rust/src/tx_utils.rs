@@ -1,3 +1,15 @@
+/// Sum atomic amounts, returning `None` on overflow.
+///
+/// Send and signing checks compare these sums to determine whether inputs cover
+/// payments and fees. Unsigned transactions are untrusted: wrapping could make
+/// excessive amounts pass those checks. Checked addition returns an error in
+/// both debug and release builds.
+pub fn checked_amount_sum(amounts: impl IntoIterator<Item = u64>) -> Option<u64> {
+    amounts
+        .into_iter()
+        .try_fold(0u64, |sum, amount| sum.checked_add(amount))
+}
+
 /// Adjust recipient amounts by subtracting the estimated fee proportionally.
 /// The first recipient absorbs any remainder from integer division.
 pub fn adjust_recipients_for_fee(

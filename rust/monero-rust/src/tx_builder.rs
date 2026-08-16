@@ -474,14 +474,23 @@ pub mod native {
                 .map_err(|e| format!("Invalid destination '{}': {:?}", addr, e))?;
         }
 
-        let total_input: u64 = stored_outputs.iter().map(|o| o.amount).sum();
-        let total_amount: u64 = recipients.iter().map(|(_, amt)| *amt).sum();
+        let total_input = crate::tx_utils::checked_amount_sum(
+            stored_outputs.iter().map(|o| o.amount),
+        )
+        .ok_or_else(|| "input amounts overflow".to_string())?;
+        let total_amount =
+            crate::tx_utils::checked_amount_sum(recipients.iter().map(|(_, amt)| *amt))
+                .ok_or_else(|| "requested amounts overflow".to_string())?;
 
         // num_outputs = recipients + 1 change
         let num_outputs = recipients.len() + 1;
         let fee_est = estimate_fee(node_url, stored_outputs.len(), num_outputs).await?;
 
-        let total_out = total_amount + fee_est.fee;
+        // Check the sum before comparing funds or calculating change. Overflow
+        // would make an excessive payment appear affordable.
+        let total_out = total_amount
+            .checked_add(fee_est.fee)
+            .ok_or_else(|| "requested amount plus fee overflows".to_string())?;
         if total_input < total_out {
             return Err(format!(
                 "Insufficient funds: have {} piconero, need {} (amount {} + fee {})",
@@ -612,11 +621,13 @@ pub mod native {
         }
 
         // Compute expected change to detect dust
-        let total_input: u64 = spendable_outputs
-            .iter()
-            .map(|o| o.commitment().amount)
-            .sum();
-        let total_send: u64 = recipients.iter().map(|(_, amt)| *amt).sum();
+        let total_input = crate::tx_utils::checked_amount_sum(
+            spendable_outputs.iter().map(|o| o.commitment().amount),
+        )
+        .ok_or_else(|| "input amounts overflow".to_string())?;
+        let total_send =
+            crate::tx_utils::checked_amount_sum(recipients.iter().map(|(_, amt)| *amt))
+                .ok_or_else(|| "requested amounts overflow".to_string())?;
         let num_out_with_change = recipients.len() + 1;
         let extra_wc = extra_weight(num_out_with_change, true, &[]);
         let weight_wc = transaction_fee_weight(
@@ -626,7 +637,12 @@ pub mod native {
             extra_wc,
         );
         let fee_wc = fee.calculate(weight_wc);
-        let expected_change = total_input.saturating_sub(total_send + fee_wc);
+        // Reject overflow before subtracting the send amount and fee from the inputs.
+        let expected_change = total_input.saturating_sub(
+            total_send
+                .checked_add(fee_wc)
+                .ok_or_else(|| "requested amount plus fee overflows".to_string())?,
+        );
 
         let change_decision = decide_change(expected_change, recipients.len());
 
@@ -771,10 +787,10 @@ pub mod native {
         }
 
         // Calculate total input amount
-        let total_in: u64 = spendable_outputs
-            .iter()
-            .map(|o| o.commitment().amount)
-            .sum();
+        let total_in = crate::tx_utils::checked_amount_sum(
+            spendable_outputs.iter().map(|o| o.commitment().amount),
+        )
+        .ok_or_else(|| "input amounts overflow".to_string())?;
 
         // Estimate transaction size for fee calculation
         // Sweep always creates 2 outputs (no change)
@@ -1508,11 +1524,13 @@ pub mod native {
             spendable_outputs.push(spendable);
         }
 
-        let total_input: u64 = spendable_outputs
-            .iter()
-            .map(|o| o.commitment().amount)
-            .sum();
-        let total_send: u64 = recipients.iter().map(|(_, amt)| *amt).sum();
+        let total_input = crate::tx_utils::checked_amount_sum(
+            spendable_outputs.iter().map(|o| o.commitment().amount),
+        )
+        .ok_or_else(|| "input amounts overflow".to_string())?;
+        let total_send =
+            crate::tx_utils::checked_amount_sum(recipients.iter().map(|(_, amt)| *amt))
+                .ok_or_else(|| "requested amounts overflow".to_string())?;
         let num_out_with_change = recipients.len() + 1;
         let extra_wc = extra_weight(num_out_with_change, true, &[]);
         let weight_wc = transaction_fee_weight(
@@ -1522,7 +1540,12 @@ pub mod native {
             extra_wc,
         );
         let fee_wc = fee_rate.calculate(weight_wc);
-        let expected_change = total_input.saturating_sub(total_send + fee_wc);
+        // Reject overflow before subtracting the send amount and fee from the inputs.
+        let expected_change = total_input.saturating_sub(
+            total_send
+                .checked_add(fee_wc)
+                .ok_or_else(|| "requested amount plus fee overflows".to_string())?,
+        );
 
         let change_decision = decide_change(expected_change, recipients.len());
         match change_decision {
@@ -1810,7 +1833,7 @@ pub mod native {
         }
         digest.update(unsigned_bytes);
         let sum = |values: Vec<u64>| {
-            (values).into_iter().try_fold(0u64, u64::checked_add)
+            crate::tx_utils::checked_amount_sum(values)
                 .ok_or_else(|| "unsigned transaction summary amounts overflow".to_string())
         };
         Ok(TransactionPreview {
@@ -1957,15 +1980,19 @@ pub mod native {
                 }
             })
             .collect();
-        let input_total = (unsigned.inputs.iter().map(|i| i.output.commitment().amount)).into_iter().try_fold(0u64, u64::checked_add)
+        let input_total = crate::tx_utils::checked_amount_sum(
+            unsigned.inputs.iter().map(|i| i.output.commitment().amount),
+        )
         .ok_or_else(|| "unsigned input amounts overflow".to_string())?;
         let output_total =
-            (destinations.iter().map(|d| d.amount)).into_iter().try_fold(0u64, u64::checked_add)
+            crate::tx_utils::checked_amount_sum(destinations.iter().map(|d| d.amount))
                 .ok_or_else(|| "unsigned output amounts overflow".to_string())?;
         if output_total.checked_add(unsigned.fee) != Some(input_total) {
             return Err("unsigned transaction fee doesn't match its amounts".into());
         }
-        let returned = (destinations.iter().filter(|d| d.is_ours).map(|d| d.amount)).into_iter().try_fold(0u64, u64::checked_add)
+        let returned = crate::tx_utils::checked_amount_sum(
+            destinations.iter().filter(|d| d.is_ours).map(|d| d.amount),
+        )
         .ok_or_else(|| "unsigned owned output amounts overflow".to_string())?;
         Ok(TransactionSummary {
             destinations,

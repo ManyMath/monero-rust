@@ -371,8 +371,19 @@ impl Metadata {
             subaddress,
             payment_id: read_bytes(r)?,
             arbitrary_data: {
+                // Bound the chunk count read from untrusted output data. Monero limits
+                // transaction extra to 1060 bytes, and each chunk here has a u8 length,
+                // so ordinary outputs need only a few chunks.
+                const MAX_ARBITRARY_DATA_CHUNKS: u32 = 1024;
+                let chunks = read_u32(r)?;
+                if chunks > MAX_ARBITRARY_DATA_CHUNKS {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("output metadata declares {chunks} arbitrary data chunks"),
+                    ));
+                }
                 let mut data = vec![];
-                for _ in 0..read_u32(r)? {
+                for _ in 0..chunks {
                     let len = read_byte(r)?;
                     data.push(read_raw_vec(read_byte, usize::from(len), r)?);
                 }
@@ -1081,12 +1092,22 @@ impl SignableTransaction {
         // Calculate the minimum fee. Omitting change may increase the actual fee.
         let mut fee = fee_rate.calculate(estimated_tx_size);
 
-        // Make sure we have enough funds
-        let in_amount = inputs
-            .iter()
-            .map(|input| input.commitment().amount)
-            .sum::<u64>();
-        let out_amount = payments.iter().map(|payment| payment.1).sum::<u64>() + fee;
+        // Make sure we have enough funds. A wrapped `out_amount` passes this test and then
+        // becomes a change output of `in_amount - out_amount`, which is very nearly the
+        // whole u64 range - so the wrap turns "not enough funds" into a transaction no node
+        // will accept. See `checked_amount_sum`.
+        let in_amount =
+            crate::tx_utils::checked_amount_sum(inputs.iter().map(|input| input.commitment().amount))
+                .ok_or_else(|| {
+                    TransactionError::InvalidTransaction("input amounts overflow".to_string())
+                })?;
+        let out_amount = crate::tx_utils::checked_amount_sum(
+            payments.iter().map(|payment| payment.1),
+        )
+        .and_then(|sum| sum.checked_add(fee))
+        .ok_or_else(|| {
+            TransactionError::InvalidTransaction("payment amounts overflow".to_string())
+        })?;
         if in_amount < out_amount {
             Err(TransactionError::NotEnoughFunds(in_amount, out_amount))?;
         }
@@ -1466,16 +1487,24 @@ pub fn sign_offline<R: rand_core::RngCore + rand_core::CryptoRng>(
     // The unsigned transaction carries a fixed fee; monero-wallet derives the
     // fee as inputs minus outputs when no change output is specified, so the
     // amounts must be consistent for the fee to be honored exactly.
-    let input_sum: u64 = unsigned
-        .inputs
-        .iter()
-        .map(|input| input.output.commitment().amount)
-        .sum();
-    let payment_sum: u64 = unsigned
-        .payments
-        .iter()
-        .map(|payment| payment.address_and_amount().1)
-        .sum();
+    //
+    // Both sums come from an untrusted unsigned transaction. Use checked
+    // addition so overflow cannot make the balance comparison pass in release
+    // builds or panic in debug builds.
+    let input_sum = crate::tx_utils::checked_amount_sum(
+        unsigned
+            .inputs
+            .iter()
+            .map(|input| input.output.commitment().amount),
+    )
+    .ok_or_else(|| "unsigned transaction input amounts overflow".to_string())?;
+    let payment_sum = crate::tx_utils::checked_amount_sum(
+        unsigned
+            .payments
+            .iter()
+            .map(|payment| payment.address_and_amount().1),
+    )
+    .ok_or_else(|| "unsigned transaction payment amounts overflow".to_string())?;
     if input_sum != payment_sum.checked_add(unsigned.fee).ok_or_else(|| {
         "unsigned transaction amounts overflow".to_string()
     })? {
@@ -2043,6 +2072,279 @@ mod tests {
         assert!(sign_offline(&mut rng, &spend, unsigned)
             .unwrap_err()
             .contains("wrong private key"));
+    }
+
+    /// Reject payment totals that overflow before comparing them with the inputs.
+    ///
+    /// These payments wrap to the input total under unchecked u64 addition. The
+    /// signer must return its own overflow error in both debug and release builds,
+    /// without relying on a later check in oxide.
+    #[test]
+    fn sign_offline_refuses_payment_amounts_that_wrap() {
+        use rand::SeedableRng;
+
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        let spend = Zeroizing::new(Scalar::from(987654321u64));
+        let key_offset = Scalar::from(1122334455u64);
+        let one_time_key = &(*spend + key_offset) * ED25519_BASEPOINT_TABLE;
+        let amount_in = 2_000_000_000u64;
+        let commitment = Commitment::new(Scalar::from(31337u64), amount_in);
+        let commitment_point = commitment.calculate();
+
+        let output = SpendableOutput::test_new(
+            ReceivedOutput {
+                absolute: AbsoluteId { tx: [5; 32], o: 0 },
+                data: OutputData {
+                    key: one_time_key,
+                    key_offset,
+                    commitment,
+                },
+                metadata: Metadata {
+                    subaddress: None,
+                    payment_id: [0; 8],
+                    arbitrary_data: vec![],
+                },
+            },
+            17,
+        );
+        // Use a valid v16 ring size so the test reaches the amount check.
+        let signer_index = 5u8;
+        let ring: Vec<[EdwardsPoint; 2]> = (0..16u64)
+            .map(|i| {
+                if i == u64::from(signer_index) {
+                    [one_time_key, commitment_point]
+                } else {
+                    let point = &Scalar::from(9000 + i) * ED25519_BASEPOINT_TABLE;
+                    [point, point]
+                }
+            })
+            .collect();
+        let mut offsets = vec![1000u64];
+        offsets.extend(std::iter::repeat(3).take(15));
+        let decoys = Decoys {
+            i: signer_index,
+            offsets,
+            ring,
+        };
+
+        let convert = |point: EdwardsPoint| {
+            monero_wallet::ed25519::CompressedPoint::from(point.compress().to_bytes())
+                .decompress()
+                .unwrap()
+        };
+        let attacker = MoneroAddress::new(
+            monero_wallet::address::Network::Mainnet,
+            monero_wallet::address::AddressType::Legacy,
+            convert(&Scalar::from(777u64) * ED25519_BASEPOINT_TABLE),
+            convert(&Scalar::from(888u64) * ED25519_BASEPOINT_TABLE),
+        );
+
+        // The fixture has to actually wrap, or this proves nothing about the guard.
+        let (a, b) = (u64::MAX, 2_000_000_001u64);
+        assert_eq!(a.wrapping_add(b), amount_in, "the two payments must wrap to the input total");
+
+        let unsigned = UnsignedTransaction {
+            protocol: Protocol::v16,
+            r_seed: Zeroizing::new([9; 32]),
+            fee: 0,
+            payments: vec![
+                InternalPayment::Payment((attacker.clone(), a)),
+                InternalPayment::Payment((attacker, b)),
+            ],
+            data: vec![],
+            inputs: vec![UnsignedInput { output, decoys }],
+        };
+
+        // Use owned inputs so the ownership check passes.
+        let err = sign_offline(&mut rng, &spend, unsigned)
+            .expect_err("payment amounts that wrap must be refused");
+        assert!(
+            err.contains("payment amounts overflow"),
+            "the refusal must name the overflow rather than blame the fee: {err}"
+        );
+    }
+
+    /// Reject overflow in the input total too, even when the wallet owns both inputs.
+    #[test]
+    fn sign_offline_refuses_input_amounts_that_wrap() {
+        use rand::SeedableRng;
+
+        let mut rng = rand::rngs::StdRng::seed_from_u64(11);
+        let spend = Zeroizing::new(Scalar::from(987654321u64));
+
+        let signer_index = 5u8;
+        let mut offsets = vec![1000u64];
+        offsets.extend(std::iter::repeat(3).take(15));
+
+        let mut inputs = Vec::new();
+        for (i, amount) in [u64::MAX, 2u64].into_iter().enumerate() {
+            let key_offset = Scalar::from(1122334455u64 + i as u64);
+            let one_time_key = &(*spend + key_offset) * ED25519_BASEPOINT_TABLE;
+            let commitment = Commitment::new(Scalar::from(31337u64 + i as u64), amount);
+            let commitment_point = commitment.calculate();
+            inputs.push(UnsignedInput {
+                output: SpendableOutput::test_new(
+                    ReceivedOutput {
+                        absolute: AbsoluteId {
+                            tx: [5 + i as u8; 32],
+                            o: 0,
+                        },
+                        data: OutputData {
+                            key: one_time_key,
+                            key_offset,
+                            commitment,
+                        },
+                        metadata: Metadata {
+                            subaddress: None,
+                            payment_id: [0; 8],
+                            arbitrary_data: vec![],
+                        },
+                    },
+                    1000 + 3 * 5,
+                ),
+                decoys: Decoys {
+                    i: signer_index,
+                    offsets: offsets.clone(),
+                    ring: (0..16u64)
+                        .map(|r| {
+                            if r == u64::from(signer_index) {
+                                [one_time_key, commitment_point]
+                            } else {
+                                let point = &Scalar::from(9000 + r) * ED25519_BASEPOINT_TABLE;
+                                [point, point]
+                            }
+                        })
+                        .collect(),
+                },
+            });
+        }
+        assert_eq!(
+            u64::MAX.wrapping_add(2),
+            1,
+            "the two inputs must wrap to something a fee can match"
+        );
+
+        let convert = |point: EdwardsPoint| {
+            monero_wallet::ed25519::CompressedPoint::from(point.compress().to_bytes())
+                .decompress()
+                .unwrap()
+        };
+        let attacker = MoneroAddress::new(
+            monero_wallet::address::Network::Mainnet,
+            monero_wallet::address::AddressType::Legacy,
+            convert(&Scalar::from(777u64) * ED25519_BASEPOINT_TABLE),
+            convert(&Scalar::from(888u64) * ED25519_BASEPOINT_TABLE),
+        );
+
+        let unsigned = UnsignedTransaction {
+            protocol: Protocol::v16,
+            r_seed: Zeroizing::new([9; 32]),
+            fee: 0,
+            payments: vec![InternalPayment::Payment((attacker, 1))],
+            data: vec![],
+            inputs,
+        };
+
+        let err = sign_offline(&mut rng, &spend, unsigned)
+            .expect_err("input amounts that wrap must be refused");
+        assert!(
+            err.contains("input amounts overflow"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// Reject overflow when adding payments and fees on the send path. A wrapped
+    /// total could pass the funds check and produce an invalid change amount.
+    #[test]
+    fn builder_refuses_payment_amounts_that_wrap() {
+        let spend = Zeroizing::new(Scalar::from(31u64));
+        let key_offset = Scalar::from(7u64);
+        let output = SpendableOutput::test_new(
+            ReceivedOutput {
+                absolute: AbsoluteId { tx: [1; 32], o: 0 },
+                data: OutputData {
+                    key: &(*spend + key_offset) * ED25519_BASEPOINT_TABLE,
+                    key_offset,
+                    commitment: Commitment::new(Scalar::from(3u64), 2_000_000_000),
+                },
+                metadata: Metadata {
+                    subaddress: None,
+                    payment_id: [0; 8],
+                    arbitrary_data: vec![],
+                },
+            },
+            5,
+        );
+
+        let convert = |point: EdwardsPoint| {
+            monero_wallet::ed25519::CompressedPoint::from(point.compress().to_bytes())
+                .decompress()
+                .unwrap()
+        };
+        let dest = MoneroAddress::new(
+            monero_wallet::address::Network::Mainnet,
+            monero_wallet::address::AddressType::Legacy,
+            convert(&Scalar::from(41u64) * ED25519_BASEPOINT_TABLE),
+            convert(&Scalar::from(43u64) * ED25519_BASEPOINT_TABLE),
+        );
+        let view_pair = ViewPair::new(
+            &Scalar::from(51u64) * ED25519_BASEPOINT_TABLE,
+            Zeroizing::new(Scalar::from(53u64)),
+        );
+
+        let mut builder = SignableTransactionBuilder::new(
+            Protocol::v16,
+            Fee {
+                per_weight: 8000,
+                mask: 10000,
+            },
+            Some(Change::new(&view_pair, false)),
+        );
+        builder.add_input(output);
+        builder.add_payment(dest.clone(), u64::MAX);
+        builder.add_payment(dest, 2_000_000_001);
+
+        assert_eq!(
+            builder.build().unwrap_err(),
+            TransactionError::InvalidTransaction("payment amounts overflow".to_string()),
+        );
+    }
+
+    /// Bound chunk counts when reading either stored outputs or an untrusted
+    /// unsigned transaction.
+    #[test]
+    fn metadata_refuses_an_absurd_arbitrary_data_count() {
+        let header = |chunks: u32| {
+            let mut bytes = vec![0u8]; // subaddress: None
+            bytes.extend_from_slice(&[0u8; 8]); // payment_id
+            bytes.extend_from_slice(&chunks.to_le_bytes());
+            bytes
+        };
+
+        // Accept a valid count before testing the limit.
+        let mut within = header(2);
+        within.extend_from_slice(&[3, 1, 2, 3]);
+        within.extend_from_slice(&[1, 9]);
+        let read = Metadata::read(&mut within.as_slice()).expect("a real chunk count must read");
+        assert_eq!(read.arbitrary_data, vec![vec![1, 2, 3], vec![9]]);
+
+        let err = Metadata::read(&mut header(1_000_000).as_slice())
+            .expect_err("a million declared chunks must be refused");
+        assert!(
+            err.to_string().contains("1000000 arbitrary data chunks"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn checked_amount_sum_refuses_a_wrap() {
+        use crate::tx_utils::checked_amount_sum;
+
+        assert_eq!(checked_amount_sum([1u64, 2, 3]), Some(6));
+        assert_eq!(checked_amount_sum([u64::MAX, 0]), Some(u64::MAX));
+        assert_eq!(checked_amount_sum([u64::MAX, 1]), None);
+        assert_eq!(checked_amount_sum([u64::MAX, 2_000_000_001]), None);
+        assert_eq!(checked_amount_sum(std::iter::empty()), Some(0));
     }
 
     #[test]
