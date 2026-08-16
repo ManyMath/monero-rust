@@ -1269,6 +1269,52 @@ fn check_block_transaction_count(
     Ok(())
 }
 
+/// Parse transaction blobs and check each hash against its position in the block.
+///
+/// `/getblocks.bin` supplies blobs separately from the block. Matching the counts
+/// does not prevent substitution: each parsed transaction must hash to the value
+/// committed by the block before its outputs can be credited.
+///
+/// Return parsed transactions and key images extracted from unparseable blobs.
+/// The latter cannot be hash-checked and can only mark outputs spent; they never
+/// credit outputs. A hostile node can therefore still cause false spent reports
+/// through this fallback.
+fn parse_block_transaction_blobs(
+    block: &OxideBlock,
+    blobs: &[Vec<u8>],
+    block_height: u64,
+) -> Result<(Vec<([u8; 32], OxideTransaction<Pruned>)>, Vec<String>), String> {
+    let mut parsed = Vec::with_capacity(blobs.len());
+    let mut skipped_key_images = Vec::new();
+
+    for (index, blob) in blobs.iter().enumerate() {
+        match parse_full_tx_blob(blob) {
+            Some((hash, tx)) => {
+                let listed = block.transactions.get(index).ok_or_else(|| {
+                    format!(
+                        "Block at height {} was sent more transaction blobs than it lists",
+                        block_height
+                    )
+                })?;
+                if hash != *listed {
+                    return Err(format!(
+                        "Block at height {} lists transaction {} at position {}, but the blob \
+                         sent in its place is transaction {}",
+                        block_height,
+                        hex::encode(listed),
+                        index,
+                        hex::encode(hash)
+                    ));
+                }
+                parsed.push((hash, tx));
+            }
+            None => skipped_key_images.extend(extract_key_images_from_raw_tx(blob)),
+        }
+    }
+
+    Ok((parsed, skipped_key_images))
+}
+
 /// Scan a batch of blocks fetched via `/getblocks.bin` for outputs belonging to the wallet.
 ///
 /// This is dramatically faster than scanning one block at a time because it fetches
@@ -1474,16 +1520,8 @@ pub async fn process_batch_response(
                 spent_key_image_tx_hashes,
             });
         } else {
-            let mut parsed_txs = Vec::with_capacity(block_entry.txs.len());
-            let mut skipped_key_images = Vec::new();
-            for tx_blob in &block_entry.txs {
-                match parse_full_tx_blob(tx_blob) {
-                    Some(parsed) => parsed_txs.push(parsed),
-                    None => {
-                        skipped_key_images.extend(extract_key_images_from_raw_tx(tx_blob));
-                    }
-                }
-            }
+            let (parsed_txs, skipped_key_images) =
+                parse_block_transaction_blobs(&block, &block_entry.txs, block_height)?;
 
             let skipped_count = skipped_key_images.len();
             let mut spent_key_images = skipped_key_images;
@@ -1847,16 +1885,8 @@ pub async fn process_batch_multi_wallet_response(
                 wallet_results,
             });
         } else {
-            let mut parsed_txs = Vec::with_capacity(block_entry.txs.len());
-            let mut skipped_key_images = Vec::new();
-            for tx_blob in &block_entry.txs {
-                match parse_full_tx_blob(tx_blob) {
-                    Some(parsed) => parsed_txs.push(parsed),
-                    None => {
-                        skipped_key_images.extend(extract_key_images_from_raw_tx(tx_blob));
-                    }
-                }
-            }
+            let (parsed_txs, skipped_key_images) =
+                parse_block_transaction_blobs(&block, &block_entry.txs, block_height)?;
 
             let skipped_count = skipped_key_images.len();
             let mut spent_key_images = skipped_key_images;

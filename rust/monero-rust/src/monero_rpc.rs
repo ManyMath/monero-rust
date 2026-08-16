@@ -368,6 +368,13 @@ impl<R: RpcConnection> Rpc<R> {
             ))?;
         }
 
+        // Require one response per requested hash. Per-entry hash checks alone would
+        // accept a truncated reply and let the scanner miss received outputs or spent
+        // key images. Extra entries would index past `hashes`.
+        if txs.txs.len() != hashes.len() {
+            return Err(RpcError::InvalidNode);
+        }
+
         txs.txs
             .iter()
             .enumerate()

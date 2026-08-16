@@ -167,3 +167,43 @@ async fn get_output_distribution_accepts_a_monotonic_distribution() {
         .expect("a monotonic distribution should be accepted");
     assert_eq!(distribution, vec![0, 0, 7, 7, 19]);
 }
+
+/// Reject a truncated `get_transactions` reply.
+///
+/// Checking individual hashes would accept a valid prefix while missing the
+/// remaining transactions. The scanner would then miss both received outputs
+/// and key images for spent outputs in the omitted transactions.
+#[tokio::test]
+async fn get_transactions_rejects_fewer_transactions_than_were_requested() {
+    let rpc = node(vec![(
+        "get_transactions",
+        "{\"status\":\"OK\",\"txs\":[],\"missed_tx\":[]}".to_string(),
+    )]);
+
+    let err = rpc
+        .get_transactions(&[[1u8; 32], [2u8; 32]])
+        .await
+        .expect_err("a short get_transactions reply should be refused");
+    assert!(
+        matches!(err, RpcError::InvalidNode),
+        "expected InvalidNode, got {err:?}"
+    );
+}
+
+/// Reject an empty reply to `get_transaction` before it calls `swap_remove(0)`.
+#[tokio::test]
+async fn get_transaction_rejects_an_empty_reply_rather_than_indexing_it() {
+    let rpc = node(vec![(
+        "get_transactions",
+        "{\"status\":\"OK\",\"txs\":[],\"missed_tx\":[]}".to_string(),
+    )]);
+
+    let err = rpc
+        .get_transaction([1u8; 32])
+        .await
+        .expect_err("an empty get_transactions reply should be refused, not indexed");
+    assert!(
+        matches!(err, RpcError::InvalidNode),
+        "expected InvalidNode, got {err:?}"
+    );
+}

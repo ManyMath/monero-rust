@@ -301,6 +301,125 @@ async fn multi_wallet_batches_reject_an_unlinked_block_too() {
     assert!(err.contains("does not follow"), "{err}");
 }
 
+/// A transaction that parses and has a hash. `Input::Gen` keeps it valid without RingCT
+/// proofs; `marker` is only there to make two of them differ.
+fn make_tx(marker: u64) -> monero_rust::monero_backend::transaction::Transaction {
+    use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
+    use monero_oxide::ed25519::CompressedPoint;
+    use monero_rust::monero_backend::transaction::*;
+
+    Transaction::V2 {
+        prefix: TransactionPrefix {
+            additional_timelock: Timelock::Block(marker as usize),
+            inputs: vec![Input::Gen(marker as usize)],
+            outputs: vec![Output {
+                amount: Some(0),
+                key: CompressedPoint::from(ED25519_BASEPOINT_POINT.compress().to_bytes()),
+                view_tag: Some(0),
+            }],
+            extra: vec![1; 33],
+        },
+        proofs: None,
+    }
+}
+
+/// Build one block at `height` with the transaction hashes in `listed`.
+fn make_block_listing(height: u64, previous: [u8; 32], listed: Vec<[u8; 32]>) -> Block {
+    let coinbase = make_coinbase_block(height, previous);
+    Block::new(
+        coinbase.header.clone(),
+        coinbase.miner_transaction().clone(),
+        listed,
+    )
+    .expect("synthetic block should be valid")
+}
+
+fn response_with(block: Block, blobs: Vec<Vec<u8>>, start_height: u64) -> GetBlocksFastResponse {
+    GetBlocksFastResponse {
+        status: "OK".to_string(),
+        blocks: vec![BlockCompleteEntry {
+            block: block.serialize(),
+            txs: blobs,
+            pruned: false,
+            block_weight: 0,
+        }],
+        start_height,
+        current_height: start_height + 1,
+        output_indices: vec![],
+        untrusted: false,
+        credits: 0,
+        top_hash: String::new(),
+        daemon_time: 0,
+    }
+}
+
+/// Reject a transaction blob whose hash differs from the block's listed hash.
+///
+/// The daemon sends blobs separately. A matching count does not prevent it
+/// from substituting a transaction while leaving the block unchanged. Such a
+/// transaction must not contribute outputs to the wallet balance.
+#[tokio::test]
+async fn batch_scan_rejects_a_transaction_blob_the_block_does_not_list() {
+    let listed = make_tx(1);
+    let substituted = make_tx(2);
+    assert_ne!(
+        listed.hash(),
+        substituted.hash(),
+        "premise: the two transactions must differ"
+    );
+
+    let block = make_block_listing(100, [0u8; 32], vec![listed.hash()]);
+    let resp = response_with(block, vec![substituted.serialize()], 100);
+
+    let err = process_batch_response(resp, 100, STAGENET_SEED, "stagenet", lookahead(), None, "")
+        .await
+        .expect_err("a blob the block does not list must be refused");
+    assert!(
+        err.contains("blob sent in its place"),
+        "unexpected error: {err}"
+    );
+}
+
+/// Accept the same block when its transaction blob matches the listed hash.
+#[tokio::test]
+async fn batch_scan_accepts_the_transaction_blob_the_block_lists() {
+    let tx = make_tx(1);
+    let block = make_block_listing(100, [0u8; 32], vec![tx.hash()]);
+    let resp = response_with(block, vec![tx.serialize()], 100);
+
+    let (results, _scanner) =
+        process_batch_response(resp, 100, STAGENET_SEED, "stagenet", lookahead(), None, "")
+            .await
+            .expect("a block whose blob matches what it lists must scan");
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].tx_count, 2, "the miner tx and the listed one");
+}
+
+/// Enforce the transaction-hash check in multi-wallet batch scanning too.
+#[tokio::test]
+async fn multi_wallet_batch_scan_rejects_a_transaction_blob_the_block_does_not_list() {
+    let listed = make_tx(1);
+    let substituted = make_tx(2);
+
+    let block = make_block_listing(100, [0u8; 32], vec![listed.hash()]);
+    let resp = response_with(block, vec![substituted.serialize()], 100);
+
+    let configs = vec![WalletScanConfig {
+        mnemonic: STAGENET_SEED.to_string(),
+        network: "stagenet".to_string(),
+        lookahead: lookahead(),
+        passphrase: String::new(),
+    }];
+
+    let err = process_batch_multi_wallet_response(resp, 100, configs, None)
+        .await
+        .expect_err("a blob the block does not list must be refused");
+    assert!(
+        err.contains("blob sent in its place"),
+        "unexpected error: {err}"
+    );
+}
+
 #[derive(Clone, Debug)]
 struct HistoryNode {
     response: Vec<u8>,
