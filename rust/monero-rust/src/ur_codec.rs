@@ -169,11 +169,30 @@ fn read_cbor_u32(rest: &mut &[u8]) -> Option<u32> {
     Some(value)
 }
 
+/// A transfer completed by the current frame.
+///
+/// Keep the decoded bytes with their UR type so callers cannot accidentally
+/// label data using a frame from another transfer.
+#[derive(Clone, Debug)]
+pub struct CompletedTransfer {
+    /// Decoded transfer payload.
+    pub message: Vec<u8>,
+    /// UR type shared by the transfer's frames, such as `xmr-txsigned`.
+    pub ur_type: String,
+}
+
 /// Progress of UR decoding.
 #[derive(Clone, Debug)]
 pub struct DecodeProgress {
     pub progress: f64,
-    pub is_complete: bool,
+    /// Completed transfer, if this frame finished one.
+    pub completed: Option<CompletedTransfer>,
+}
+
+impl DecodeProgress {
+    pub fn is_complete(&self) -> bool {
+        self.completed.is_some()
+    }
 }
 
 /// UR decoder that accumulates scanned QR frames.
@@ -181,6 +200,8 @@ pub struct UrDecoder {
     inner: ur::Decoder,
     parts_received: usize,
     expected_parts: Option<usize>,
+    /// UR type of the transfer being assembled.
+    ur_type: Option<String>,
 }
 
 impl UrDecoder {
@@ -189,31 +210,50 @@ impl UrDecoder {
             inner: ur::Decoder::default(),
             parts_received: 0,
             expected_parts: None,
+            ur_type: None,
         }
     }
 
     /// Feed a scanned UR URI string into the decoder.
+    ///
+    /// Return a completed transfer with this frame and clear the accumulator
+    /// before accepting another frame.
     pub fn receive(&mut self, uri: &str) -> Result<DecodeProgress, String> {
-        // Before the crate sees it: the declared fragment count drives allocations inside
-        // the fountain decoder and nothing in the crate bounds it.
+        // Bound allocations before the fountain decoder receives the frame.
         check_declared_fragment_count(uri)?;
 
-        match self.inner.receive(uri) {
-            Ok(()) => {}
-            Err(e) => {
-                // Single-part URIs can't go through the multi-part decoder
-                // (ur::Decoder::receive returns NotMultiPart).
-                // Signal completion; caller should use decode_single().
-                let err_msg = format!("{:?}", e);
-                if err_msg.contains("NotMultiPart") {
-                    return Ok(DecodeProgress {
-                        progress: 1.0,
-                        is_complete: true,
-                    });
-                }
-                return Err(format!("UR decode error: {}", err_msg));
-            }
+        // The UR decoder discards the type. Record it here so the completed
+        // payload retains the type of the frames that produced it.
+        let ur_type = parse_ur_type(uri).ok_or_else(|| "UR frame has no type".to_string())?;
+
+        // Inspect the frame before passing it to the accumulator. Otherwise an
+        // `InconsistentPart` error would not distinguish another transfer from
+        // a corrupt frame in the current transfer.
+        let (kind, payload) = ur::decode(uri).map_err(|e| format!("UR decode error: {:?}", e))?;
+        if kind == ur::ur::Kind::SinglePart {
+            // Return the single-part payload directly, preserving any multipart
+            // transfer still in progress.
+            return Ok(DecodeProgress {
+                progress: 1.0,
+                completed: Some(CompletedTransfer {
+                    message: payload,
+                    ur_type,
+                }),
+            });
         }
+
+        // A frame of a different type belongs to a different transfer. Start that one
+        // rather than merging it into this one. (The fountain layer rejects most such
+        // frames on the checksum anyway - but "most" is not a binding, and the type is
+        // what the caller routes on.)
+        if self.ur_type.as_deref().is_some_and(|current| current != ur_type) {
+            self.reset();
+        }
+
+        self.inner
+            .receive(uri)
+            .map_err(|e| format!("UR decode error: {:?}", e))?;
+        self.ur_type = Some(ur_type.clone());
         self.parts_received += 1;
 
         if self.expected_parts.is_none() {
@@ -227,29 +267,31 @@ impl UrDecoder {
             _ => 0.0,
         };
 
-        let is_complete = self.inner.complete();
+        if !self.inner.complete() {
+            return Ok(DecodeProgress {
+                progress,
+                completed: None,
+            });
+        }
+
+        let message = self
+            .inner
+            .message()
+            .map_err(|e| format!("UR message error: {:?}", e))?
+            .ok_or_else(|| "UR decoder reported a complete transfer with no message".to_string())?;
+        self.reset();
 
         Ok(DecodeProgress {
-            progress: if is_complete { 1.0 } else { progress },
-            is_complete,
+            progress: 1.0,
+            completed: Some(CompletedTransfer { message, ur_type }),
         })
-    }
-
-    /// Get the decoded message bytes (only valid after `is_complete` is true).
-    pub fn message(&self) -> Result<Option<Vec<u8>>, String> {
-        self.inner
-            .message()
-            .map_err(|e| format!("UR message error: {:?}", e))
-    }
-
-    pub fn is_complete(&self) -> bool {
-        self.inner.complete()
     }
 
     pub fn reset(&mut self) {
         self.inner = ur::Decoder::default();
         self.parts_received = 0;
         self.expected_parts = None;
+        self.ur_type = None;
     }
 }
 
@@ -263,6 +305,16 @@ impl Default for UrDecoder {
 pub fn decode_single(uri: &str) -> Result<Vec<u8>, String> {
     let (_kind, data) = ur::decode(uri).map_err(|e| format!("UR decode error: {:?}", e))?;
     Ok(data)
+}
+
+/// Read the type from `ur:TYPE/...`.
+fn parse_ur_type(uri: &str) -> Option<String> {
+    let after_scheme = uri.strip_prefix("ur:")?;
+    let (ur_type, _rest) = after_scheme.split_once('/')?;
+    if ur_type.is_empty() {
+        return None;
+    }
+    Some(ur_type.to_string())
 }
 
 /// Parse the total sequence count from a multi-part UR URI.
@@ -288,6 +340,7 @@ mod tests {
         assert!(encoder.fragment_count() > 0);
 
         let mut decoder = UrDecoder::new();
+        let mut completed = None;
 
         for _ in 0..encoder.fragment_count() * 3 {
             let frame = encoder.next_frame().expect("next_frame failed");
@@ -296,17 +349,15 @@ mod tests {
             assert_eq!(frame.modules.len(), frame.size * frame.size);
 
             let progress = decoder.receive(&frame.uri).expect("receive failed");
-            if progress.is_complete {
+            if let Some(done) = progress.completed {
+                completed = Some(done);
                 break;
             }
         }
 
-        assert!(decoder.is_complete());
-        let decoded = decoder
-            .message()
-            .expect("message failed")
-            .expect("no message");
-        assert_eq!(decoded, data);
+        let completed = completed.expect("transfer never completed");
+        assert_eq!(completed.message, data);
+        assert_eq!(completed.ur_type, UR_TYPE_UNSIGNED_TX);
     }
 
     fn assert_fixture_roundtrips_as_ur(data: &[u8], ur_type: &'static str) {
@@ -318,23 +369,22 @@ mod tests {
         );
 
         let mut decoder = UrDecoder::new();
+        let mut completed = None;
         for _ in 0..encoder.fragment_count() * 3 {
             let frame = encoder.next_frame().expect("fixture next_frame failed");
             assert!(frame.uri.starts_with(&format!("ur:{ur_type}/")));
             assert_eq!(frame.modules.len(), frame.size * frame.size);
 
             let progress = decoder.receive(&frame.uri).expect("fixture receive failed");
-            if progress.is_complete {
+            if let Some(done) = progress.completed {
+                completed = Some(done);
                 break;
             }
         }
 
-        assert!(decoder.is_complete(), "fixture UR stream did not complete");
-        let decoded = decoder
-            .message()
-            .expect("fixture message failed")
-            .expect("fixture UR message missing");
-        assert_eq!(decoded, data);
+        let completed = completed.expect("fixture UR stream did not complete");
+        assert_eq!(completed.message, data);
+        assert_eq!(completed.ur_type, ur_type);
     }
 
     #[test]
@@ -366,6 +416,119 @@ mod tests {
 
         assert_eq!(frame.modules.len(), frame.size * frame.size);
         assert!(frame.size >= 21);
+    }
+
+    /// A single-part frame received after a multipart transfer must return its
+    /// own payload. Previously the completed accumulator could supply stale bytes.
+    #[test]
+    fn a_finished_transfer_does_not_answer_for_the_next_frame() {
+        let first = b"the first transfer, long enough that it takes several fragments";
+        let mut encoder = UrEncoder::new(first, UR_TYPE_UNSIGNED_TX, 20).unwrap();
+        let mut decoder = UrDecoder::new();
+        for _ in 0..encoder.fragment_count() * 3 {
+            let frame = encoder.next_frame().unwrap();
+            if decoder.receive(&frame.uri).unwrap().is_complete() {
+                break;
+            }
+        }
+
+        let second = b"second";
+        let uri = ur::ur::encode(second, &ur::ur::Type::Custom(UR_TYPE_SIGNED_TX));
+        let done = decoder
+            .receive(&uri)
+            .unwrap()
+            .completed
+            .expect("a single-part frame is a complete transfer");
+
+        assert_eq!(
+            done.message,
+            second.to_vec(),
+            "the previous transfer answered for a frame that is not part of it"
+        );
+        assert_eq!(
+            done.ur_type, UR_TYPE_SIGNED_TX,
+            "the completion was labelled with a type its own frame did not carry"
+        );
+    }
+
+    /// Report the UR type from the completed transfer's frames.
+    #[test]
+    fn a_transfer_is_reported_under_the_type_its_frames_carried() {
+        let data = b"a payload that needs several fragments to arrive in full";
+        let mut encoder = UrEncoder::new(data, UR_TYPE_KEY_IMAGE, 20).unwrap();
+        let mut decoder = UrDecoder::new();
+
+        let mut done = None;
+        for _ in 0..encoder.fragment_count() * 3 {
+            let frame = encoder.next_frame().unwrap();
+            if let Some(completed) = decoder.receive(&frame.uri).unwrap().completed {
+                done = Some(completed);
+                break;
+            }
+        }
+
+        let done = done.expect("transfer never completed");
+        assert_eq!(done.ur_type, UR_TYPE_KEY_IMAGE);
+        assert_eq!(done.message, data);
+    }
+
+    /// A change in UR type starts a new transfer. The underlying decoder strips
+    /// the type, so this wrapper must detect the change.
+    #[test]
+    fn a_frame_of_another_type_starts_a_new_transfer() {
+        let first = b"the transfer that is abandoned halfway through scanning";
+        let second = b"the transfer the user actually went on to scan instead";
+        let mut first_encoder = UrEncoder::new(first, UR_TYPE_UNSIGNED_TX, 20).unwrap();
+        let mut second_encoder = UrEncoder::new(second, UR_TYPE_SIGNED_TX, 20).unwrap();
+        let mut decoder = UrDecoder::new();
+
+        // Leave the first transfer incomplete.
+        let partial = first_encoder.fragment_count() / 2;
+        assert!(partial > 0, "fixture must be multi-fragment");
+        for _ in 0..partial {
+            let frame = first_encoder.next_frame().unwrap();
+            assert!(decoder.receive(&frame.uri).unwrap().completed.is_none());
+        }
+
+        let mut done = None;
+        for _ in 0..second_encoder.fragment_count() * 3 {
+            let frame = second_encoder.next_frame().unwrap();
+            if let Some(completed) = decoder.receive(&frame.uri).unwrap().completed {
+                done = Some(completed);
+                break;
+            }
+        }
+
+        let done = done.expect("the second transfer never completed");
+        assert_eq!(done.message, second.to_vec());
+        assert_eq!(done.ur_type, UR_TYPE_SIGNED_TX);
+    }
+
+    /// Accept a valid multipart transfer after adding the type and completion checks.
+    #[test]
+    fn control_a_transfer_still_completes_from_its_own_frames_alone() {
+        let data = b"an ordinary transfer, scanned start to finish with nothing else about";
+        let mut encoder = UrEncoder::new(data, UR_TYPE_OUTPUT, 20).unwrap();
+        let mut decoder = UrDecoder::new();
+
+        let mut frames = 0;
+        let mut done = None;
+        for _ in 0..encoder.fragment_count() * 3 {
+            let frame = encoder.next_frame().unwrap();
+            frames += 1;
+            if let Some(completed) = decoder.receive(&frame.uri).unwrap().completed {
+                done = Some(completed);
+                break;
+            }
+        }
+
+        let done = done.expect("an ordinary transfer did not complete");
+        assert_eq!(done.message, data);
+        assert_eq!(done.ur_type, UR_TYPE_OUTPUT);
+        assert!(
+            frames >= encoder.fragment_count(),
+            "completed before every fragment had been seen"
+        );
     }
 
     #[test]
@@ -471,10 +634,27 @@ mod tests {
 
     #[test]
     fn test_decoder_reset() {
+        let data = b"a payload that takes more than one fragment to arrive in full";
+        let mut encoder = UrEncoder::new(data, UR_TYPE_UNSIGNED_TX, 20).unwrap();
         let mut decoder = UrDecoder::new();
-        assert!(!decoder.is_complete());
+
+        let frame = encoder.next_frame().unwrap();
+        assert!(decoder.receive(&frame.uri).unwrap().completed.is_none());
         decoder.reset();
-        assert!(!decoder.is_complete());
+
+        // Reset discards all previously received fragments.
+        let mut frames = 0;
+        let mut done = None;
+        for _ in 0..encoder.fragment_count() * 3 {
+            let frame = encoder.next_frame().unwrap();
+            frames += 1;
+            if let Some(completed) = decoder.receive(&frame.uri).unwrap().completed {
+                done = Some(completed);
+                break;
+            }
+        }
+        assert_eq!(done.expect("transfer never completed").message, data);
+        assert!(frames >= encoder.fragment_count());
     }
 
     #[test]
@@ -487,9 +667,14 @@ mod tests {
         let decoded = decode_single(&uri).expect("decode failed");
         assert_eq!(decoded, data);
 
-        // UrDecoder.receive should detect single-part and signal completion
+        // A single-part frame completes immediately with its own payload.
         let mut decoder = UrDecoder::new();
-        let progress = decoder.receive(&uri).expect("receive failed");
-        assert!(progress.is_complete);
+        let done = decoder
+            .receive(&uri)
+            .expect("receive failed")
+            .completed
+            .expect("a single-part UR is a complete transfer");
+        assert_eq!(done.message, data);
+        assert_eq!(done.ur_type, "bytes");
     }
 }
