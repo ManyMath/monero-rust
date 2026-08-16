@@ -138,41 +138,157 @@ fn write_leb128(mut value: u64) -> Vec<u8> {
     out
 }
 
-fn find_json_string_value(data: &[u8], field_name: &str) -> Option<(usize, usize)> {
-    let needle = format!("\"{}\":\"", field_name);
-    let needle_bytes = needle.as_bytes();
-    let pos = data
-        .windows(needle_bytes.len())
-        .position(|w| w == needle_bytes)?;
-    let start = pos + needle_bytes.len();
-    let mut i = start;
-    while i < data.len() {
-        if data[i] == b'\\' {
-            i += 2;
-        } else if data[i] == b'"' {
-            return Some((start, i));
-        } else {
-            i += 1;
+fn skip_json_whitespace(data: &[u8], mut i: usize) -> usize {
+    while i < data.len() && matches!(data[i], b' ' | b'\t' | b'\n' | b'\r') {
+        i += 1;
+    }
+    i
+}
+
+/// Return the position after the closing quote of the JSON string at `i`.
+fn json_string_end(data: &[u8], i: usize) -> Option<usize> {
+    if *data.get(i)? != b'"' {
+        return None;
+    }
+    let mut j = i + 1;
+    while j < data.len() {
+        match data[j] {
+            b'\\' => j += 2,
+            b'"' => return Some(j + 1),
+            _ => j += 1,
         }
     }
     None
 }
 
-fn find_json_int_value(data: &[u8], field_name: &str) -> Option<u64> {
-    let needle = format!("\"{}\":", field_name);
-    let needle_bytes = needle.as_bytes();
-    let pos = data
-        .windows(needle_bytes.len())
-        .position(|w| w == needle_bytes)?;
-    let start = pos + needle_bytes.len();
-    let mut end = start;
-    while end < data.len() && data[end].is_ascii_digit() {
-        end += 1;
+/// Return the position after the JSON value at `i`.
+fn json_value_end(data: &[u8], i: usize) -> Option<usize> {
+    match *data.get(i)? {
+        b'"' => json_string_end(data, i),
+        b'{' | b'[' => {
+            let mut depth: usize = 0;
+            let mut j = i;
+            while j < data.len() {
+                match data[j] {
+                    // Skip strings whole so embedded braces do not affect nesting depth.
+                    b'"' => j = json_string_end(data, j)?,
+                    b'{' | b'[' => {
+                        depth += 1;
+                        j += 1;
+                    }
+                    b'}' | b']' => {
+                        // Reject unmatched closing delimiters without underflow,
+                        // including in release builds.
+                        depth = depth.checked_sub(1)?;
+                        j += 1;
+                        if depth == 0 {
+                            return Some(j);
+                        }
+                    }
+                    _ => j += 1,
+                }
+            }
+            None
+        }
+        // Numbers and literals end at the next structural byte.
+        _ => {
+            let mut j = i;
+            while j < data.len()
+                && !matches!(
+                    data[j],
+                    b',' | b'}' | b']' | b' ' | b'\t' | b'\n' | b'\r'
+                )
+            {
+                j += 1;
+            }
+            (j > i).then_some(j)
+        }
     }
-    if end == start {
+}
+
+/// A top-level JSON member referencing the original plaintext.
+struct JsonMember<'a> {
+    name: &'a [u8],
+    /// Value bytes, including quotes for strings.
+    value: &'a [u8],
+}
+
+/// Read top-level members of the keys file's JSON object in file order.
+///
+/// Parse the object structure before looking up names. The `key_data` string
+/// contains an Epee account blob and may include bytes resembling field names;
+/// those must not be treated as top-level members.
+///
+/// Reject malformed JSON, as Monero does when loading keys through rapidjson.
+fn parse_top_level_object(data: &[u8]) -> Result<Vec<JsonMember<'_>>, String> {
+    let malformed = || "keys file JSON is not a well-formed object".to_string();
+
+    let mut members = Vec::new();
+    let mut i = skip_json_whitespace(data, 0);
+    if data.get(i) != Some(&b'{') {
+        return Err(malformed());
+    }
+    i = skip_json_whitespace(data, i + 1);
+    if data.get(i) == Some(&b'}') {
+        i += 1;
+        return if skip_json_whitespace(data, i) == data.len() {
+            Ok(members)
+        } else {
+            Err(malformed())
+        };
+    }
+
+    loop {
+        let name_end = json_string_end(data, i).ok_or_else(malformed)?;
+        let name = data.get(i + 1..name_end - 1).ok_or_else(malformed)?;
+
+        i = skip_json_whitespace(data, name_end);
+        if data.get(i) != Some(&b':') {
+            return Err(malformed());
+        }
+        i = skip_json_whitespace(data, i + 1);
+
+        let value_end = json_value_end(data, i).ok_or_else(malformed)?;
+        members.push(JsonMember {
+            name,
+            value: data.get(i..value_end).ok_or_else(malformed)?,
+        });
+
+        i = skip_json_whitespace(data, value_end);
+        match data.get(i) {
+            Some(&b',') => i = skip_json_whitespace(data, i + 1),
+            Some(&b'}') => {
+                return if skip_json_whitespace(data, i + 1) == data.len() {
+                    Ok(members)
+                } else {
+                    Err(malformed())
+                };
+            }
+            _ => return Err(malformed()),
+        }
+    }
+}
+
+/// Return the first matching member, matching rapidjson's handling of duplicates.
+fn member<'a, 'b>(members: &'b [JsonMember<'a>], name: &str) -> Option<&'b JsonMember<'a>> {
+    members.iter().find(|m| m.name == name.as_bytes())
+}
+
+/// Return an escaped top-level string value, or `None` if absent or not a string.
+fn string_member<'a>(members: &[JsonMember<'a>], name: &str) -> Option<&'a [u8]> {
+    let value = member(members, name)?.value;
+    if value.len() < 2 || value[0] != b'"' || value[value.len() - 1] != b'"' {
         return None;
     }
-    std::str::from_utf8(&data[start..end]).ok()?.parse().ok()
+    Some(&value[1..value.len() - 1])
+}
+
+fn int_member(members: &[JsonMember<'_>], name: &str) -> Option<u64> {
+    let digits = member(members, name)?.value;
+    if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    std::str::from_utf8(digits).ok()?.parse().ok()
 }
 
 fn unescape_json_bytes(data: &[u8]) -> Result<Vec<u8>, String> {
@@ -487,7 +603,9 @@ fn write_json_str(buf: &mut Vec<u8>, key: &str, value: &str) {
     buf.push(b'"');
     buf.extend_from_slice(key.as_bytes());
     buf.extend_from_slice(b"\":\"");
-    buf.extend_from_slice(value.as_bytes());
+    // Escape `seed_language` when writing it back. Imported values may contain
+    // quotes that would otherwise end the string and introduce JSON members.
+    buf.extend_from_slice(&escape_json_bytes(value.as_bytes()));
     buf.push(b'"');
 }
 
@@ -496,10 +614,9 @@ pub fn parse_decrypted_keys(
     chacha_key: &[u8; 32],
     outer_iv: [u8; 8],
 ) -> Result<ImportedKeysFile, String> {
-    let (kd_start, kd_end) =
-        find_json_string_value(plaintext, "key_data").ok_or("key_data field not found")?;
+    let members = parse_top_level_object(plaintext)?;
 
-    let key_data_raw = &plaintext[kd_start..kd_end];
+    let key_data_raw = string_member(&members, "key_data").ok_or("key_data field not found")?;
     let key_data_bytes =
         if !key_data_raw.is_empty() && key_data_raw.iter().all(|b| b.is_ascii_hexdigit()) {
             hex::decode(std::str::from_utf8(key_data_raw).unwrap())
@@ -536,8 +653,7 @@ pub fn parse_decrypted_keys(
             })?;
 
     // Decrypt secret keys via xor_with_key_stream if they're encrypted
-    let encrypted_secret_keys =
-        find_json_int_value(plaintext, "encrypted_secret_keys").unwrap_or(0) != 0;
+    let encrypted_secret_keys = int_member(&members, "encrypted_secret_keys").unwrap_or(0) != 0;
 
     if encrypted_secret_keys {
         let mut derive_input = [0u8; 33];
@@ -557,7 +673,7 @@ pub fn parse_decrypted_keys(
         }
     }
 
-    let watch_only = find_json_int_value(plaintext, "watch_only").unwrap_or(0) != 0;
+    let watch_only = int_member(&members, "watch_only").unwrap_or(0) != 0;
 
     verify_secret_keys_match_public_keys(
         &spend_secret_key,
@@ -567,12 +683,9 @@ pub fn parse_decrypted_keys(
         watch_only,
     )?;
 
-    let nettype = find_json_int_value(plaintext, "nettype").unwrap_or(0) as u8;
-    let seed_language = find_json_string_value(plaintext, "seed_language").and_then(|(s, e)| {
-        std::str::from_utf8(&plaintext[s..e])
-            .ok()
-            .map(|s| s.to_string())
-    });
+    let nettype = int_member(&members, "nettype").unwrap_or(0) as u8;
+    let seed_language = string_member(&members, "seed_language")
+        .and_then(|value| std::str::from_utf8(value).ok().map(|s| s.to_string()));
 
     let derived_view = Zeroizing::new(Scalar::from_bytes_mod_order(
         Keccak256::digest(spend_secret_key).into(),
@@ -633,7 +746,63 @@ mod tests {
     #[test]
     fn find_field_in_json() {
         let json = br#"{"foo":"bar","baz":"qux"}"#;
-        let (s, e) = find_json_string_value(json, "baz").unwrap();
-        assert_eq!(&json[s..e], b"qux");
+        let members = parse_top_level_object(json).unwrap();
+        assert_eq!(string_member(&members, "baz"), Some(&b"qux"[..]));
+    }
+
+    /// Ignore field-like text inside `key_data`. Lookups must match only
+    /// top-level member names, regardless of where a string appears in the file.
+    #[test]
+    fn a_field_name_inside_a_string_value_is_not_a_field() {
+        let json = br#"{"key_data":"junk\"nettype\":1junk","nettype":2}"#;
+        let members = parse_top_level_object(json).unwrap();
+        assert_eq!(int_member(&members, "nettype"), Some(2));
+        assert_eq!(members.len(), 2, "the decoy must not become a member");
+    }
+
+    /// Reject malformed JSON that closes `key_data` early and inserts a decoy
+    /// `nettype` before the real member. Monero rejects this during JSON parsing.
+    #[test]
+    fn refuses_a_document_that_is_not_a_flat_object() {
+        for bad in [
+            &br#"{"key_data":"junk"nettype":1,"nettype":2}"#[..],
+            &br#"{"a":1"#[..],
+            &br#"{"a":1}trailing"#[..],
+            &br#"["a",1]"#[..],
+            &br#"{"a" 1}"#[..],
+            &br#"{"a":}"#[..],
+        ] {
+            assert!(
+                parse_top_level_object(bad).is_err(),
+                "accepted a malformed document: {}",
+                String::from_utf8_lossy(bad)
+            );
+        }
+    }
+
+    /// Skip nested values without treating their braces or names as top-level fields.
+    #[test]
+    fn skips_nested_values_whole() {
+        let json = br#"{"a":{"nettype":1,"b":[1,{"c":"}"}]},"nettype":2}"#;
+        let members = parse_top_level_object(json).unwrap();
+        assert_eq!(members.len(), 2);
+        assert_eq!(int_member(&members, "nettype"), Some(2));
+    }
+
+    /// Escape imported `seed_language` values when writing JSON.
+    #[test]
+    fn written_string_values_are_escaped() {
+        let mut written = Vec::new();
+        write_json_str(&mut written, "seed_language", "E\",\"nettype\":1,\"x\":\"y");
+
+        // The helper includes the comma separating this member from the previous one.
+        let mut json = vec![b'{'];
+        json.extend_from_slice(&written[1..]);
+        json.extend_from_slice(b",\"nettype\":2}");
+
+        let members = parse_top_level_object(&json)
+            .expect("an escaped value must still leave a well-formed object");
+        assert_eq!(int_member(&members, "nettype"), Some(2));
+        assert_eq!(members.len(), 2, "the value must not have become members");
     }
 }

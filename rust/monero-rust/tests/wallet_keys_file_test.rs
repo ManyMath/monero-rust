@@ -214,10 +214,65 @@ fn accepts_a_view_only_keys_file_whose_spend_secret_key_is_absent() {
     assert_eq!(imported.spend_secret_key, [0u8; 32]);
 }
 
-/// The spend-key half of the check is skipped for a watch-only wallet, which would be a hole
-/// rather than a concession if the view-key half did not still bite. A view-only file is the
-/// one an untrusted online wallet hands over, so it is the case that most needs to fail
-/// closed: tamper with the same flag and the import must be rejected.
+/// Replace the first `from` match with `to`; panic if no match exists.
+fn splice_once(plaintext: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
+    let pos = plaintext
+        .windows(from.len())
+        .position(|w| w == from)
+        .unwrap_or_else(|| {
+            panic!(
+                "{} not found in the decrypted keys file",
+                String::from_utf8_lossy(from)
+            )
+        });
+    let mut out = plaintext[..pos].to_vec();
+    out.extend_from_slice(to);
+    out.extend_from_slice(&plaintext[pos + from.len()..]);
+    out
+}
+
+fn first_occurrence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+/// Reject malformed JSON containing a decoy field before the real member.
+///
+/// Closing a string early can expose field-like text that a substring search
+/// would accept. The importer must parse the object and reject invalid syntax,
+/// as Monero does with rapidjson.
+#[test]
+fn refuses_a_keys_file_with_a_decoy_field_smuggled_past_a_string() {
+    let (plaintext, key, outer_iv) = decrypt_vector("honked.keys");
+
+    let honest = monero_rust::wallet_keys_file::parse_decrypted_keys(&plaintext, &key, outer_iv)
+        .expect("the untampered vector should parse");
+    assert_eq!(honest.nettype, 2, "premise: honked.keys is a stagenet wallet");
+
+    // Close seed_language's string early and leave a decoy nettype behind it.
+    let tampered = splice_once(
+        &plaintext,
+        br#""seed_language":"English""#,
+        br#""seed_language":"a"nettype":1,"b""#,
+    );
+
+    // Confirm that a substring search would encounter the decoy first.
+    let decoy = first_occurrence(&tampered, br#""nettype":1"#).expect("decoy must be present");
+    let real = first_occurrence(&tampered, br#""nettype":2"#).expect("real member must survive");
+    assert!(
+        decoy < real,
+        "the decoy must precede the real member for this to be the bug under test"
+    );
+
+    let err = monero_rust::wallet_keys_file::parse_decrypted_keys(&tampered, &key, outer_iv)
+        .expect_err("a keys file whose JSON is malformed must be refused");
+    assert!(
+        err.contains("well-formed"),
+        "the malformed document must be what rejected it, got: {err}"
+    );
+}
+
+/// Still verify the view key in watch-only files. Changing the encryption flag
+/// must fail import even though the spend-key check is skipped.
 #[test]
 fn rejects_a_view_only_keys_file_whose_view_key_does_not_match() {
     let (plaintext, key, outer_iv) = decrypt_vector("hemlock_view_only.keys");
