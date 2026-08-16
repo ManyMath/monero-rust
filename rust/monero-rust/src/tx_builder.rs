@@ -303,18 +303,17 @@ pub mod native {
         }
     }
 
-    fn spend_key_from_seed(seed: &Seed) -> Zeroizing<Scalar> {
-        // key_bytes(), not entropy(): for a polyseed the spend key is PBKDF2-derived from
-        // the entropy rather than being it. They coincide for a classic seed, which is the
-        // only kind the tests here used, so deriving from entropy looked correct.
-        let entropy = seed.key_bytes();
+    fn spend_key_from_seed(seed: &Seed, passphrase: &str) -> Zeroizing<Scalar> {
+        // Apply the seed offset passphrase and derive the spend key. For polyseed,
+        // this includes PBKDF2; the seed entropy alone is not the spend key.
+        let entropy = seed.key_bytes_with_passphrase(passphrase);
         let mut spend_bytes = [0u8; 32];
         spend_bytes.copy_from_slice(&entropy[..]);
         Zeroizing::new(Scalar::from_bytes_mod_order(spend_bytes))
     }
 
-    fn view_pair_from_seed(seed: &Seed) -> ViewPair {
-        let entropy = seed.key_bytes();
+    fn view_pair_from_seed(seed: &Seed, passphrase: &str) -> ViewPair {
+        let entropy = seed.key_bytes_with_passphrase(passphrase);
         let mut spend_bytes = [0u8; 32];
         spend_bytes.copy_from_slice(&entropy[..]);
 
@@ -327,6 +326,25 @@ pub mod native {
         let view_scalar = Scalar::from_bytes_mod_order(view);
 
         ViewPair::new(spend_point, Zeroizing::new(view_scalar))
+    }
+
+    /// Derive the private spend and view keys for the offline signing APIs.
+    ///
+    /// Signing, preview, and key-offset derivation share this helper so they use
+    /// the same wallet. Apply the passphrase and reduce the spend scalar before
+    /// hashing it to derive the view key, which must also be a canonical scalar.
+    /// Wallet2 encryption and subaddress derivation hash these exact key bytes.
+    fn private_keys_from_seed(
+        seed_phrase: &str,
+        passphrase: &str,
+    ) -> Result<([u8; 32], [u8; 32]), String> {
+        let seed = resolve_seed(seed_phrase)?;
+        let spend_secret_key = spend_key_from_seed(&seed, passphrase).to_bytes();
+        let view_secret_key: [u8; 32] = Keccak256::digest(spend_secret_key).into();
+        Ok((
+            spend_secret_key,
+            Scalar::from_bytes_mod_order(view_secret_key).to_bytes(),
+        ))
     }
 
     pub async fn create_spendable_output<R: RpcConnection>(
@@ -513,6 +531,7 @@ pub mod native {
     pub async fn sign_prepared_transaction(
         prepared: PreparedTransaction,
         seed_phrase: &str,
+        passphrase: &str,
     ) -> Result<TransactionResult, String> {
         create_transaction(
             &prepared.node_url,
@@ -520,6 +539,7 @@ pub mod native {
             &prepared.network,
             prepared.stored_outputs,
             &prepared.recipients,
+            passphrase,
         )
         .await
     }
@@ -568,6 +588,7 @@ pub mod native {
         network_str: &str,
         stored_outputs: Vec<StoredOutputData>,
         recipients: &[(String, u64)],
+        passphrase: &str,
     ) -> Result<TransactionResult, String> {
         crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
         crate::error_codes::validate_network(network_str).map_err(|e| e.message.clone())?;
@@ -585,8 +606,8 @@ pub mod native {
 
         let seed = resolve_seed(seed_phrase)?;
 
-        let spend_key = spend_key_from_seed(&seed);
-        let view_pair = view_pair_from_seed(&seed);
+        let spend_key = spend_key_from_seed(&seed, passphrase);
+        let view_pair = view_pair_from_seed(&seed, passphrase);
 
         #[cfg(not(target_arch = "wasm32"))]
         let rpc = HttpRpc::new(node_url.to_string())
@@ -739,6 +760,7 @@ pub mod native {
         network_str: &str,
         stored_outputs: Vec<StoredOutputData>,
         destination_address: &str,
+        passphrase: &str,
     ) -> Result<TransactionResult, String> {
         crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
         crate::error_codes::validate_network(network_str).map_err(|e| e.message.clone())?;
@@ -750,8 +772,8 @@ pub mod native {
 
         let seed = resolve_seed(seed_phrase)?;
 
-        let spend_key = spend_key_from_seed(&seed);
-        let view_pair = view_pair_from_seed(&seed);
+        let spend_key = spend_key_from_seed(&seed, passphrase);
+        let view_pair = view_pair_from_seed(&seed, passphrase);
 
         #[cfg(not(target_arch = "wasm32"))]
         let rpc = HttpRpc::new(node_url.to_string())
@@ -940,9 +962,10 @@ pub mod native {
         rpc: &Rpc<R>,
         block_height: u64,
         seed_phrase: &str,
+        passphrase: &str,
     ) -> Result<Vec<ReceivedOutput>, String> {
         let seed = resolve_seed(seed_phrase)?;
-        let view_pair = view_pair_from_seed(&seed);
+        let view_pair = view_pair_from_seed(&seed, passphrase);
         let mut scanner =
             crate::scanner::oxide_scanner_from_keys(&view_pair.spend(), view_pair.view_scalar())?;
 
@@ -983,10 +1006,11 @@ pub mod native {
         block_height: u64,
         seed_phrase: &str,
         _network_str: &str,
+        passphrase: &str,
     ) -> Result<Vec<ReceivedOutput>, String> {
         let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
-        received_outputs_from_scan_inner(&rpc, block_height, seed_phrase).await
+        received_outputs_from_scan_inner(&rpc, block_height, seed_phrase, passphrase).await
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -995,9 +1019,10 @@ pub mod native {
         block_height: u64,
         seed_phrase: &str,
         _network_str: &str,
+        passphrase: &str,
     ) -> Result<Vec<ReceivedOutput>, String> {
         let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
-        received_outputs_from_scan_inner(&rpc, block_height, seed_phrase).await
+        received_outputs_from_scan_inner(&rpc, block_height, seed_phrase, passphrase).await
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1201,12 +1226,10 @@ pub mod native {
     pub fn derive_wallet2_unsigned_source_key_offsets(
         seed_phrase: &str,
         unsigned_txset: &[u8],
+        passphrase: &str,
     ) -> Result<Wallet2SourceKeyOffsetsResult, String> {
-        let seed = resolve_seed(seed_phrase)?;
-        // Reduce before hashing: the view key is H(reduced spend scalar) everywhere else
-        // in the crate, and a polyseed's key is not canonical to begin with.
-        let spend_secret_key = Scalar::from_bytes_mod_order(*seed.key_bytes()).to_bytes();
-        let view_secret_key: [u8; 32] = Keccak256::digest(spend_secret_key).into();
+        let (spend_secret_key, view_secret_key) =
+            private_keys_from_seed(seed_phrase, passphrase)?;
         derive_wallet2_unsigned_source_key_offsets_from_keys(
             spend_secret_key,
             view_secret_key,
@@ -1601,13 +1624,11 @@ pub mod native {
         seed_phrase: &str,
         unsigned_tx_hex: &str,
         network_str: &str,
+        passphrase: &str,
         approval: &SigningApproval,
     ) -> Result<OfflineSignResult, String> {
-        let seed = resolve_seed(seed_phrase)?;
-        // Reduce before hashing: the view key is H(reduced spend scalar) everywhere else
-        // in the crate, and a polyseed's key is not canonical to begin with.
-        let spend_secret_key = Scalar::from_bytes_mod_order(*seed.key_bytes()).to_bytes();
-        let view_secret_key: [u8; 32] = Keccak256::digest(spend_secret_key).into();
+        let (spend_secret_key, view_secret_key) =
+            private_keys_from_seed(seed_phrase, passphrase)?;
         sign_unsigned_transaction_with_private_keys(
             spend_secret_key,
             view_secret_key,
@@ -1854,12 +1875,10 @@ pub mod native {
         seed_phrase: &str,
         unsigned_tx_hex: &str,
         network_str: &str,
+        passphrase: &str,
     ) -> Result<TransactionPreview, String> {
-        let seed = resolve_seed(seed_phrase)?;
-        // Reduce before hashing: the view key is H(reduced spend scalar) everywhere else
-        // in the crate, and a polyseed's key is not canonical to begin with.
-        let spend_secret_key = Scalar::from_bytes_mod_order(*seed.key_bytes()).to_bytes();
-        let view_secret_key: [u8; 32] = Keccak256::digest(spend_secret_key).into();
+        let (spend_secret_key, view_secret_key) =
+            private_keys_from_seed(seed_phrase, passphrase)?;
         preview_unsigned_transaction(
             spend_secret_key,
             view_secret_key,
@@ -2188,20 +2207,53 @@ pub mod native {
             let expected = crate::scanner::derive_keys(&words, "stagenet", "")
                 .expect("derive_keys must accept a polyseed");
 
-            let spend = spend_key_from_seed(&seed);
+            let spend = spend_key_from_seed(&seed, "");
             assert_eq!(
                 hex::encode((&*spend * ED25519_BASEPOINT_TABLE).compress().to_bytes()),
                 expected.public_spend_key,
                 "signer's spend key must be the wallet's spend key"
             );
 
-            let view_pair = view_pair_from_seed(&seed);
+            let view_pair = view_pair_from_seed(&seed, "");
             assert_eq!(
                 view_pair
                     .address(Network::Stagenet, AddressSpec::Standard)
                     .to_string(),
                 expected.address,
                 "signer's view pair must be the wallet's view pair"
+            );
+        }
+
+        /// Apply the seed offset passphrase in every seed-based offline signing API.
+        ///
+        /// The passphrase changes the wallet by subtracting `cn_slow_hash(passphrase)`
+        /// from the spend key. All three signing entry points use
+        /// `private_keys_from_seed`, so check its result against scanner derivation.
+        #[test]
+        fn private_keys_from_seed_matches_derive_keys_for_a_passphrase() {
+            let words = "hemlock jubilee eden hacksaw boil superior inroads epoxy exhale orders cavernous second brunt saved richly lower upgrade hitched launching deepest mostly playful layout lower eden";
+            let passphrase = "hunter2";
+
+            let seed = Seed::from_string(Zeroizing::new(words.to_string())).unwrap();
+            assert_ne!(
+                seed.key_bytes_with_passphrase(passphrase),
+                seed.key_bytes(),
+                "premise: the passphrase must change which wallet this mnemonic opens"
+            );
+
+            let expected = crate::scanner::derive_keys(words, "stagenet", passphrase)
+                .expect("derive_keys must accept a passphrase");
+            let (spend_secret_key, view_secret_key) = private_keys_from_seed(words, passphrase)
+                .expect("the signer must accept the same passphrase");
+
+            assert_eq!(
+                hex::encode(spend_secret_key),
+                expected.secret_spend_key,
+                "signer's spend key must be the wallet's spend key"
+            );
+            assert_eq!(
+                hex::encode(view_secret_key), expected.secret_view_key,
+                "signer's view key must be the wallet's view key"
             );
         }
 
@@ -2237,10 +2289,10 @@ pub mod native {
             let seed_phrase = "hemlock jubilee eden hacksaw boil superior inroads epoxy exhale orders cavernous second brunt saved richly lower upgrade hitched launching deepest mostly playful layout lower eden";
             let seed = Seed::from_string(Zeroizing::new(seed_phrase.to_string())).unwrap();
 
-            let spend_key = spend_key_from_seed(&seed);
+            let spend_key = spend_key_from_seed(&seed, "");
 
             // The spend key should be deterministic
-            let spend_key2 = spend_key_from_seed(&seed);
+            let spend_key2 = spend_key_from_seed(&seed, "");
             assert_eq!(spend_key.to_bytes(), spend_key2.to_bytes());
 
             // Should match the expected spend key from test vector
@@ -2254,10 +2306,10 @@ pub mod native {
             let seed_phrase = "hemlock jubilee eden hacksaw boil superior inroads epoxy exhale orders cavernous second brunt saved richly lower upgrade hitched launching deepest mostly playful layout lower eden";
             let seed = Seed::from_string(Zeroizing::new(seed_phrase.to_string())).unwrap();
 
-            let view_pair = view_pair_from_seed(&seed);
+            let view_pair = view_pair_from_seed(&seed, "");
 
             // View pair should be deterministic - test by generating the same spend point
-            let view_pair2 = view_pair_from_seed(&seed);
+            let view_pair2 = view_pair_from_seed(&seed, "");
             assert_eq!(
                 view_pair.spend().compress().to_bytes(),
                 view_pair2.spend().compress().to_bytes()

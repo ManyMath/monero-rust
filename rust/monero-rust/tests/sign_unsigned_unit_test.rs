@@ -275,14 +275,6 @@ fn test_sign_unsigned_transaction_synthetic() {
     }
 }
 
-/// A tampered unsigned transaction whose change is redirected to an address the signer
-/// does not control must be rejected.
-///
-/// This is the attack offline signing exists to prevent. The online, view-only
-/// half is untrusted and it chooses every destination in the unsigned transaction. Here
-/// the inputs are really ours and the amount equation really balances - the two
-/// things sign_offline() checks - so without an explicit change check the signer hands
-/// back a valid signature that pays the wallet's balance to somebody else.
 /// Build an unsigned transaction owned by `spend_scalar`, including its ring
 /// and change. Return the serialized hex and declared fee.
 fn synthetic_unsigned_hex_for(spend_scalar: Scalar) -> (String, u64) {
@@ -355,6 +347,72 @@ fn synthetic_unsigned_hex_for(spend_scalar: Scalar) -> (String, u64) {
     (hex::encode(unsigned_tx.serialize()), fee)
 }
 
+/// Sign with the same seed offset passphrase used to derive the wallet.
+///
+/// The passphrase changes the spend key by subtracting `cn_slow_hash(passphrase)`.
+/// Omitting it selects a different wallet, which does not own these inputs.
+/// Check both signing and preview with the passphrase applied.
+#[test]
+fn offline_signing_honours_the_seed_offset_passphrase() {
+    const PASSPHRASE: &str = "hunter2";
+
+    let seed = Seed::from_string(Zeroizing::new(TEST_SEED.to_string())).unwrap();
+    let offset_key = seed.key_bytes_with_passphrase(PASSPHRASE);
+    assert_ne!(
+        offset_key,
+        seed.key_bytes(),
+        "premise: a passphrase must change which wallet the mnemonic opens"
+    );
+
+    let (unsigned_hex, fee) =
+        synthetic_unsigned_hex_for(Scalar::from_bytes_mod_order(*offset_key));
+
+    // Sign with the keys that own the outputs.
+    let signed = sign_reviewed_seed(TEST_SEED, &unsigned_hex, NETWORK_STR, PASSPHRASE)
+        .expect("the passphrase wallet must be able to sign its own transaction");
+    assert_eq!(signed.fee, fee, "fee must survive signing");
+    assert_eq!(signed.tx_id.len(), 64, "tx_id must be 64 hex chars");
+
+    // Without the passphrase, the wallet does not own these outputs.
+    let error = sign_reviewed_seed(TEST_SEED, &unsigned_hex, NETWORK_STR, "")
+        .expect_err("the bare mnemonic's wallet does not own these outputs");
+    assert!(
+        error.contains("Refusing to sign") || error.contains("does not belong"),
+        "expected a refusal naming the wrong wallet, got: {error}"
+    );
+
+    // Preview and signing must agree on the wallet and its change ownership.
+    let previewed = monero_rust::native::preview_unsigned_transaction_from_seed(
+        TEST_SEED,
+        &unsigned_hex,
+        NETWORK_STR,
+        PASSPHRASE,
+    )
+    .expect("preview must parse the transaction the passphrase wallet signs");
+    let change = previewed.transactions[0]
+        .destinations
+        .iter()
+        .find(|d| d.is_change)
+        .expect("preview must surface the change destination");
+    assert!(
+        change.is_ours,
+        "preview disowned the passphrase wallet's own change: {change:?}"
+    );
+
+    let error = monero_rust::native::preview_unsigned_transaction_from_seed(
+        TEST_SEED,
+        &unsigned_hex,
+        NETWORK_STR,
+        "",
+    )
+    .unwrap_err();
+    assert!(error.contains("does not belong"));
+}
+
+/// Reject unsigned transactions that redirect change to another wallet.
+///
+/// This fixture has owned inputs and balanced amounts, so those checks pass.
+/// The signer must separately verify that it owns the declared change address.
 #[test]
 fn refuses_to_sign_a_transaction_whose_change_is_redirected() {
     let seed = Seed::from_string(Zeroizing::new(TEST_SEED.to_string())).unwrap();
@@ -596,13 +654,13 @@ fn sign_reviewed_seed(
     seed: &str,
     encoded: &str,
     network: &str,
-    _passphrase: &str,
+    passphrase: &str,
 ) -> Result<monero_rust::native::OfflineSignResult, String> {
     let preview = monero_rust::native::preview_unsigned_transaction_from_seed(
-        seed, encoded, network,
+        seed, encoded, network, passphrase,
     )?;
     let approval = preview.approve(10_000_000_000, 100_000_000_000_000)?;
-    monero_rust::native::sign_unsigned_transaction(seed, encoded, network, &approval)
+    monero_rust::native::sign_unsigned_transaction(seed, encoded, network, passphrase, &approval)
 }
 
 fn sign_reviewed_keys(

@@ -1053,18 +1053,62 @@ fn cold_signing_full_export_imports_through_view_only_sentinel() {
     assert_eq!(outputs[1].key_image, later_ki);
 }
 
+#[test]
+fn cold_signing_wallet2_seed_apis_match_imported_keys() {
+    use monero_rust::native;
+
+    let cold = read_keys_file(&vector_path("cold_full.keys"), "").unwrap();
+    let seed = cold.mnemonic.as_ref().unwrap();
+    let unsigned = std::fs::read(vector_path("unsigned_monero_tx")).unwrap();
+    let unsigned_hex = hex::encode(&unsigned);
+    let from_keys = native::preview_unsigned_transaction(
+        cold.spend_secret_key,
+        cold.view_secret_key,
+        &unsigned_hex,
+        "mainnet",
+    )
+    .unwrap();
+    let from_seed =
+        native::preview_unsigned_transaction_from_seed(seed, &unsigned_hex, "mainnet", "")
+            .expect("the seed must decrypt the same wallet2 txset as its imported keys");
+    assert_eq!(
+        serde_json::to_value(from_seed).unwrap(),
+        serde_json::to_value(from_keys).unwrap()
+    );
+
+    let offsets = native::derive_wallet2_unsigned_source_key_offsets(seed, &unsigned, "")
+        .expect("seed-based source derivation must decrypt wallet2 archives");
+    let key_offsets = native::derive_wallet2_unsigned_source_key_offsets_from_keys(
+        cold.spend_secret_key,
+        cold.view_secret_key,
+        &unsigned,
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(offsets).unwrap(),
+        serde_json::to_value(key_offsets).unwrap()
+    );
+
+    let signed = sign_reviewed_seed(seed, &unsigned_hex, "mainnet", "")
+        .expect("the original Monero seed must sign its wallet2 txset");
+    assert_eq!(signed.fee, 2_599_200_000);
+    assert_eq!(signed.spent_key_images.len(), 2);
+    let bytes = hex::decode(signed.tx_blob).unwrap();
+    Transaction::<NotPruned>::read(&mut bytes.as_slice()).unwrap();
+}
+
 // Explicit test policy, independent of amounts supplied by the fixture.
 fn sign_reviewed_seed(
     seed: &str,
     encoded: &str,
     network: &str,
-    _passphrase: &str,
+    passphrase: &str,
 ) -> Result<monero_rust::native::OfflineSignResult, String> {
     let preview = monero_rust::native::preview_unsigned_transaction_from_seed(
-        seed, encoded, network,
+        seed, encoded, network, passphrase,
     )?;
     let approval = preview.approve(10_000_000_000, 100_000_000_000_000)?;
-    monero_rust::native::sign_unsigned_transaction(seed, encoded, network, &approval)
+    monero_rust::native::sign_unsigned_transaction(seed, encoded, network, passphrase, &approval)
 }
 
 fn sign_reviewed_keys(

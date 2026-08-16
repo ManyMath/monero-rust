@@ -263,11 +263,11 @@ fn sign_reviewed_seed(
     seed: &str,
     encoded: &str,
     network: &str,
-    _passphrase: &str,
+    passphrase: &str,
 ) -> Result<monero_rust::native::OfflineSignResult, String> {
     let preview = monero_rust::native::preview_unsigned_transaction_from_seed(
-        seed, encoded, network,
+        seed, encoded, network, passphrase,
     )?;
     let approval = preview.approve(10_000_000_000, 100_000_000_000_000)?;
-    monero_rust::native::sign_unsigned_transaction(seed, encoded, network, &approval)
+    monero_rust::native::sign_unsigned_transaction(seed, encoded, network, passphrase, &approval)
 }

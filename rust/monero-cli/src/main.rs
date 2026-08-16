@@ -515,6 +515,8 @@ async fn cmd_transfer(
         network,
         stored_outputs,
         &[(address.to_string(), amount_pico)],
+        // The CLI has no seed offset passphrase; its wallet file holds a bare mnemonic.
+        "",
     )
     .await?;
 
@@ -667,7 +669,7 @@ async fn cmd_sweep_all(
 
     println!("Building sweep transaction...");
     let result =
-        monero_rust::native::sweep_all(daemon, seed, network, stored_outputs, address).await?;
+        monero_rust::native::sweep_all(daemon, seed, network, stored_outputs, address, "").await?;
 
     println!("Broadcasting transaction...");
     monero_rust::native::broadcast_transaction(daemon, &result.tx_blob, false).await?;
