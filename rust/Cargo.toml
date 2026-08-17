@@ -2,7 +2,6 @@
 members = [
     "monero-rust",
     "monero-epee-bin-serde",
-    "monero-cli",
     "cuprate-cryptonight",
     "monero-utils/polyseed",
     "monero-utils/payment-proofs",
