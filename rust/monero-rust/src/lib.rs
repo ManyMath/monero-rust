@@ -147,13 +147,7 @@ pub use abstractions::{
 
 // -- Platform-specific implementations --
 #[cfg(target_arch = "wasm32")]
-pub mod rpc_adapter;
-#[cfg(target_arch = "wasm32")]
 pub mod wasm_fetch;
-#[cfg(target_arch = "wasm32")]
-pub mod wasm_impl;
-#[cfg(target_arch = "wasm32")]
-pub use wasm_impl::{BrowserStorage, CallbackRpcClient, JsTimeProvider, WasmRpcClient};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native_impl;
