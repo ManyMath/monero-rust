@@ -133,11 +133,6 @@ pub use scanner::scan_block_multi_wallet;
 #[cfg(target_arch = "wasm32")]
 pub use scanner::scan_block_multi_wallet_wasm;
 
-/// Simple integration test function
-pub fn test_integration() -> String {
-    "monero-rust works".to_string()
-}
-
 // -- Abstractions (RPC, storage, time) --
 pub use abstractions::{
     AbError, AbResult, BlockData, BlockHeader, BlockResponse, GetOutsParams, HeightResponse,
