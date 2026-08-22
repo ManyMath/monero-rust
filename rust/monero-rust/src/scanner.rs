@@ -692,9 +692,10 @@ fn check_spent_status(requested: usize, statuses: Vec<u32>) -> Result<Vec<u32>, 
     Ok(statuses)
 }
 
-pub async fn is_key_image_spent(node_url: &str, key_images: &[String]) -> Result<Vec<u32>, String> {
-    crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
-
+pub async fn key_image_spent_status<R: RpcConnection>(
+    rpc: &Rpc<R>,
+    key_images: &[String],
+) -> Result<Vec<u32>, String> {
     #[derive(serde::Serialize, Debug)]
     struct Req {
         key_images: Vec<String>,
@@ -708,54 +709,37 @@ pub async fn is_key_image_spent(node_url: &str, key_images: &[String]) -> Result
         key_images: key_images.to_vec(),
     };
 
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use crate::monero_backend::rpc::HttpRpc;
-        let rpc = HttpRpc::new(node_url.to_string())
-            .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
-        let resp: Resp = rpc
-            .rpc_call("is_key_image_spent", Some(params))
-            .await
-            .map_err(|e| format!("RPC error: {:?}", e))?;
-        check_spent_status(key_images.len(), resp.spent_status)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        use crate::rpc_serai::WasmRpcConnection;
-        let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
-        let resp: Resp = rpc
-            .rpc_call("is_key_image_spent", Some(params))
-            .await
-            .map_err(|e| format!("RPC error: {:?}", e))?;
-        check_spent_status(key_images.len(), resp.spent_status)
-    }
+    let resp: Resp = rpc
+        .rpc_call("is_key_image_spent", Some(params))
+        .await
+        .map_err(|e| format!("RPC error: {:?}", e))?;
+    check_spent_status(key_images.len(), resp.spent_status)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn is_key_image_spent(node_url: &str, key_images: &[String]) -> Result<Vec<u32>, String> {
+    crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
+    use crate::monero_backend::rpc::HttpRpc;
+    let rpc = HttpRpc::new(node_url.to_string())
+        .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
+    key_image_spent_status(&rpc, key_images).await
+}
+
+pub async fn daemon_height<R: RpcConnection>(rpc: &Rpc<R>) -> Result<u64, String> {
+    let height = rpc
+        .get_height()
+        .await
+        .map_err(|e| format!("Failed to get height: {:?}", e))?;
+    Ok(height as u64)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn get_daemon_height(node_url: &str) -> Result<u64, String> {
     crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use crate::monero_backend::rpc::HttpRpc;
-        let rpc = HttpRpc::new(node_url.to_string())
-            .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
-        let height = rpc
-            .get_height()
-            .await
-            .map_err(|e| format!("Failed to get height: {:?}", e))?;
-        Ok(height as u64)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        use crate::rpc_serai::WasmRpcConnection;
-        let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
-        let height = rpc
-            .get_height()
-            .await
-            .map_err(|e| format!("Failed to get height: {:?}", e))?;
-        Ok(height as u64)
-    }
+    use crate::monero_backend::rpc::HttpRpc;
+    let rpc = HttpRpc::new(node_url.to_string())
+        .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
+    daemon_height(&rpc).await
 }
 
 /// Scan a single block for outputs belonging to the given wallet.
