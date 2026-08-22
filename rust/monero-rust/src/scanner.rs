@@ -746,6 +746,7 @@ pub async fn get_daemon_height(node_url: &str) -> Result<u64, String> {
 ///
 /// This function is generic over the RPC connection type, allowing it to work
 /// with native or wasm RPC connections.
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn scan_block_for_outputs_with_url(
     node_url: &str,
     block_height: u64,
@@ -766,6 +767,7 @@ pub async fn scan_block_for_outputs_with_url(
     .await
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn scan_block_for_outputs_with_url_and_lookahead(
     node_url: &str,
     block_height: u64,
@@ -774,40 +776,18 @@ pub async fn scan_block_for_outputs_with_url_and_lookahead(
     lookahead: Lookahead,
     passphrase: &str,
 ) -> Result<BlockScanResult, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use crate::monero_backend::rpc::HttpRpc;
-        let rpc = HttpRpc::new(node_url.to_string())
-            .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
-        scan_block_for_outputs_with_lookahead(
-            &rpc,
-            block_height,
-            mnemonic,
-            network_str,
-            lookahead,
-            passphrase,
-        )
-        .await
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        let results = scan_blocks_batch_with_url(
-            node_url,
-            block_height,
-            mnemonic,
-            network_str,
-            lookahead,
-            false,
-            passphrase,
-        )
-        .await?;
-
-        results
-            .into_iter()
-            .next()
-            .ok_or_else(|| format!("No block data returned for height {}", block_height))
-    }
+    use crate::monero_backend::rpc::HttpRpc;
+    let rpc = HttpRpc::new(node_url.to_string())
+        .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
+    scan_block_for_outputs_with_lookahead(
+        &rpc,
+        block_height,
+        mnemonic,
+        network_str,
+        lookahead,
+        passphrase,
+    )
+    .await
 }
 
 /// Build a `monero-wallet` scanner from dalek key material.
@@ -1605,6 +1585,7 @@ pub async fn process_batch_response(
 }
 
 /// Convenience wrapper for batch scanning with URL-based RPC creation.
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn scan_blocks_batch_with_url(
     node_url: &str,
     start_height: u64,
@@ -1614,38 +1595,19 @@ pub async fn scan_blocks_batch_with_url(
     prune: bool,
     passphrase: &str,
 ) -> Result<Vec<BlockScanResult>, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use crate::monero_backend::rpc::HttpRpc;
-        let rpc = HttpRpc::new(node_url.to_string())
-            .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
-        scan_blocks_batch(
-            &rpc,
-            start_height,
-            mnemonic,
-            network_str,
-            lookahead,
-            prune,
-            passphrase,
-        )
-        .await
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        use crate::rpc_serai::WasmRpcConnection;
-        let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
-        scan_blocks_batch(
-            &rpc,
-            start_height,
-            mnemonic,
-            network_str,
-            lookahead,
-            prune,
-            passphrase,
-        )
-        .await
-    }
+    use crate::monero_backend::rpc::HttpRpc;
+    let rpc = HttpRpc::new(node_url.to_string())
+        .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
+    scan_blocks_batch(
+        &rpc,
+        start_height,
+        mnemonic,
+        network_str,
+        lookahead,
+        prune,
+        passphrase,
+    )
+    .await
 }
 
 /// Scan a batch of blocks for outputs belonging to multiple wallets.
@@ -1982,26 +1944,17 @@ pub async fn process_batch_multi_wallet_response(
 }
 
 /// Convenience wrapper for multi-wallet batch scanning with URL-based RPC creation.
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn scan_blocks_batch_multi_wallet_with_url(
     node_url: &str,
     start_height: u64,
     wallet_configs: Vec<WalletScanConfig>,
     prune: bool,
 ) -> Result<Vec<MultiWalletScanResult>, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use crate::monero_backend::rpc::HttpRpc;
-        let rpc = HttpRpc::new(node_url.to_string())
-            .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
-        scan_blocks_batch_multi_wallet(&rpc, start_height, wallet_configs, prune).await
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        use crate::rpc_serai::WasmRpcConnection;
-        let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
-        scan_blocks_batch_multi_wallet(&rpc, start_height, wallet_configs, prune).await
-    }
+    use crate::monero_backend::rpc::HttpRpc;
+    let rpc = HttpRpc::new(node_url.to_string())
+        .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
+    scan_blocks_batch_multi_wallet(&rpc, start_height, wallet_configs, prune).await
 }
 
 /// Opaque wrapper around `GetBlocksFastResponse` for double-buffered pipelining.
@@ -2171,6 +2124,7 @@ pub async fn scan_blocks_batch_with_history<R: RpcConnection>(
 }
 
 /// Convenience wrapper for history-aware batch scanning with URL-based RPC.
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn scan_blocks_batch_with_history_url(
     node_url: &str,
     start_height: u64,
@@ -2181,40 +2135,20 @@ pub async fn scan_blocks_batch_with_history_url(
     prune: bool,
     passphrase: &str,
 ) -> Result<(Vec<BlockScanResult>, u64), String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use crate::monero_backend::rpc::HttpRpc;
-        let rpc = HttpRpc::new(node_url.to_string())
-            .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
-        scan_blocks_batch_with_history(
-            &rpc,
-            start_height,
-            known_hashes,
-            mnemonic,
-            network_str,
-            lookahead,
-            prune,
-            passphrase,
-        )
-        .await
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        use crate::rpc_serai::WasmRpcConnection;
-        let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
-        scan_blocks_batch_with_history(
-            &rpc,
-            start_height,
-            known_hashes,
-            mnemonic,
-            network_str,
-            lookahead,
-            prune,
-            passphrase,
-        )
-        .await
-    }
+    use crate::monero_backend::rpc::HttpRpc;
+    let rpc = HttpRpc::new(node_url.to_string())
+        .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
+    scan_blocks_batch_with_history(
+        &rpc,
+        start_height,
+        known_hashes,
+        mnemonic,
+        network_str,
+        lookahead,
+        prune,
+        passphrase,
+    )
+    .await
 }
 
 /// Fetch a batch of blocks using known hash history, without scanning.
@@ -2577,23 +2511,6 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
         spent_key_image_tx_hashes,
         wallet_results,
     })
-}
-
-/// WASM convenience wrapper
-#[cfg(target_arch = "wasm32")]
-pub async fn scan_block_multi_wallet_with_url(
-    node_url: &str,
-    block_height: u64,
-    wallet_configs: Vec<WalletScanConfig>,
-) -> Result<MultiWalletScanResult, String> {
-    let results =
-        scan_blocks_batch_multi_wallet_with_url(node_url, block_height, wallet_configs, false)
-            .await?;
-
-    results
-        .into_iter()
-        .next()
-        .ok_or_else(|| format!("No block data returned for height {}", block_height))
 }
 
 pub async fn scan_mempool_for_outputs(
