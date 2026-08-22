@@ -36,8 +36,9 @@ pub use tx_prepare::{
 };
 pub use tx_utils::{adjust_recipients_for_fee, classify_broadcast_error};
 
-// RPC
-pub mod rpc_serai;
+// Internal browser RPC transport. Public browser adapters belong to monero-ffi.
+#[cfg(target_arch = "wasm32")]
+pub(crate) mod rpc_serai;
 
 // -- Wallet state & output types --
 pub use wallet_output::WalletOutput;
@@ -143,7 +144,7 @@ pub use abstractions::{
 
 // -- Platform-specific implementations --
 #[cfg(target_arch = "wasm32")]
-pub mod wasm_fetch;
+pub(crate) mod wasm_fetch;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native_impl;

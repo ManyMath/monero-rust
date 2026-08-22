@@ -1,9 +1,6 @@
 use crate::monero_backend::rpc::{RpcConnection, RpcError};
 use async_trait::async_trait;
 
-#[cfg(any(test, feature = "test-helpers"))]
-use crate::monero_backend::rpc::Rpc;
-
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsValue;
 #[cfg(target_arch = "wasm32")]
@@ -12,13 +9,13 @@ use wasm_bindgen_futures::JsFuture;
 use web_sys::{Request, RequestCredentials, RequestInit, RequestMode, Response};
 
 #[derive(Clone, Debug)]
-pub struct WasmRpcConnection {
+pub(crate) struct WasmRpcConnection {
     #[allow(dead_code)] // Used in WASM target's RpcConnection::post impl
     url: String,
 }
 
 impl WasmRpcConnection {
-    pub fn new(url: String) -> Self {
+    pub(crate) fn new(url: String) -> Self {
         Self { url }
     }
 }
@@ -68,24 +65,4 @@ impl RpcConnection for WasmRpcConnection {
 
         Ok(result)
     }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-#[async_trait]
-impl RpcConnection for WasmRpcConnection {
-    async fn post(&self, _route: &str, _body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
-        Err(RpcError::InternalError(
-            "WasmRpcConnection only works in WASM context",
-        ))
-    }
-}
-
-#[cfg(any(test, feature = "test-helpers"))]
-pub fn create_rpc_client(url: String) -> Rpc<WasmRpcConnection> {
-    Rpc::new_with_connection(WasmRpcConnection::new(url))
-}
-
-#[cfg(not(any(test, feature = "test-helpers")))]
-pub fn create_rpc_client(_url: String) -> ! {
-    panic!("create_rpc_client requires test-helpers feature or use HttpRpc::new for native")
 }
