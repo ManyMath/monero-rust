@@ -2513,6 +2513,7 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn scan_mempool_for_outputs(
     node_url: &str,
     mnemonic: &str,
@@ -2529,6 +2530,7 @@ pub async fn scan_mempool_for_outputs(
     .await
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn scan_mempool_for_outputs_with_account_lookahead(
     node_url: &str,
     mnemonic: &str,
@@ -2546,18 +2548,11 @@ pub async fn scan_mempool_for_outputs_with_account_lookahead(
             DEFAULT_LOOKAHEAD.subaddress
         },
     };
-    let mut result = scan_mempool_for_outputs_with_lookahead(
-        node_url,
-        mnemonic,
-        network_str,
-        lookahead,
-        passphrase,
-    )
-    .await?;
-
-    retain_mempool_outputs_for_accounts(&mut result.outputs, accounts_to_scan);
-
-    Ok(result)
+    crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
+    use crate::monero_backend::rpc::HttpRpc;
+    let rpc = HttpRpc::new(node_url.to_string())
+        .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
+    scan_mempool(&rpc, mnemonic, network_str, lookahead, accounts_to_scan, passphrase).await
 }
 
 fn retain_mempool_outputs_for_accounts(
@@ -2576,11 +2571,27 @@ fn retain_mempool_outputs_for_accounts(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn scan_mempool_for_outputs_with_lookahead(
     node_url: &str,
     mnemonic: &str,
     _network_str: &str,
     lookahead: Lookahead,
+    passphrase: &str,
+) -> Result<MempoolScanResult, String> {
+    crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
+    use crate::monero_backend::rpc::HttpRpc;
+    let rpc = HttpRpc::new(node_url.to_string())
+        .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
+    scan_mempool(&rpc, mnemonic, _network_str, lookahead, None, passphrase).await
+}
+
+pub async fn scan_mempool<R: RpcConnection>(
+    rpc: &Rpc<R>,
+    mnemonic: &str,
+    _network_str: &str,
+    lookahead: Lookahead,
+    accounts_to_scan: Option<&[u32]>,
     passphrase: &str,
 ) -> Result<MempoolScanResult, String> {
     let view_only = parse_view_only_keys(mnemonic);
@@ -2606,19 +2617,6 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
 
     let mut scanner = oxide_scanner_from_keys(&spend_point, &view_scalar)?;
     register_subaddresses(&mut scanner, lookahead);
-
-    #[cfg(not(target_arch = "wasm32"))]
-    let rpc = {
-        use crate::monero_backend::rpc::HttpRpc;
-        HttpRpc::new(node_url.to_string())
-            .map_err(|e| format!("Failed to create RPC client: {:?}", e))?
-    };
-
-    #[cfg(target_arch = "wasm32")]
-    let rpc = {
-        use crate::rpc_serai::WasmRpcConnection;
-        Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()))
-    };
 
     let (mempool_txs, mempool_spent_key_images) = rpc
         .get_transaction_pool()
@@ -2667,12 +2665,14 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
     let (spent_key_images, spent_key_image_tx_hashes): (Vec<String>, Vec<String>) =
         spent_key_images_map.into_iter().unzip();
 
-    Ok(MempoolScanResult {
+    let mut result = MempoolScanResult {
         tx_count,
         outputs,
         spent_key_images,
         spent_key_image_tx_hashes,
-    })
+    };
+    retain_mempool_outputs_for_accounts(&mut result.outputs, accounts_to_scan);
+    Ok(result)
 }
 
 #[cfg(test)]
