@@ -2056,49 +2056,36 @@ impl FetchedBlocks {
 ///
 /// This is the fetch-only half of `scan_blocks_batch_with_url`, designed for
 /// double-buffered pipelining: fetch the next batch while processing the current one.
+pub async fn fetch_blocks_batch<R: RpcConnection>(
+    rpc: &Rpc<R>,
+    start_height: u64,
+    prune: bool,
+) -> Result<FetchedBlocks, String> {
+    let known_hash = rpc
+        .get_block_hash(start_height as usize)
+        .await
+        .map_err(|e| format!("Failed to get block hash at {}: {:?}", start_height, e))?;
+    let response = rpc
+        .get_blocks_fast(&[known_hash], start_height, prune)
+        .await
+        .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
+    Ok(FetchedBlocks {
+        response,
+        requested_start_height: start_height,
+        requested_history: Vec::new(),
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn fetch_blocks_batch_with_url(
     node_url: &str,
     start_height: u64,
     prune: bool,
 ) -> Result<FetchedBlocks, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use crate::monero_backend::rpc::HttpRpc;
-        let rpc = HttpRpc::new(node_url.to_string())
-            .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
-        let known_hash = rpc
-            .get_block_hash(start_height as usize)
-            .await
-            .map_err(|e| format!("Failed to get block hash at {}: {:?}", start_height, e))?;
-        let response = rpc
-            .get_blocks_fast(&[known_hash], start_height, prune)
-            .await
-            .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
-        Ok(FetchedBlocks {
-            response,
-            requested_start_height: start_height,
-            requested_history: Vec::new(),
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        use crate::rpc_serai::WasmRpcConnection;
-        let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
-        let known_hash = rpc
-            .get_block_hash(start_height as usize)
-            .await
-            .map_err(|e| format!("Failed to get block hash at {}: {:?}", start_height, e))?;
-        let response = rpc
-            .get_blocks_fast(&[known_hash], start_height, prune)
-            .await
-            .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
-        Ok(FetchedBlocks {
-            response,
-            requested_start_height: start_height,
-            requested_history: Vec::new(),
-        })
-    }
+    use crate::monero_backend::rpc::HttpRpc;
+    let rpc = HttpRpc::new(node_url.to_string())
+        .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
+    fetch_blocks_batch(&rpc, start_height, prune).await
 }
 
 /// Process a previously fetched batch for a single wallet (no caching).
@@ -2266,26 +2253,17 @@ pub async fn fetch_blocks_batch_with_history<R: RpcConnection>(
     Ok((fetched, actual_start))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn fetch_blocks_batch_with_history_url(
     node_url: &str,
     start_height: u64,
     known_hashes: &[(u64, String)],
     prune: bool,
 ) -> Result<(FetchedBlocks, u64), String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use crate::monero_backend::rpc::HttpRpc;
-        let rpc = HttpRpc::new(node_url.to_string())
-            .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
-        fetch_blocks_batch_with_history(&rpc, start_height, known_hashes, prune).await
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        use crate::rpc_serai::WasmRpcConnection;
-        let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
-        fetch_blocks_batch_with_history(&rpc, start_height, known_hashes, prune).await
-    }
+    use crate::monero_backend::rpc::HttpRpc;
+    let rpc = HttpRpc::new(node_url.to_string())
+        .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
+    fetch_blocks_batch_with_history(&rpc, start_height, known_hashes, prune).await
 }
 
 /// Process a previously fetched batch for multiple wallets (no caching).

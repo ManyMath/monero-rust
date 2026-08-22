@@ -81,8 +81,8 @@ pub use scanner::{
     derive_keys_from_view_only,
     derive_subaddress,
     daemon_height,
-    fetch_blocks_batch_with_history_url,
-    fetch_blocks_batch_with_url,
+    fetch_blocks_batch,
+    fetch_blocks_batch_with_history,
     generate_seed,
     // Single-block scanning
     key_image_spent_status,
@@ -130,7 +130,10 @@ pub use scanner::{
 };
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use scanner::{get_daemon_height, is_key_image_spent};
+pub use scanner::{
+    fetch_blocks_batch_with_history_url, fetch_blocks_batch_with_url, get_daemon_height,
+    is_key_image_spent,
+};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use scanner::scan_block_multi_wallet;
