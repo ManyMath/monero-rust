@@ -1,6 +1,7 @@
 use monero_rust::{
     bip39_to_legacy_mnemonic, derive_address, derive_keys, derive_subaddress, generate_bip39,
     generate_seed, resolve_seed, resolve_seed_bip39, seed_birthday, validate_bip39, validate_seed,
+    SeedFormat,
 };
 
 #[test]
@@ -172,7 +173,7 @@ fn test_derive_keys_bip39_matches_explicit_conversion() {
 
 #[test]
 fn test_generate_seed_bip39_type() {
-    let seed = generate_seed("bip39").unwrap();
+    let seed = generate_seed(SeedFormat::Bip39).unwrap();
     assert_eq!(seed.split_whitespace().count(), 12);
     validate_bip39(&seed).unwrap();
 }
@@ -256,7 +257,7 @@ fn test_resolve_seed_matches_explicit_bip39_conversion() {
 
 #[test]
 fn test_resolve_seed_with_polyseed() {
-    let polyseed = generate_seed("polyseed").unwrap();
+    let polyseed = generate_seed(SeedFormat::Polyseed).unwrap();
     assert_eq!(polyseed.split_whitespace().count(), 16);
     // Polyseed should pass through resolve_seed without BIP39 conversion
     let _seed = resolve_seed(&polyseed).unwrap();
@@ -270,7 +271,7 @@ fn test_validate_seed_accepts_all_types() {
     validate_seed("meadow tip best belt boss eyebrow control affair eternal piece very shiver")
         .unwrap();
     // 16-word polyseed
-    let polyseed = generate_seed("polyseed").unwrap();
+    let polyseed = generate_seed(SeedFormat::Polyseed).unwrap();
     validate_seed(&polyseed).unwrap();
     // 25-word classic
     validate_seed(
@@ -394,7 +395,7 @@ fn test_resolve_seed_bip39_passthrough_classic() {
 
 #[test]
 fn test_resolve_seed_bip39_passthrough_polyseed() {
-    let polyseed = generate_seed("polyseed").unwrap();
+    let polyseed = generate_seed(SeedFormat::Polyseed).unwrap();
     // Polyseed (16 words) should pass through regardless of passphrase/account_index
     let _seed = resolve_seed_bip39(&polyseed, "pass", 3).unwrap();
     let keys = derive_keys(&polyseed, "mainnet", "").unwrap();

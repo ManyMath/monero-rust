@@ -530,14 +530,22 @@ pub fn derive_address_from_view_only(
     Ok(address.to_string())
 }
 
-pub fn generate_seed(seed_type: &str) -> Result<String, String> {
+/// Mnemonic format used when generating a new wallet seed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SeedFormat {
+    Classic,
+    Polyseed,
+    Bip39,
+}
+
+pub fn generate_seed(format: SeedFormat) -> Result<String, String> {
     // Use thread_rng which works in both native and WASM contexts
     let mut rng = rand::thread_rng();
 
-    let seed = match seed_type {
-        "polyseed" => Seed::new_polyseed(&mut rng),
-        "bip39" => return crate::bip39_conv::generate_bip39(),
-        _ => Seed::new(&mut rng, Language::English),
+    let seed = match format {
+        SeedFormat::Classic => Seed::new(&mut rng, Language::English),
+        SeedFormat::Polyseed => Seed::new_polyseed(&mut rng),
+        SeedFormat::Bip39 => return crate::bip39_conv::generate_bip39(),
     };
 
     Ok(Seed::to_string(&seed).to_string())
@@ -2836,7 +2844,7 @@ mod tests {
 
     #[test]
     fn test_generate_seed() {
-        let seed = generate_seed("classic").expect("Failed to generate seed");
+        let seed = generate_seed(SeedFormat::Classic).expect("Failed to generate seed");
         let words: Vec<&str> = seed.split_whitespace().collect();
         assert_eq!(words.len(), 25);
     }
@@ -2981,7 +2989,7 @@ mod tests {
 
     #[test]
     fn test_seed_generation_and_address_derivation() {
-        let seed = generate_seed("classic").expect("Failed to generate seed");
+        let seed = generate_seed(SeedFormat::Classic).expect("Failed to generate seed");
 
         let mainnet_address = derive_address(&seed, "mainnet", "")
             .expect("Failed to derive mainnet address from generated seed");

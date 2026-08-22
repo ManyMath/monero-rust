@@ -121,6 +121,7 @@ pub use scanner::{
     Lookahead,
     MempoolScanResult,
     MultiWalletScanResult,
+    SeedFormat,
     WalletScanConfig,
     WalletScanData,
     // Constants

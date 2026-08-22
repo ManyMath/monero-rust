@@ -8,7 +8,7 @@
 
 use monero_rust::{
     bip39_to_legacy_mnemonic, derive_address, derive_keys, derive_subaddress, generate_seed,
-    resolve_seed, resolve_seed_bip39, seed_birthday, validate_seed,
+    resolve_seed, resolve_seed_bip39, seed_birthday, validate_seed, SeedFormat,
 };
 
 const BIP39_SEED: &str =
@@ -24,7 +24,7 @@ fn hub_seed_birthday_with_bip39() {
 
 #[test]
 fn hub_seed_birthday_with_polyseed() {
-    let polyseed = generate_seed("polyseed").unwrap();
+    let polyseed = generate_seed(SeedFormat::Polyseed).unwrap();
     let birthday = seed_birthday(&polyseed);
     assert!(birthday.is_some());
     assert!(birthday.unwrap() > 0);
@@ -32,14 +32,14 @@ fn hub_seed_birthday_with_polyseed() {
 
 #[test]
 fn hub_seed_birthday_with_classic() {
-    let classic = generate_seed("classic").unwrap();
+    let classic = generate_seed(SeedFormat::Classic).unwrap();
     let birthday = seed_birthday(&classic);
     assert_eq!(birthday, None);
 }
 
 #[test]
 fn hub_generate_bip39_then_birthday() {
-    let seed = generate_seed("bip39").unwrap();
+    let seed = generate_seed(SeedFormat::Bip39).unwrap();
     assert_eq!(seed.split_whitespace().count(), 12);
     let birthday = seed_birthday(&seed);
     assert_eq!(birthday, None);
@@ -47,7 +47,7 @@ fn hub_generate_bip39_then_birthday() {
 
 #[test]
 fn hub_generate_polyseed_then_birthday() {
-    let seed = generate_seed("polyseed").unwrap();
+    let seed = generate_seed(SeedFormat::Polyseed).unwrap();
     assert_eq!(seed.split_whitespace().count(), 16);
     let birthday = seed_birthday(&seed);
     assert!(birthday.is_some());
@@ -105,10 +105,10 @@ fn hub_resolve_seed_all_types() {
     // BIP39
     resolve_seed(BIP39_SEED).unwrap();
     // Classic
-    let classic = generate_seed("classic").unwrap();
+    let classic = generate_seed(SeedFormat::Classic).unwrap();
     resolve_seed(&classic).unwrap();
     // Polyseed
-    let polyseed = generate_seed("polyseed").unwrap();
+    let polyseed = generate_seed(SeedFormat::Polyseed).unwrap();
     resolve_seed(&polyseed).unwrap();
 }
 
@@ -140,9 +140,9 @@ fn hub_full_bip39_restore_pipeline() {
 #[test]
 fn hub_all_seed_types_through_restore_pipeline() {
     let seeds = vec![
-        ("bip39", generate_seed("bip39").unwrap()),
-        ("classic", generate_seed("classic").unwrap()),
-        ("polyseed", generate_seed("polyseed").unwrap()),
+        ("bip39", generate_seed(SeedFormat::Bip39).unwrap()),
+        ("classic", generate_seed(SeedFormat::Classic).unwrap()),
+        ("polyseed", generate_seed(SeedFormat::Polyseed).unwrap()),
     ];
 
     for (seed_type, seed) in &seeds {
