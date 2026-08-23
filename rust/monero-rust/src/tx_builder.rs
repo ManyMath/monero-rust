@@ -680,17 +680,6 @@ pub mod native {
 
         let change_decision = decide_change(expected_change, recipients.len());
 
-        #[cfg(not(target_arch = "wasm32"))]
-        eprintln!(
-            "[create_tx] total_input={} total_send={} fee_wc={} expected_change={} decision={:?} recipients={}",
-            total_input, total_send, fee_wc, expected_change, change_decision, recipients.len(),
-        );
-        #[cfg(target_arch = "wasm32")]
-        web_sys::console::log_1(&format!(
-            "[create_tx] total_input={} total_send={} fee_wc={} expected_change={} decision={:?} recipients={}",
-            total_input, total_send, fee_wc, expected_change, change_decision, recipients.len(),
-        ).into());
-
         match change_decision {
             ChangeDecision::DustError => {
                 return Err(
