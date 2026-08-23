@@ -1673,8 +1673,6 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "ur",
- "wasm-bindgen",
- "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
  "zeroize",
