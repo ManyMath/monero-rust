@@ -68,9 +68,6 @@ pub mod native {
     #[cfg(not(target_arch = "wasm32"))]
     use crate::monero_backend::rpc::HttpRpc;
 
-    #[cfg(target_arch = "wasm32")]
-    use crate::rpc_serai::WasmRpcConnection;
-
     use crate::scanner::{resolve_seed, Lookahead, DEFAULT_LOOKAHEAD};
     use serde::{Deserialize, Serialize};
     use serde_json::Value;
@@ -362,20 +359,23 @@ pub mod native {
 
     /// Fetch decoys for a set of outputs to be spent.
     /// Returns decoy ring data that can be cached and used later for transaction signing.
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn fetch_decoys(
         node_url: &str,
         stored_outputs: Vec<StoredOutputData>,
     ) -> Result<DecoyResult, String> {
         crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
+        let rpc = HttpRpc::new(node_url.to_string()).map_err(|e| format!("RPC error: {:?}", e))?;
+        fetch_decoys_with_rpc(&rpc, stored_outputs).await
+    }
+
+    pub async fn fetch_decoys_with_rpc<R: RpcConnection>(
+        rpc: &Rpc<R>,
+        stored_outputs: Vec<StoredOutputData>,
+    ) -> Result<DecoyResult, String> {
         if stored_outputs.is_empty() {
             return Err("No outputs provided".to_string());
         }
-
-        #[cfg(not(target_arch = "wasm32"))]
-        let rpc = HttpRpc::new(node_url.to_string()).map_err(|e| format!("RPC error: {:?}", e))?;
-
-        #[cfg(target_arch = "wasm32")]
-        let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
 
         let protocol = rpc
             .get_protocol()
@@ -389,12 +389,12 @@ pub mod native {
 
         let mut spendable_outputs = Vec::with_capacity(stored_outputs.len());
         for stored in &stored_outputs {
-            let spendable = spendable_from_stored_bytes(&rpc, &stored.received_output_bytes).await?;
+            let spendable = spendable_from_stored_bytes(rpc, &stored.received_output_bytes).await?;
             spendable_outputs.push(spendable);
         }
 
         let decoys = select_output_decoys(
-            &rpc,
+            rpc,
             protocol,
             height.saturating_sub(1),
             &spendable_outputs,
@@ -410,12 +410,22 @@ pub mod native {
     /// Estimate transaction fee without building the transaction.
     /// `num_outputs` should include the change output (typically num_destinations + 1).
     /// Maximum 16 outputs due to bulletproofs limit (15 destinations + 1 change, or 16 if no change).
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn estimate_fee(
         node_url: &str,
         num_inputs: usize,
         num_outputs: usize,
     ) -> Result<FeeEstimate, String> {
         crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
+        let rpc = HttpRpc::new(node_url.to_string()).map_err(|e| format!("RPC error: {:?}", e))?;
+        estimate_fee_with_rpc(&rpc, num_inputs, num_outputs).await
+    }
+
+    pub async fn estimate_fee_with_rpc<R: RpcConnection>(
+        rpc: &Rpc<R>,
+        num_inputs: usize,
+        num_outputs: usize,
+    ) -> Result<FeeEstimate, String> {
         if num_inputs == 0 {
             return Err("Must have at least one input".to_string());
         }
@@ -425,13 +435,6 @@ pub mod native {
         if num_outputs > 16 {
             return Err("Maximum 16 outputs allowed (bulletproofs limit)".to_string());
         }
-
-        #[cfg(not(target_arch = "wasm32"))]
-        let rpc = HttpRpc::new(node_url.to_string()).map_err(|e| format!("RPC error: {:?}", e))?;
-
-        #[cfg(target_arch = "wasm32")]
-        let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
-
         let protocol = rpc
             .get_protocol()
             .await
@@ -459,6 +462,7 @@ pub mod native {
 
     /// Prepare a transaction: validate inputs, calculate fee, check balance.
     /// Returns a PreparedTransaction that can be inspected before signing.
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn prepare_transaction(
         node_url: &str,
         network_str: &str,
@@ -1007,16 +1011,14 @@ pub mod native {
         received_outputs_from_scan_inner(&rpc, block_height, seed_phrase, passphrase).await
     }
 
-    #[cfg(target_arch = "wasm32")]
-    pub async fn get_received_outputs_from_scan(
-        node_url: &str,
+    pub async fn get_received_outputs_from_scan_with_rpc<R: RpcConnection>(
+        rpc: &Rpc<R>,
         block_height: u64,
         seed_phrase: &str,
         _network_str: &str,
         passphrase: &str,
     ) -> Result<Vec<ReceivedOutput>, String> {
-        let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
-        received_outputs_from_scan_inner(&rpc, block_height, seed_phrase, passphrase).await
+        received_outputs_from_scan_inner(rpc, block_height, seed_phrase, passphrase).await
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1471,8 +1473,31 @@ pub mod native {
         Ok(unsigned.remove(0))
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn create_unsigned_transaction(
         node_url: &str,
+        view_key_hex: &str,
+        pub_spend_key_hex: &str,
+        network_str: &str,
+        stored_outputs: Vec<StoredOutputData>,
+        recipients: &[(String, u64)],
+        max_fee_per_weight: Option<u64>,
+    ) -> Result<UnsignedTransactionResult, String> {
+        let rpc = HttpRpc::new(node_url.to_string()).map_err(|e| format!("RPC error: {:?}", e))?;
+        create_unsigned_transaction_with_rpc(
+            &rpc,
+            view_key_hex,
+            pub_spend_key_hex,
+            network_str,
+            stored_outputs,
+            recipients,
+            max_fee_per_weight,
+        )
+        .await
+    }
+
+    pub async fn create_unsigned_transaction_with_rpc<R: RpcConnection>(
+        rpc: &Rpc<R>,
         view_key_hex: &str,
         pub_spend_key_hex: &str,
         network_str: &str,
@@ -1513,12 +1538,6 @@ pub mod native {
 
         let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
 
-        #[cfg(not(target_arch = "wasm32"))]
-        let rpc = HttpRpc::new(node_url.to_string()).map_err(|e| format!("RPC error: {:?}", e))?;
-
-        #[cfg(target_arch = "wasm32")]
-        let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
-
         let protocol = rpc
             .get_protocol()
             .await
@@ -1537,7 +1556,7 @@ pub mod native {
 
         let mut spendable_outputs = Vec::with_capacity(stored_outputs.len());
         for stored in &stored_outputs {
-            let spendable = spendable_from_stored_bytes(&rpc, &stored.received_output_bytes).await?;
+            let spendable = spendable_from_stored_bytes(rpc, &stored.received_output_bytes).await?;
             spendable_outputs.push(spendable);
         }
 
