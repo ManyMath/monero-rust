@@ -77,13 +77,6 @@ pub mod native {
     use sha3::{Digest, Keccak256};
     use zeroize::Zeroizing;
 
-    #[cfg(not(target_arch = "wasm32"))]
-    fn raw_tx_endpoint(node_url: &str) -> String {
-        let trimmed = node_url.trim_end_matches('/');
-        let base = trimmed.strip_suffix("/json_rpc").unwrap_or(trimmed);
-        format!("{}/send_raw_transaction", base)
-    }
-
     fn check_send_raw_transaction_response(body: &str) -> Result<(), String> {
         let value: Value = serde_json::from_str(body)
             .map_err(|e| format!("Invalid send_raw_transaction response: {:?}", e))?;
@@ -933,60 +926,30 @@ pub mod native {
         tx_blob_hex: &str,
         do_not_relay: bool,
     ) -> Result<(), String> {
-        let tx_bytes = hex::decode(tx_blob_hex).map_err(|e| format!("Invalid hex: {:?}", e))?;
-
-        let tx = Transaction::<NotPruned>::read::<&[u8]>(&mut tx_bytes.as_ref())
-            .map_err(|e| format!("Invalid transaction: {:?}", e))?;
-
-        let _rpc = HttpRpc::new(node_url.to_string())
+        let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
-
-        let response = reqwest::Client::new()
-            .post(raw_tx_endpoint(node_url))
-            .json(&serde_json::json!({
-                "tx_as_hex": hex::encode(tx.serialize()),
-                "do_not_relay": do_not_relay,
-            }))
-            .send()
-            .await
-            .map_err(|e| format!("Failed to broadcast: {:?}", e))?;
-
-        let status = response.status();
-        let body = response
-            .text()
-            .await
-            .map_err(|e| format!("Failed to read daemon response: {:?}", e))?;
-        if !status.is_success() {
-            return Err(format!("HTTP {}: {}", status, body));
-        }
-        check_send_raw_transaction_response(&body)
+        broadcast_transaction_with_rpc(&rpc, tx_blob_hex, do_not_relay).await
     }
 
-    #[cfg(target_arch = "wasm32")]
-    pub async fn broadcast_transaction(
-        node_url: &str,
+    pub async fn broadcast_transaction_with_rpc<R: RpcConnection>(
+        rpc: &Rpc<R>,
         tx_blob_hex: &str,
         do_not_relay: bool,
     ) -> Result<(), String> {
         let tx_bytes = hex::decode(tx_blob_hex).map_err(|e| format!("Invalid hex: {:?}", e))?;
-
         let tx = Transaction::<NotPruned>::read::<&[u8]>(&mut tx_bytes.as_ref())
             .map_err(|e| format!("Invalid transaction: {:?}", e))?;
-
-        let conn = WasmRpcConnection::new(node_url.to_string());
-        let body = serde_json::to_vec(&serde_json::json!({
-            "tx_as_hex": hex::encode(tx.serialize()),
-            "do_not_relay": do_not_relay,
-        }))
-        .map_err(|e| format!("Failed to serialize broadcast request: {:?}", e))?;
-
-        let response = conn
-            .post("send_raw_transaction", body)
+        let response: Value = rpc
+            .rpc_call(
+                "send_raw_transaction",
+                Some(serde_json::json!({
+                    "tx_as_hex": hex::encode(tx.serialize()),
+                    "do_not_relay": do_not_relay,
+                })),
+            )
             .await
             .map_err(|e| format!("Failed to broadcast: {:?}", e))?;
-        let response = String::from_utf8(response)
-            .map_err(|e| format!("Invalid UTF-8 daemon response: {:?}", e))?;
-        check_send_raw_transaction_response(&response)
+        check_send_raw_transaction_response(&response.to_string())
     }
 
     async fn received_outputs_from_scan_inner<R: RpcConnection>(
