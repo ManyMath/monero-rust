@@ -770,6 +770,7 @@ pub mod native {
         })
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn sweep_all(
         node_url: &str,
         seed_phrase: &str,
@@ -779,6 +780,27 @@ pub mod native {
         passphrase: &str,
     ) -> Result<TransactionResult, String> {
         crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
+        let rpc = HttpRpc::new(node_url.to_string())
+            .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
+        sweep_all_with_rpc(
+            &rpc,
+            seed_phrase,
+            network_str,
+            stored_outputs,
+            destination_address,
+            passphrase,
+        )
+        .await
+    }
+
+    pub async fn sweep_all_with_rpc<R: RpcConnection>(
+        rpc: &Rpc<R>,
+        seed_phrase: &str,
+        network_str: &str,
+        stored_outputs: Vec<StoredOutputData>,
+        destination_address: &str,
+        passphrase: &str,
+    ) -> Result<TransactionResult, String> {
         crate::error_codes::validate_network(network_str).map_err(|e| e.message.clone())?;
         if stored_outputs.is_empty() {
             return Err("No outputs provided".to_string());
@@ -790,13 +812,6 @@ pub mod native {
 
         let spend_key = spend_key_from_seed(&seed, passphrase);
         let view_pair = view_pair_from_seed(&seed, passphrase);
-
-        #[cfg(not(target_arch = "wasm32"))]
-        let rpc = HttpRpc::new(node_url.to_string())
-            .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
-
-        #[cfg(target_arch = "wasm32")]
-        let rpc = Rpc::new_with_connection(WasmRpcConnection::new(node_url.to_string()));
 
         let protocol = rpc
             .get_protocol()
