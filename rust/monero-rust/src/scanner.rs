@@ -584,7 +584,7 @@ pub fn derive_address(
     network_str: &str,
     passphrase: &str,
 ) -> Result<String, String> {
-    crate::error_codes::validate_network(network_str).map_err(|e| e.message.clone())?;
+    crate::validation::validate_network(network_str).map_err(|e| e.to_string())?;
     if let Some((view_hex, spend_hex)) = mnemonic.strip_prefix("viewonly:").and_then(|r| {
         let mut parts = r.splitn(2, ':');
         Some((parts.next()?, parts.next()?))
@@ -608,7 +608,7 @@ pub fn derive_subaddress(
         ViewPair,
     };
 
-    crate::error_codes::validate_network(network_str).map_err(|e| e.message.clone())?;
+    crate::validation::validate_network(network_str).map_err(|e| e.to_string())?;
     let network = parse_network(network_str)?;
 
     let (spend_point, view_scalar) = if let Some((vs, sp)) = parse_view_only_keys(mnemonic) {
@@ -646,7 +646,7 @@ pub fn derive_keys(
     network_str: &str,
     passphrase: &str,
 ) -> Result<DerivedKeys, String> {
-    crate::error_codes::validate_network(network_str).map_err(|e| e.message.clone())?;
+    crate::validation::validate_network(network_str).map_err(|e| e.to_string())?;
     if let Some((view_hex, spend_hex)) = mnemonic.strip_prefix("viewonly:").and_then(|r| {
         let mut parts = r.splitn(2, ':');
         Some((parts.next()?, parts.next()?))
@@ -718,7 +718,7 @@ pub async fn key_image_spent_status<R: RpcConnection>(
 
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn is_key_image_spent(node_url: &str, key_images: &[String]) -> Result<Vec<u32>, String> {
-    crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
+    crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;
     use crate::monero_backend::rpc::HttpRpc;
     let rpc = HttpRpc::new(node_url.to_string())
         .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
@@ -735,7 +735,7 @@ pub async fn daemon_height<R: RpcConnection>(rpc: &Rpc<R>) -> Result<u64, String
 
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn get_daemon_height(node_url: &str) -> Result<u64, String> {
-    crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
+    crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;
     use crate::monero_backend::rpc::HttpRpc;
     let rpc = HttpRpc::new(node_url.to_string())
         .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
@@ -754,8 +754,8 @@ pub async fn scan_block_for_outputs_with_url(
     network_str: &str,
     passphrase: &str,
 ) -> Result<BlockScanResult, String> {
-    crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
-    crate::error_codes::validate_network(network_str).map_err(|e| e.message.clone())?;
+    crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;
+    crate::validation::validate_network(network_str).map_err(|e| e.to_string())?;
     scan_block_for_outputs_with_url_and_lookahead(
         node_url,
         block_height,
@@ -2548,7 +2548,7 @@ pub async fn scan_mempool_for_outputs_with_account_lookahead(
             DEFAULT_LOOKAHEAD.subaddress
         },
     };
-    crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
+    crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;
     use crate::monero_backend::rpc::HttpRpc;
     let rpc = HttpRpc::new(node_url.to_string())
         .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
@@ -2579,7 +2579,7 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
     lookahead: Lookahead,
     passphrase: &str,
 ) -> Result<MempoolScanResult, String> {
-    crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
+    crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;
     use crate::monero_backend::rpc::HttpRpc;
     let rpc = HttpRpc::new(node_url.to_string())
         .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;

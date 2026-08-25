@@ -364,7 +364,7 @@ pub mod native {
         node_url: &str,
         stored_outputs: Vec<StoredOutputData>,
     ) -> Result<DecoyResult, String> {
-        crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
+        crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;
         let rpc = HttpRpc::new(node_url.to_string()).map_err(|e| format!("RPC error: {:?}", e))?;
         fetch_decoys_with_rpc(&rpc, stored_outputs).await
     }
@@ -416,7 +416,7 @@ pub mod native {
         num_inputs: usize,
         num_outputs: usize,
     ) -> Result<FeeEstimate, String> {
-        crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
+        crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;
         let rpc = HttpRpc::new(node_url.to_string()).map_err(|e| format!("RPC error: {:?}", e))?;
         estimate_fee_with_rpc(&rpc, num_inputs, num_outputs).await
     }
@@ -469,8 +469,8 @@ pub mod native {
         stored_outputs: Vec<StoredOutputData>,
         recipients: &[(String, u64)],
     ) -> Result<PreparedTransaction, String> {
-        crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
-        crate::error_codes::validate_network(network_str).map_err(|e| e.message.clone())?;
+        crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;
+        crate::validation::validate_network(network_str).map_err(|e| e.to_string())?;
         if stored_outputs.is_empty() {
             return Err("No outputs provided".to_string());
         }
@@ -589,7 +589,7 @@ pub mod native {
         recipients: &[(String, u64)],
         passphrase: &str,
     ) -> Result<TransactionResult, String> {
-        crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
+        crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;
         let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
         create_transaction_with_rpc(
@@ -611,7 +611,7 @@ pub mod native {
         recipients: &[(String, u64)],
         passphrase: &str,
     ) -> Result<TransactionResult, String> {
-        crate::error_codes::validate_network(network_str).map_err(|e| e.message.clone())?;
+        crate::validation::validate_network(network_str).map_err(|e| e.to_string())?;
         if stored_outputs.is_empty() {
             return Err("No outputs provided".to_string());
         }
@@ -765,7 +765,7 @@ pub mod native {
         destination_address: &str,
         passphrase: &str,
     ) -> Result<TransactionResult, String> {
-        crate::error_codes::validate_node_url(node_url).map_err(|e| e.message.clone())?;
+        crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;
         let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
         sweep_all_with_rpc(
@@ -787,7 +787,7 @@ pub mod native {
         destination_address: &str,
         passphrase: &str,
     ) -> Result<TransactionResult, String> {
-        crate::error_codes::validate_network(network_str).map_err(|e| e.message.clone())?;
+        crate::validation::validate_network(network_str).map_err(|e| e.to_string())?;
         if stored_outputs.is_empty() {
             return Err("No outputs provided".to_string());
         }

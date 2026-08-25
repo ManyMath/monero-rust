@@ -9,7 +9,6 @@ pub mod bip39_conv;
 pub mod chain_config;
 pub mod coin_selection;
 pub mod encryption;
-pub mod error_codes;
 pub mod key_image_import;
 pub mod monero_backend;
 pub mod monero_rpc;
@@ -29,6 +28,7 @@ pub mod tx_prepare;
 pub mod tx_proof;
 pub mod tx_utils;
 pub mod ur_codec;
+pub mod validation;
 pub use tx_builder::native;
 pub use tx_prepare::{
     prepare_send_inputs, prepare_send_inputs_at, prepare_sweep_inputs, prepare_sweep_inputs_at,
