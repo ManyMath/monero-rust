@@ -4,7 +4,6 @@
 //! Works on both native and WASM targets.
 
 // Core modules
-pub mod abstractions;
 pub mod bip39_conv;
 pub mod chain_config;
 pub mod coin_selection;
@@ -130,20 +129,6 @@ pub use scanner::scan_block_multi_wallet;
 
 #[cfg(target_arch = "wasm32")]
 pub use scanner::scan_block_multi_wallet_wasm;
-
-// -- Abstractions (RPC, storage, time) --
-pub use abstractions::{
-    AbError, AbResult, BlockData, BlockHeader, BlockResponse, GetOutsParams, HeightResponse,
-    MemoryStorage, OutEntry, OutputIndex, OutsResponse, RpcClient, TimeProvider, TransactionData,
-    TxSubmitResponse, WalletStorage,
-};
-
-// -- Platform-specific implementations --
-
-#[cfg(not(target_arch = "wasm32"))]
-pub mod native_impl;
-#[cfg(not(target_arch = "wasm32"))]
-pub use native_impl::SystemTimeProvider;
 
 // -- .keys file import --
 pub mod wallet_keys_file;
