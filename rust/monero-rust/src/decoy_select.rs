@@ -29,7 +29,7 @@ pub(crate) struct SpentOutput {
 use rand_core::{CryptoRng, RngCore};
 use rand_distr::{Distribution as _, Gamma};
 
-use crate::monero_backend::rpc::{Rpc, RpcConnection};
+use crate::monero_rpc::{Rpc, RpcConnection};
 
 const RECENT_WINDOW: u64 = 15;
 const BLOCKS_PER_YEAR: usize = (365 * 24 * 60 * 60) / BLOCK_TIME;

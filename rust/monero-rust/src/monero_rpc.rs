@@ -2,11 +2,10 @@
 //! monero-oxide types.
 //!
 //! monero-oxide's `interface` crate is trait-only: it ships no HTTP client,
-//! so this keeps our HTTP / wasm-fetch / epee stack: JSON-RPC and binary
-//! (`.bin`, epee) endpoints, `/getblocks.bin` batching with output indices,
-//! pruned handling, and digest authentication.
+//! so this module supplies a generic connection interface and native HTTP transport.
+//! It supports JSON-RPC, binary Epee endpoints, `/getblocks.bin` output indices,
+//! pruned transactions, and digest authentication.
 
-// The facade cutover repoints monero_backend::rpc here.
 #![allow(dead_code)]
 
 use std::fmt::Debug;

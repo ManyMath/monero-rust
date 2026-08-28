@@ -476,7 +476,11 @@ fn import_account_keys(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::monero_backend::ringct::generate_key_image;
+
+    fn generate_key_image(secret: &Zeroizing<Scalar>) -> EdwardsPoint {
+        let public = &**secret * ED25519_BASEPOINT_TABLE;
+        hash_to_point(public) * **secret
+    }
 
     /// Create deterministic test keys for reproducible tests.
     fn test_keys() -> (

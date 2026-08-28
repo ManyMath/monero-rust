@@ -1147,11 +1147,11 @@ impl SignableTransaction {
     /// `UnsignedTransaction` for offline signing.
     pub async fn prepare_unsigned<
         R: rand_core::RngCore + rand_core::CryptoRng,
-        C: crate::monero_backend::rpc::RpcConnection,
+        C: crate::monero_rpc::RpcConnection,
     >(
         self,
         rng: &mut R,
-        rpc: &crate::monero_backend::rpc::Rpc<C>,
+        rpc: &crate::monero_rpc::Rpc<C>,
     ) -> Result<UnsignedTransaction, TransactionError> {
         let height = rpc
             .get_height()
@@ -1205,11 +1205,11 @@ impl SignableTransaction {
     /// Select decoys and sign this transaction with the private spend key.
     pub async fn sign<
         R: rand_core::RngCore + rand_core::CryptoRng,
-        C: crate::monero_backend::rpc::RpcConnection,
+        C: crate::monero_rpc::RpcConnection,
     >(
         self,
         rng: &mut R,
-        rpc: &crate::monero_backend::rpc::Rpc<C>,
+        rpc: &crate::monero_rpc::Rpc<C>,
         spend: &Zeroizing<Scalar>,
     ) -> Result<monero_oxide::transaction::Transaction, TransactionError> {
         let unsigned = self.prepare_unsigned(rng, rpc).await?;

@@ -3,7 +3,6 @@
 //! Wraps classic (25-word) seeds and 16-word polyseeds behind one type,
 //! including Monero's seed-offset passphrase mechanism.
 
-// The facade cutover repoints monero_backend::wallet::seed here.
 #![allow(dead_code)]
 
 use core::fmt;

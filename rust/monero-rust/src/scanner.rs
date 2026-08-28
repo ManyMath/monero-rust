@@ -3,11 +3,7 @@
 //! This module provides wallet scanning functionality that works across
 //! both native and WASM targets through generic RpcConnection support.
 
-use crate::monero_backend::{
-    block::Block,
-    rpc::{BlockOutputIndices, GetBlocksFastResponse, Rpc, RpcConnection},
-    wallet::address::{MoneroAddress, Network},
-};
+use crate::monero_rpc::{BlockOutputIndices, GetBlocksFastResponse, Rpc, RpcConnection};
 use crate::seed_compat::{Language, Seed};
 use monero_oxide::{
     block::{Block as OxideBlock, BlockHeader as OxideBlockHeader},
@@ -17,7 +13,7 @@ use monero_oxide::{
     },
 };
 use monero_wallet::{
-    address::SubaddressIndex,
+    address::{MoneroAddress, Network, SubaddressIndex},
     ed25519::{Point as OxidePoint, Scalar as OxideScalar},
     extra::PaymentId,
     interface::ScannableBlock,
@@ -55,7 +51,7 @@ async fn yield_to_event_loop() {
 }
 
 /// Computes a Monero block ID.
-pub fn compute_block_id(block: &Block) -> [u8; 32] {
+pub fn compute_block_id(block: &OxideBlock) -> [u8; 32] {
     block.hash()
 }
 
@@ -603,10 +599,7 @@ pub fn derive_subaddress(
     address_index: u32,
     passphrase: &str,
 ) -> Result<String, String> {
-    use crate::monero_backend::wallet::{
-        address::{AddressSpec, SubaddressIndex},
-        ViewPair,
-    };
+    use crate::wallet_compat::{AddressSpec, ViewPair};
 
     crate::validation::validate_network(network_str).map_err(|e| e.to_string())?;
     let network = parse_network(network_str)?;
@@ -719,7 +712,7 @@ pub async fn key_image_spent_status<R: RpcConnection>(
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn is_key_image_spent(node_url: &str, key_images: &[String]) -> Result<Vec<u32>, String> {
     crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;
-    use crate::monero_backend::rpc::HttpRpc;
+    use crate::monero_rpc::HttpRpc;
     let rpc = HttpRpc::new(node_url.to_string())
         .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
     key_image_spent_status(&rpc, key_images).await
@@ -736,7 +729,7 @@ pub async fn daemon_height<R: RpcConnection>(rpc: &Rpc<R>) -> Result<u64, String
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn get_daemon_height(node_url: &str) -> Result<u64, String> {
     crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;
-    use crate::monero_backend::rpc::HttpRpc;
+    use crate::monero_rpc::HttpRpc;
     let rpc = HttpRpc::new(node_url.to_string())
         .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
     daemon_height(&rpc).await
@@ -776,7 +769,7 @@ pub async fn scan_block_for_outputs_with_url_and_lookahead(
     lookahead: Lookahead,
     passphrase: &str,
 ) -> Result<BlockScanResult, String> {
-    use crate::monero_backend::rpc::HttpRpc;
+    use crate::monero_rpc::HttpRpc;
     let rpc = HttpRpc::new(node_url.to_string())
         .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
     scan_block_for_outputs_with_lookahead(
@@ -859,7 +852,7 @@ fn first_ringct_index_from_rpc(
 /// Walk non-miner transactions until one carries daemon output indices and
 /// derive the block's first RingCT index from it.
 fn first_ringct_index_from_tx_entries(
-    entries: &[crate::monero_backend::rpc::TxOutputIndices],
+    entries: &[crate::monero_rpc::TxOutputIndices],
     txs: &[OxideTransaction<Pruned>],
     mut ringct_outputs_before: u64,
 ) -> u64 {
@@ -1595,7 +1588,7 @@ pub async fn scan_blocks_batch_with_url(
     prune: bool,
     passphrase: &str,
 ) -> Result<Vec<BlockScanResult>, String> {
-    use crate::monero_backend::rpc::HttpRpc;
+    use crate::monero_rpc::HttpRpc;
     let rpc = HttpRpc::new(node_url.to_string())
         .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
     scan_blocks_batch(
@@ -1951,7 +1944,7 @@ pub async fn scan_blocks_batch_multi_wallet_with_url(
     wallet_configs: Vec<WalletScanConfig>,
     prune: bool,
 ) -> Result<Vec<MultiWalletScanResult>, String> {
-    use crate::monero_backend::rpc::HttpRpc;
+    use crate::monero_rpc::HttpRpc;
     let rpc = HttpRpc::new(node_url.to_string())
         .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
     scan_blocks_batch_multi_wallet(&rpc, start_height, wallet_configs, prune).await
@@ -2035,7 +2028,7 @@ pub async fn fetch_blocks_batch_with_url(
     start_height: u64,
     prune: bool,
 ) -> Result<FetchedBlocks, String> {
-    use crate::monero_backend::rpc::HttpRpc;
+    use crate::monero_rpc::HttpRpc;
     let rpc = HttpRpc::new(node_url.to_string())
         .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
     fetch_blocks_batch(&rpc, start_height, prune).await
@@ -2135,7 +2128,7 @@ pub async fn scan_blocks_batch_with_history_url(
     prune: bool,
     passphrase: &str,
 ) -> Result<(Vec<BlockScanResult>, u64), String> {
-    use crate::monero_backend::rpc::HttpRpc;
+    use crate::monero_rpc::HttpRpc;
     let rpc = HttpRpc::new(node_url.to_string())
         .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
     scan_blocks_batch_with_history(
@@ -2194,7 +2187,7 @@ pub async fn fetch_blocks_batch_with_history_url(
     known_hashes: &[(u64, String)],
     prune: bool,
 ) -> Result<(FetchedBlocks, u64), String> {
-    use crate::monero_backend::rpc::HttpRpc;
+    use crate::monero_rpc::HttpRpc;
     let rpc = HttpRpc::new(node_url.to_string())
         .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
     fetch_blocks_batch_with_history(&rpc, start_height, known_hashes, prune).await
@@ -2376,7 +2369,7 @@ pub async fn scan_block_multi_wallet_with_url(
     block_height: u64,
     wallet_configs: Vec<WalletScanConfig>,
 ) -> Result<MultiWalletScanResult, String> {
-    use crate::monero_backend::rpc::HttpRpc;
+    use crate::monero_rpc::HttpRpc;
     let rpc =
         HttpRpc::new(node_url.to_string()).map_err(|e| format!("Failed to create RPC: {:?}", e))?;
     scan_block_multi_wallet(&rpc, block_height, wallet_configs).await
@@ -2549,7 +2542,7 @@ pub async fn scan_mempool_for_outputs_with_account_lookahead(
         },
     };
     crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;
-    use crate::monero_backend::rpc::HttpRpc;
+    use crate::monero_rpc::HttpRpc;
     let rpc = HttpRpc::new(node_url.to_string())
         .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
     scan_mempool(&rpc, mnemonic, network_str, lookahead, accounts_to_scan, passphrase).await
@@ -2580,7 +2573,7 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
     passphrase: &str,
 ) -> Result<MempoolScanResult, String> {
     crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;
-    use crate::monero_backend::rpc::HttpRpc;
+    use crate::monero_rpc::HttpRpc;
     let rpc = HttpRpc::new(node_url.to_string())
         .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
     scan_mempool(&rpc, mnemonic, _network_str, lookahead, None, passphrase).await

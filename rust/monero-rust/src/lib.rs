@@ -8,7 +8,6 @@ pub mod bip39_conv;
 pub mod coin_selection;
 pub mod encryption;
 pub mod key_image_import;
-pub mod monero_backend;
 pub mod monero_rpc;
 pub mod seed_compat;
 pub(crate) mod decoy_select;

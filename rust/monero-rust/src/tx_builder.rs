@@ -1,7 +1,7 @@
 //! Transaction building.
 
 pub mod native {
-    use crate::monero_backend::rpc::{Rpc, RpcConnection, DEFAULT_MAX_FEE_PER_BYTE};
+    use crate::monero_rpc::{Rpc, RpcConnection, DEFAULT_MAX_FEE_PER_BYTE};
     use crate::seed_compat::Seed;
     use crate::wallet_compat::{
         sign_offline, AddressSpec, transaction_fee_weight, Change, Decoys, Fee, InternalPayment, Protocol,
@@ -66,7 +66,7 @@ pub mod native {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    use crate::monero_backend::rpc::HttpRpc;
+    use crate::monero_rpc::HttpRpc;
 
     use crate::scanner::{resolve_seed, Lookahead, DEFAULT_LOOKAHEAD};
     use serde::{Deserialize, Serialize};
