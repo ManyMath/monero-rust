@@ -5,7 +5,6 @@
 
 // Core modules
 pub mod bip39_conv;
-pub mod chain_config;
 pub mod coin_selection;
 pub mod encryption;
 pub mod key_image_import;
