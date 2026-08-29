@@ -1073,7 +1073,6 @@ mod tests {
             tx_hash: format!("tx_{}", key_image),
             output_index: 0,
             amount,
-            amount_xmr: format!("{:.12}", amount as f64 / 1_000_000_000_000.0),
             key: "k".into(),
             key_offset: "ko".into(),
             commitment_mask: "cm".into(),

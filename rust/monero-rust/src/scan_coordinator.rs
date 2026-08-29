@@ -244,7 +244,6 @@ mod tests {
             tx_hash: tx_hash.to_string(),
             output_index: 0,
             amount,
-            amount_xmr: String::new(),
             key: "k".into(),
             key_offset: "ko".into(),
             commitment_mask: "cm".into(),

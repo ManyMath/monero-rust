@@ -96,7 +96,6 @@ pub mod native {
         pub tx_hash: String,
         pub output_index: u8,
         pub amount: u64,
-        pub amount_xmr: String,
         pub key: String,
         pub key_offset: String,
         pub commitment_mask: String,
@@ -253,7 +252,6 @@ pub mod native {
             .into_iter()
             .map(|output| {
                 let amount = output.commitment().amount;
-                let amount_xmr = format!("{:.12}", amount as f64 / 1_000_000_000_000.0);
                 let key = hex::encode(output.key().compress().to_bytes());
                 let key_offset_scalar =
                     Scalar::from_bytes_mod_order(<[u8; 32]>::from(output.key_offset()));
@@ -272,7 +270,6 @@ pub mod native {
                     tx_hash: tx_id.to_string(),
                     output_index: u8::try_from(output.index_in_transaction()).unwrap_or(u8::MAX),
                     amount,
-                    amount_xmr,
                     key,
                     key_offset,
                     commitment_mask,

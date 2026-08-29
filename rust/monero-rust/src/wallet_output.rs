@@ -11,7 +11,6 @@ pub struct WalletOutput {
     pub tx_hash: String,
     pub output_index: u8,
     pub amount: u64,
-    pub amount_xmr: String,
     pub key: String,
     pub key_offset: String,
     pub commitment_mask: String,
@@ -68,18 +67,15 @@ impl WalletOutput {
         format!("{}:{}", self.tx_hash, self.output_index)
     }
 
-    /// The output's *additional* timelock, over and above the 10-block spendable age.
+    /// Read the transaction's additional timelock from the serialized output.
     ///
-    /// monero keeps this as the transaction's `unlock_time` and gates spending on it in
-    /// `is_transfer_unlocked` (wallet2.cpp:7310). It is recovered from
-    /// `received_output_bytes` rather than stored in a field of its own: the scanner writes
-    /// the whole `monero-wallet` output there, its `Metadata` already carries the timelock,
-    /// and reading it back means the value remains the Dart round trip without a new
-    /// signal field to keep in step.
+    /// This lock applies in addition to the normal spendable age. The scanner
+    /// stores the full `monero-wallet` output in `received_output_bytes`, including
+    /// the timelock in its metadata.
+    /// Read that stored value rather than maintain a second copy.
     ///
-    /// `Timelock::None` when the output carries no extra lock. Also `Timelock::None` when
-    /// there are no output bytes to read - synthetic fixtures leave that field empty, and
-    /// there is nothing to check in that case.
+    /// Return `Timelock::None` if there is no additional lock or no serialized
+    /// output data. Synthetic fixtures may leave the data empty.
     pub fn additional_timelock(&self) -> monero_wallet::transaction::Timelock {
         use monero_wallet::transaction::Timelock;
 
@@ -105,7 +101,6 @@ mod tests {
             tx_hash: "abc123".into(),
             output_index: 0,
             amount: 1_000_000_000_000,
-            amount_xmr: "1.000000000000".into(),
             key: "key".into(),
             key_offset: "offset".into(),
             commitment_mask: "mask".into(),
