@@ -34,7 +34,9 @@ cuprate-cryptonight = { path = "../cuprate-cryptonight" }
 polyseed = { path = "../monero-utils/polyseed", default-features = false }
 crc = "3"
 lazy_static = "1" 
-monero-epee-bin-serde = { path = "../monero-epee-bin-serde" }
+# This revision includes the nested-struct and byte-blob deserialization fixes
+# needed for wallet and RPC data. Those fixes are absent from crates.io 1.0.1.
+monero-epee-bin-serde = { git = "https://github.com/comit-network/monero-epee-bin-serde", rev = "fae7a23f8e57f19553c341c0878b4f0fa5a6994d" }
 monero-payment-proofs = { path = "../monero-utils/payment-proofs" }
 monero-oxide = { version = "0.1.0", default-features = false, features = ["std"] }
 monero-wallet = { version = "0.2.0", default-features = false, features = ["std"] }
