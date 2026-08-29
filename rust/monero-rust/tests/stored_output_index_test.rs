@@ -8,10 +8,10 @@
 
 mod mock_rpc;
 
-use monero_rust::monero_backend::rpc::Rpc;
+use mock_rpc::MockRpc;
+use monero_rust::monero_rpc::Rpc;
 use monero_rust::tx_builder::native::create_spendable_output;
 use monero_rust::wallet_compat::received_from_wallet_output;
-use mock_rpc::MockRpc;
 use serde::Serialize;
 
 /// Global index returned by the daemon for transaction output 1.
@@ -60,10 +60,13 @@ fn get_o_indexes_response(indexes: Vec<u64>) -> Vec<u8> {
 }
 
 fn mock_daemon() -> Rpc<MockRpc> {
-    // indexes[1] is the one that matters - the stored output is index_in_transaction 1.
+    // The stored output is at transaction index 1, so use `indexes[1]`.
     let rpc = MockRpc::from_json("[]")
         .expect("mock")
-        .with_binary_response("get_o_indexes.bin", get_o_indexes_response(vec![7, DAEMON_INDEX, 9]));
+        .with_binary_response(
+            "get_o_indexes.bin",
+            get_o_indexes_response(vec![7, DAEMON_INDEX, 9]),
+        );
     Rpc::new_with_connection(rpc)
 }
 
@@ -88,11 +91,14 @@ async fn spending_re_resolves_the_stored_index_from_the_daemon() {
         spendable.global_index, DAEMON_INDEX,
         "the daemon's index must win over the stored placeholder"
     );
-    assert_ne!(spendable.global_index, 0, "the placeholder must not survive");
+    assert_ne!(
+        spendable.global_index, 0,
+        "the placeholder must not survive"
+    );
 }
 
-/// The conversion out of stored bytes carries no global index at all, which is what makes
-/// re-resolution unavoidable rather than just customary.
+/// The conversion to `ReceivedOutput` discards the global index, requiring
+/// the spend path to fetch it again.
 #[test]
 fn the_compat_output_has_nowhere_to_carry_a_stale_index() {
     let stored = stored_output_with_zero_index();

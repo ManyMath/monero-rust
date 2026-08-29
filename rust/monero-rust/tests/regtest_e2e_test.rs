@@ -13,20 +13,18 @@
 mod common;
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
-use monero_rust::monero_backend::rpc::HttpRpc;
-use monero_rust::monero_backend::wallet::{
-    address::{MoneroAddress, Network},
-    seed::Seed,
-    Change, SignableTransactionBuilder, SpendableOutput, ViewPair,
-};
+use monero_rust::monero_rpc::HttpRpc;
 use monero_rust::scanner::{
     derive_address, derive_keys, scan_block_for_outputs_with_lookahead, scan_blocks_batch,
     Lookahead,
 };
+use monero_rust::seed_compat::Seed;
 use monero_rust::wallet_compat::received_from_wallet_output;
+use monero_rust::wallet_compat::{Change, SignableTransactionBuilder, SpendableOutput, ViewPair};
+use monero_wallet::address::{MoneroAddress, Network};
 use zeroize::Zeroizing;
 
-/// Monero's own deterministic test seed, as used by the cold-signing vector generator.
+/// Monero's deterministic test seed, also used for cold-signing vectors.
 const SEED: &str = "velvet lymph giddy number token physics poetry unquoted nibs useful \
     sabotage limits benches lifestyle eden nitrogen anvil fewest avoid batch vials washing \
     fences goat unquoted";
@@ -60,7 +58,11 @@ async fn mines_then_scans_its_own_outputs() {
 
     let rpc = HttpRpc::new(node).expect("regtest RPC");
     let address = derive_address(SEED, NETWORK, "").expect("derive address");
-    assert!(address.starts_with('4'), "regtest uses mainnet encoding, got {}", address);
+    assert!(
+        address.starts_with('4'),
+        "regtest uses mainnet encoding, got {}",
+        address
+    );
 
     let start_height = rpc.get_height().await.expect("get_height");
     rpc.generate_blocks(&address, BLOCKS_TO_MINE)
@@ -75,21 +77,14 @@ async fn mines_then_scans_its_own_outputs() {
         height
     );
 
-    // Scan what we just mined. Every block's coinbase paid our address, so every block in
-    // the range should yield an output.
+    // Every block just mined pays our address and should yield one output.
     let mut found = 0usize;
     let mut total = 0u64;
-    for h in start_height .. (start_height + BLOCKS_TO_MINE) {
-        let scanned = scan_block_for_outputs_with_lookahead(
-            &rpc,
-            h as u64,
-            SEED,
-            NETWORK,
-            LOOKAHEAD,
-            "",
-        )
-        .await
-        .unwrap_or_else(|e| panic!("scan of block {} failed: {}", h, e));
+    for h in start_height..(start_height + BLOCKS_TO_MINE) {
+        let scanned =
+            scan_block_for_outputs_with_lookahead(&rpc, h as u64, SEED, NETWORK, LOOKAHEAD, "")
+                .await
+                .unwrap_or_else(|e| panic!("scan of block {} failed: {}", h, e));
 
         for output in &scanned.outputs {
             assert!(output.amount > 0, "a mined output must carry an amount");
@@ -123,11 +118,13 @@ async fn scanned_outputs_parse_back_in_the_stored_format() {
     let address = derive_address(SEED, NETWORK, "").expect("derive address");
 
     // Mine a little in case this runs before the other test; the chain is shared.
-    rpc.generate_blocks(&address, 5).await.expect("generateblocks");
+    rpc.generate_blocks(&address, 5)
+        .await
+        .expect("generateblocks");
     let height = rpc.get_height().await.expect("get_height");
 
     let mut checked = 0usize;
-    for h in (height.saturating_sub(5)) .. height {
+    for h in (height.saturating_sub(5))..height {
         let scanned =
             scan_block_for_outputs_with_lookahead(&rpc, h as u64, SEED, NETWORK, LOOKAHEAD, "")
                 .await
@@ -147,13 +144,14 @@ async fn scanned_outputs_parse_back_in_the_stored_format() {
         }
     }
 
-    assert!(checked > 0, "expected to check at least one freshly scanned output");
+    assert!(
+        checked > 0,
+        "expected to check at least one freshly scanned output"
+    );
 }
 
-/// Build and sign a real transaction spending what we mined, then have the daemon accept it.
-///
-/// This is the half the fixture-driven tests can only replay: decoys come from the live
-/// output distribution, and the daemon is the one judging whether the result is valid.
+/// Build, sign, and broadcast a transaction spending a mined output.
+/// Use live decoys and require the daemon to accept the result.
 #[tokio::test(flavor = "multi_thread")]
 async fn builds_signs_and_broadcasts_a_transaction() {
     let Some(node) = common::regtest_node() else {
@@ -174,10 +172,10 @@ async fn builds_signs_and_broadcasts_a_transaction() {
     let height = rpc.get_height().await.expect("get_height");
     assert!(height >= MIN_HEIGHT_TO_SPEND);
 
-    // Take the first mature output we can find.
+    // Select the first mature output.
     let mature_before = height.saturating_sub(60);
     let mut spendable = None;
-    for h in 1 .. mature_before {
+    for h in 1..mature_before {
         let scanned =
             scan_block_for_outputs_with_lookahead(&rpc, h as u64, SEED, NETWORK, LOOKAHEAD, "")
                 .await
@@ -203,7 +201,7 @@ async fn builds_signs_and_broadcasts_a_transaction() {
     let spend_scalar = Scalar::from_bytes_mod_order(*seed.entropy());
     let spend_point = &spend_scalar * ED25519_BASEPOINT_TABLE;
     let view_scalar = Scalar::from_bytes_mod_order(
-        hex::decode(&keys.secret_view_key).expect("view hex")[.. 32]
+        hex::decode(&keys.secret_view_key).expect("view hex")[..32]
             .try_into()
             .expect("32 bytes"),
     );
@@ -212,11 +210,8 @@ async fn builds_signs_and_broadcasts_a_transaction() {
     let protocol = rpc.get_protocol().await.expect("get_protocol");
     let fee_rate = rpc.get_fee().await.expect("get_fee");
 
-    let mut builder = SignableTransactionBuilder::new(
-        protocol,
-        fee_rate,
-        Some(Change::new(&view_pair, false)),
-    );
+    let mut builder =
+        SignableTransactionBuilder::new(protocol, fee_rate, Some(Change::new(&view_pair, false)));
     builder.add_input(spendable);
     let send_amount = 1_000_000_000u64;
     builder.add_payment(
@@ -268,17 +263,9 @@ async fn batch_scans_the_chain_it_mined() {
         .await
         .expect("generateblocks");
 
-    let results = scan_blocks_batch(
-        &rpc,
-        start as u64,
-        SEED,
-        NETWORK,
-        LOOKAHEAD,
-        false,
-        "",
-    )
-    .await
-    .expect("batch scan must succeed");
+    let results = scan_blocks_batch(&rpc, start as u64, SEED, NETWORK, LOOKAHEAD, false, "")
+        .await
+        .expect("batch scan must succeed");
 
     assert!(!results.is_empty(), "a batch scan must return blocks");
 
@@ -288,26 +275,28 @@ async fn batch_scans_the_chain_it_mined() {
         "every block in the range paid our address, so the batch must find outputs"
     );
 
-    // Heights must come back ascending and start where we asked, since the sync loop
-    // resumes from the last one it saw.
+    // Check the requested start and ascending heights before the sync loop
+    // would resume from the last returned block.
     let heights: Vec<u64> = results.iter().map(|r| r.block_height).collect();
-    assert_eq!(heights[0], start as u64, "batch must start at the requested height");
+    assert_eq!(
+        heights[0], start as u64,
+        "batch must start at the requested height"
+    );
     assert!(
         heights.windows(2).all(|w| w[0] < w[1]),
         "batch heights must be strictly ascending, got {:?}",
-        &heights[.. heights.len().min(8)]
+        &heights[..heights.len().min(8)]
     );
 
-    // A batch scan and a per-block scan of the same range must agree.
+    // Compare batch and per-block scanning over the same range.
     let mut per_block = 0usize;
     for height in &heights {
-        per_block += scan_block_for_outputs_with_lookahead(
-            &rpc, *height, SEED, NETWORK, LOOKAHEAD, "",
-        )
-        .await
-        .expect("scan")
-        .outputs
-        .len();
+        per_block +=
+            scan_block_for_outputs_with_lookahead(&rpc, *height, SEED, NETWORK, LOOKAHEAD, "")
+                .await
+                .expect("scan")
+                .outputs
+                .len();
     }
     assert_eq!(
         total_outputs, per_block,

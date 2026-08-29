@@ -9,7 +9,6 @@ fn make_output(amount: u64, height: u64, tx_hash: &str, account: u32) -> WalletO
         tx_hash: tx_hash.to_string(),
         output_index: 0,
         amount,
-        amount_xmr: String::new(),
         key: format!("key_{}", tx_hash),
         key_offset: format!("ko_{}", tx_hash),
         commitment_mask: format!("cm_{}", tx_hash),

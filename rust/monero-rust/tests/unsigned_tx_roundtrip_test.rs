@@ -4,24 +4,22 @@ mod common;
 mod mock_rpc;
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
-use monero_rust::monero_backend::transaction::{NotPruned, Transaction};
-use monero_rust::monero_backend::wallet::{
-    address::{MoneroAddress, Network},
-    seed::Seed,
-    Change, SignableTransactionBuilder, SpendableOutput, ViewPair,
-};
+use monero_oxide::transaction::{NotPruned, Transaction};
 use monero_rust::scanner::{
     derive_address, derive_keys, scan_block_for_outputs_with_lookahead, Lookahead,
 };
+use monero_rust::seed_compat::Seed;
+use monero_rust::wallet_compat::received_from_wallet_output;
+use monero_rust::wallet_compat::{Change, SignableTransactionBuilder, SpendableOutput, ViewPair};
+use monero_wallet::address::{MoneroAddress, Network};
+use monero_wallet::WalletOutput;
 #[cfg(feature = "mock-rpc")]
 use rand::SeedableRng;
-use monero_rust::wallet_compat::received_from_wallet_output;
-use monero_wallet::WalletOutput;
 use std::io::Cursor;
 use zeroize::Zeroizing;
 
 #[cfg(not(feature = "mock-rpc"))]
-use monero_rust::monero_backend::rpc::HttpRpc;
+use monero_rust::monero_rpc::HttpRpc;
 
 #[cfg(feature = "mock-rpc")]
 use mock_rpc::MockRpc;
@@ -111,7 +109,8 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
 
     let test_output = &all_outputs[0];
     let output_bytes = hex::decode(&test_output.received_output_bytes)?;
-    let received = received_from_wallet_output(&WalletOutput::read(&mut Cursor::new(output_bytes))?)?;
+    let received =
+        received_from_wallet_output(&WalletOutput::read(&mut Cursor::new(output_bytes))?)?;
     let spendable = SpendableOutput::from(&rpc, received.clone()).await?;
 
     let change = Change::new(&view_pair, false);
@@ -145,9 +144,8 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
     let unsigned_tx_hex = hex::encode(&unsigned_bytes);
 
     // Verify the unsigned bytes can be deserialized back
-    let unsigned_roundtrip = monero_rust::monero_backend::wallet::UnsignedTransaction::read(
-        &mut Cursor::new(&unsigned_bytes),
-    )?;
+    let unsigned_roundtrip =
+        monero_rust::wallet_compat::UnsignedTransaction::read(&mut Cursor::new(&unsigned_bytes))?;
     assert_eq!(
         unsigned_roundtrip.fee, expected_fee,
         "Fee must survive unsigned TX serialize/deserialize roundtrip"
@@ -200,7 +198,11 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
         2,
         "TX version must be 2 (RingCT)"
     );
-    assert_eq!(deserialized_tx.prefix().inputs.len(), 1, "Must have 1 input");
+    assert_eq!(
+        deserialized_tx.prefix().inputs.len(),
+        1,
+        "Must have 1 input"
+    );
     assert_eq!(
         deserialized_tx.prefix().outputs.len(),
         2,
@@ -225,7 +227,7 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
     // Verify ring signature inputs have proper key offsets
     for input in &deserialized_tx.prefix().inputs {
         match input {
-            monero_rust::monero_backend::transaction::Input::ToKey {
+            monero_oxide::transaction::Input::ToKey {
                 key_offsets,
                 key_image,
                 ..

@@ -1,13 +1,9 @@
 //! Output scanning test using the honked bagpipe stagenet wallet.
 
-use monero_rust::monero_backend::{
-    transaction::{NotPruned, Transaction},
-    wallet::{
-        address::{AddressSpec, Network},
-        seed::Seed,
-        Scanner, ViewPair,
-    },
-};
+use monero_oxide::transaction::{NotPruned, Transaction};
+use monero_rust::seed_compat::Seed;
+use monero_rust::wallet_compat::{AddressSpec, Scanner, ViewPair};
+use monero_wallet::address::Network;
 use std::collections::HashSet;
 use std::io::Cursor;
 use zeroize::Zeroizing;
@@ -141,7 +137,7 @@ fn spend_key_from_seed(seed: &Seed) -> curve25519_dalek::edwards::EdwardsPoint {
 }
 
 fn view_key_from_seed(seed: &Seed) -> curve25519_dalek::scalar::Scalar {
-    use monero_rust::monero_backend::hash_to_scalar;
+    use monero_rust::crypto::hash_to_scalar;
 
     let entropy = seed.entropy();
     let mut spend_bytes = [0u8; 32];
@@ -154,7 +150,7 @@ fn parse_pruned_transaction<R: std::io::Read>(
     r: &mut R,
     _prunable_hash: [u8; 32],
 ) -> std::io::Result<Transaction> {
-    use monero_rust::monero_backend::{
+    use monero_oxide::{
         ringct::{bulletproofs::Bulletproof, RctBase, RctProofs, RctPrunable},
         transaction::TransactionPrefix,
     };

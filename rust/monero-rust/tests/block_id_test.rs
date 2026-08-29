@@ -3,7 +3,7 @@
 // so the miner tx hash must use Monero's three-part transaction hash, not a
 // plain keccak of the serialization.
 
-use monero_rust::monero_backend::block::Block;
+use monero_oxide::block::Block;
 use monero_rust::scanner::compute_block_id;
 
 #[test]

@@ -6,14 +6,15 @@
 // Core modules
 pub mod bip39_conv;
 pub mod coin_selection;
+pub mod crypto;
+pub(crate) mod decoy_select;
 pub mod encryption;
 pub mod key_image_import;
 pub mod monero_rpc;
-pub mod seed_compat;
-pub(crate) mod decoy_select;
-pub mod wallet_compat;
 pub mod scan_coordinator;
 pub mod scanner;
+pub mod seed_compat;
+pub mod wallet_compat;
 pub mod wallet_output;
 pub mod wallet_state;
 
@@ -67,13 +68,13 @@ pub use key_image_import::{
 
 // -- Scanning --
 pub use scanner::{
+    daemon_height,
     // Key derivation
     derive_address,
     derive_address_from_view_only,
     derive_keys,
     derive_keys_from_view_only,
     derive_subaddress,
-    daemon_height,
     fetch_blocks_batch,
     fetch_blocks_batch_with_history,
     generate_seed,

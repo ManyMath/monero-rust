@@ -2,8 +2,8 @@
 
 mod common;
 
-use monero_rust::monero_backend::block::Block;
-use monero_rust::monero_backend::rpc::{BlockCompleteEntry, GetBlocksFastResponse};
+use monero_oxide::block::Block;
+use monero_rust::monero_rpc::{BlockCompleteEntry, GetBlocksFastResponse};
 use monero_rust::scanner::{
     process_batch_multi_wallet_response, process_batch_response, Lookahead, WalletScanConfig,
 };
@@ -13,10 +13,10 @@ const STAGENET_SEED: &str = "vocal either anvil films dolphin zeal bacon cuisine
 fn make_coinbase_block(height: u64, previous: [u8; 32]) -> Block {
     use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
     use monero_oxide::ed25519::CompressedPoint;
-    use monero_rust::monero_backend::transaction::*;
+    use monero_oxide::transaction::*;
 
     Block::new(
-        monero_rust::monero_backend::block::BlockHeader {
+        monero_oxide::block::BlockHeader {
             hardfork_version: 16,
             hardfork_signal: 16,
             timestamp: 1600000000 + height * 120,
@@ -126,9 +126,11 @@ async fn test_one_bad_seed_fails_multi_wallet_batch() {
             passphrase: String::new(),
         },
     ];
-    assert!(process_batch_multi_wallet_response(resp, 100, configs, None)
-        .await
-        .is_err());
+    assert!(
+        process_batch_multi_wallet_response(resp, 100, configs, None)
+            .await
+            .is_err()
+    );
 }
 
 // -- Edge cases --
@@ -301,12 +303,12 @@ async fn multi_wallet_batches_reject_an_unlinked_block_too() {
     assert!(err.contains("does not follow"), "{err}");
 }
 
-/// A transaction that parses and has a hash. `Input::Gen` keeps it valid without RingCT
-/// proofs; `marker` is only there to make two of them differ.
-fn make_tx(marker: u64) -> monero_rust::monero_backend::transaction::Transaction {
+/// Build a parseable transaction with a distinct hash for each `marker`.
+/// `Input::Gen` avoids needing RingCT proofs.
+fn make_tx(marker: u64) -> monero_oxide::transaction::Transaction {
     use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
     use monero_oxide::ed25519::CompressedPoint;
-    use monero_rust::monero_backend::transaction::*;
+    use monero_oxide::transaction::*;
 
     Transaction::V2 {
         prefix: TransactionPrefix {

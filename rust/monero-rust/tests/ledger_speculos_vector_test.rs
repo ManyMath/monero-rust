@@ -3,10 +3,8 @@ use std::path::Path;
 use curve25519_dalek::{
     constants::ED25519_BASEPOINT_TABLE, edwards::CompressedEdwardsY, scalar::Scalar,
 };
-use monero_rust::monero_backend::{
-    ringct::generate_key_image,
-    wallet::address::{MoneroAddress, Network},
-};
+use monero_rust::crypto::generate_key_image;
+use monero_wallet::address::{MoneroAddress, Network};
 use serde::Deserialize;
 use serde_json::Value;
 use zeroize::Zeroizing;

@@ -3,7 +3,7 @@
 #![allow(dead_code)]
 
 use base64::Engine;
-use monero_rust::monero_backend::rpc::{RpcConnection, RpcError};
+use monero_rust::monero_rpc::{Rpc, RpcConnection, RpcError};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
@@ -380,6 +380,6 @@ impl RpcConnection for SafeMockRpc {
     }
 }
 
-pub fn create_rpc(mock: MockRpc) -> monero_rust::monero_backend::rpc::Rpc<SafeMockRpc> {
-    monero_rust::monero_backend::rpc::Rpc::new_with_connection(SafeMockRpc::new(mock))
+pub fn create_rpc(mock: MockRpc) -> Rpc<SafeMockRpc> {
+    Rpc::new_with_connection(SafeMockRpc::new(mock))
 }

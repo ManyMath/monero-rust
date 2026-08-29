@@ -53,7 +53,6 @@ fn make_sample_wallet_output(index: u64) -> WalletOutput {
         tx_hash: format!("{:064x}", index),
         output_index: 0,
         amount: 1_000_000_000_000,
-        amount_xmr: "1.000000000000".to_string(),
         key: "a".repeat(64),
         key_offset: "b".repeat(64),
         commitment_mask: "c".repeat(64),

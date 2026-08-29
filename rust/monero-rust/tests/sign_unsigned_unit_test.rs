@@ -1,12 +1,12 @@
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
-use monero_rust::monero_backend::transaction::{NotPruned, Transaction};
+use monero_oxide::transaction::{NotPruned, Transaction};
 /// Unit tests for the offline signing pipeline without RPC or mock-rpc.
-use monero_rust::monero_backend::wallet::{
-    address::{AddressSpec, Network},
-    seed::Seed,
-    Change, Decoys, InternalPayment, SpendableOutput, UnsignedInput, UnsignedTransaction, ViewPair,
+use monero_rust::seed_compat::Seed;
+use monero_rust::wallet_compat::{
+    AddressSpec, Change, Commitment, Decoys, InternalPayment, Protocol, SpendableOutput,
+    UnsignedInput, UnsignedTransaction, ViewPair,
 };
-use monero_rust::monero_backend::{Commitment, Protocol};
+use monero_wallet::address::Network;
 use sha3::{Digest, Keccak256};
 use std::io::Cursor;
 use zeroize::Zeroizing;
@@ -199,7 +199,11 @@ fn test_sign_unsigned_transaction_synthetic() {
         "TX version must be 2 (RingCT)"
     );
 
-    assert_eq!(deserialized_tx.prefix().inputs.len(), 1, "Must have 1 input");
+    assert_eq!(
+        deserialized_tx.prefix().inputs.len(),
+        1,
+        "Must have 1 input"
+    );
 
     assert_eq!(
         deserialized_tx.prefix().outputs.len(),
@@ -215,10 +219,7 @@ fn test_sign_unsigned_transaction_synthetic() {
         panic!("signed TX must be a v2 transaction with RCT proofs");
     };
 
-    assert_eq!(
-        proofs.base.fee, fee,
-        "Fee in signed TX RCT base must match"
-    );
+    assert_eq!(proofs.base.fee, fee, "Fee in signed TX RCT base must match");
 
     // 11. Hash of deserialized transaction must match tx_id
     let tx_hash = hex::encode(deserialized_tx.hash());
@@ -238,7 +239,7 @@ fn test_sign_unsigned_transaction_synthetic() {
     let mut expected_spent_key_images = Vec::new();
     for input in &deserialized_tx.prefix().inputs {
         match input {
-            monero_rust::monero_backend::transaction::Input::ToKey {
+            monero_oxide::transaction::Input::ToKey {
                 key_offsets,
                 key_image,
                 ..
@@ -364,8 +365,7 @@ fn offline_signing_honours_the_seed_offset_passphrase() {
         "premise: a passphrase must change which wallet the mnemonic opens"
     );
 
-    let (unsigned_hex, fee) =
-        synthetic_unsigned_hex_for(Scalar::from_bytes_mod_order(*offset_key));
+    let (unsigned_hex, fee) = synthetic_unsigned_hex_for(Scalar::from_bytes_mod_order(*offset_key));
 
     // Sign with the keys that own the outputs.
     let signed = sign_reviewed_seed(TEST_SEED, &unsigned_hex, NETWORK_STR, PASSPHRASE)

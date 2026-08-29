@@ -1,4 +1,4 @@
-use monero_rust::monero_backend::transaction::{Input, NotPruned, Transaction};
+use monero_oxide::transaction::{Input, NotPruned, Transaction};
 use sha3::{Digest, Keccak256};
 
 #[derive(serde::Deserialize)]
@@ -37,9 +37,8 @@ fn test_key_images_extractable_from_pruned() {
     let mut cursor = std::io::Cursor::new(&pruned_bytes);
     let version: u64 =
         monero_oxide::io::VarInt::read(&mut cursor).expect("version should parse from pruned data");
-    let prefix =
-        monero_rust::monero_backend::transaction::TransactionPrefix::read(&mut cursor, version)
-            .expect("prefix should parse from pruned data");
+    let prefix = monero_oxide::transaction::TransactionPrefix::read(&mut cursor, version)
+        .expect("prefix should parse from pruned data");
 
     // Extract key images from the parsed prefix
     let key_images: Vec<String> = prefix
@@ -63,7 +62,8 @@ fn test_key_images_extractable_from_pruned() {
 
     // Cross-check: parse full TX and verify same key images
     let full_bytes = hex::decode(&fixture.as_hex_full).expect("decode full");
-    let full_tx = Transaction::<NotPruned>::read::<&[u8]>(&mut full_bytes.as_ref()).expect("parse full");
+    let full_tx =
+        Transaction::<NotPruned>::read::<&[u8]>(&mut full_bytes.as_ref()).expect("parse full");
 
     let full_key_images: Vec<String> = full_tx
         .prefix()
@@ -87,7 +87,8 @@ fn test_prunable_hash_matches_keccak256() {
 
     // Parse the full transaction to extract the prunable portion
     let full_bytes = hex::decode(&fixture.as_hex_full).expect("decode full");
-    let tx = Transaction::<NotPruned>::read::<&[u8]>(&mut full_bytes.as_ref()).expect("parse full tx");
+    let tx =
+        Transaction::<NotPruned>::read::<&[u8]>(&mut full_bytes.as_ref()).expect("parse full tx");
 
     // Serialize the prunable portion and compute its Keccak-256 hash
     let Transaction::V2 {

@@ -1,7 +1,7 @@
 use async_trait::async_trait;
-use monero_rust::monero_backend::rpc::{Rpc, RpcConnection, RpcError};
-use monero_rust::monero_backend::wallet::seed::Seed;
+use monero_rust::monero_rpc::{Rpc, RpcConnection, RpcError};
 use monero_rust::scanner::{derive_address, scan_block_for_outputs, BlockScanResult};
+use monero_rust::seed_compat::Seed;
 use serde_json::Value;
 
 const TEST_SEED: &str = "honked bagpipe alpine juicy faked afoot jostle claim cowl tunnel orphans negative pheasants feast jetting quote frown teeming cycling tribal womanly hills cottage daytime daytime";
@@ -194,11 +194,9 @@ async fn test_step6_network_validation() {
 
 #[test]
 fn test_step7_direct_scanner_e2e() {
-    use monero_rust::monero_backend::wallet::{
-        address::{AddressSpec, Network},
-        seed::Seed,
-        Scanner, ViewPair,
-    };
+    use monero_rust::seed_compat::Seed;
+    use monero_rust::wallet_compat::{AddressSpec, Scanner, ViewPair};
+    use monero_wallet::address::Network;
     use std::collections::HashSet;
     use zeroize::Zeroizing;
 
@@ -216,8 +214,8 @@ fn test_step7_direct_scanner_e2e() {
     let tx_hex = get_transaction_hex(EXPECTED_TX_HASH);
     let tx_bytes = hex::decode(&tx_hex).expect("failed to decode transaction hex");
 
-    let transaction = monero_rust::monero_backend::transaction::Transaction::<
-        monero_rust::monero_backend::transaction::NotPruned,
+    let transaction = monero_oxide::transaction::Transaction::<
+        monero_oxide::transaction::NotPruned,
     >::read::<&[u8]>(&mut tx_bytes.as_ref())
     .expect("failed to parse transaction");
 

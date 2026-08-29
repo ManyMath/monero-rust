@@ -4,12 +4,12 @@ use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 use sha3::{Digest, Keccak256};
 use zeroize::Zeroizing;
 
+use monero_rust::crypto::generate_key_image;
 use monero_rust::epee_compat;
 use monero_rust::key_image_signing::{
     decrypt_with_view_key, export_key_images_v3, import_key_images_v3,
     verify_key_image_ring_signature, KeyImageExportEntry,
 };
-use monero_rust::monero_backend::ringct::generate_key_image;
 
 /// Magic bytes for Monero key image export v3 format.
 const KEY_IMAGES_MAGIC: &[u8] = b"Monero key image export\x03";
@@ -65,7 +65,6 @@ fn test_outputs(entries: &[KeyImageExportEntry]) -> Vec<monero_rust::WalletOutpu
             tx_hash: format!("{i:064x}"),
             output_index: 0,
             amount: 1,
-            amount_xmr: "0.000000000001".to_string(),
             key: hex::encode(entry.pub_key.compress().to_bytes()),
             key_offset: hex::encode(entry.key_offset.to_bytes()),
             commitment_mask: String::new(),
@@ -447,15 +446,20 @@ fn refuses_key_images_exported_for_a_different_account() {
         .to_bytes();
     let view_bytes: [u8; 32] = Keccak256::digest(spend_scalar.to_bytes()).into();
     let view_scalar = Scalar::from_bytes_mod_order(view_bytes);
-    let pub_view = (&view_scalar * ED25519_BASEPOINT_TABLE).compress().to_bytes();
+    let pub_view = (&view_scalar * ED25519_BASEPOINT_TABLE)
+        .compress()
+        .to_bytes();
     let view_secret = view_scalar.to_bytes();
 
-    // Encrypted with this wallet's view key, so it authenticates - but declaring someone
-    // else's spend key, which is the part nothing was checking.
+    // Authenticate with this wallet's view key but put another spend key
+    // in the account header.
     let foreign_spend = (&Scalar::from(9_999u64) * ED25519_BASEPOINT_TABLE)
         .compress()
         .to_bytes();
-    assert_ne!(foreign_spend, pub_spend, "the fixture must name another account");
+    assert_ne!(
+        foreign_spend, pub_spend,
+        "the fixture must name another account"
+    );
 
     let exported = export_key_images_v3(
         &test_entries(&spend_scalar, 2),
@@ -469,25 +473,15 @@ fn refuses_key_images_exported_for_a_different_account() {
 
     let err = monero_rust::key_image_signing::import_key_images_from_seed(mnemonic, "", &exported)
         .expect_err("key images naming another account must be refused");
-    assert!(
-        err.contains("different account"),
-        "unexpected error: {err}"
-    );
+    assert!(err.contains("different account"), "unexpected error: {err}");
 }
 
-/// The account binding says *whose* wallet a file is for. It says nothing about which
-/// output each key image belongs to, and key images are applied positionally - so a file
-/// for the right account, encrypted with the right view key, whose entries are in
-/// the wrong order, marked the wrong outputs spent.
+/// Reject an export with valid signatures assigned to the wrong outputs.
 ///
-/// The per-key-image ring signature is what rules that out, and monero checks it against
-/// the output's own one-time public key (wallet2.cpp:13362-13368). This builds a real
-/// export, swaps its two records - every key image and every signature still authentic,
-/// only mispaired - and requires the import to reject it.
-///
-/// The swap is within the attacker's means by construction: the file is authenticated with
-/// the *view* key, which the untrusted online wallet holds by design, so it can decrypt,
-/// rewrite and re-encrypt at will.
+/// Swap two records in a valid export and reauthenticate it with the view key,
+/// which an online wallet holds. Account and file authentication still pass.
+/// Each ring signature must also verify against the public key of the output
+/// at its assigned position.
 #[test]
 fn refuses_key_images_paired_with_the_wrong_outputs() {
     use monero_rust::key_image_signing::encrypt_with_view_key;
@@ -598,7 +592,10 @@ fn honours_the_offset_of_a_partial_export() {
         &exported,
     )
     .expect("a genuine partial export should import");
-    assert_eq!(import.offset, 2, "the header's offset must survive the parse");
+    assert_eq!(
+        import.offset, 2,
+        "the header's offset must survive the parse"
+    );
     assert_eq!(import.key_images.len(), 2);
 
     let mut state = WalletState::new();

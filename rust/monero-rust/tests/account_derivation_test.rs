@@ -4,14 +4,10 @@
 //! Specifically, it tests that account 1 (index 1), subaddress 0 produces the expected address.
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
-use monero_rust::monero_backend::{
-    hash_to_scalar,
-    wallet::{
-        address::{AddressSpec, Network, SubaddressIndex},
-        seed::Seed,
-        ViewPair,
-    },
-};
+use monero_rust::crypto::hash_to_scalar;
+use monero_rust::seed_compat::Seed;
+use monero_rust::wallet_compat::{AddressSpec, ViewPair};
+use monero_wallet::address::{Network, SubaddressIndex};
 use zeroize::Zeroizing;
 
 const HONKED_BAGPIPE_MNEMONIC: &str = "honked bagpipe alpine juicy faked afoot jostle claim cowl tunnel orphans negative pheasants feast jetting quote frown teeming cycling tribal womanly hills cottage daytime daytime";

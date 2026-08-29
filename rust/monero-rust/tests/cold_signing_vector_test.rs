@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
-use monero_rust::monero_backend::ringct::generate_key_image;
-use monero_rust::monero_backend::transaction::{NotPruned, Transaction};
+use monero_oxide::transaction::{NotPruned, Transaction};
+use monero_rust::crypto::generate_key_image;
 use monero_rust::{
     epee_compat, extract_key_image_hex, key_image_signing, parse_rpc_export,
     wallet_keys_file::read_keys_file, WalletOutput, WalletState,
@@ -51,7 +51,6 @@ fn synthetic_output_for_spend_key(
             tx_hash: format!("{key_offset_byte:064x}"),
             output_index,
             amount: 1,
-            amount_xmr: "0.000000000001".to_string(),
             key: hex::encode(output_key),
             key_offset: hex::encode(key_offset.to_bytes()),
             commitment_mask: String::new(),
@@ -412,7 +411,7 @@ fn cold_signing_unsigned_txset_converts_to_app_unsigned_payload() {
 
     let unsigned_bytes =
         hex::decode(&converted.unsigned_tx_hex).expect("converted unsigned tx should be hex");
-    let app_unsigned = monero_rust::monero_backend::wallet::UnsignedTransaction::read(
+    let app_unsigned = monero_rust::wallet_compat::UnsignedTransaction::read(
         &mut std::io::Cursor::new(unsigned_bytes),
     )
     .expect("converted unsigned tx should parse as app payload");
@@ -421,9 +420,8 @@ fn cold_signing_unsigned_txset_converts_to_app_unsigned_payload() {
 
     let spend = Zeroizing::new(Scalar::from_bytes_mod_order(cold.spend_secret_key));
     let mut rng = rand::rngs::OsRng;
-    let (tx, _, _) =
-        monero_rust::monero_backend::wallet::sign_offline(&mut rng, &spend, app_unsigned)
-            .expect("converted wallet2 unsigned payload should sign offline");
+    let (tx, _, _) = monero_rust::wallet_compat::sign_offline(&mut rng, &spend, app_unsigned)
+        .expect("converted wallet2 unsigned payload should sign offline");
     let tx_bytes = tx.serialize();
     Transaction::<NotPruned>::read(&mut std::io::Cursor::new(tx_bytes.clone()))
         .expect("signed converted tx should reparse");
@@ -977,7 +975,6 @@ fn cold_signing_key_image_rpc_vector_flows_through_app_import_state() {
                 tx_hash: format!("{index:064x}"),
                 output_index: 0,
                 amount: 1,
-                amount_xmr: "0.000000000001".to_string(),
                 key: String::new(),
                 key_offset: String::new(),
                 commitment_mask: String::new(),

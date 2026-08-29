@@ -25,7 +25,10 @@ pub fn stagenet_available() -> bool {
             false
         }
         None => {
-            eprintln!("Skipping live tests: no node reachable at {}", STAGENET_NODE);
+            eprintln!(
+                "Skipping live tests: no node reachable at {}",
+                STAGENET_NODE
+            );
             false
         }
     })
@@ -76,7 +79,9 @@ fn node_nettype_of(authority: &str) -> Option<String> {
     let addr: SocketAddr = authority.parse().ok()?;
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(1)).ok()?;
     stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
-    stream.set_write_timeout(Some(Duration::from_secs(2))).ok()?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(2)))
+        .ok()?;
 
     stream
         .write_all(
@@ -89,16 +94,15 @@ fn node_nettype_of(authority: &str) -> Option<String> {
     json_string_field(&String::from_utf8_lossy(&response), "nettype")
 }
 
-/// Pull `"<field>": "<value>"` out of a JSON blob, so the gate needn't take a parser
-/// dependency of its own.
+/// Extract a string field from the `/get_info` JSON response.
 ///
-/// The gate fails closed, so if this ever stopped working it would disable every
-/// live test while the suite stayed green. `tests/live_gate_test.rs` pins it.
+/// `tests/live_gate_test.rs` checks this parser because a parsing failure
+/// would otherwise silently skip the stagenet tests.
 pub fn json_string_field(haystack: &str, field: &str) -> Option<String> {
     let key = format!("\"{}\"", field);
-    let after_key = &haystack[haystack.find(&key)? + key.len() ..];
-    let after_colon = &after_key[after_key.find(':')? + 1 ..];
+    let after_key = &haystack[haystack.find(&key)? + key.len()..];
+    let after_colon = &after_key[after_key.find(':')? + 1..];
     let start = after_colon.find('"')? + 1;
-    let value = &after_colon[start ..];
-    Some(value[.. value.find('"')?].to_string())
+    let value = &after_colon[start..];
+    Some(value[..value.find('"')?].to_string())
 }

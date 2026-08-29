@@ -1,16 +1,16 @@
 //! Transaction building tests using stagenet data.
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, edwards::EdwardsPoint, scalar::Scalar};
-use monero_rust::monero_backend::{
+use monero_oxide::{
     ringct::{bulletproofs::Bulletproof, RctBase, RctProofs, RctPrunable},
     transaction::{Transaction, TransactionPrefix},
-    wallet::{
-        address::{AddressSpec, Network},
-        seed::Seed,
-        Change, Fee, Scanner, SignableTransactionBuilder, SpendableOutput, ViewPair,
-    },
-    Protocol,
 };
+use monero_rust::seed_compat::Seed;
+use monero_rust::wallet_compat::{
+    AddressSpec, Change, Fee, Protocol, Scanner, SignableTransactionBuilder, SpendableOutput,
+    ViewPair,
+};
+use monero_wallet::address::Network;
 use std::collections::HashSet;
 use std::io::Cursor;
 use zeroize::Zeroizing;
@@ -29,7 +29,7 @@ fn spend_key_from_seed(seed: &Seed) -> EdwardsPoint {
 }
 
 fn view_key_from_seed(seed: &Seed) -> Scalar {
-    use monero_rust::monero_backend::hash_to_scalar;
+    use monero_rust::crypto::hash_to_scalar;
     let entropy = seed.entropy();
     let mut spend_bytes = [0u8; 32];
     spend_bytes.copy_from_slice(&entropy[..]);

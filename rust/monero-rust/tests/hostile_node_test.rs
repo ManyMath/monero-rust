@@ -1,16 +1,12 @@
-//! The node is not trusted, so the shape of what it answers with is not either.
+//! Reject malformed daemon responses before using them for scanning or decoy selection.
 //!
-//! Every response below is well-formed JSON that a real daemon would never send. They are
-//! here because the send path consumes these three replies *positionally* - decoy selection
-//! reads the output at position `i` as the one it asked for at `indexes[i]`, and reads the
-//! output distribution as a running total - so a reply of the wrong length is not a parse
-//! failure, it is a silent mispairing, an out-of-bounds index, or an underflow.
-//!
-//! Each test constructs the input its guard exists to reject and watches it be rejected.
+//! The replies below are valid JSON with invalid counts or distributions. Callers
+//! pair response entries with requested indices and subtract cumulative output
+//! counts, so these checks must run before indexing or arithmetic.
 
-use monero_rust::monero_backend::rpc::{Rpc, RpcConnection, RpcError};
+use monero_rust::monero_rpc::{Rpc, RpcConnection, RpcError};
 
-/// Answers each route with a canned body, whatever was asked.
+/// Return the configured response body for each route.
 #[derive(Clone, Debug)]
 struct ScriptedNode {
     responses: Vec<(&'static str, String)>,
