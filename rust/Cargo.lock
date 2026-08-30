@@ -473,10 +473,10 @@ dependencies = [
 [[package]]
 name = "cuprate-cryptonight"
 version = "0.1.0"
+source = "git+https://github.com/Cuprate/cuprate?rev=b6a0302c8189187c7b85059c81086858bd4e4352#b6a0302c8189187c7b85059c81086858bd4e4352"
 dependencies = [
  "digest",
  "groestl",
- "hex",
  "jh",
  "keccak",
  "seq-macro",
