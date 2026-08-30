@@ -26,7 +26,6 @@ mod mock_rpc;
 use mock_rpc::MockRpc;
 
 const TEST_SEED: &str = "honked bagpipe alpine juicy faked afoot jostle claim cowl tunnel orphans negative pheasants feast jetting quote frown teeming cycling tribal womanly hills cottage daytime daytime";
-const NETWORK_STR: &str = "stagenet";
 const NETWORK: Network = Network::Stagenet;
 const START_BLOCK: u64 = 1386863;
 const END_BLOCK: u64 = 1386874;
@@ -84,15 +83,9 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
             account: 0,
             subaddress: 10,
         };
-        let scan_result = scan_block_for_outputs_with_lookahead(
-            &rpc,
-            height,
-            TEST_SEED,
-            NETWORK_STR,
-            lookahead,
-            "",
-        )
-        .await?;
+        let scan_result =
+            scan_block_for_outputs_with_lookahead(&rpc, height, TEST_SEED, NETWORK, lookahead, "")
+                .await?;
 
         for output in scan_result.outputs {
             assert!(!output.tx_hash.is_empty());
@@ -284,7 +277,7 @@ async fn test_key_image_determinism() -> Result<(), Box<dyn std::error::Error>> 
             &rpc,
             START_BLOCK,
             TEST_SEED,
-            NETWORK_STR,
+            NETWORK,
             lookahead,
             "",
         )
@@ -293,7 +286,7 @@ async fn test_key_image_determinism() -> Result<(), Box<dyn std::error::Error>> 
             &rpc,
             START_BLOCK,
             TEST_SEED,
-            NETWORK_STR,
+            NETWORK,
             lookahead,
             "",
         )
@@ -338,12 +331,7 @@ async fn test_transaction_with_multiple_inputs() -> Result<(), Box<dyn std::erro
 
         for height in START_BLOCK..=END_BLOCK {
             let scan_result = scan_block_for_outputs_with_lookahead(
-                &rpc,
-                height,
-                TEST_SEED,
-                NETWORK_STR,
-                lookahead,
-                "",
+                &rpc, height, TEST_SEED, NETWORK, lookahead, "",
             )
             .await?;
 
@@ -432,12 +420,7 @@ async fn test_transaction_parsing_and_validation() -> Result<(), Box<dyn std::er
         let mut test_output = None;
         for height in START_BLOCK..=END_BLOCK {
             let scan_result = scan_block_for_outputs_with_lookahead(
-                &rpc,
-                height,
-                TEST_SEED,
-                NETWORK_STR,
-                lookahead,
-                "",
+                &rpc, height, TEST_SEED, NETWORK, lookahead, "",
             )
             .await?;
 

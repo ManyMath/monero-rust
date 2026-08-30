@@ -28,10 +28,10 @@ const SEED: &str = "velvet lymph giddy number token physics poetry unquoted nibs
     sabotage limits benches lifestyle eden nitrogen anvil fewest avoid batch vials washing \
     fences goat unquoted";
 
-/// regtest uses mainnet address encoding.
-const NETWORK: &str = "mainnet";
+/// Use mainnet address encoding on regtest.
+const NETWORK: monero_rust::Network = monero_rust::Network::Mainnet;
 
-/// Coinbase needs 60 confirmations, so mine past that to end up with spendable outputs.
+/// Mine past coinbase's 60-confirmation maturity requirement.
 const BLOCKS_TO_MINE: usize = 80;
 
 /// Minimum chain height for the spending test.

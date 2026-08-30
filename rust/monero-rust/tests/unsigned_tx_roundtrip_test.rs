@@ -11,6 +11,7 @@ use monero_rust::scanner::{
 use monero_rust::seed_compat::Seed;
 use monero_rust::wallet_compat::received_from_wallet_output;
 use monero_rust::wallet_compat::{Change, SignableTransactionBuilder, SpendableOutput, ViewPair};
+use monero_rust::Network;
 use monero_wallet::WalletOutput;
 #[cfg(feature = "mock-rpc")]
 use rand::SeedableRng;
@@ -24,6 +25,7 @@ use monero_rust::monero_rpc::HttpRpc;
 use mock_rpc::MockRpc;
 
 const TEST_SEED: &str = "honked bagpipe alpine juicy faked afoot jostle claim cowl tunnel orphans negative pheasants feast jetting quote frown teeming cycling tribal womanly hills cottage daytime daytime";
+const NETWORK: Network = Network::Stagenet;
 const NETWORK_STR: &str = "stagenet";
 const START_BLOCK: u64 = 1386863;
 const END_BLOCK: u64 = 1386874;
@@ -59,12 +61,7 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
             subaddress: 10,
         };
         let scan_result = match scan_block_for_outputs_with_lookahead(
-            &rpc,
-            height,
-            TEST_SEED,
-            NETWORK_STR,
-            lookahead,
-            "",
+            &rpc, height, TEST_SEED, NETWORK, lookahead, "",
         )
         .await
         {

@@ -5,7 +5,7 @@
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
-    use monero_rust::{Lookahead, WalletScanConfig, DEFAULT_LOOKAHEAD};
+    use monero_rust::{Lookahead, Network, WalletScanConfig, DEFAULT_LOOKAHEAD};
 
     const TEST_WALLET_1_SEED: &str = "hemlock jubilee eden hacksaw boil superior inroads epoxy exhale orders cavernous second brunt saved richly lower upgrade hitched launching deepest mostly playful layout lower eden";
     const TEST_WALLET_1_ADDRESS: &str = "45wsWad9EwZgF3VpxQumrUCRaEtdyyh6NG8sVD3YRVVJbK1jkpJ3zq8WHLijVzodQ22LxwkdWx7fS2a6JzaRGzkNU8K2Dhi";
@@ -20,13 +20,13 @@ mod tests {
     fn test_wallet_scan_config_creation() {
         let config = WalletScanConfig {
             mnemonic: TEST_WALLET_1_SEED.to_string(),
-            network: "mainnet".to_string(),
+            network: Network::Mainnet,
             lookahead: DEFAULT_LOOKAHEAD,
             passphrase: String::new(),
         };
 
         assert_eq!(config.mnemonic, TEST_WALLET_1_SEED);
-        assert_eq!(config.network, "mainnet");
+        assert_eq!(config.network, Network::Mainnet);
         assert_eq!(config.lookahead.account, 0);
         assert_eq!(config.lookahead.subaddress, 20);
     }
@@ -36,19 +36,19 @@ mod tests {
         let configs = vec![
             WalletScanConfig {
                 mnemonic: TEST_WALLET_1_SEED.to_string(),
-                network: "mainnet".to_string(),
+                network: Network::Mainnet,
                 lookahead: DEFAULT_LOOKAHEAD,
                 passphrase: String::new(),
             },
             WalletScanConfig {
                 mnemonic: TEST_WALLET_2_SEED.to_string(),
-                network: "stagenet".to_string(),
+                network: Network::Stagenet,
                 lookahead: DEFAULT_LOOKAHEAD,
                 passphrase: String::new(),
             },
             WalletScanConfig {
                 mnemonic: TEST_WALLET_3_SEED.to_string(),
-                network: "stagenet".to_string(),
+                network: Network::Stagenet,
                 lookahead: Lookahead {
                     account: 0,
                     subaddress: 10,
@@ -58,8 +58,8 @@ mod tests {
         ];
 
         assert_eq!(configs.len(), 3);
-        assert_eq!(configs[0].network, "mainnet");
-        assert_eq!(configs[1].network, "stagenet");
+        assert_eq!(configs[0].network, Network::Mainnet);
+        assert_eq!(configs[1].network, Network::Stagenet);
         assert_eq!(configs[2].lookahead.subaddress, 10);
     }
 
@@ -79,12 +79,12 @@ mod tests {
     //     let configs = vec![
     //         WalletScanConfig {
     //             mnemonic: TEST_WALLET_1_SEED.to_string(),
-    //             network: "mainnet".to_string(),
+    //             network: Network::Mainnet,
     //             lookahead: DEFAULT_LOOKAHEAD,
     //         },
     //         WalletScanConfig {
     //             mnemonic: TEST_WALLET_2_SEED.to_string(),
-    //             network: "mainnet".to_string(),
+    //             network: Network::Mainnet,
     //             lookahead: DEFAULT_LOOKAHEAD,
     //         },
     //     ];
@@ -152,7 +152,7 @@ mod tests {
     fn test_wallet_scan_config_clone_preserves_data() {
         let original = WalletScanConfig {
             mnemonic: TEST_WALLET_1_SEED.to_string(),
-            network: "mainnet".to_string(),
+            network: Network::Mainnet,
             lookahead: Lookahead {
                 account: 2,
                 subaddress: 50,
@@ -196,19 +196,19 @@ mod tests {
         let configs = vec![
             WalletScanConfig {
                 mnemonic: TEST_WALLET_1_SEED.to_string(),
-                network: "mainnet".to_string(),
+                network: Network::Mainnet,
                 lookahead: DEFAULT_LOOKAHEAD,
                 passphrase: String::new(),
             },
             WalletScanConfig {
                 mnemonic: TEST_WALLET_2_SEED.to_string(),
-                network: "stagenet".to_string(),
+                network: Network::Stagenet,
                 lookahead: DEFAULT_LOOKAHEAD,
                 passphrase: String::new(),
             },
             WalletScanConfig {
                 mnemonic: TEST_WALLET_3_SEED.to_string(),
-                network: "stagenet".to_string(),
+                network: Network::Stagenet,
                 lookahead: Lookahead {
                     account: 0,
                     subaddress: 10,
@@ -221,8 +221,8 @@ mod tests {
         assert_eq!(configs[0].mnemonic, TEST_WALLET_1_SEED);
         assert_eq!(configs[1].mnemonic, TEST_WALLET_2_SEED);
         assert_eq!(configs[2].mnemonic, TEST_WALLET_3_SEED);
-        assert_eq!(configs[0].network, "mainnet");
-        assert_eq!(configs[1].network, "stagenet");
-        assert_eq!(configs[2].network, "stagenet");
+        assert_eq!(configs[0].network, Network::Mainnet);
+        assert_eq!(configs[1].network, Network::Stagenet);
+        assert_eq!(configs[2].network, Network::Stagenet);
     }
 }

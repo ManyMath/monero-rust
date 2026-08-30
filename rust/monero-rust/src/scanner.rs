@@ -174,7 +174,8 @@ pub struct WalletScanData {
 #[derive(Debug, Clone, Zeroize, ZeroizeOnDrop)]
 pub struct WalletScanConfig {
     pub mnemonic: String,
-    pub network: String,
+    #[zeroize(skip)]
+    pub network: Network,
     pub lookahead: Lookahead,
     pub passphrase: String,
 }
@@ -223,15 +224,6 @@ fn standard_address(network: Network, spend: EdwardsPoint, view: EdwardsPoint) -
         convert(spend),
         convert(view),
     )
-}
-
-fn parse_network(network_str: &str) -> Result<Network, String> {
-    match network_str.to_lowercase().as_str() {
-        "mainnet" => Ok(Network::Mainnet),
-        "testnet" => Ok(Network::Testnet),
-        "stagenet" => Ok(Network::Stagenet),
-        _ => Err(format!("Invalid network: {}", network_str)),
-    }
 }
 
 fn spend_key_from_seed(seed: &Seed, passphrase: &str) -> EdwardsPoint {
@@ -736,16 +728,15 @@ pub async fn scan_block_for_outputs_with_url(
     node_url: &str,
     block_height: u64,
     mnemonic: &str,
-    network_str: &str,
+    network: Network,
     passphrase: &str,
 ) -> Result<BlockScanResult, String> {
     crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;
-    crate::validation::validate_network(network_str).map_err(|e| e.to_string())?;
     scan_block_for_outputs_with_url_and_lookahead(
         node_url,
         block_height,
         mnemonic,
-        network_str,
+        network,
         DEFAULT_LOOKAHEAD,
         passphrase,
     )
@@ -757,7 +748,7 @@ pub async fn scan_block_for_outputs_with_url_and_lookahead(
     node_url: &str,
     block_height: u64,
     mnemonic: &str,
-    network_str: &str,
+    network: Network,
     lookahead: Lookahead,
     passphrase: &str,
 ) -> Result<BlockScanResult, String> {
@@ -768,7 +759,7 @@ pub async fn scan_block_for_outputs_with_url_and_lookahead(
         &rpc,
         block_height,
         mnemonic,
-        network_str,
+        network,
         lookahead,
         passphrase,
     )
@@ -1033,14 +1024,14 @@ pub async fn scan_block_for_outputs<R: RpcConnection>(
     rpc: &Rpc<R>,
     block_height: u64,
     mnemonic: &str,
-    network_str: &str,
+    network: Network,
     passphrase: &str,
 ) -> Result<BlockScanResult, String> {
     scan_block_for_outputs_with_lookahead(
         rpc,
         block_height,
         mnemonic,
-        network_str,
+        network,
         DEFAULT_LOOKAHEAD,
         passphrase,
     )
@@ -1051,12 +1042,10 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
     rpc: &Rpc<R>,
     block_height: u64,
     mnemonic: &str,
-    network_str: &str,
+    _network: Network,
     lookahead: Lookahead,
     passphrase: &str,
 ) -> Result<BlockScanResult, String> {
-    let _network = parse_network(network_str)?;
-
     let view_only = parse_view_only_keys(mnemonic);
     let seed_opt = if view_only.is_none() {
         Some(resolve_seed(mnemonic)?)
@@ -1281,7 +1270,7 @@ pub async fn scan_blocks_batch<R: RpcConnection>(
     rpc: &Rpc<R>,
     start_height: u64,
     mnemonic: &str,
-    network_str: &str,
+    network: Network,
     lookahead: Lookahead,
     prune: bool,
     passphrase: &str,
@@ -1302,7 +1291,7 @@ pub async fn scan_blocks_batch<R: RpcConnection>(
         response,
         start_height,
         mnemonic,
-        network_str,
+        network,
         lookahead,
         None,
         passphrase,
@@ -1323,14 +1312,12 @@ pub async fn process_batch_response(
     response: GetBlocksFastResponse,
     requested_start_height: u64,
     mnemonic: &str,
-    network_str: &str,
+    _network: Network,
     lookahead: Lookahead,
     cached: Option<CachedScanner>,
     passphrase: &str,
 ) -> Result<(Vec<BlockScanResult>, CachedScanner), String> {
     check_batch_start_height(response.start_height, requested_start_height)?;
-    let _network = parse_network(network_str)?;
-
     let view_only = parse_view_only_keys(mnemonic);
     let seed_opt = if view_only.is_none() {
         Some(resolve_seed(mnemonic)?)
@@ -1574,7 +1561,7 @@ pub async fn scan_blocks_batch_with_url(
     node_url: &str,
     start_height: u64,
     mnemonic: &str,
-    network_str: &str,
+    network: Network,
     lookahead: Lookahead,
     prune: bool,
     passphrase: &str,
@@ -1586,7 +1573,7 @@ pub async fn scan_blocks_batch_with_url(
         &rpc,
         start_height,
         mnemonic,
-        network_str,
+        network,
         lookahead,
         prune,
         passphrase,
@@ -1676,7 +1663,7 @@ pub async fn process_batch_multi_wallet_response(
         drop(cached);
         let mut entries = Vec::with_capacity(wallet_configs.len());
         for (config, fp) in wallet_configs.iter().zip(config_fingerprints.iter()) {
-            let network = parse_network(&config.network)?;
+            let network = config.network;
 
             let view_only = parse_view_only_keys(&config.mnemonic);
             let seed_opt = if view_only.is_none() {
@@ -2029,7 +2016,7 @@ pub async fn fetch_blocks_batch_with_url(
 pub async fn process_fetched_batch(
     fetched: FetchedBlocks,
     mnemonic: &str,
-    network_str: &str,
+    network: Network,
     lookahead: Lookahead,
     passphrase: &str,
 ) -> Result<Vec<BlockScanResult>, String> {
@@ -2038,7 +2025,7 @@ pub async fn process_fetched_batch(
         fetched.response,
         validated_start_height,
         mnemonic,
-        network_str,
+        network,
         lookahead,
         None,
         passphrase,
@@ -2051,7 +2038,7 @@ pub async fn process_fetched_batch(
 pub async fn process_fetched_batch_cached(
     fetched: FetchedBlocks,
     mnemonic: &str,
-    network_str: &str,
+    network: Network,
     lookahead: Lookahead,
     cached: Option<CachedScanner>,
     passphrase: &str,
@@ -2061,7 +2048,7 @@ pub async fn process_fetched_batch_cached(
         fetched.response,
         validated_start_height,
         mnemonic,
-        network_str,
+        network,
         lookahead,
         cached,
         passphrase,
@@ -2096,14 +2083,14 @@ pub async fn scan_blocks_batch_with_history<R: RpcConnection>(
     start_height: u64,
     known_hashes: &[(u64, String)],
     mnemonic: &str,
-    network_str: &str,
+    network: Network,
     lookahead: Lookahead,
     prune: bool,
     passphrase: &str,
 ) -> Result<(Vec<BlockScanResult>, u64), String> {
     let (fetched, actual_start) =
         fetch_blocks_batch_with_history(rpc, start_height, known_hashes, prune).await?;
-    let results = process_fetched_batch(fetched, mnemonic, network_str, lookahead, passphrase).await?;
+    let results = process_fetched_batch(fetched, mnemonic, network, lookahead, passphrase).await?;
     Ok((results, actual_start))
 }
 
@@ -2114,7 +2101,7 @@ pub async fn scan_blocks_batch_with_history_url(
     start_height: u64,
     known_hashes: &[(u64, String)],
     mnemonic: &str,
-    network_str: &str,
+    network: Network,
     lookahead: Lookahead,
     prune: bool,
     passphrase: &str,
@@ -2127,7 +2114,7 @@ pub async fn scan_blocks_batch_with_history_url(
         start_height,
         known_hashes,
         mnemonic,
-        network_str,
+        network,
         lookahead,
         prune,
         passphrase,
@@ -2299,7 +2286,7 @@ pub async fn scan_block_multi_wallet<R: RpcConnection + Send + Sync + Clone + 's
         let shared_block = Arc::clone(&shared_block);
 
         join_set.spawn(async move {
-            let network = parse_network(&wallet_config.network)?;
+            let network = wallet_config.network;
             let passphrase = wallet_config.passphrase.as_str();
             let (spend_point, view_scalar, address) =
                 if let Some((vs, sp)) = parse_view_only_keys(&wallet_config.mnemonic) {
@@ -2434,7 +2421,7 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
     let mut wallet_results = HashMap::new();
 
     for wallet_config in wallet_configs {
-        let network = parse_network(&wallet_config.network)?;
+        let network = wallet_config.network;
         let passphrase = wallet_config.passphrase.as_str();
         let view_only = parse_view_only_keys(&wallet_config.mnemonic);
         let seed_opt = if view_only.is_none() {
@@ -2500,13 +2487,13 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
 pub async fn scan_mempool_for_outputs(
     node_url: &str,
     mnemonic: &str,
-    network_str: &str,
+    network: Network,
     passphrase: &str,
 ) -> Result<MempoolScanResult, String> {
     scan_mempool_for_outputs_with_lookahead(
         node_url,
         mnemonic,
-        network_str,
+        network,
         DEFAULT_LOOKAHEAD,
         passphrase,
     )
@@ -2517,7 +2504,7 @@ pub async fn scan_mempool_for_outputs(
 pub async fn scan_mempool_for_outputs_with_account_lookahead(
     node_url: &str,
     mnemonic: &str,
-    network_str: &str,
+    network: Network,
     account_lookahead: u32,
     subaddress_lookahead: u32,
     accounts_to_scan: Option<&[u32]>,
@@ -2538,7 +2525,7 @@ pub async fn scan_mempool_for_outputs_with_account_lookahead(
     scan_mempool(
         &rpc,
         mnemonic,
-        network_str,
+        network,
         lookahead,
         accounts_to_scan,
         passphrase,
@@ -2566,7 +2553,7 @@ fn retain_mempool_outputs_for_accounts(
 pub async fn scan_mempool_for_outputs_with_lookahead(
     node_url: &str,
     mnemonic: &str,
-    _network_str: &str,
+    _network: Network,
     lookahead: Lookahead,
     passphrase: &str,
 ) -> Result<MempoolScanResult, String> {
@@ -2574,13 +2561,13 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
     use crate::monero_rpc::HttpRpc;
     let rpc = HttpRpc::new(node_url.to_string())
         .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
-    scan_mempool(&rpc, mnemonic, _network_str, lookahead, None, passphrase).await
+    scan_mempool(&rpc, mnemonic, _network, lookahead, None, passphrase).await
 }
 
 pub async fn scan_mempool<R: RpcConnection>(
     rpc: &Rpc<R>,
     mnemonic: &str,
-    _network_str: &str,
+    _network: Network,
     lookahead: Lookahead,
     accounts_to_scan: Option<&[u32]>,
     passphrase: &str,
@@ -2955,15 +2942,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_network_case_insensitive() {
-        // Already tested in other tests, but let's be explicit
-        assert!(matches!(parse_network("MAINNET"), Ok(Network::Mainnet)));
-        assert!(matches!(parse_network("mainnet"), Ok(Network::Mainnet)));
-        assert!(matches!(parse_network("Mainnet"), Ok(Network::Mainnet)));
-        assert!(matches!(parse_network("MaInNeT"), Ok(Network::Mainnet)));
-    }
-
-    #[test]
     fn test_spend_key_from_seed_different_seeds() {
         let seed1 = Seed::from_string(Zeroizing::new(TEST_VECTOR_1_SEED.to_string())).unwrap();
         let seed2 = Seed::from_string(Zeroizing::new(TEST_VECTOR_2_SEED.to_string())).unwrap();
@@ -3133,7 +3111,7 @@ mod tests {
     fn test_wallet_scan_config_clone() {
         let config = WalletScanConfig {
             mnemonic: TEST_VECTOR_1_SEED.to_string(),
-            network: "mainnet".to_string(),
+            network: Network::Mainnet,
             lookahead: DEFAULT_LOOKAHEAD,
             passphrase: String::new(),
         };

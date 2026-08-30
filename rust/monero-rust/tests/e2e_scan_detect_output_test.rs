@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use monero_rust::monero_rpc::{Rpc, RpcConnection, RpcError};
 use monero_rust::scanner::{derive_address, scan_block_for_outputs, BlockScanResult};
 use monero_rust::seed_compat::Seed;
+use monero_rust::Network;
 use serde_json::Value;
 
 const TEST_SEED: &str = "honked bagpipe alpine juicy faked afoot jostle claim cowl tunnel orphans negative pheasants feast jetting quote frown teeming cycling tribal womanly hills cottage daytime daytime";
@@ -88,7 +89,7 @@ async fn test_step2_scan_and_detect_output() {
     let rpc = Rpc::new_with_connection(mock_rpc);
 
     let scan_result: BlockScanResult =
-        scan_block_for_outputs(&rpc, TEST_BLOCK_HEIGHT, TEST_SEED, "stagenet", "")
+        scan_block_for_outputs(&rpc, TEST_BLOCK_HEIGHT, TEST_SEED, Network::Stagenet, "")
             .await
             .expect("Block scan should succeed");
 
@@ -119,14 +120,14 @@ async fn test_step3_key_image_determinism() {
     let mock_rpc = MockRpcConnection::new();
     let rpc = Rpc::new_with_connection(mock_rpc);
 
-    let scan1 = scan_block_for_outputs(&rpc, TEST_BLOCK_HEIGHT, TEST_SEED, "stagenet", "")
+    let scan1 = scan_block_for_outputs(&rpc, TEST_BLOCK_HEIGHT, TEST_SEED, Network::Stagenet, "")
         .await
         .expect("First scan should succeed");
 
     let mock_rpc2 = MockRpcConnection::new();
     let rpc2 = Rpc::new_with_connection(mock_rpc2);
 
-    let scan2 = scan_block_for_outputs(&rpc2, TEST_BLOCK_HEIGHT, TEST_SEED, "stagenet", "")
+    let scan2 = scan_block_for_outputs(&rpc2, TEST_BLOCK_HEIGHT, TEST_SEED, Network::Stagenet, "")
         .await
         .expect("Second scan should succeed");
 
@@ -144,7 +145,7 @@ async fn test_step4_scan_block_no_outputs() {
     let mock_rpc = MockRpcConnection::new();
     let rpc = Rpc::new_with_connection(mock_rpc);
 
-    let result = scan_block_for_outputs(&rpc, 999999, TEST_SEED, "stagenet", "").await;
+    let result = scan_block_for_outputs(&rpc, 999999, TEST_SEED, Network::Stagenet, "").await;
 
     // Mock doesn't have vectors for this block
     assert!(result.is_err());
@@ -159,7 +160,7 @@ async fn test_step5_invalid_seed_handling() {
         &rpc,
         TEST_BLOCK_HEIGHT,
         "invalid short seed",
-        "stagenet",
+        Network::Stagenet,
         "",
     )
     .await;
@@ -170,24 +171,6 @@ async fn test_step5_invalid_seed_handling() {
     assert!(
         error.contains("mnemonic") || error.contains("seed"),
         "Error should mention mnemonic/seed: {}",
-        error
-    );
-}
-
-#[tokio::test]
-async fn test_step6_network_validation() {
-    let mock_rpc = MockRpcConnection::new();
-    let rpc = Rpc::new_with_connection(mock_rpc);
-
-    let result =
-        scan_block_for_outputs(&rpc, TEST_BLOCK_HEIGHT, TEST_SEED, "invalid_network", "").await;
-
-    assert!(result.is_err());
-
-    let error = result.unwrap_err();
-    assert!(
-        error.contains("network") || error.contains("Network"),
-        "Error should mention network: {}",
         error
     );
 }

@@ -7,6 +7,7 @@ use monero_rust::monero_rpc::{BlockCompleteEntry, GetBlocksFastResponse};
 use monero_rust::scanner::{
     process_batch_multi_wallet_response, process_batch_response, Lookahead, WalletScanConfig,
 };
+use monero_rust::Network;
 
 const STAGENET_SEED: &str = "vocal either anvil films dolphin zeal bacon cuisine quote syndrome rejoices envy okay pancakes tulips lair greater petals organs enmity dedicated oust thwart tomorrow tomorrow";
 
@@ -85,19 +86,18 @@ fn lookahead() -> Lookahead {
 #[tokio::test]
 async fn test_invalid_seed_rejected() {
     let resp = make_response(100, 1, 101);
-    let err = process_batch_response(resp, 100, "bad seed", "stagenet", lookahead(), None, "")
-        .await
-        .unwrap_err();
+    let err = process_batch_response(
+        resp,
+        100,
+        "bad seed",
+        Network::Stagenet,
+        lookahead(),
+        None,
+        "",
+    )
+    .await
+    .unwrap_err();
     assert!(err.contains("mnemonic") || err.contains("seed"), "{err}");
-}
-
-#[tokio::test]
-async fn test_invalid_network_rejected() {
-    let resp = make_response(100, 1, 101);
-    let err = process_batch_response(resp, 100, STAGENET_SEED, "badnet", lookahead(), None, "")
-        .await
-        .unwrap_err();
-    assert!(err.contains("network") || err.contains("Network"), "{err}");
 }
 
 #[tokio::test]
@@ -115,13 +115,13 @@ async fn test_one_bad_seed_fails_multi_wallet_batch() {
     let configs = vec![
         WalletScanConfig {
             mnemonic: STAGENET_SEED.to_string(),
-            network: "stagenet".to_string(),
+            network: Network::Stagenet,
             lookahead: lookahead(),
             passphrase: String::new(),
         },
         WalletScanConfig {
             mnemonic: "bad".to_string(),
-            network: "stagenet".to_string(),
+            network: Network::Stagenet,
             lookahead: lookahead(),
             passphrase: String::new(),
         },
@@ -138,13 +138,19 @@ async fn test_one_bad_seed_fails_multi_wallet_batch() {
 #[tokio::test]
 async fn test_empty_batch_returns_empty() {
     let resp = make_response(100, 0, 100);
-    assert!(
-        process_batch_response(resp, 100, STAGENET_SEED, "stagenet", lookahead(), None, "")
-            .await
-            .unwrap()
-            .0
-            .is_empty()
-    );
+    assert!(process_batch_response(
+        resp,
+        100,
+        STAGENET_SEED,
+        Network::Stagenet,
+        lookahead(),
+        None,
+        ""
+    )
+    .await
+    .unwrap()
+    .0
+    .is_empty());
 }
 
 #[tokio::test]
@@ -166,9 +172,17 @@ async fn test_height_mismatch_detected() {
         top_hash: String::new(),
         daemon_time: 0,
     };
-    let err = process_batch_response(resp, 100, STAGENET_SEED, "stagenet", lookahead(), None, "")
-        .await
-        .unwrap_err();
+    let err = process_batch_response(
+        resp,
+        100,
+        STAGENET_SEED,
+        Network::Stagenet,
+        lookahead(),
+        None,
+        "",
+    )
+    .await
+    .unwrap_err();
     assert!(err.contains("mismatch"), "{err}");
 }
 
@@ -181,13 +195,13 @@ async fn test_multi_wallet_produces_entry_per_wallet() {
     let configs = vec![
         WalletScanConfig {
             mnemonic: STAGENET_SEED.to_string(),
-            network: "stagenet".to_string(),
+            network: Network::Stagenet,
             lookahead: lookahead(),
             passphrase: String::new(),
         },
         WalletScanConfig {
             mnemonic: other_seed.to_string(),
-            network: "stagenet".to_string(),
+            network: Network::Stagenet,
             lookahead: lookahead(),
             passphrase: String::new(),
         },
@@ -208,27 +222,39 @@ async fn test_multi_wallet_produces_entry_per_wallet() {
 
 #[tokio::test]
 async fn rejects_a_batch_that_starts_later_than_the_one_requested() {
-    // Internally consistent throughout: the blocks really are at 5000-5002 and say so. The
-    // only lie is that 100 was asked for. Left unchecked, the wallet records 5000-5002 as
-    // scanned and never looks at 100-4999 again - where its outputs were.
+    // The blocks consistently declare heights 5000-5002, but the request began
+    // at 100. Accepting this batch would skip heights 100-4999.
     let resp = make_response(5_000, 3, 10_000);
-    let err = process_batch_response(resp, 100, STAGENET_SEED, "stagenet", lookahead(), None, "")
-        .await
-        .expect_err("a batch starting past the requested height must be rejected");
+    let err = process_batch_response(
+        resp,
+        100,
+        STAGENET_SEED,
+        Network::Stagenet,
+        lookahead(),
+        None,
+        "",
+    )
+    .await
+    .expect_err("a batch starting past the requested height must be rejected");
     assert!(err.contains("skip forward"), "{err}");
 }
 
 #[tokio::test]
 async fn accepts_a_batch_rewound_to_an_earlier_fork_point() {
-    // The negative control, and the reason the guard is one-sided. A daemon that finds our
-    // known hash off-chain answers from the split point, which is *below* what we asked for;
-    // `scan_blocks_batch_with_history` exists to use that. Rejecting it would break reorg
-    // recovery, which is the opposite of the bug.
+    // Allow an earlier start when the daemon reports a fork point.
+    // History-aware scanning needs this for reorg recovery.
     let resp = make_response(90, 3, 10_000);
-    let (results, _) =
-        process_batch_response(resp, 100, STAGENET_SEED, "stagenet", lookahead(), None, "")
-            .await
-            .expect("a rewound batch is how a fork point is reported and must be accepted");
+    let (results, _) = process_batch_response(
+        resp,
+        100,
+        STAGENET_SEED,
+        Network::Stagenet,
+        lookahead(),
+        None,
+        "",
+    )
+    .await
+    .expect("a rewound batch is how a fork point is reported and must be accepted");
     assert_eq!(results.len(), 3);
     assert_eq!(results[0].block_height, 90);
 }
@@ -246,9 +272,17 @@ async fn rejects_a_block_that_does_not_follow_the_one_before_it() {
         block_weight: 0,
     };
 
-    let err = process_batch_response(resp, 100, STAGENET_SEED, "stagenet", lookahead(), None, "")
-        .await
-        .expect_err("a block that does not follow its predecessor must be rejected");
+    let err = process_batch_response(
+        resp,
+        100,
+        STAGENET_SEED,
+        Network::Stagenet,
+        lookahead(),
+        None,
+        "",
+    )
+    .await
+    .expect_err("a block that does not follow its predecessor must be rejected");
     assert!(err.contains("does not follow"), "{err}");
 }
 
@@ -259,9 +293,17 @@ async fn rejects_transaction_blobs_the_block_does_not_list() {
     let mut resp = make_response(100, 1, 10_000);
     resp.blocks[0].txs = vec![vec![0u8; 32]];
 
-    let err = process_batch_response(resp, 100, STAGENET_SEED, "stagenet", lookahead(), None, "")
-        .await
-        .expect_err("transaction blobs the block does not list must be rejected");
+    let err = process_batch_response(
+        resp,
+        100,
+        STAGENET_SEED,
+        Network::Stagenet,
+        lookahead(),
+        None,
+        "",
+    )
+    .await
+    .expect_err("transaction blobs the block does not list must be rejected");
     assert!(err.contains("blobs were sent with it"), "{err}");
 }
 
@@ -271,7 +313,7 @@ async fn multi_wallet_batches_are_bound_to_the_requested_range_too() {
     let resp = make_response(5_000, 2, 10_000);
     let configs = vec![WalletScanConfig {
         mnemonic: STAGENET_SEED.to_string(),
-        network: "stagenet".to_string(),
+        network: Network::Stagenet,
         lookahead: lookahead(),
         passphrase: String::new(),
     }];
@@ -293,7 +335,7 @@ async fn multi_wallet_batches_reject_an_unlinked_block_too() {
     };
     let configs = vec![WalletScanConfig {
         mnemonic: STAGENET_SEED.to_string(),
-        network: "stagenet".to_string(),
+        network: Network::Stagenet,
         lookahead: lookahead(),
         passphrase: String::new(),
     }];
@@ -373,9 +415,17 @@ async fn batch_scan_rejects_a_transaction_blob_the_block_does_not_list() {
     let block = make_block_listing(100, [0u8; 32], vec![listed.hash()]);
     let resp = response_with(block, vec![substituted.serialize()], 100);
 
-    let err = process_batch_response(resp, 100, STAGENET_SEED, "stagenet", lookahead(), None, "")
-        .await
-        .expect_err("a blob the block does not list must be refused");
+    let err = process_batch_response(
+        resp,
+        100,
+        STAGENET_SEED,
+        Network::Stagenet,
+        lookahead(),
+        None,
+        "",
+    )
+    .await
+    .expect_err("a blob the block does not list must be refused");
     assert!(
         err.contains("blob sent in its place"),
         "unexpected error: {err}"
@@ -389,10 +439,17 @@ async fn batch_scan_accepts_the_transaction_blob_the_block_lists() {
     let block = make_block_listing(100, [0u8; 32], vec![tx.hash()]);
     let resp = response_with(block, vec![tx.serialize()], 100);
 
-    let (results, _scanner) =
-        process_batch_response(resp, 100, STAGENET_SEED, "stagenet", lookahead(), None, "")
-            .await
-            .expect("a block whose blob matches what it lists must scan");
+    let (results, _scanner) = process_batch_response(
+        resp,
+        100,
+        STAGENET_SEED,
+        Network::Stagenet,
+        lookahead(),
+        None,
+        "",
+    )
+    .await
+    .expect("a block whose blob matches what it lists must scan");
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].tx_count, 2, "the miner tx and the listed one");
 }
@@ -408,7 +465,7 @@ async fn multi_wallet_batch_scan_rejects_a_transaction_blob_the_block_does_not_l
 
     let configs = vec![WalletScanConfig {
         mnemonic: STAGENET_SEED.to_string(),
-        network: "stagenet".to_string(),
+        network: Network::Stagenet,
         lookahead: lookahead(),
         passphrase: String::new(),
     }];
@@ -484,7 +541,7 @@ fn history_node(response: GetBlocksFastResponse) -> monero_rust::monero_rpc::Rpc
 fn history_configs() -> Vec<WalletScanConfig> {
     vec![WalletScanConfig {
         mnemonic: STAGENET_SEED.into(),
-        network: "stagenet".into(),
+        network: Network::Stagenet,
         lookahead: lookahead(),
         passphrase: String::new(),
     }]
@@ -504,7 +561,7 @@ async fn history_zero_negotiates_a_known_common_block_on_all_processing_routes()
         0,
         &history,
         STAGENET_SEED,
-        "stagenet",
+        Network::Stagenet,
         lookahead(),
         false,
         "",
@@ -521,7 +578,7 @@ async fn history_zero_negotiates_a_known_common_block_on_all_processing_routes()
     let (single, cache) = process_fetched_batch_cached(
         fetched,
         STAGENET_SEED,
-        "stagenet",
+        Network::Stagenet,
         lookahead(),
         None,
         "",
@@ -533,7 +590,7 @@ async fn history_zero_negotiates_a_known_common_block_on_all_processing_routes()
     let (single, _) = process_fetched_batch_cached(
         fetched,
         STAGENET_SEED,
-        "stagenet",
+        Network::Stagenet,
         lookahead(),
         Some(cache),
         "",
@@ -611,7 +668,7 @@ async fn history_empty_and_ordinary_zero_remain_literal_genesis_requests() {
         make_response(100, 3, 103),
         0,
         STAGENET_SEED,
-        "stagenet",
+        Network::Stagenet,
         lookahead(),
         None,
         "",
@@ -633,7 +690,7 @@ async fn history_anchor_does_not_bypass_parent_linkage() {
         0,
         &history,
         STAGENET_SEED,
-        "stagenet",
+        Network::Stagenet,
         lookahead(),
         false,
         "",
