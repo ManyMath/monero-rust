@@ -15,7 +15,7 @@ pub(crate) use monero_wallet as wallet;
 /// monero-oxide keeps its own `H` private, so we recover it from the public
 /// `CompressedPoint::H` constant.
 pub(crate) static H: LazyLock<EdwardsPoint> = LazyLock::new(|| {
-  CompressedEdwardsY(monero_oxide::ed25519::CompressedPoint::H.to_bytes())
-    .decompress()
-    .expect("couldn't decompress `CompressedPoint::H`")
+    CompressedEdwardsY(monero_oxide::ed25519::CompressedPoint::H.to_bytes())
+        .decompress()
+        .expect("couldn't decompress `CompressedPoint::H`")
 });

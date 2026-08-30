@@ -10,9 +10,7 @@
 use chacha20::ChaCha20Legacy;
 use cipher::{KeyIvInit, StreamCipher};
 use cuprate_cryptonight::cryptonight_hash_v0;
-use curve25519_dalek::{
-    constants::ED25519_BASEPOINT_TABLE, edwards::EdwardsPoint, scalar::Scalar,
-};
+use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, edwards::EdwardsPoint, scalar::Scalar};
 use getrandom::getrandom;
 use sha3::{Digest, Keccak256};
 use zeroize::Zeroizing;
@@ -295,7 +293,14 @@ pub fn export_key_images_v3(
 pub fn import_key_images_v3(
     data: &[u8],
     view_secret_key: &[u8; 32],
-) -> Result<(crate::key_image_import::SignedKeyImageImport, [u8; 32], [u8; 32]), String> {
+) -> Result<
+    (
+        crate::key_image_import::SignedKeyImageImport,
+        [u8; 32],
+        [u8; 32],
+    ),
+    String,
+> {
     // Strip magic bytes
     let payload = crate::epee_compat::strip_magic(KEY_IMAGES_MAGIC, data)?;
 
@@ -457,7 +462,9 @@ fn import_account_keys(
         return Ok((
             view_scalar.to_bytes(),
             spend_point.compress().to_bytes(),
-            (&view_scalar * ED25519_BASEPOINT_TABLE).compress().to_bytes(),
+            (&view_scalar * ED25519_BASEPOINT_TABLE)
+                .compress()
+                .to_bytes(),
         ));
     }
 
@@ -468,8 +475,12 @@ fn import_account_keys(
     let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(view_bytes));
     Ok((
         view_scalar.to_bytes(),
-        (&*spend_scalar * ED25519_BASEPOINT_TABLE).compress().to_bytes(),
-        (&*view_scalar * ED25519_BASEPOINT_TABLE).compress().to_bytes(),
+        (&*spend_scalar * ED25519_BASEPOINT_TABLE)
+            .compress()
+            .to_bytes(),
+        (&*view_scalar * ED25519_BASEPOINT_TABLE)
+            .compress()
+            .to_bytes(),
     ))
 }
 
@@ -874,16 +885,13 @@ mod tests {
             found = true;
             break;
         }
-        assert!(found, "a divisible-by-8 challenge should turn up within 256 nonces");
+        assert!(
+            found,
+            "a divisible-by-8 challenge should turn up within 256 nonces"
+        );
 
         assert!(
-            !verify_key_image_ring_signature(
-                &forged_bytes,
-                &pub_key,
-                &forged,
-                &c_bytes,
-                &r_bytes
-            ),
+            !verify_key_image_ring_signature(&forged_bytes, &pub_key, &forged, &c_bytes, &r_bytes),
             "a key image outside the prime-order subgroup must be rejected"
         );
     }
@@ -916,7 +924,10 @@ mod tests {
     #[test]
     fn ring_sig_verify_rejects_an_identity_key_image_it_would_otherwise_accept() {
         let identity = EdwardsPoint::default();
-        assert!(identity.is_torsion_free(), "the torsion check cannot catch this");
+        assert!(
+            identity.is_torsion_free(),
+            "the torsion check cannot catch this"
+        );
 
         let identity_bytes = identity.compress().to_bytes();
         let hp = hash_to_point(identity);

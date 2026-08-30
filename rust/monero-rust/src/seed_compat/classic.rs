@@ -3,8 +3,8 @@ use std::collections::HashMap;
 
 use lazy_static::lazy_static;
 
+use rand_core::{CryptoRng, RngCore};
 use zeroize::{Zeroize, Zeroizing};
-use rand_core::{RngCore, CryptoRng};
 
 use crc::{Crc, CRC_32_ISO_HDLC};
 
@@ -14,298 +14,337 @@ use crate::seed_compat::{Language, SeedError};
 
 /// Generate a random scalar from 64 bytes of entropy.
 fn random_scalar<R: RngCore + CryptoRng>(rng: &mut R) -> Scalar {
-  let mut r = [0; 64];
-  rng.fill_bytes(&mut r);
-  Scalar::from_bytes_mod_order_wide(&r)
+    let mut r = [0; 64];
+    rng.fill_bytes(&mut r);
+    Scalar::from_bytes_mod_order_wide(&r)
 }
 
 pub(crate) const CLASSIC_SEED_LENGTH: usize = 24;
 pub(crate) const CLASSIC_SEED_LENGTH_WITH_CHECKSUM: usize = 25;
 
 fn trim(word: &str, len: usize) -> Zeroizing<String> {
-  Zeroizing::new(word.chars().take(len).collect())
+    Zeroizing::new(word.chars().take(len).collect())
 }
 
 struct WordList {
-  word_list: Vec<&'static str>,
-  word_map: HashMap<&'static str, usize>,
-  trimmed_word_map: HashMap<String, usize>,
-  unique_prefix_length: usize,
+    word_list: Vec<&'static str>,
+    word_map: HashMap<&'static str, usize>,
+    trimmed_word_map: HashMap<String, usize>,
+    unique_prefix_length: usize,
 }
 
 impl WordList {
-  fn new(word_list: Vec<&'static str>, prefix_length: usize) -> WordList {
-    let mut lang = WordList {
-      word_list,
-      word_map: HashMap::new(),
-      trimmed_word_map: HashMap::new(),
-      unique_prefix_length: prefix_length,
-    };
+    fn new(word_list: Vec<&'static str>, prefix_length: usize) -> WordList {
+        let mut lang = WordList {
+            word_list,
+            word_map: HashMap::new(),
+            trimmed_word_map: HashMap::new(),
+            unique_prefix_length: prefix_length,
+        };
 
-    for (i, word) in lang.word_list.iter().enumerate() {
-      lang.word_map.insert(word, i);
-      lang.trimmed_word_map.insert(trim(word, lang.unique_prefix_length).deref().clone(), i);
+        for (i, word) in lang.word_list.iter().enumerate() {
+            lang.word_map.insert(word, i);
+            lang.trimmed_word_map
+                .insert(trim(word, lang.unique_prefix_length).deref().clone(), i);
+        }
+
+        lang
     }
-
-    lang
-  }
 }
 
 lazy_static! {
-  static ref LANGUAGES: HashMap<Language, WordList> = HashMap::from([
-    (Language::Chinese, WordList::new(include!("./classic/zh.rs"), 1)),
-    (Language::English, WordList::new(include!("./classic/en.rs"), 3)),
-    (Language::Dutch, WordList::new(include!("./classic/nl.rs"), 4)),
-    (Language::French, WordList::new(include!("./classic/fr.rs"), 4)),
-    (Language::Spanish, WordList::new(include!("./classic/es.rs"), 4)),
-    (Language::German, WordList::new(include!("./classic/de.rs"), 4)),
-    (Language::Italian, WordList::new(include!("./classic/it.rs"), 4)),
-    (Language::Portuguese, WordList::new(include!("./classic/pt.rs"), 4)),
-    (Language::Japanese, WordList::new(include!("./classic/ja.rs"), 3)),
-    (Language::Russian, WordList::new(include!("./classic/ru.rs"), 4)),
-    (Language::Esperanto, WordList::new(include!("./classic/eo.rs"), 4)),
-    (Language::Lojban, WordList::new(include!("./classic/jbo.rs"), 4)),
-    (Language::EnglishOld, WordList::new(include!("./classic/ang.rs"), 4)),
-  ]);
+    static ref LANGUAGES: HashMap<Language, WordList> = HashMap::from([
+        (
+            Language::Chinese,
+            WordList::new(include!("./classic/zh.rs"), 1)
+        ),
+        (
+            Language::English,
+            WordList::new(include!("./classic/en.rs"), 3)
+        ),
+        (
+            Language::Dutch,
+            WordList::new(include!("./classic/nl.rs"), 4)
+        ),
+        (
+            Language::French,
+            WordList::new(include!("./classic/fr.rs"), 4)
+        ),
+        (
+            Language::Spanish,
+            WordList::new(include!("./classic/es.rs"), 4)
+        ),
+        (
+            Language::German,
+            WordList::new(include!("./classic/de.rs"), 4)
+        ),
+        (
+            Language::Italian,
+            WordList::new(include!("./classic/it.rs"), 4)
+        ),
+        (
+            Language::Portuguese,
+            WordList::new(include!("./classic/pt.rs"), 4)
+        ),
+        (
+            Language::Japanese,
+            WordList::new(include!("./classic/ja.rs"), 3)
+        ),
+        (
+            Language::Russian,
+            WordList::new(include!("./classic/ru.rs"), 4)
+        ),
+        (
+            Language::Esperanto,
+            WordList::new(include!("./classic/eo.rs"), 4)
+        ),
+        (
+            Language::Lojban,
+            WordList::new(include!("./classic/jbo.rs"), 4)
+        ),
+        (
+            Language::EnglishOld,
+            WordList::new(include!("./classic/ang.rs"), 4)
+        ),
+    ]);
 }
 
-/// The order languages are tried in when detecting a seed's language.
+/// Language detection order from Monero's `find_seed_language`
+/// (`src/mnemonics/electrum-words.cpp`).
 ///
-/// This mirrors the `language_instances` list in monero's `find_seed_language`
-/// (src/mnemonics/electrum-words.cpp). It has to be a fixed order: prefix sets overlap
-/// heavily between languages, so more than one wordlist routinely matches the same seed,
-/// and iterating a HashMap would resolve that differently from one process to the next.
+/// Word prefixes overlap across languages. A fixed order gives ambiguous seeds
+/// the same interpretation on every run and matches Monero.
 static LANGUAGE_ORDER: [Language; 13] = [
-  Language::Chinese,
-  Language::English,
-  Language::Dutch,
-  Language::French,
-  Language::Spanish,
-  Language::German,
-  Language::Italian,
-  Language::Portuguese,
-  Language::Japanese,
-  Language::Russian,
-  Language::Esperanto,
-  Language::Lojban,
-  Language::EnglishOld,
+    Language::Chinese,
+    Language::English,
+    Language::Dutch,
+    Language::French,
+    Language::Spanish,
+    Language::German,
+    Language::Italian,
+    Language::Portuguese,
+    Language::Japanese,
+    Language::Russian,
+    Language::Esperanto,
+    Language::Lojban,
+    Language::EnglishOld,
 ];
 
 #[cfg(test)]
 pub(crate) fn trim_by_lang(word: &str, lang: Language) -> String {
-  if lang != Language::EnglishOld {
-    word.chars().take(LANGUAGES[&lang].unique_prefix_length).collect()
-  } else {
-    word.to_string()
-  }
+    if lang != Language::EnglishOld {
+        word.chars()
+            .take(LANGUAGES[&lang].unique_prefix_length)
+            .collect()
+    } else {
+        word.to_string()
+    }
 }
 
 fn checksum_index(words: &[Zeroizing<String>], lang: &WordList) -> usize {
-  let mut trimmed_words = Zeroizing::new(String::new());
-  for w in words {
-    *trimmed_words += &trim(w, lang.unique_prefix_length);
-  }
+    let mut trimmed_words = Zeroizing::new(String::new());
+    for w in words {
+        *trimmed_words += &trim(w, lang.unique_prefix_length);
+    }
 
-  let crc = Crc::<u32>::new(&CRC_32_ISO_HDLC);
-  let mut digest = crc.digest();
-  digest.update(trimmed_words.as_bytes());
+    let crc = Crc::<u32>::new(&CRC_32_ISO_HDLC);
+    let mut digest = crc.digest();
+    digest.update(trimmed_words.as_bytes());
 
-  usize::try_from(digest.finalize()).unwrap() % words.len()
+    usize::try_from(digest.finalize()).unwrap() % words.len()
 }
 
 // Convert a private key to a seed
 fn key_to_seed(lang: Language, key: Zeroizing<Scalar>) -> ClassicSeed {
-  let bytes = Zeroizing::new(key.to_bytes());
+    let bytes = Zeroizing::new(key.to_bytes());
 
-  // get the language words
-  let words = &LANGUAGES[&lang].word_list;
-  let list_len = u64::try_from(words.len()).unwrap();
+    // get the language words
+    let words = &LANGUAGES[&lang].word_list;
+    let list_len = u64::try_from(words.len()).unwrap();
 
-  // To store the found words & add the checksum word later.
-  let mut seed = Vec::with_capacity(25);
+    // To store the found words & add the checksum word later.
+    let mut seed = Vec::with_capacity(25);
 
-  // convert to words
-  // 4 bytes -> 3 words. 8 digits base 16 -> 3 digits base 1626
-  let mut segment = [0; 4];
-  let mut indices = [0; 4];
-  for i in 0 .. 8 {
-    // convert first 4 byte to u32 & get the word indices
-    let start = i * 4;
-    // convert 4 byte to u32
-    segment.copy_from_slice(&bytes[start .. (start + 4)]);
-    // Actually convert to a u64 so we can add without overflowing
-    indices[0] = u64::from(u32::from_le_bytes(segment));
-    indices[1] = indices[0];
-    indices[0] /= list_len;
-    indices[2] = indices[0] + indices[1];
-    indices[0] /= list_len;
-    indices[3] = indices[0] + indices[2];
+    // convert to words
+    // 4 bytes -> 3 words. 8 digits base 16 -> 3 digits base 1626
+    let mut segment = [0; 4];
+    let mut indices = [0; 4];
+    for i in 0..8 {
+        // convert first 4 byte to u32 & get the word indices
+        let start = i * 4;
+        // convert 4 byte to u32
+        segment.copy_from_slice(&bytes[start..(start + 4)]);
+        // Actually convert to a u64 so we can add without overflowing
+        indices[0] = u64::from(u32::from_le_bytes(segment));
+        indices[1] = indices[0];
+        indices[0] /= list_len;
+        indices[2] = indices[0] + indices[1];
+        indices[0] /= list_len;
+        indices[3] = indices[0] + indices[2];
 
-    // append words to seed
-    for i in indices.iter().skip(1) {
-      let word = usize::try_from(i % list_len).unwrap();
-      seed.push(Zeroizing::new(words[word].to_string()));
+        // append words to seed
+        for i in indices.iter().skip(1) {
+            let word = usize::try_from(i % list_len).unwrap();
+            seed.push(Zeroizing::new(words[word].to_string()));
+        }
     }
-  }
-  segment.zeroize();
-  indices.zeroize();
+    segment.zeroize();
+    indices.zeroize();
 
-  // create a checksum word for all languages except old english
-  if lang != Language::EnglishOld {
-    let checksum = seed[checksum_index(&seed, &LANGUAGES[&lang])].clone();
-    seed.push(checksum);
-  }
-
-  let mut res = Zeroizing::new(String::new());
-  for (i, word) in seed.iter().enumerate() {
-    if i != 0 {
-      *res += " ";
+    // create a checksum word for all languages except old english
+    if lang != Language::EnglishOld {
+        let checksum = seed[checksum_index(&seed, &LANGUAGES[&lang])].clone();
+        seed.push(checksum);
     }
-    *res += word;
-  }
-  ClassicSeed(res)
+
+    let mut res = Zeroizing::new(String::new());
+    for (i, word) in seed.iter().enumerate() {
+        if i != 0 {
+            *res += " ";
+        }
+        *res += word;
+    }
+    ClassicSeed(res)
 }
 
 // Convert a seed to bytes
 pub(crate) fn seed_to_bytes(words: &str) -> Result<(Language, Zeroizing<[u8; 32]>), SeedError> {
-  // get seed words
-  let words = words.split_whitespace().map(|w| Zeroizing::new(w.to_string())).collect::<Vec<_>>();
-  if (words.len() != CLASSIC_SEED_LENGTH) && (words.len() != CLASSIC_SEED_LENGTH_WITH_CHECKSUM) {
-    // Seed::from_string filters the length before reaching here, so this is an internal
-    // invariant - but it is one a parser should report rather than abort on.
-    Err(SeedError::InvalidSeedLength)?;
-  }
-
-  // find the language
-  let (matched_indices, lang_name, lang) = (|| {
-    let has_checksum = words.len() == CLASSIC_SEED_LENGTH_WITH_CHECKSUM;
-    let mut matched_indices = Zeroizing::new(vec![]);
-    // Set when a language matched every word but failed the checksum. monero keeps this to
-    // tell "mistyped seed in a known language" apart from "not a seed we recognize".
-    let mut checksum_mismatch = false;
-
-    // Iterate through all the languages
-    'language: for lang_name in &LANGUAGE_ORDER {
-      let lang = &LANGUAGES[lang_name];
-
-      matched_indices.zeroize();
-      matched_indices.clear();
-
-      // Iterate through all the words and see if they're all present
-      for word in &words {
-        let trimmed = trim(word, lang.unique_prefix_length);
-        let word = if has_checksum { &trimmed } else { word };
-
-        if let Some(index) = if has_checksum {
-          lang.trimmed_word_map.get(word.deref())
-        } else {
-          lang.word_map.get(&word.as_str())
-        } {
-          matched_indices.push(*index);
-        } else {
-          continue 'language;
-        }
-      }
-
-      if has_checksum {
-        // exclude the last word when calculating a checksum.
-        let last_word = words.last().unwrap().clone();
-        let checksum = words[checksum_index(&words[.. words.len() - 1], lang)].clone();
-
-        // check the trimmed checksum and trimmed last word line up
-        if trim(&checksum, lang.unique_prefix_length) != trim(&last_word, lang.unique_prefix_length)
-        {
-          // Every word being present in this wordlist is weak evidence, since short
-          // prefixes collide across languages. A failed checksum means we almost certainly
-          // picked the wrong language, not that the seed is bad, so keep looking.
-          checksum_mismatch = true;
-          continue 'language;
-        }
-      }
-
-      return Ok((matched_indices, lang_name, lang));
+    // get seed words
+    let words = words
+        .split_whitespace()
+        .map(|w| Zeroizing::new(w.to_string()))
+        .collect::<Vec<_>>();
+    if (words.len() != CLASSIC_SEED_LENGTH) && (words.len() != CLASSIC_SEED_LENGTH_WITH_CHECKSUM) {
+        // `Seed::from_string` checks this length too; keep this parser fallible.
+        Err(SeedError::InvalidSeedLength)?;
     }
 
-    // No language matched outright. If one matched on words alone, the seed is a seed with
-    // a broken checksum rather than something we don't recognize at all.
-    if checksum_mismatch {
-      Err(SeedError::InvalidChecksum)?;
+    // find the language
+    let (matched_indices, lang_name, lang) = (|| {
+        let has_checksum = words.len() == CLASSIC_SEED_LENGTH_WITH_CHECKSUM;
+        let mut matched_indices = Zeroizing::new(vec![]);
+        // Remember a wordlist match so we can distinguish a bad checksum from
+        // an unrecognized seed.
+        let mut checksum_mismatch = false;
+
+        // Iterate through all the languages
+        'language: for lang_name in &LANGUAGE_ORDER {
+            let lang = &LANGUAGES[lang_name];
+
+            matched_indices.zeroize();
+            matched_indices.clear();
+
+            // Iterate through all the words and see if they're all present
+            for word in &words {
+                let trimmed = trim(word, lang.unique_prefix_length);
+                let word = if has_checksum { &trimmed } else { word };
+
+                if let Some(index) = if has_checksum {
+                    lang.trimmed_word_map.get(word.deref())
+                } else {
+                    lang.word_map.get(&word.as_str())
+                } {
+                    matched_indices.push(*index);
+                } else {
+                    continue 'language;
+                }
+            }
+
+            if has_checksum {
+                // exclude the last word when calculating a checksum.
+                let last_word = words.last().unwrap().clone();
+                let checksum = words[checksum_index(&words[..words.len() - 1], lang)].clone();
+
+                // check the trimmed checksum and trimmed last word line up
+                if trim(&checksum, lang.unique_prefix_length)
+                    != trim(&last_word, lang.unique_prefix_length)
+                {
+                    // Matching prefixes may belong to another language. Keep searching
+                    // until the checksum matches too.
+                    checksum_mismatch = true;
+                    continue 'language;
+                }
+            }
+
+            return Ok((matched_indices, lang_name, lang));
+        }
+
+        // Report a checksum error if the words matched a known language.
+        if checksum_mismatch {
+            Err(SeedError::InvalidChecksum)?;
+        }
+        Err(SeedError::UnknownLanguage)?
+    })()?;
+
+    // convert to bytes
+    let mut res = Zeroizing::new([0; 32]);
+    // Decode into u64 so overflow checks behave the same on native and wasm32.
+    // Monero uses wrapping uint32_t arithmetic and detects overflow with
+    // `val % word_list_length == w1`; we check the u32 range explicitly below.
+    let mut indices = Zeroizing::new([0u64; 4]);
+    let list_len = lang.word_list.len() as u64;
+    for i in 0..8 {
+        // read 3 indices at a time
+        let i3 = i * 3;
+        indices[1] = matched_indices[i3] as u64;
+        indices[2] = matched_indices[i3 + 1] as u64;
+        indices[3] = matched_indices[i3 + 2] as u64;
+
+        let inner = |i: usize| {
+            let mut base = (list_len - indices[i] + indices[i + 1]) % list_len;
+            // Shift the index over
+            for _ in 0..i {
+                base *= list_len;
+            }
+            base
+        };
+        // set the last index
+        indices[0] = indices[1] + inner(1) + inner(2);
+
+        // Reject values outside u32, matching Monero's overflow check.
+        let word = u32::try_from(indices[0]).map_err(|_| SeedError::InvalidSeed)?;
+
+        let pos = i * 4;
+        let mut bytes = word.to_le_bytes();
+        res[pos..(pos + 4)].copy_from_slice(&bytes);
+        bytes.zeroize();
     }
-    Err(SeedError::UnknownLanguage)?
-  })()?;
 
-  // convert to bytes
-  let mut res = Zeroizing::new([0; 32]);
-  // u64, not usize. monero decodes each triple into a `uint32_t`, so the arithmetic wraps,
-  // and its `val % word_list_length == w1` test is what detects the wrap. At usize width
-  // that test cannot fail - `w1 + a*L + b*L^2` always reduces to `w1` - and on wasm32 the
-  // sum would wrap somewhere else again. A fixed 64-bit accumulator makes the range check
-  // below mean the same thing on every target.
-  let mut indices = Zeroizing::new([0u64; 4]);
-  let list_len = lang.word_list.len() as u64;
-  for i in 0 .. 8 {
-    // read 3 indices at a time
-    let i3 = i * 3;
-    indices[1] = matched_indices[i3] as u64;
-    indices[2] = matched_indices[i3 + 1] as u64;
-    indices[3] = matched_indices[i3 + 2] as u64;
-
-    let inner = |i: usize| {
-      let mut base = (list_len - indices[i] + indices[i + 1]) % list_len;
-      // Shift the index over
-      for _ in 0 .. i {
-        base *= list_len;
-      }
-      base
-    };
-    // set the last index
-    indices[0] = indices[1] + inner(1) + inner(2);
-
-    // The values that do not fit a u32 are exactly the ones monero's wrapped check
-    // rejects, so this stands in for it. It used to reach `u32::try_from(..).unwrap()`
-    // instead, which panicked the parser on a crafted seed.
-    let word = u32::try_from(indices[0]).map_err(|_| SeedError::InvalidSeed)?;
-
-    let pos = i * 4;
-    let mut bytes = word.to_le_bytes();
-    res[pos .. (pos + 4)].copy_from_slice(&bytes);
-    bytes.zeroize();
-  }
-
-  Ok((*lang_name, res))
+    Ok((*lang_name, res))
 }
 
 #[derive(Clone, PartialEq, Eq, Zeroize)]
 pub struct ClassicSeed(Zeroizing<String>);
 impl ClassicSeed {
-  pub(crate) fn new<R: RngCore + CryptoRng>(rng: &mut R, lang: Language) -> ClassicSeed {
-    key_to_seed(lang, Zeroizing::new(random_scalar(rng)))
-  }
+    pub(crate) fn new<R: RngCore + CryptoRng>(rng: &mut R, lang: Language) -> ClassicSeed {
+        key_to_seed(lang, Zeroizing::new(random_scalar(rng)))
+    }
 
-  pub fn from_string(words: Zeroizing<String>) -> Result<ClassicSeed, SeedError> {
-    let (lang, entropy) = seed_to_bytes(&words)?;
+    pub fn from_string(words: Zeroizing<String>) -> Result<ClassicSeed, SeedError> {
+        let (lang, entropy) = seed_to_bytes(&words)?;
 
-    // Make sure this is a valid scalar
-    let Some(mut scalar) = Option::<Scalar>::from(Scalar::from_canonical_bytes(*entropy)) else {
-      Err(SeedError::InvalidSeed)?;
-      unreachable!()
-    };
-    scalar.zeroize();
+        // Make sure this is a valid scalar
+        let Some(mut scalar) = Option::<Scalar>::from(Scalar::from_canonical_bytes(*entropy))
+        else {
+            Err(SeedError::InvalidSeed)?;
+            unreachable!()
+        };
+        scalar.zeroize();
 
-    // Call from_entropy so a trimmed seed becomes a full seed
-    Ok(Self::from_entropy(lang, entropy).unwrap())
-  }
+        // Call from_entropy so a trimmed seed becomes a full seed
+        Ok(Self::from_entropy(lang, entropy).unwrap())
+    }
 
-  pub fn from_entropy(lang: Language, entropy: Zeroizing<[u8; 32]>) -> Option<ClassicSeed> {
-    Option::<Scalar>::from(Scalar::from_canonical_bytes(*entropy))
-      .map(|scalar| key_to_seed(lang, Zeroizing::new(scalar)))
-  }
+    pub fn from_entropy(lang: Language, entropy: Zeroizing<[u8; 32]>) -> Option<ClassicSeed> {
+        Option::<Scalar>::from(Scalar::from_canonical_bytes(*entropy))
+            .map(|scalar| key_to_seed(lang, Zeroizing::new(scalar)))
+    }
 
-  pub(crate) fn to_string(&self) -> Zeroizing<String> {
-    self.0.clone()
-  }
+    pub(crate) fn to_string(&self) -> Zeroizing<String> {
+        self.0.clone()
+    }
 
-  pub(crate) fn entropy(&self) -> Zeroizing<[u8; 32]> {
-    seed_to_bytes(&self.0).unwrap().1
-  }
+    pub(crate) fn entropy(&self) -> Zeroizing<[u8; 32]> {
+        seed_to_bytes(&self.0).unwrap().1
+    }
 }

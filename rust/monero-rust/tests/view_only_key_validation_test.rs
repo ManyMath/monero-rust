@@ -14,7 +14,10 @@ const VIEW_KEY: &str = "0a000000000000000000000000000000000000000000000000000000
 fn torsioned_spend_key() -> String {
     let point = curve25519_dalek::constants::ED25519_BASEPOINT_POINT
         + curve25519_dalek::constants::EIGHT_TORSION[1];
-    assert!(!point.is_torsion_free(), "fixture must actually carry torsion");
+    assert!(
+        !point.is_torsion_free(),
+        "fixture must actually carry torsion"
+    );
     assert!(
         curve25519_dalek::edwards::CompressedEdwardsY(point.compress().to_bytes())
             .decompress()
@@ -31,7 +34,10 @@ fn valid_spend_key() -> String {
 
 #[test]
 fn rejects_torsioned_spend_key() {
-    let bytes: [u8; 32] = hex::decode(torsioned_spend_key()).unwrap().try_into().unwrap();
+    let bytes: [u8; 32] = hex::decode(torsioned_spend_key())
+        .unwrap()
+        .try_into()
+        .unwrap();
     assert!(decompress_public_spend_key(bytes).is_none());
 }
 

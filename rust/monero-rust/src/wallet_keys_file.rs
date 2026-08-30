@@ -194,10 +194,7 @@ fn json_value_end(data: &[u8], i: usize) -> Option<usize> {
         _ => {
             let mut j = i;
             while j < data.len()
-                && !matches!(
-                    data[j],
-                    b',' | b'}' | b']' | b' ' | b'\t' | b'\n' | b'\r'
-                )
+                && !matches!(data[j], b',' | b'}' | b']' | b' ' | b'\t' | b'\n' | b'\r')
             {
                 j += 1;
             }

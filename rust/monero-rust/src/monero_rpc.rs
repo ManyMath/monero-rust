@@ -287,7 +287,8 @@ impl<R: RpcConnection> Rpc<R> {
         route: &str,
         params: Vec<u8>,
     ) -> Result<Response, RpcError> {
-        self.call_tail(route, self.0.post(route, params).await?).await
+        self.call_tail(route, self.0.post(route, params).await?)
+            .await
     }
 
     async fn call_tail<Response: DeserializeOwned + Debug>(
@@ -477,7 +478,10 @@ impl<R: RpcConnection> Rpc<R> {
         }
 
         let header: BlockHeaderByHeightResponse = self
-            .json_rpc_call("get_block_header_by_height", Some(json!({ "height": number })))
+            .json_rpc_call(
+                "get_block_header_by_height",
+                Some(json!({ "height": number })),
+            )
             .await?;
         rpc_hex(&header.block_header.hash)?
             .try_into()
@@ -662,15 +666,13 @@ impl<R: RpcConnection> Rpc<R> {
             .iter()
             .enumerate()
             .map(|(i, out)| {
-                Ok(
-                    Some([rpc_point(&out.key)?, rpc_point(&out.mask)?]).filter(|_| {
-                        match timelocks[i] {
-                            Timelock::None => true,
-                            Timelock::Block(t_height) => t_height <= height,
-                            _ => false,
-                        }
-                    }),
-                )
+                Ok(Some([rpc_point(&out.key)?, rpc_point(&out.mask)?]).filter(
+                    |_| match timelocks[i] {
+                        Timelock::None => true,
+                        Timelock::Block(t_height) => t_height <= height,
+                        _ => false,
+                    },
+                ))
             })
             .collect()
     }
@@ -964,7 +966,10 @@ mod vec_of_bytes {
     impl<'de> serde::de::DeserializeSeed<'de> for ByteBlob {
         type Value = Vec<u8>;
 
-        fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
+        fn deserialize<D: Deserializer<'de>>(
+            self,
+            deserializer: D,
+        ) -> Result<Self::Value, D::Error> {
             struct ByteBlobVisitor;
 
             impl<'de> Visitor<'de> for ByteBlobVisitor {
@@ -1176,9 +1181,6 @@ mod tests {
         // version 2, timelock at the block/time threshold
         let mut data = vec![2];
         crate::wallet_compat::write_varint(&500_000_000u64, &mut data).unwrap();
-        assert_eq!(
-            prefix_timelock(&data).unwrap(),
-            Timelock::Time(500_000_000)
-        );
+        assert_eq!(prefix_timelock(&data).unwrap(), Timelock::Time(500_000_000));
     }
 }

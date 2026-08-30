@@ -12,9 +12,7 @@
 use std::collections::HashSet;
 
 use curve25519_dalek::traits::IsIdentity as _;
-use monero_oxide::{
-    ringct::clsag::Decoys, BLOCK_TIME, COINBASE_LOCK_WINDOW, DEFAULT_LOCK_WINDOW,
-};
+use monero_oxide::{ringct::clsag::Decoys, BLOCK_TIME, COINBASE_LOCK_WINDOW, DEFAULT_LOCK_WINDOW};
 use monero_wallet::ed25519::CompressedPoint;
 
 /// The facts about the output being spent that decoy selection needs.
@@ -119,10 +117,12 @@ async fn select_n<R: RngCore + CryptoRng, C: RpcConnection>(
             let o = (age * per_second) as u64;
             if o < highest_output_exclusive_bound {
                 // Find which block this points to
-                let i = distribution
-                    .partition_point(|s| *s < (highest_output_exclusive_bound - 1 - o));
+                let i =
+                    distribution.partition_point(|s| *s < (highest_output_exclusive_bound - 1 - o));
                 let prev_block = i.checked_sub(1);
-                let prev_outputs = prev_block.map(|prev_block| distribution[prev_block]).unwrap_or(0);
+                let prev_outputs = prev_block
+                    .map(|prev_block| distribution[prev_block])
+                    .unwrap_or(0);
                 let n = distribution[i]
                     .checked_sub(prev_outputs)
                     .ok_or_else(|| "RPC returned non-monotonic distribution".to_string())?;
@@ -162,13 +162,11 @@ async fn select_n<R: RngCore + CryptoRng, C: RpcConnection>(
         for (i, output) in unlocked.into_iter().enumerate() {
             if real_index == Some(i) {
                 let matches = output.map_or(false, |[key, commitment]| {
-                    (key == output_being_spent.key)
-                        && (commitment == output_being_spent.commitment)
+                    (key == output_being_spent.key) && (commitment == output_being_spent.commitment)
                 });
                 if !matches {
                     return Err(
-                        "node presented different view of output we're trying to spend"
-                            .to_string(),
+                        "node presented different view of output we're trying to spend".to_string(),
                     );
                 }
                 continue;
@@ -252,10 +250,8 @@ pub(crate) async fn select_decoys<R: RngCore + CryptoRng, C: RpcConnection>(
         offsets.push(ring[m].0 - ring[m - 1].0);
     }
 
-    let signer_index = u8::try_from(
-        ring.partition_point(|x| x.0 < input.index_on_blockchain),
-    )
-    .map_err(|_| "ring of size <= u8::MAX had an index exceeding u8::MAX".to_string())?;
+    let signer_index = u8::try_from(ring.partition_point(|x| x.0 < input.index_on_blockchain))
+        .map_err(|_| "ring of size <= u8::MAX had an index exceeding u8::MAX".to_string())?;
 
     Decoys::new(
         offsets,

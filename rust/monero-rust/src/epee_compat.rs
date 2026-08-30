@@ -2047,8 +2047,11 @@ mod tests {
         archive_varint(9, &mut archive_body); // total outputs
         archive_varint(u64::MAX, &mut archive_body); // output count, and not one record follows
 
-        let err = parse_output_export(&seal_output_export(&archive_body, &view_secret_key), &view_secret_key)
-            .expect_err("an output export claiming u64::MAX records should be rejected");
+        let err = parse_output_export(
+            &seal_output_export(&archive_body, &view_secret_key),
+            &view_secret_key,
+        )
+        .expect_err("an output export claiming u64::MAX records should be rejected");
         assert!(
             err.contains("Unexpected end of binary archive"),
             "expected the read of record #0 to run off the end, got: {err}"

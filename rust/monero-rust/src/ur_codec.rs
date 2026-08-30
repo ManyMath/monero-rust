@@ -242,11 +242,13 @@ impl UrDecoder {
             });
         }
 
-        // A frame of a different type belongs to a different transfer. Start that one
-        // rather than merging it into this one. (The fountain layer rejects most such
-        // frames on the checksum anyway - but "most" is not a binding, and the type is
-        // what the caller routes on.)
-        if self.ur_type.as_deref().is_some_and(|current| current != ur_type) {
+        // Start a new transfer when the type changes. Fountain checksums do not
+        // cover the type, which callers use to decide how to handle the payload.
+        if self
+            .ur_type
+            .as_deref()
+            .is_some_and(|current| current != ur_type)
+        {
             self.reset();
         }
 

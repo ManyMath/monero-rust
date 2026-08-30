@@ -17,7 +17,10 @@ const RESPONSE: &str = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\
 
 #[test]
 fn reads_nettype_from_a_real_response() {
-    assert_eq!(json_string_field(RESPONSE, "nettype").as_deref(), Some("stagenet"));
+    assert_eq!(
+        json_string_field(RESPONSE, "nettype").as_deref(),
+        Some("stagenet")
+    );
     assert_eq!(json_string_field(RESPONSE, "status").as_deref(), Some("OK"));
 }
 
@@ -26,7 +29,10 @@ fn reads_nettype_from_a_real_response() {
 fn distinguishes_the_chains_the_gate_must_reject() {
     for nettype in ["fakechain", "mainnet", "testnet"] {
         let body = RESPONSE.replace("\"stagenet\"", &format!("\"{}\"", nettype));
-        assert_eq!(json_string_field(&body, "nettype").as_deref(), Some(nettype));
+        assert_eq!(
+            json_string_field(&body, "nettype").as_deref(),
+            Some(nettype)
+        );
     }
 }
 

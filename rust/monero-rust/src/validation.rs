@@ -25,9 +25,7 @@ pub fn validate_node_url(url: &str) -> Result<(), ValidationError> {
         return Err(ValidationError::EmptyNodeUrl);
     }
     if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
-        return Err(ValidationError::InvalidNodeUrlScheme(
-            trimmed.to_string(),
-        ));
+        return Err(ValidationError::InvalidNodeUrlScheme(trimmed.to_string()));
     }
     Ok(())
 }

@@ -226,7 +226,10 @@ mod tests {
         for (password, salt) in [
             ("test_password_123", [0u8; 16]),
             ("", [1u8; 16]),
-            ("a much longer password with spaces and ünïcödé", [0xABu8; 16]),
+            (
+                "a much longer password with spaces and ünïcödé",
+                [0xABu8; 16],
+            ),
         ] {
             let params = argon2::Params::new(65536, 3, 1, Some(32)).unwrap();
             let argon2 = Argon2::new(argon2::Algorithm::Argon2id, Version::V0x13, params);

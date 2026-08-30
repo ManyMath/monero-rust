@@ -362,12 +362,15 @@ mod tests {
         let output_key = &x * ED25519_BASEPOINT_TABLE;
         let hp = hash_to_point(output_key);
         let forged = (x * hp) + torsion;
-        assert!(!forged.is_torsion_free(), "the forged key image must be torsioned");
+        assert!(
+            !forged.is_torsion_free(),
+            "the forged key image must be torsioned"
+        );
 
-        // Grind the nonce until the challenge is divisible by 8, so c*T vanishes.
+        // Try nonces until `8 | c`, making `c*T` the identity.
         let mut signature = [0u8; 64];
         let mut found = false;
-        for nonce in 1u64 .. 256 {
+        for nonce in 1u64..256 {
             let k = Scalar::from(nonce);
             let l_point = &k * ED25519_BASEPOINT_TABLE;
             let r_point = k * hp;
@@ -388,7 +391,10 @@ mod tests {
             found = true;
             break;
         }
-        assert!(found, "a divisible-by-8 challenge should turn up within 256 nonces");
+        assert!(
+            found,
+            "a divisible-by-8 challenge should turn up within 256 nonces"
+        );
 
         assert!(
             !verify_key_image_signature(&output_key, &forged, &signature),

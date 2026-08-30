@@ -1,6 +1,6 @@
+use curve25519_dalek::scalar::Scalar;
 use monero_payment_proofs::OutProof;
 use monero_wallet::address::{MoneroAddress, Network};
-use curve25519_dalek::scalar::Scalar;
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
@@ -54,12 +54,19 @@ pub fn generate_out_proof_v2(
 ) -> Result<OutProofResult, String> {
     let network = parse_network(network_str)?;
     let tx_id_bytes = parse_32(tx_id, "tx_id")?;
-    let r = Zeroizing::new(Scalar::from_bytes_mod_order(parse_32(tx_key_hex, "tx_key")?));
+    let r = Zeroizing::new(Scalar::from_bytes_mod_order(parse_32(
+        tx_key_hex, "tx_key",
+    )?));
 
     let address = MoneroAddress::from_str(network, recipient_address)
         .map_err(|e| format!("Invalid address: {:?}", e))?;
 
-    let proof = OutProof::prove(&mut OsRng, &address, &r, &prefix_data(&tx_id_bytes, message));
+    let proof = OutProof::prove(
+        &mut OsRng,
+        &address,
+        &r,
+        &prefix_data(&tx_id_bytes, message),
+    );
     let signature = proof.to_string();
 
     // Build formatted proof (Feather Wallet style)
@@ -127,10 +134,7 @@ pub fn verify_out_proof_v2(
 
     let proofs = OutProof::read(signature).ok_or("Malformed OutProofV2 signature")?;
     let [proof] = proofs.as_slice() else {
-        return Err(format!(
-            "Expected a single OutProof, got {}",
-            proofs.len()
-        ));
+        return Err(format!("Expected a single OutProof, got {}", proofs.len()));
     };
 
     Ok(proof.verify_signature(&address, &prefix_data(&tx_id_bytes, message), r_point))
@@ -393,11 +397,11 @@ mod tests {
         let data = base58_monero::decode(payload).expect("base58");
         assert_eq!(data.len(), 96, "proof payload must be D || c || s");
 
-        let d = CompressedEdwardsY(data[0 .. 32].try_into().unwrap())
+        let d = CompressedEdwardsY(data[0..32].try_into().unwrap())
             .decompress()
             .expect("D on curve");
-        let c = Scalar::from_bytes_mod_order(data[32 .. 64].try_into().unwrap());
-        let s = Scalar::from_bytes_mod_order(data[64 .. 96].try_into().unwrap());
+        let c = Scalar::from_bytes_mod_order(data[32..64].try_into().unwrap());
+        let s = Scalar::from_bytes_mod_order(data[64..96].try_into().unwrap());
         (d, c, s)
     }
 

@@ -84,10 +84,7 @@ pub(crate) fn read_varint<R: Read>(r: &mut R) -> io::Result<u64> {
     while {
         let b = read_byte(r)?;
         if (bits != 0) && (b == 0) {
-            Err(io::Error::new(
-                io::ErrorKind::Other,
-                "non-canonical varint",
-            ))?;
+            Err(io::Error::new(io::ErrorKind::Other, "non-canonical varint"))?;
         }
         if ((bits + 7) >= 64) && (b >= (1 << (64 - bits))) {
             Err(io::Error::new(io::ErrorKind::Other, "varint overflow"))?;
@@ -190,7 +187,10 @@ impl Protocol {
             0 => match read_byte(r)? {
                 14 => Protocol::v14,
                 16 => Protocol::v16,
-                _ => Err(io::Error::new(io::ErrorKind::Other, "unrecognized protocol"))?,
+                _ => Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "unrecognized protocol",
+                ))?,
             },
             1 => match read_byte(r)? {
                 0 => Protocol::Custom {
@@ -201,9 +201,15 @@ impl Protocol {
                         _ => Err(io::Error::new(io::ErrorKind::Other, "invalid bool"))?,
                     },
                 },
-                _ => Err(io::Error::new(io::ErrorKind::Other, "unrecognized protocol"))?,
+                _ => Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "unrecognized protocol",
+                ))?,
             },
-            _ => Err(io::Error::new(io::ErrorKind::Other, "unrecognized protocol"))?,
+            _ => Err(io::Error::new(
+                io::ErrorKind::Other,
+                "unrecognized protocol",
+            ))?,
         })
     }
 
@@ -226,10 +232,9 @@ pub struct Fee {
 
 impl Fee {
     pub fn calculate(&self, weight: usize) -> u64 {
-        ((((self.per_weight * u64::try_from(weight).expect("weight exceeds u64")) - 1) /
-            self.mask) +
-            1) *
-            self.mask
+        ((((self.per_weight * u64::try_from(weight).expect("weight exceeds u64")) - 1) / self.mask)
+            + 1)
+            * self.mask
     }
 }
 
@@ -738,7 +743,9 @@ impl Scanner {
     /// callers are responsible for output deduplication.
     pub fn from_view(
         pair: ViewPair,
-        _burning_bug: Option<std::collections::HashSet<curve25519_dalek::edwards::CompressedEdwardsY>>,
+        _burning_bug: Option<
+            std::collections::HashSet<curve25519_dalek::edwards::CompressedEdwardsY>,
+        >,
     ) -> Scanner {
         let inner = pair
             .to_oxide()
@@ -753,17 +760,14 @@ impl Scanner {
     }
 
     /// Scan a single transaction for outputs owned by this scanner's keys.
-    pub fn scan_transaction(
-        &mut self,
-        tx: &monero_oxide::transaction::Transaction,
-    ) -> Timelocked {
+    pub fn scan_transaction(&mut self, tx: &monero_oxide::transaction::Transaction) -> Timelocked {
         let tx_hash = tx.hash();
-        let pruned = monero_oxide::transaction::Transaction::<
-            monero_oxide::transaction::Pruned,
-        >::from(tx.clone());
-        let outputs =
-            crate::scanner::scan_single_transaction(&mut self.inner, tx_hash, &pruned)
-                .unwrap_or_default();
+        let pruned =
+            monero_oxide::transaction::Transaction::<monero_oxide::transaction::Pruned>::from(
+                tx.clone(),
+            );
+        let outputs = crate::scanner::scan_single_transaction(&mut self.inner, tx_hash, &pruned)
+            .unwrap_or_default();
         Timelocked(
             outputs
                 .iter()
@@ -839,11 +843,9 @@ impl ViewPair {
     }
 
     fn to_oxide(&self) -> Result<monero_wallet::ViewPair, String> {
-        let spend = monero_wallet::ed25519::CompressedPoint::from(
-            self.spend.compress().to_bytes(),
-        )
-        .decompress()
-        .ok_or_else(|| "invalid spend key".to_string())?;
+        let spend = monero_wallet::ed25519::CompressedPoint::from(self.spend.compress().to_bytes())
+            .decompress()
+            .ok_or_else(|| "invalid spend key".to_string())?;
         monero_wallet::ViewPair::new(
             spend,
             Zeroizing::new(monero_wallet::ed25519::Scalar::from(**(&self.view))),
@@ -925,9 +927,9 @@ const BP_LOG_N: usize = 6;
 fn varint_len(varint: usize) -> usize {
     ((usize::try_from(usize::BITS - varint.leading_zeros())
         .expect("bit count exceeds usize")
-        .saturating_sub(1)) /
-        7) +
-        1
+        .saturating_sub(1))
+        / 7)
+        + 1
 }
 
 fn input_fee_weight(ring_len: usize) -> usize {
@@ -941,13 +943,13 @@ fn output_fee_weight() -> usize {
 
 fn prefix_fee_weight(ring_len: usize, inputs: usize, outputs: usize, extra: usize) -> usize {
     // Assumes Timelock::None
-    1 + 1 +
-        varint_len(inputs) +
-        (inputs * input_fee_weight(ring_len)) +
-        1 +
-        (outputs * output_fee_weight()) +
-        varint_len(extra) +
-        extra
+    1 + 1
+        + varint_len(inputs)
+        + (inputs * input_fee_weight(ring_len))
+        + 1
+        + (outputs * output_fee_weight())
+        + varint_len(extra)
+        + extra
 }
 
 fn clsag_fee_weight(ring_len: usize) -> usize {
@@ -964,14 +966,13 @@ fn bulletproofs_fee_weight(plus: bool, outputs: usize) -> usize {
     LR_len += BP_LOG_N;
 
     let len = (fields + (2 * LR_len)) * 32;
-    len +
-        if padded_outputs <= 2 {
-            0
-        } else {
-            let base = ((fields + (2 * (BP_LOG_N + 1))) * 32) / 2;
-            let size = (fields + (2 * LR_len)) * 32;
-            ((base * padded_outputs) - size) * 4 / 5
-        }
+    len + if padded_outputs <= 2 {
+        0
+    } else {
+        let base = ((fields + (2 * (BP_LOG_N + 1))) * 32) / 2;
+        let size = (fields + (2 * LR_len)) * 32;
+        ((base * padded_outputs) - size) * 4 / 5
+    }
 }
 
 fn rct_base_fee_weight(outputs: usize) -> usize {
@@ -997,11 +998,11 @@ pub fn transaction_fee_weight(
     outputs: usize,
     extra: usize,
 ) -> usize {
-    prefix_fee_weight(protocol.ring_len(), inputs, outputs, extra) +
-        rct_base_fee_weight(outputs) +
-        1 +
-        bulletproofs_fee_weight(protocol.bp_plus(), outputs) +
-        (inputs * (clsag_fee_weight(protocol.ring_len()) + 32))
+    prefix_fee_weight(protocol.ring_len(), inputs, outputs, extra)
+        + rct_base_fee_weight(outputs)
+        + 1
+        + bulletproofs_fee_weight(protocol.bp_plus(), outputs)
+        + (inputs * (clsag_fee_weight(protocol.ring_len()) + 32))
 }
 
 // ---------------------------------------------------------------------------
@@ -1092,22 +1093,20 @@ impl SignableTransaction {
         // Calculate the minimum fee. Omitting change may increase the actual fee.
         let mut fee = fee_rate.calculate(estimated_tx_size);
 
-        // Make sure we have enough funds. A wrapped `out_amount` passes this test and then
-        // becomes a change output of `in_amount - out_amount`, which is very nearly the
-        // whole u64 range - so the wrap turns "not enough funds" into a transaction no node
-        // will accept. See `checked_amount_sum`.
-        let in_amount =
-            crate::tx_utils::checked_amount_sum(inputs.iter().map(|input| input.commitment().amount))
-                .ok_or_else(|| {
-                    TransactionError::InvalidTransaction("input amounts overflow".to_string())
-                })?;
-        let out_amount = crate::tx_utils::checked_amount_sum(
-            payments.iter().map(|payment| payment.1),
+        // The checked sum above prevents overflow from making an excessive
+        // payment appear affordable or producing invalid change.
+        let in_amount = crate::tx_utils::checked_amount_sum(
+            inputs.iter().map(|input| input.commitment().amount),
         )
-        .and_then(|sum| sum.checked_add(fee))
         .ok_or_else(|| {
-            TransactionError::InvalidTransaction("payment amounts overflow".to_string())
+            TransactionError::InvalidTransaction("input amounts overflow".to_string())
         })?;
+        let out_amount =
+            crate::tx_utils::checked_amount_sum(payments.iter().map(|payment| payment.1))
+                .and_then(|sum| sum.checked_add(fee))
+                .ok_or_else(|| {
+                    TransactionError::InvalidTransaction("payment amounts overflow".to_string())
+                })?;
         if in_amount < out_amount {
             Err(TransactionError::NotEnoughFunds(in_amount, out_amount))?;
         }
@@ -1213,8 +1212,8 @@ impl SignableTransaction {
         spend: &Zeroizing<Scalar>,
     ) -> Result<monero_oxide::transaction::Transaction, TransactionError> {
         let unsigned = self.prepare_unsigned(rng, rpc).await?;
-        let (tx, _, _) = sign_offline(rng, spend, unsigned)
-            .map_err(TransactionError::InvalidTransaction)?;
+        let (tx, _, _) =
+            sign_offline(rng, spend, unsigned).map_err(TransactionError::InvalidTransaction)?;
         Ok(tx)
     }
 }
@@ -1505,9 +1504,11 @@ pub fn sign_offline<R: rand_core::RngCore + rand_core::CryptoRng>(
             .map(|payment| payment.address_and_amount().1),
     )
     .ok_or_else(|| "unsigned transaction payment amounts overflow".to_string())?;
-    if input_sum != payment_sum.checked_add(unsigned.fee).ok_or_else(|| {
-        "unsigned transaction amounts overflow".to_string()
-    })? {
+    if input_sum
+        != payment_sum
+            .checked_add(unsigned.fee)
+            .ok_or_else(|| "unsigned transaction amounts overflow".to_string())?
+    {
         return Err("unsigned transaction fee doesn't match its amounts".to_string());
     }
 
@@ -1587,10 +1588,8 @@ pub fn sign_offline<R: rand_core::RngCore + rand_core::CryptoRng>(
             })
             .collect::<Result<Vec<_>, String>>()?;
 
-        let mut tx_keys = monero_wallet::send::TransactionKeys::new(
-            &unsigned.r_seed,
-            input_keys_and_commitments,
-        );
+        let mut tx_keys =
+            monero_wallet::send::TransactionKeys::new(&unsigned.r_seed, input_keys_and_commitments);
         let tx_key = tx_keys
             .next()
             .expect("TransactionKeys (never-ending) was exhausted");
@@ -1691,8 +1690,7 @@ mod tests {
 
         let mut with_decoys = bytes.clone();
         oxide_decoys.write(&mut with_decoys).unwrap();
-        let assembled =
-            monero_wallet::OutputWithDecoys::read(&mut with_decoys.as_slice()).unwrap();
+        let assembled = monero_wallet::OutputWithDecoys::read(&mut with_decoys.as_slice()).unwrap();
         assert_eq!(
             assembled.key().compress().to_bytes(),
             data.key.compress().to_bytes()
@@ -1779,8 +1777,7 @@ mod tests {
 
         // Two outputs (payment + change); a dummy payment ID applies
         let extra = extra_fee_weight(2, true, true, &[]);
-        let expected_fee =
-            fee_rate.calculate(transaction_fee_weight(Protocol::v16, 1, 2, extra));
+        let expected_fee = fee_rate.calculate(transaction_fee_weight(Protocol::v16, 1, 2, extra));
         assert_eq!(signable.fee(), expected_fee);
     }
 
@@ -1892,10 +1889,7 @@ mod tests {
                 InternalPayment::Change(Change::from_raw(change_addr, None), change),
             ],
             data: vec![],
-            inputs: vec![UnsignedInput {
-                output,
-                decoys,
-            }],
+            inputs: vec![UnsignedInput { output, decoys }],
         };
 
         // The wire format roundtrips
@@ -1922,10 +1916,8 @@ mod tests {
             panic!("input wasn't ToKey");
         };
         assert_eq!(key_offsets, &offsets);
-        let expected_key_image: EdwardsPoint = monero_wallet::ed25519::Point::biased_hash(
-            one_time_key.compress().to_bytes(),
-        )
-        .into();
+        let expected_key_image: EdwardsPoint =
+            monero_wallet::ed25519::Point::biased_hash(one_time_key.compress().to_bytes()).into();
         let expected_key_image = expected_key_image * (*spend + key_offset);
         assert_eq!(
             key_image.to_bytes(),
@@ -1944,8 +1936,7 @@ mod tests {
         assert_eq!(proofs.base.fee, fee);
 
         // The returned tx key matches the pubkey embedded in extra
-        let extra =
-            monero_wallet::extra::Extra::read(&mut tx.prefix().extra.as_slice()).unwrap();
+        let extra = monero_wallet::extra::Extra::read(&mut tx.prefix().extra.as_slice()).unwrap();
         let (tx_pubkeys, _additional) = extra.keys().unwrap();
         let expected_pubkey = (&*tx_key * ED25519_BASEPOINT_TABLE).compress().to_bytes();
         assert_eq!(tx_pubkeys[0].compress().to_bytes(), expected_pubkey);
@@ -2063,10 +2054,7 @@ mod tests {
             fee: 1,
             payments: vec![],
             data: vec![],
-            inputs: vec![UnsignedInput {
-                output,
-                decoys,
-            }],
+            inputs: vec![UnsignedInput { output, decoys }],
         };
         // sample_received_output isn't owned by `spend`
         assert!(sign_offline(&mut rng, &spend, unsigned)
@@ -2139,9 +2127,13 @@ mod tests {
             convert(&Scalar::from(888u64) * ED25519_BASEPOINT_TABLE),
         );
 
-        // The fixture has to actually wrap, or this proves nothing about the guard.
+        // Verify that the fixture overflows to the input total.
         let (a, b) = (u64::MAX, 2_000_000_001u64);
-        assert_eq!(a.wrapping_add(b), amount_in, "the two payments must wrap to the input total");
+        assert_eq!(
+            a.wrapping_add(b),
+            amount_in,
+            "the two payments must wrap to the input total"
+        );
 
         let unsigned = UnsignedTransaction {
             protocol: Protocol::v16,
@@ -2372,7 +2364,10 @@ mod tests {
             mask: 10000,
         };
         // Matches serai's quantized fee formula.
-        assert_eq!(fee.calculate(1500), ((8000u64 * 1500 - 1) / 10000 + 1) * 10000);
+        assert_eq!(
+            fee.calculate(1500),
+            ((8000u64 * 1500 - 1) / 10000 + 1) * 10000
+        );
     }
 
     #[test]

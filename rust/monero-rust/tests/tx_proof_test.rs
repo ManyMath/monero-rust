@@ -101,7 +101,7 @@ fn agrees_with_monero_on_shared_secret_and_tx_public_key() {
         )
         .unwrap_or_else(|e| panic!("generate failed for case {}: {}", case.name, e));
 
-        let d = hex::encode(&decode_proof(&proof.signature)[0 .. 32]);
+        let d = hex::encode(&decode_proof(&proof.signature)[0..32]);
         assert_eq!(
             d, case.shared_secret,
             "shared secret D must match monero's (case {})",
@@ -142,7 +142,11 @@ fn rejects_monero_proofs_bound_to_other_inputs() {
             &case.tx_public_key,
         )
         .expect("verify must not error");
-        assert!(!wrong_txid, "proof must not verify under another txid (case {})", case.name);
+        assert!(
+            !wrong_txid,
+            "proof must not verify under another txid (case {})",
+            case.name
+        );
 
         let wrong_message = verify_out_proof_v2(
             &vectors.txid,
@@ -204,7 +208,10 @@ fn rejects_malformed_signatures() {
 
     for bad in [
         "InProofV2".to_string() + case.signature.strip_prefix("OutProofV2").unwrap(),
-        case.signature.strip_prefix("OutProofV2").unwrap().to_string(),
+        case.signature
+            .strip_prefix("OutProofV2")
+            .unwrap()
+            .to_string(),
         "OutProofV2!@#$%^&*()".to_string(),
         "OutProofV2".to_string(),
     ] {
@@ -216,7 +223,11 @@ fn rejects_malformed_signatures() {
             &vectors.network,
             &case.tx_public_key,
         );
-        assert!(result.is_err(), "malformed signature must be an error: {}", bad);
+        assert!(
+            result.is_err(),
+            "malformed signature must be an error: {}",
+            bad
+        );
     }
 }
 

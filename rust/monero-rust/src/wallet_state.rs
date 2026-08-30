@@ -860,7 +860,9 @@ impl WalletState {
         let mut incoming: HashSet<&str> = HashSet::new();
         for ki in key_images.iter().filter(|k| !k.is_empty()) {
             if !incoming.insert(ki.as_str()) {
-                return Err(format!("key image {ki} appears more than once in the import"));
+                return Err(format!(
+                    "key image {ki} appears more than once in the import"
+                ));
             }
         }
         let end = offset + key_images.len();
@@ -2728,7 +2730,10 @@ mod tests {
 
         let updated = state.import_key_images(0, &["Z".to_string(), "Z".to_string()]);
 
-        assert_eq!(updated, 0, "a duplicated key image must be refused outright");
+        assert_eq!(
+            updated, 0,
+            "a duplicated key image must be refused outright"
+        );
         assert!(
             state.outputs().iter().all(|o| o.key_image.is_empty()),
             "a refused import must not half-apply"
@@ -2798,14 +2803,10 @@ mod tests {
     fn a_future_block_timelock_makes_an_aged_output_unspendable() {
         use monero_wallet::transaction::Timelock;
 
-        let output = make_timelocked_output(
-            1_000_000_000_000,
-            100,
-            "ki_locked",
-            Timelock::Block(5_000),
-        );
+        let output =
+            make_timelocked_output(1_000_000_000_000, 100, "ki_locked", Timelock::Block(5_000));
 
-        // 900 confirmations: the age requirement is long satisfied.
+        // 900 confirmations satisfy the normal age requirement.
         assert!(
             !is_spendable(&output, 1_000),
             "an output under a future timelock must not be spendable"
@@ -2830,9 +2831,11 @@ mod tests {
     fn an_output_without_an_additional_timelock_is_unaffected() {
         use monero_wallet::transaction::Timelock;
 
-        let output =
-            make_timelocked_output(1_000_000_000_000, 100, "ki_plain", Timelock::None);
-        assert!(!is_spendable(&output, 105), "the 10-block age still applies");
+        let output = make_timelocked_output(1_000_000_000_000, 100, "ki_plain", Timelock::None);
+        assert!(
+            !is_spendable(&output, 105),
+            "the 10-block age still applies"
+        );
         assert!(is_spendable(&output, 110));
     }
 

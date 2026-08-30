@@ -132,10 +132,14 @@ fn detection_is_deterministic() {
         let first = Seed::from_string(Zeroizing::new(vector.seed.clone()))
             .map(|s| hex::encode(&*s.entropy()));
 
-        for _ in 0 .. 8 {
+        for _ in 0..8 {
             let again = Seed::from_string(Zeroizing::new(vector.seed.clone()))
                 .map(|s| hex::encode(&*s.entropy()));
-            assert_eq!(first, again, "detection must be stable ({})", vector.language);
+            assert_eq!(
+                first, again,
+                "detection must be stable ({})",
+                vector.language
+            );
         }
     }
 }
@@ -144,8 +148,16 @@ fn detection_is_deterministic() {
 #[test]
 fn resolves_ambiguous_seeds_the_way_monero_does() {
     let fixture = load();
-    let ambiguous: Vec<&Vector> = fixture.vectors.iter().filter(|v| v.ambiguous.is_some()).collect();
-    assert_eq!(ambiguous.len(), 2, "fixture should carry both ambiguous cases");
+    let ambiguous: Vec<&Vector> = fixture
+        .vectors
+        .iter()
+        .filter(|v| v.ambiguous.is_some())
+        .collect();
+    assert_eq!(
+        ambiguous.len(),
+        2,
+        "fixture should carry both ambiguous cases"
+    );
 
     for vector in ambiguous {
         let expected = vector.ambiguous.as_ref().unwrap();
@@ -182,7 +194,11 @@ fn vector_view_keys_are_the_hash_of_the_spend_key() {
         let expected = Option::<Scalar>::from(Scalar::from_canonical_bytes(view))
             .unwrap_or_else(|| panic!("view key not canonical ({})", vector.language));
 
-        assert_eq!(derived, expected, "view key must be H(spend) ({})", vector.language);
+        assert_eq!(
+            derived, expected,
+            "view key must be H(spend) ({})",
+            vector.language
+        );
     }
 }
 
@@ -197,7 +213,11 @@ fn rejects_a_seed_whose_word_triple_exceeds_u32() {
     let crafted = "hemlock abducts abbey hacksaw boil superior inroads epoxy exhale orders \
                    cavernous second brunt saved richly lower upgrade hitched launching \
                    deepest mostly playful layout lower hemlock";
-    assert_eq!(crafted.split_whitespace().count(), 25, "must be a checksummed seed");
+    assert_eq!(
+        crafted.split_whitespace().count(),
+        25,
+        "must be a checksummed seed"
+    );
 
     match Seed::from_string(Zeroizing::new(crafted.to_string())) {
         Ok(seed) => panic!(
