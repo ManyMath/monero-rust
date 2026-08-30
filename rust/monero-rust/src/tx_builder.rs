@@ -2195,8 +2195,9 @@ pub mod native {
             );
 
             let words = seed.to_string();
-            let expected = crate::scanner::derive_keys(&words, "stagenet", "")
-                .expect("derive_keys must accept a polyseed");
+            let expected =
+                crate::scanner::derive_keys(&words, monero_wallet::address::Network::Stagenet, "")
+                    .expect("derive_keys must accept a polyseed");
 
             let spend = spend_key_from_seed(&seed, "");
             assert_eq!(
@@ -2232,8 +2233,12 @@ pub mod native {
                 "premise: the passphrase must change which wallet this mnemonic opens"
             );
 
-            let expected = crate::scanner::derive_keys(words, "stagenet", passphrase)
-                .expect("derive_keys must accept a passphrase");
+            let expected = crate::scanner::derive_keys(
+                words,
+                monero_wallet::address::Network::Stagenet,
+                passphrase,
+            )
+            .expect("derive_keys must accept a passphrase");
             let (spend_secret_key, view_secret_key) = private_keys_from_seed(words, passphrase)
                 .expect("the signer must accept the same passphrase");
 

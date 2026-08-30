@@ -65,7 +65,7 @@ fn view_only_import_rejects_torsioned_spend_key() {
 fn subaddress_derivation_errors_rather_than_panicking() {
     let mnemonic = format!("viewonly:{}:{}", VIEW_KEY, torsioned_spend_key());
 
-    let result = derive_subaddress(&mnemonic, "mainnet", 0, 1, "");
+    let result = derive_subaddress(&mnemonic, monero_rust::Network::Mainnet, 0, 1, "");
     assert!(result.is_err(), "expected an error, got {:?}", result);
 }
 
@@ -73,26 +73,36 @@ fn subaddress_derivation_errors_rather_than_panicking() {
 fn address_derivation_errors_rather_than_panicking() {
     let spend = torsioned_spend_key();
 
-    assert!(derive_address_from_view_only(VIEW_KEY, &spend, "mainnet").is_err());
-    assert!(derive_keys_from_view_only(VIEW_KEY, &spend, "mainnet").is_err());
+    assert!(
+        derive_address_from_view_only(VIEW_KEY, &spend, monero_rust::Network::Mainnet).is_err()
+    );
+    assert!(derive_keys_from_view_only(VIEW_KEY, &spend, monero_rust::Network::Mainnet).is_err());
 }
 
-/// A well-formed view-only import must keep working, so the check can't be over-broad.
+/// Accept valid view-only keys after adding the subgroup check.
 #[test]
 fn accepts_a_real_view_only_wallet() {
     let spend = valid_spend_key();
 
-    let address = derive_address_from_view_only(VIEW_KEY, &spend, "mainnet")
+    let address = derive_address_from_view_only(VIEW_KEY, &spend, monero_rust::Network::Mainnet)
         .expect("a prime-order spend key must import");
-    assert!(address.starts_with('4'), "mainnet address, got {}", address);
+    assert!(
+        address.to_string().starts_with('4'),
+        "mainnet address, got {}",
+        address
+    );
 
     let sub = derive_subaddress(
         &format!("viewonly:{}:{}", VIEW_KEY, spend),
-        "mainnet",
+        monero_rust::Network::Mainnet,
         0,
         1,
         "",
     )
     .expect("subaddress derivation must succeed");
-    assert!(sub.starts_with('8'), "mainnet subaddress, got {}", sub);
+    assert!(
+        sub.to_string().starts_with('8'),
+        "mainnet subaddress, got {}",
+        sub
+    );
 }

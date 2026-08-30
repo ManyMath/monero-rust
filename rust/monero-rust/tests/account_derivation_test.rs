@@ -142,19 +142,19 @@ fn test_derive_subaddress_api() {
     let seed = HONKED_BAGPIPE_MNEMONIC;
 
     // Test account 1, subaddress 0
-    let addr_1_0 =
-        derive_subaddress(seed, "stagenet", 1, 0, "").expect("derive_subaddress should succeed");
-    assert_eq!(addr_1_0, EXPECTED_ACCOUNT_1_SUBADDRESS_0);
+    let addr_1_0 = derive_subaddress(seed, monero_rust::Network::Stagenet, 1, 0, "")
+        .expect("derive_subaddress should succeed");
+    assert_eq!(addr_1_0.to_string(), EXPECTED_ACCOUNT_1_SUBADDRESS_0);
 
     // Test account 1, subaddress 1
-    let addr_1_1 =
-        derive_subaddress(seed, "stagenet", 1, 1, "").expect("derive_subaddress should succeed");
-    assert_eq!(addr_1_1, EXPECTED_ACCOUNT_1_SUBADDRESS_1);
+    let addr_1_1 = derive_subaddress(seed, monero_rust::Network::Stagenet, 1, 1, "")
+        .expect("derive_subaddress should succeed");
+    assert_eq!(addr_1_1.to_string(), EXPECTED_ACCOUNT_1_SUBADDRESS_1);
 
     // Test account 0, subaddress 0 (should return standard address)
-    let addr_0_0 = derive_subaddress(seed, "stagenet", 0, 0, "")
+    let addr_0_0 = derive_subaddress(seed, monero_rust::Network::Stagenet, 0, 0, "")
         .expect("derive_subaddress should succeed for (0, 0)");
-    assert_eq!(addr_0_0, EXPECTED_ACCOUNT_0_SUBADDRESS_0);
+    assert_eq!(addr_0_0.to_string(), EXPECTED_ACCOUNT_0_SUBADDRESS_0);
 }
 
 #[test]
@@ -189,12 +189,15 @@ fn test_multiple_accounts_have_different_addresses() {
     assert_ne!(account_1_addr.to_string(), account_3_addr.to_string());
 }
 
-/// The public `derive_address` entry point, which the rest of this file bypasses in favour
-/// of building addresses from keys directly. Kept from local_stagenet_test, whose other
-/// tests needed a stagenet chain and so never ran.
+/// Exercise the public `derive_address` API. Other tests in this file construct
+/// addresses directly from keys.
 #[test]
 fn derive_address_returns_the_standard_address() {
-    let address = monero_rust::scanner::derive_address(HONKED_BAGPIPE_MNEMONIC, "stagenet", "")
-        .expect("derive_address must succeed");
-    assert_eq!(address, EXPECTED_ACCOUNT_0_SUBADDRESS_0);
+    let address = monero_rust::scanner::derive_address(
+        HONKED_BAGPIPE_MNEMONIC,
+        monero_rust::Network::Stagenet,
+        "",
+    )
+    .expect("derive_address must succeed");
+    assert_eq!(address.to_string(), EXPECTED_ACCOUNT_0_SUBADDRESS_0);
 }

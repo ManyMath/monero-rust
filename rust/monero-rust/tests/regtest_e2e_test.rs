@@ -21,7 +21,6 @@ use monero_rust::scanner::{
 use monero_rust::seed_compat::Seed;
 use monero_rust::wallet_compat::received_from_wallet_output;
 use monero_rust::wallet_compat::{Change, SignableTransactionBuilder, SpendableOutput, ViewPair};
-use monero_wallet::address::{MoneroAddress, Network};
 use zeroize::Zeroizing;
 
 /// Monero's deterministic test seed, also used for cold-signing vectors.
@@ -57,15 +56,15 @@ async fn mines_then_scans_its_own_outputs() {
     };
 
     let rpc = HttpRpc::new(node).expect("regtest RPC");
-    let address = derive_address(SEED, NETWORK, "").expect("derive address");
+    let address = derive_address(SEED, monero_rust::Network::Mainnet, "").expect("derive address");
     assert!(
-        address.starts_with('4'),
+        address.to_string().starts_with('4'),
         "regtest uses mainnet encoding, got {}",
         address
     );
 
     let start_height = rpc.get_height().await.expect("get_height");
-    rpc.generate_blocks(&address, BLOCKS_TO_MINE)
+    rpc.generate_blocks(&address.to_string(), BLOCKS_TO_MINE)
         .await
         .expect("generateblocks must succeed on a regtest daemon");
 
@@ -115,10 +114,10 @@ async fn scanned_outputs_parse_back_in_the_stored_format() {
     };
 
     let rpc = HttpRpc::new(node).expect("regtest RPC");
-    let address = derive_address(SEED, NETWORK, "").expect("derive address");
+    let address = derive_address(SEED, monero_rust::Network::Mainnet, "").expect("derive address");
 
-    // Mine a little in case this runs before the other test; the chain is shared.
-    rpc.generate_blocks(&address, 5)
+    // Ensure some blocks exist regardless of which test runs first.
+    rpc.generate_blocks(&address.to_string(), 5)
         .await
         .expect("generateblocks");
     let height = rpc.get_height().await.expect("get_height");
@@ -159,13 +158,12 @@ async fn builds_signs_and_broadcasts_a_transaction() {
     };
 
     let rpc = HttpRpc::new(node).expect("regtest RPC");
-    let address = derive_address(SEED, NETWORK, "").expect("derive address");
+    let address = derive_address(SEED, monero_rust::Network::Mainnet, "").expect("derive address");
 
-    // Top the chain up rather than mining a fixed amount: the other tests in this binary
-    // share it, so its starting height depends on what already ran.
+    // Mine up to the required height, accounting for blocks from other tests.
     let height = rpc.get_height().await.expect("get_height");
     if height < MIN_HEIGHT_TO_SPEND {
-        rpc.generate_blocks(&address, MIN_HEIGHT_TO_SPEND - height)
+        rpc.generate_blocks(&address.to_string(), MIN_HEIGHT_TO_SPEND - height)
             .await
             .expect("generateblocks");
     }
@@ -196,7 +194,7 @@ async fn builds_signs_and_broadcasts_a_transaction() {
     let spendable = spendable.expect("no mature output to spend");
     let input_amount = spendable.commitment().amount;
 
-    let keys = derive_keys(SEED, NETWORK, "").expect("derive keys");
+    let keys = derive_keys(SEED, monero_rust::Network::Mainnet, "").expect("derive keys");
     let seed = Seed::from_string(Zeroizing::new(SEED.to_string())).expect("seed");
     let spend_scalar = Scalar::from_bytes_mod_order(*seed.entropy());
     let spend_point = &spend_scalar * ED25519_BASEPOINT_TABLE;
@@ -210,10 +208,7 @@ async fn builds_signs_and_broadcasts_a_transaction() {
         SignableTransactionBuilder::new(protocol, fee_rate, Some(Change::new(&view_pair, false)));
     builder.add_input(spendable);
     let send_amount = 1_000_000_000u64;
-    builder.add_payment(
-        MoneroAddress::from_str(Network::Mainnet, &address).expect("address"),
-        send_amount,
-    );
+    builder.add_payment(address, send_amount);
 
     let signable = builder.build().expect("build a signable transaction");
     assert!(signable.fee() > 0, "a real transaction must carry a fee");
@@ -236,7 +231,9 @@ async fn builds_signs_and_broadcasts_a_transaction() {
         .expect("the daemon must accept the transaction we built");
 
     let mined_into = rpc.get_height().await.expect("get_height");
-    rpc.generate_blocks(&address, 1).await.expect("mine it in");
+    rpc.generate_blocks(&address.to_string(), 1)
+        .await
+        .expect("mine it in");
     assert!(
         rpc.get_height().await.expect("get_height") > mined_into,
         "the chain must advance once our transaction is mined"
@@ -252,10 +249,10 @@ async fn batch_scans_the_chain_it_mined() {
     };
 
     let rpc = HttpRpc::new(node).expect("regtest RPC");
-    let address = derive_address(SEED, NETWORK, "").expect("derive address");
+    let address = derive_address(SEED, monero_rust::Network::Mainnet, "").expect("derive address");
 
     let start = rpc.get_height().await.expect("get_height");
-    rpc.generate_blocks(&address, BLOCKS_TO_MINE)
+    rpc.generate_blocks(&address.to_string(), BLOCKS_TO_MINE)
         .await
         .expect("generateblocks");
 

@@ -491,9 +491,8 @@ pub fn decompress_public_spend_key(bytes: [u8; 32]) -> Option<EdwardsPoint> {
 pub fn derive_keys_from_view_only(
     secret_view_key_hex: &str,
     public_spend_key_hex: &str,
-    network_str: &str,
+    network: Network,
 ) -> Result<DerivedKeys, String> {
-    let network = parse_network(network_str)?;
     let (view_scalar, spend_point) = parse_view_only_keys(&format!(
         "viewonly:{}:{}",
         secret_view_key_hex, public_spend_key_hex
@@ -514,9 +513,8 @@ pub fn derive_keys_from_view_only(
 pub fn derive_address_from_view_only(
     secret_view_key_hex: &str,
     public_spend_key_hex: &str,
-    network_str: &str,
-) -> Result<String, String> {
-    let network = parse_network(network_str)?;
+    network: Network,
+) -> Result<MoneroAddress, String> {
     let (view_scalar, spend_point) = parse_view_only_keys(&format!(
         "viewonly:{}:{}",
         secret_view_key_hex, public_spend_key_hex
@@ -524,10 +522,10 @@ pub fn derive_address_from_view_only(
     .ok_or_else(|| "Invalid view-only key hex".to_string())?;
     let view_point: EdwardsPoint = &view_scalar * ED25519_BASEPOINT_TABLE;
     let address = standard_address(network, spend_point, view_point);
-    Ok(address.to_string())
+    Ok(address)
 }
 
-/// Mnemonic format used when generating a new wallet seed.
+/// Seed format to generate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SeedFormat {
     Classic,
@@ -568,42 +566,37 @@ pub fn validate_seed(mnemonic: &str) -> Result<(), String> {
         .map_err(|e| format!("Invalid seed phrase: {:?}", e))
 }
 
-fn address_from_seed(seed: &Seed, network: Network, passphrase: &str) -> String {
+fn address_from_seed(seed: &Seed, network: Network, passphrase: &str) -> MoneroAddress {
     let spend_point = spend_key_from_seed(seed, passphrase);
     let view_scalar = view_key_from_seed(seed, passphrase);
     let view_point: EdwardsPoint = &view_scalar * ED25519_BASEPOINT_TABLE;
 
-    standard_address(network, spend_point, view_point).to_string()
+    standard_address(network, spend_point, view_point)
 }
 
 pub fn derive_address(
     mnemonic: &str,
-    network_str: &str,
+    network: Network,
     passphrase: &str,
-) -> Result<String, String> {
-    crate::validation::validate_network(network_str).map_err(|e| e.to_string())?;
+) -> Result<MoneroAddress, String> {
     if let Some((view_hex, spend_hex)) = mnemonic.strip_prefix("viewonly:").and_then(|r| {
         let mut parts = r.splitn(2, ':');
         Some((parts.next()?, parts.next()?))
     }) {
-        return derive_address_from_view_only(view_hex, spend_hex, network_str);
+        return derive_address_from_view_only(view_hex, spend_hex, network);
     }
-    let network = parse_network(network_str)?;
     let seed = resolve_seed(mnemonic)?;
     Ok(address_from_seed(&seed, network, passphrase))
 }
 
 pub fn derive_subaddress(
     mnemonic: &str,
-    network_str: &str,
+    network: Network,
     account: u32,
     address_index: u32,
     passphrase: &str,
-) -> Result<String, String> {
+) -> Result<MoneroAddress, String> {
     use crate::wallet_compat::{AddressSpec, ViewPair};
-
-    crate::validation::validate_network(network_str).map_err(|e| e.to_string())?;
-    let network = parse_network(network_str)?;
 
     let (spend_point, view_scalar) = if let Some((vs, sp)) = parse_view_only_keys(mnemonic) {
         (sp, vs)
@@ -621,7 +614,7 @@ pub fn derive_subaddress(
 
     if account == 0 && address_index == 0 {
         let address = view_pair.address(network, AddressSpec::Standard);
-        return Ok(address.to_string());
+        return Ok(address);
     }
 
     let subaddress_index = SubaddressIndex::new(account, address_index).ok_or_else(|| {
@@ -632,22 +625,20 @@ pub fn derive_subaddress(
     })?;
 
     let address = view_pair.address(network, AddressSpec::Subaddress(subaddress_index));
-    Ok(address.to_string())
+    Ok(address)
 }
 
 pub fn derive_keys(
     mnemonic: &str,
-    network_str: &str,
+    network: Network,
     passphrase: &str,
 ) -> Result<DerivedKeys, String> {
-    crate::validation::validate_network(network_str).map_err(|e| e.to_string())?;
     if let Some((view_hex, spend_hex)) = mnemonic.strip_prefix("viewonly:").and_then(|r| {
         let mut parts = r.splitn(2, ':');
         Some((parts.next()?, parts.next()?))
     }) {
-        return derive_keys_from_view_only(view_hex, spend_hex, network_str);
+        return derive_keys_from_view_only(view_hex, spend_hex, network);
     }
-    let network = parse_network(network_str)?;
 
     let seed = resolve_seed(mnemonic)?;
 
@@ -1699,7 +1690,7 @@ pub async fn process_batch_multi_wallet_response(
                 (*sp, *vs, addr)
             } else {
                 let seed = seed_opt.as_ref().unwrap();
-                let addr = address_from_seed(seed, network, &config.passphrase);
+                let addr = address_from_seed(seed, network, &config.passphrase).to_string();
                 (
                     spend_key_from_seed(seed, &config.passphrase),
                     view_key_from_seed(seed, &config.passphrase),
@@ -2317,7 +2308,7 @@ pub async fn scan_block_multi_wallet<R: RpcConnection + Send + Sync + Clone + 's
                     (sp, vs, addr)
                 } else {
                     let seed = resolve_seed(&wallet_config.mnemonic)?;
-                    let addr = address_from_seed(&seed, network, passphrase);
+                    let addr = address_from_seed(&seed, network, passphrase).to_string();
                     let sp = spend_key_from_seed(&seed, passphrase);
                     let vs = view_key_from_seed(&seed, passphrase);
                     (sp, vs, addr)
@@ -2457,7 +2448,7 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
             (*sp, *vs, addr)
         } else {
             let seed = seed_opt.as_ref().unwrap();
-            let addr = address_from_seed(seed, network, passphrase);
+            let addr = address_from_seed(seed, network, passphrase).to_string();
             (
                 spend_key_from_seed(seed, passphrase),
                 view_key_from_seed(seed, passphrase),
@@ -2730,10 +2721,10 @@ mod tests {
 
     #[test]
     fn test_derive_address_test_vector_1_mainnet() {
-        let address = derive_address(TEST_VECTOR_1_SEED, "mainnet", "")
+        let address = derive_address(TEST_VECTOR_1_SEED, Network::Mainnet, "")
             .expect("Failed to derive address from test vector 1");
 
-        assert_eq!(address, TEST_VECTOR_1_ADDRESS);
+        assert_eq!(address.to_string(), TEST_VECTOR_1_ADDRESS);
 
         let seed = Seed::from_string(Zeroizing::new(TEST_VECTOR_1_SEED.to_string())).unwrap();
         let spend: [u8; 32] = *seed.entropy();
@@ -2746,10 +2737,10 @@ mod tests {
 
     #[test]
     fn test_derive_address_test_vector_2_stagenet() {
-        let address = derive_address(TEST_VECTOR_2_SEED, "stagenet", "")
+        let address = derive_address(TEST_VECTOR_2_SEED, Network::Stagenet, "")
             .expect("Failed to derive address from test vector 2");
 
-        assert_eq!(address, TEST_VECTOR_2_ADDRESS);
+        assert_eq!(address.to_string(), TEST_VECTOR_2_ADDRESS);
 
         let seed = Seed::from_string(Zeroizing::new(TEST_VECTOR_2_SEED.to_string())).unwrap();
         let spend: [u8; 32] = *seed.entropy();
@@ -2762,15 +2753,15 @@ mod tests {
 
     #[test]
     fn test_derive_address_test_vector_3_stagenet() {
-        let address = derive_address(TEST_VECTOR_3_SEED, "stagenet", "")
+        let address = derive_address(TEST_VECTOR_3_SEED, Network::Stagenet, "")
             .expect("Failed to derive address from test vector 3");
 
-        assert_eq!(address, TEST_VECTOR_3_ADDRESS);
+        assert_eq!(address.to_string(), TEST_VECTOR_3_ADDRESS);
     }
 
     #[test]
     fn test_derive_address_test_vector_4_english() {
-        let _address = derive_address(TEST_VECTOR_4_SEED, "mainnet", "")
+        let _address = derive_address(TEST_VECTOR_4_SEED, Network::Mainnet, "")
             .expect("Failed to derive address from test vector 4");
 
         let seed = Seed::from_string(Zeroizing::new(TEST_VECTOR_4_SEED.to_string())).unwrap();
@@ -2784,7 +2775,7 @@ mod tests {
 
     #[test]
     fn test_derive_address_test_vector_5_spanish() {
-        let _address = derive_address(TEST_VECTOR_5_SEED, "mainnet", "")
+        let _address = derive_address(TEST_VECTOR_5_SEED, Network::Mainnet, "")
             .expect("Failed to derive address from test vector 5");
 
         let seed = Seed::from_string(Zeroizing::new(TEST_VECTOR_5_SEED.to_string())).unwrap();
@@ -2798,7 +2789,7 @@ mod tests {
 
     #[test]
     fn test_derive_address_test_vector_6_french() {
-        let _address = derive_address(TEST_VECTOR_6_SEED, "mainnet", "")
+        let _address = derive_address(TEST_VECTOR_6_SEED, Network::Mainnet, "")
             .expect("Failed to derive address from test vector 6");
 
         let seed = Seed::from_string(Zeroizing::new(TEST_VECTOR_6_SEED.to_string())).unwrap();
@@ -2812,7 +2803,7 @@ mod tests {
 
     #[test]
     fn test_derive_address_test_vector_7_german() {
-        let _address = derive_address(TEST_VECTOR_7_SEED, "mainnet", "")
+        let _address = derive_address(TEST_VECTOR_7_SEED, Network::Mainnet, "")
             .expect("Failed to derive address from test vector 7");
 
         let seed = Seed::from_string(Zeroizing::new(TEST_VECTOR_7_SEED.to_string())).unwrap();
@@ -2827,16 +2818,18 @@ mod tests {
     #[test]
     fn test_derive_address_networks() {
         let mainnet_addr =
-            derive_address(TEST_VECTOR_1_SEED, "mainnet", "").expect("Failed for mainnet");
-        assert!(mainnet_addr.starts_with("4"));
+            derive_address(TEST_VECTOR_1_SEED, Network::Mainnet, "").expect("Failed for mainnet");
+        assert!(mainnet_addr.to_string().starts_with("4"));
 
         let testnet_addr =
-            derive_address(TEST_VECTOR_1_SEED, "testnet", "").expect("Failed for testnet");
-        assert!(testnet_addr.starts_with("9") || testnet_addr.starts_with("A"));
+            derive_address(TEST_VECTOR_1_SEED, Network::Testnet, "").expect("Failed for testnet");
+        assert!(
+            testnet_addr.to_string().starts_with("9") || testnet_addr.to_string().starts_with("A")
+        );
 
         let stagenet_addr =
-            derive_address(TEST_VECTOR_2_SEED, "stagenet", "").expect("Failed for stagenet");
-        assert!(stagenet_addr.starts_with("5"));
+            derive_address(TEST_VECTOR_2_SEED, Network::Stagenet, "").expect("Failed for stagenet");
+        assert!(stagenet_addr.to_string().starts_with("5"));
 
         assert_ne!(mainnet_addr, testnet_addr);
         assert_ne!(mainnet_addr, stagenet_addr);
@@ -2845,24 +2838,18 @@ mod tests {
 
     #[test]
     fn test_derive_address_deterministic() {
-        let address1 =
-            derive_address(TEST_VECTOR_1_SEED, "mainnet", "").expect("Failed first derivation");
-        let address2 =
-            derive_address(TEST_VECTOR_1_SEED, "mainnet", "").expect("Failed second derivation");
+        let address1 = derive_address(TEST_VECTOR_1_SEED, Network::Mainnet, "")
+            .expect("Failed first derivation");
+        let address2 = derive_address(TEST_VECTOR_1_SEED, Network::Mainnet, "")
+            .expect("Failed second derivation");
 
         assert_eq!(address1, address2);
-        assert_eq!(address1.len(), 95);
+        assert_eq!(address1.to_string().len(), 95);
     }
 
     #[test]
     fn test_derive_address_invalid_seed() {
-        let result = derive_address("invalid seed words", "mainnet", "");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_derive_address_invalid_network() {
-        let result = derive_address(TEST_VECTOR_1_SEED, "invalidnet", "");
+        let result = derive_address("invalid seed words", Network::Mainnet, "");
         assert!(result.is_err());
     }
 
@@ -2870,23 +2857,26 @@ mod tests {
     fn test_seed_generation_and_address_derivation() {
         let seed = generate_seed(SeedFormat::Classic).expect("Failed to generate seed");
 
-        let mainnet_address = derive_address(&seed, "mainnet", "")
+        let mainnet_address = derive_address(&seed, Network::Mainnet, "")
             .expect("Failed to derive mainnet address from generated seed");
-        assert!(mainnet_address.starts_with("4"));
-        assert_eq!(mainnet_address.len(), 95);
+        assert!(mainnet_address.to_string().starts_with("4"));
+        assert_eq!(mainnet_address.to_string().len(), 95);
 
-        let testnet_address = derive_address(&seed, "testnet", "")
+        let testnet_address = derive_address(&seed, Network::Testnet, "")
             .expect("Failed to derive testnet address from generated seed");
-        assert!(testnet_address.starts_with("9") || testnet_address.starts_with("A"));
+        assert!(
+            testnet_address.to_string().starts_with("9")
+                || testnet_address.to_string().starts_with("A")
+        );
 
-        let stagenet_address = derive_address(&seed, "stagenet", "")
+        let stagenet_address = derive_address(&seed, Network::Stagenet, "")
             .expect("Failed to derive stagenet address from generated seed");
-        assert!(stagenet_address.starts_with("5"));
+        assert!(stagenet_address.to_string().starts_with("5"));
     }
 
     #[test]
     fn test_derive_keys_test_vector_1() {
-        let keys = derive_keys(TEST_VECTOR_1_SEED, "mainnet", "")
+        let keys = derive_keys(TEST_VECTOR_1_SEED, Network::Mainnet, "")
             .expect("Failed to derive keys from test vector 1");
 
         assert_eq!(
@@ -2899,7 +2889,7 @@ mod tests {
 
     #[test]
     fn test_derive_keys_test_vector_2_stagenet() {
-        let keys = derive_keys(TEST_VECTOR_2_SEED, "stagenet", "")
+        let keys = derive_keys(TEST_VECTOR_2_SEED, Network::Stagenet, "")
             .expect("Failed to derive keys from test vector 2");
 
         assert_eq!(
@@ -2999,19 +2989,13 @@ mod tests {
 
     #[test]
     fn test_derive_keys_invalid_seed() {
-        let result = derive_keys("invalid seed phrase", "mainnet", "");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_derive_keys_invalid_network() {
-        let result = derive_keys(TEST_VECTOR_1_SEED, "invalidnet", "");
+        let result = derive_keys("invalid seed phrase", Network::Mainnet, "");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_derive_keys_are_typed_bytes() {
-        let keys = derive_keys(TEST_VECTOR_1_SEED, "mainnet", "").unwrap();
+        let keys = derive_keys(TEST_VECTOR_1_SEED, Network::Mainnet, "").unwrap();
         assert!(keys.secret_spend_key.is_some());
         assert_ne!(*keys.secret_view_key, [0; 32]);
         assert_ne!(keys.public_spend_key, [0; 32]);
@@ -3345,7 +3329,7 @@ mod tests {
         let seed = "shoot exhibit rebuild laptop drive come off yard infant session subject tree steak antique liar hybrid";
 
         // Mainnet keys
-        let keys = derive_keys(seed, "mainnet", "hunter2").unwrap();
+        let keys = derive_keys(seed, Network::Mainnet, "hunter2").unwrap();
         assert_eq!(
             hex::encode(keys.secret_spend_key.as_deref().unwrap()),
             "08813258e8b396b2629ae9ecccd95ae33ec269ab0813754f43edfae937304909"
@@ -3365,11 +3349,11 @@ mod tests {
         assert_eq!(keys.address.to_string(), "48UhC3g9s9T8UjKHj1GQsPBjb4To7AS585VYujqCfgEcQtEMx2CKgHA4RLmRYqjsG7FsErzHZbeUb8SmMihoYme6S4MBnaZ");
 
         // Stagenet keys (the Feather wallet was on Stagenet)
-        let keys_stagenet = derive_keys(seed, "stagenet", "hunter2").unwrap();
+        let keys_stagenet = derive_keys(seed, Network::Stagenet, "hunter2").unwrap();
         assert_eq!(keys_stagenet.address.to_string(), "58gjGtb7WkZ8UjKHj1GQsPBjb4To7AS585VYujqCfgEcQtEMx2CKgHA4RLmRYqjsG7FsErzHZbeUb8SmMihoYme6S9wf8gy");
 
         // Without passphrase: different keys
-        let keys_no_pass = derive_keys(seed, "mainnet", "").unwrap();
+        let keys_no_pass = derive_keys(seed, Network::Mainnet, "").unwrap();
         assert_ne!(keys_no_pass.address, keys.address);
     }
 

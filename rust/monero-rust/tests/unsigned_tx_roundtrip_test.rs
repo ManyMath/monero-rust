@@ -11,7 +11,6 @@ use monero_rust::scanner::{
 use monero_rust::seed_compat::Seed;
 use monero_rust::wallet_compat::received_from_wallet_output;
 use monero_rust::wallet_compat::{Change, SignableTransactionBuilder, SpendableOutput, ViewPair};
-use monero_wallet::address::{MoneroAddress, Network};
 use monero_wallet::WalletOutput;
 #[cfg(feature = "mock-rpc")]
 use rand::SeedableRng;
@@ -26,7 +25,6 @@ use mock_rpc::MockRpc;
 
 const TEST_SEED: &str = "honked bagpipe alpine juicy faked afoot jostle claim cowl tunnel orphans negative pheasants feast jetting quote frown teeming cycling tribal womanly hills cottage daytime daytime";
 const NETWORK_STR: &str = "stagenet";
-const NETWORK: Network = Network::Stagenet;
 const START_BLOCK: u64 = 1386863;
 const END_BLOCK: u64 = 1386874;
 #[cfg(feature = "mock-rpc")]
@@ -41,8 +39,8 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
         return Ok(());
     }
 
-    let address = derive_address(TEST_SEED, NETWORK_STR, "")?;
-    let keys = derive_keys(TEST_SEED, NETWORK_STR, "")?;
+    let address = derive_address(TEST_SEED, monero_rust::Network::Stagenet, "")?;
+    let keys = derive_keys(TEST_SEED, monero_rust::Network::Stagenet, "")?;
 
     #[cfg(not(feature = "mock-rpc"))]
     let rpc = HttpRpc::new("http://127.0.0.1:38081".to_string())?;
@@ -117,8 +115,7 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
     builder.add_input(spendable);
 
     let send_amount = 1_000_000_000u64;
-    let dest_addr = MoneroAddress::from_str(NETWORK, &address)?;
-    builder.add_payment(dest_addr, send_amount);
+    builder.add_payment(address, send_amount);
 
     let signable = builder.build()?;
     let expected_fee = signable.fee();

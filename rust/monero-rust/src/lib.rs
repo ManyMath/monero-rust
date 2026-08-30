@@ -67,6 +67,7 @@ pub use key_image_import::{
 };
 
 // -- Scanning --
+pub use monero_wallet::address::{MoneroAddress, Network};
 pub use scanner::{
     daemon_height,
     // Key derivation

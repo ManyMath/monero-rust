@@ -217,7 +217,7 @@ mod tests {
         )
         .unwrap();
         let words = seed.to_string(Coin::Monero);
-        let expected = crate::scanner::derive_address(&words, "mainnet", "").unwrap();
+        let expected = crate::scanner::derive_address(&words, crate::Network::Mainnet, "").unwrap();
         seed.crypt("password");
         let encrypted = seed.to_string(Coin::Monero);
         assert_eq!(
@@ -225,12 +225,25 @@ mod tests {
             SeedError::EncryptedPolyseed
         );
         for passphrase in ["", "password", "wrong"] {
-            assert!(crate::scanner::derive_address(&encrypted, "mainnet", passphrase).is_err());
-            assert!(crate::scanner::derive_keys(&encrypted, "mainnet", passphrase).is_err());
+            assert!(crate::scanner::derive_address(
+                &encrypted,
+                crate::Network::Mainnet,
+                passphrase
+            )
+            .is_err());
+            assert!(
+                crate::scanner::derive_keys(&encrypted, crate::Network::Mainnet, passphrase)
+                    .is_err()
+            );
         }
         seed.crypt("password");
         assert_eq!(
-            crate::scanner::derive_address(&seed.to_string(Coin::Monero), "mainnet", "").unwrap(),
+            crate::scanner::derive_address(
+                &seed.to_string(Coin::Monero),
+                crate::Network::Mainnet,
+                ""
+            )
+            .unwrap(),
             expected
         );
     }

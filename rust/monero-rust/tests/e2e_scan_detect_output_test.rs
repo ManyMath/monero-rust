@@ -71,18 +71,18 @@ impl RpcConnection for MockRpcConnection {
 
 #[test]
 fn test_step1_address_derivation() {
-    let result = derive_address(TEST_SEED, "stagenet", "");
+    let result = derive_address(TEST_SEED, monero_rust::Network::Stagenet, "");
     assert!(result.is_ok(), "Address derivation should succeed");
 
     let address = result.unwrap();
-    assert_eq!(address, EXPECTED_ADDRESS);
+    assert_eq!(address.to_string(), EXPECTED_ADDRESS);
 }
 
 #[tokio::test]
 async fn test_step2_scan_and_detect_output() {
-    let address =
-        derive_address(TEST_SEED, "stagenet", "").expect("Address derivation should succeed");
-    assert_eq!(address, EXPECTED_ADDRESS);
+    let address = derive_address(TEST_SEED, monero_rust::Network::Stagenet, "")
+        .expect("Address derivation should succeed");
+    assert_eq!(address.to_string(), EXPECTED_ADDRESS);
 
     let mock_rpc = MockRpcConnection::new();
     let rpc = Rpc::new_with_connection(mock_rpc);

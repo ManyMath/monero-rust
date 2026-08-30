@@ -27,11 +27,11 @@ fn import_honked_keys() {
     let mnemonic = imported.mnemonic.as_deref().expect("missing mnemonic");
     assert_eq!(mnemonic, HONKED_MNEMONIC);
 
-    let address =
-        monero_rust::derive_address(mnemonic, "stagenet", "").expect("address derivation failed");
-    assert_eq!(address, HONKED_STAGENET_ADDRESS);
+    let address = monero_rust::derive_address(mnemonic, monero_rust::Network::Stagenet, "")
+        .expect("address derivation failed");
+    assert_eq!(address.to_string(), HONKED_STAGENET_ADDRESS);
 
-    let keys = monero_rust::derive_keys(mnemonic, "stagenet", "").unwrap();
+    let keys = monero_rust::derive_keys(mnemonic, monero_rust::Network::Stagenet, "").unwrap();
     assert_eq!(imported.spend_public_key, keys.public_spend_key);
     assert_eq!(imported.view_public_key, keys.public_view_key);
 }
@@ -51,9 +51,9 @@ fn import_vocal_keys() {
     let mnemonic = imported.mnemonic.as_deref().expect("missing mnemonic");
     assert_eq!(mnemonic, VOCAL_MNEMONIC);
 
-    let address =
-        monero_rust::derive_address(mnemonic, "stagenet", "").expect("address derivation failed");
-    assert_eq!(address, VOCAL_STAGENET_ADDRESS);
+    let address = monero_rust::derive_address(mnemonic, monero_rust::Network::Stagenet, "")
+        .expect("address derivation failed");
+    assert_eq!(address.to_string(), VOCAL_STAGENET_ADDRESS);
 }
 
 #[test]

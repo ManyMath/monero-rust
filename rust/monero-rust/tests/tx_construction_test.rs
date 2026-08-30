@@ -10,7 +10,7 @@ use monero_rust::wallet_compat::received_from_wallet_output;
 use monero_rust::wallet_compat::{
     AddressSpec, Change, SignableTransactionBuilder, SpendableOutput, ViewPair,
 };
-use monero_wallet::address::{MoneroAddress, Network};
+use monero_wallet::address::Network;
 use monero_wallet::WalletOutput;
 #[cfg(feature = "mock-rpc")]
 use rand::SeedableRng;
@@ -57,11 +57,11 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Skipped: no stagenet node at 127.0.0.1:38081");
         return Ok(());
     }
-    let address = derive_address(TEST_SEED, NETWORK_STR, "")?;
-    let keys = derive_keys(TEST_SEED, NETWORK_STR, "")?;
+    let address = derive_address(TEST_SEED, monero_rust::Network::Stagenet, "")?;
+    let keys = derive_keys(TEST_SEED, monero_rust::Network::Stagenet, "")?;
 
-    assert!(address.starts_with("5"));
-    assert_eq!(address.len(), 95);
+    assert!(address.to_string().starts_with("5"));
+    assert_eq!(address.to_string().len(), 95);
 
     #[cfg(not(feature = "mock-rpc"))]
     let rpc = HttpRpc::new(NODE_URL.to_string())?;
@@ -132,7 +132,7 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
     let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
 
     let derived_address = view_pair.address(NETWORK, AddressSpec::Standard);
-    assert_eq!(derived_address.to_string(), address);
+    assert_eq!(derived_address, address);
 
     let test_output = &all_outputs[0];
     let output_bytes = hex::decode(&test_output.received_output_bytes)?;
@@ -148,8 +148,7 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
     builder.add_input(spendable);
 
     let send_amount = 1_000_000_000u64;
-    let dest_addr = MoneroAddress::from_str(NETWORK, &address)?;
-    builder.add_payment(dest_addr, send_amount);
+    builder.add_payment(address, send_amount);
 
     let signable = builder.build()?;
 
@@ -239,8 +238,8 @@ async fn test_address_derivation_consistency() -> Result<(), Box<dyn std::error:
         eprintln!("Skipped: no stagenet node at 127.0.0.1:38081");
         return Ok(());
     }
-    let address1 = derive_address(TEST_SEED, NETWORK_STR, "")?;
-    let address2 = derive_address(TEST_SEED, NETWORK_STR, "")?;
+    let address1 = derive_address(TEST_SEED, monero_rust::Network::Stagenet, "")?;
+    let address2 = derive_address(TEST_SEED, monero_rust::Network::Stagenet, "")?;
 
     assert_eq!(address1, address2);
 
@@ -251,13 +250,11 @@ async fn test_address_derivation_consistency() -> Result<(), Box<dyn std::error:
     let spend_scalar = Scalar::from_bytes_mod_order(spend_bytes);
     let spend_point = &spend_scalar * ED25519_BASEPOINT_TABLE;
 
-    let keys = derive_keys(TEST_SEED, NETWORK_STR, "")?;
+    let keys = derive_keys(TEST_SEED, monero_rust::Network::Stagenet, "")?;
     let view_scalar = Scalar::from_bytes_mod_order(*keys.secret_view_key);
 
     let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
-    let address3 = view_pair
-        .address(NETWORK, AddressSpec::Standard)
-        .to_string();
+    let address3 = view_pair.address(NETWORK, AddressSpec::Standard);
 
     assert_eq!(address1, address3);
 
@@ -363,7 +360,7 @@ async fn test_transaction_with_multiple_inputs() -> Result<(), Box<dyn std::erro
             let spend_scalar = Scalar::from_bytes_mod_order(spend_bytes);
             let spend_point = &spend_scalar * ED25519_BASEPOINT_TABLE;
 
-            let keys = derive_keys(TEST_SEED, NETWORK_STR, "")?;
+            let keys = derive_keys(TEST_SEED, monero_rust::Network::Stagenet, "")?;
             let view_scalar = Scalar::from_bytes_mod_order(*keys.secret_view_key);
             let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
 
@@ -384,10 +381,9 @@ async fn test_transaction_with_multiple_inputs() -> Result<(), Box<dyn std::erro
                 total_input += output.amount;
             }
 
-            let address = derive_address(TEST_SEED, NETWORK_STR, "")?;
-            let dest_addr = MoneroAddress::from_str(NETWORK, &address)?;
+            let address = derive_address(TEST_SEED, monero_rust::Network::Stagenet, "")?;
             let send_amount = 1_000_000_000u64;
-            builder.add_payment(dest_addr, send_amount);
+            builder.add_payment(address, send_amount);
 
             let signable = builder.build()?;
 
