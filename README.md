@@ -5,11 +5,10 @@ Monero wallet tooling in Rust.
 ## Workspace
 
 - `rust/monero-rust`: wallet library
-- `rust/monero-epee-bin-serde`: Epee binary serialization
-- `rust/cuprate-cryptonight`: legacy CryptoNight hashing used by wallet compatibility code
-- `rust/monero-utils`: utility crates awaiting suitable upstream published releases
+- `rust/monero-utils`: local utility crates retained until upstream releases can replace them
 
-The wallet core uses the published `monero-oxide` and `monero-wallet` crates.
+The wallet library depends on the published `monero-oxide` and `monero-wallet` crates.
+CryptoNight hashing and Epee serialization use pinned upstream Git revisions.
 
 ## Related repositories
 
@@ -25,10 +24,11 @@ The wallet core uses the published `monero-oxide` and `monero-wallet` crates.
 ## Testing
 
 ```sh
-scripts/test-all.sh    # --no-regtest skips the tier that needs monerod
+scripts/test-fast.sh   # check formatting, compile, and run selected unit tests
+scripts/test-all.sh    # run the full suite; use --no-regtest to skip regtest
 ```
 
-A missing optional toolchain is reported as a skip, not a pass.
+The full suite reports skips when `wasm-bindgen-test-runner` or `monerod` is unavailable.
 
 ## Acknowledgements
 
