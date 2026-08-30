@@ -103,8 +103,7 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
     let spend_scalar = Scalar::from_bytes_mod_order(spend_bytes);
     let spend_point = &spend_scalar * ED25519_BASEPOINT_TABLE;
 
-    let view_bytes = hex::decode(&keys.secret_view_key)?;
-    let view_scalar = Scalar::from_bytes_mod_order(view_bytes[..32].try_into()?);
+    let view_scalar = Scalar::from_bytes_mod_order(*keys.secret_view_key);
     let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
 
     let test_output = &all_outputs[0];

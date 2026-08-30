@@ -72,11 +72,11 @@ fn hub_derive_subaddress_with_bip39() {
 #[test]
 fn hub_derive_keys_with_bip39() {
     let keys = derive_keys(BIP39_SEED, "mainnet", "").unwrap();
-    assert_eq!(keys.address, BIP39_EXPECTED_ADDRESS);
-    assert!(!keys.secret_spend_key.is_empty());
-    assert!(!keys.secret_view_key.is_empty());
-    assert!(!keys.public_spend_key.is_empty());
-    assert!(!keys.public_view_key.is_empty());
+    assert_eq!(keys.address.to_string(), BIP39_EXPECTED_ADDRESS);
+    assert!(keys.secret_spend_key.is_some());
+    assert_ne!(*keys.secret_view_key, [0; 32]);
+    assert_ne!(keys.public_spend_key, [0; 32]);
+    assert_ne!(keys.public_view_key, [0; 32]);
 }
 
 #[test]
@@ -123,7 +123,7 @@ fn hub_full_bip39_restore_pipeline() {
 
     // 3. Derive keys (wallet initialization)
     let keys = derive_keys(BIP39_SEED, "mainnet", "").unwrap();
-    assert_eq!(keys.address, BIP39_EXPECTED_ADDRESS);
+    assert_eq!(keys.address.to_string(), BIP39_EXPECTED_ADDRESS);
 
     // 4. Derive primary address
     let address = derive_address(BIP39_SEED, "mainnet", "").unwrap();
@@ -201,7 +201,7 @@ fn hub_pre_resolve_classic_passthrough() {
     // Simulating pre_resolve_bip39: word count != 12, so returns seed unchanged
     assert_ne!(classic.split_whitespace().count(), 12);
     let keys = derive_keys(classic, "mainnet", "").unwrap();
-    assert!(!keys.address.is_empty());
+    assert!(!keys.address.to_string().is_empty());
 }
 
 #[test]

@@ -5,6 +5,11 @@
 
 use crate::monero_rpc::{BlockOutputIndices, GetBlocksFastResponse, Rpc, RpcConnection};
 use crate::seed_compat::{Language, Seed};
+use curve25519_dalek::{
+    constants::ED25519_BASEPOINT_TABLE,
+    edwards::{CompressedEdwardsY, EdwardsPoint},
+    scalar::Scalar,
+};
 use monero_oxide::{
     block::{Block as OxideBlock, BlockHeader as OxideBlockHeader},
     transaction::{
@@ -18,11 +23,6 @@ use monero_wallet::{
     extra::PaymentId,
     interface::ScannableBlock,
     Scanner, ViewPair as OxideViewPair, WalletOutput as OxideWalletOutput,
-};
-use curve25519_dalek::{
-    constants::ED25519_BASEPOINT_TABLE,
-    edwards::{CompressedEdwardsY, EdwardsPoint},
-    scalar::Scalar,
 };
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
@@ -179,13 +179,14 @@ pub struct WalletScanConfig {
     pub passphrase: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Zeroize, ZeroizeOnDrop)]
+#[derive(Debug, Clone)]
 pub struct DerivedKeys {
-    pub secret_spend_key: String,
-    pub secret_view_key: String,
-    pub public_spend_key: String,
-    pub public_view_key: String,
-    pub address: String,
+    /// `None` for view-only wallets.
+    pub secret_spend_key: Option<Zeroizing<[u8; 32]>>,
+    pub secret_view_key: Zeroizing<[u8; 32]>,
+    pub public_spend_key: [u8; 32],
+    pub public_view_key: [u8; 32],
+    pub address: MoneroAddress,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Zeroize)]
@@ -501,11 +502,11 @@ pub fn derive_keys_from_view_only(
     let view_point: EdwardsPoint = &view_scalar * ED25519_BASEPOINT_TABLE;
     let address = standard_address(network, spend_point, view_point);
     Ok(DerivedKeys {
-        secret_spend_key: String::new(),
-        secret_view_key: hex::encode(view_scalar.to_bytes()),
-        public_spend_key: hex::encode(spend_point.compress().to_bytes()),
-        public_view_key: hex::encode(view_point.compress().to_bytes()),
-        address: address.to_string(),
+        secret_spend_key: None,
+        secret_view_key: Zeroizing::new(view_scalar.to_bytes()),
+        public_spend_key: spend_point.compress().to_bytes(),
+        public_view_key: view_point.compress().to_bytes(),
+        address,
     })
 }
 
@@ -661,11 +662,11 @@ pub fn derive_keys(
     let address = standard_address(network, spend_point, view_point);
 
     Ok(DerivedKeys {
-        secret_spend_key: hex::encode(spend_scalar.to_bytes()),
-        secret_view_key: hex::encode(view_scalar.to_bytes()),
-        public_spend_key: hex::encode(spend_point.compress().to_bytes()),
-        public_view_key: hex::encode(view_point.compress().to_bytes()),
-        address: address.to_string(),
+        secret_spend_key: Some(Zeroizing::new(spend_scalar.to_bytes())),
+        secret_view_key: Zeroizing::new(view_scalar.to_bytes()),
+        public_spend_key: spend_point.compress().to_bytes(),
+        public_view_key: view_point.compress().to_bytes(),
+        address,
     })
 }
 
@@ -770,8 +771,8 @@ pub async fn scan_block_for_outputs_with_url_and_lookahead(
     passphrase: &str,
 ) -> Result<BlockScanResult, String> {
     use crate::monero_rpc::HttpRpc;
-    let rpc = HttpRpc::new(node_url.to_string())
-        .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
+    let rpc =
+        HttpRpc::new(node_url.to_string()).map_err(|e| format!("Failed to create RPC: {:?}", e))?;
     scan_block_for_outputs_with_lookahead(
         &rpc,
         block_height,
@@ -1127,8 +1128,8 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
     let tx_count = 1 + txs.len();
     let mut spent_key_images = Vec::new();
     let mut spent_key_image_tx_hashes = Vec::new();
-    for (tx_hash, tx) in std::iter::once((miner_tx_hash, &miner_tx))
-        .chain(txs.iter().map(|(hash, tx)| (*hash, tx)))
+    for (tx_hash, tx) in
+        std::iter::once((miner_tx_hash, &miner_tx)).chain(txs.iter().map(|(hash, tx)| (*hash, tx)))
     {
         let tx_hash_hex = hex::encode(tx_hash);
         for input in &tx.prefix().inputs {
@@ -1588,8 +1589,8 @@ pub async fn scan_blocks_batch_with_url(
     passphrase: &str,
 ) -> Result<Vec<BlockScanResult>, String> {
     use crate::monero_rpc::HttpRpc;
-    let rpc = HttpRpc::new(node_url.to_string())
-        .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
+    let rpc =
+        HttpRpc::new(node_url.to_string()).map_err(|e| format!("Failed to create RPC: {:?}", e))?;
     scan_blocks_batch(
         &rpc,
         start_height,
@@ -1944,8 +1945,8 @@ pub async fn scan_blocks_batch_multi_wallet_with_url(
     prune: bool,
 ) -> Result<Vec<MultiWalletScanResult>, String> {
     use crate::monero_rpc::HttpRpc;
-    let rpc = HttpRpc::new(node_url.to_string())
-        .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
+    let rpc =
+        HttpRpc::new(node_url.to_string()).map_err(|e| format!("Failed to create RPC: {:?}", e))?;
     scan_blocks_batch_multi_wallet(&rpc, start_height, wallet_configs, prune).await
 }
 
@@ -2028,8 +2029,8 @@ pub async fn fetch_blocks_batch_with_url(
     prune: bool,
 ) -> Result<FetchedBlocks, String> {
     use crate::monero_rpc::HttpRpc;
-    let rpc = HttpRpc::new(node_url.to_string())
-        .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
+    let rpc =
+        HttpRpc::new(node_url.to_string()).map_err(|e| format!("Failed to create RPC: {:?}", e))?;
     fetch_blocks_batch(&rpc, start_height, prune).await
 }
 
@@ -2128,8 +2129,8 @@ pub async fn scan_blocks_batch_with_history_url(
     passphrase: &str,
 ) -> Result<(Vec<BlockScanResult>, u64), String> {
     use crate::monero_rpc::HttpRpc;
-    let rpc = HttpRpc::new(node_url.to_string())
-        .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
+    let rpc =
+        HttpRpc::new(node_url.to_string()).map_err(|e| format!("Failed to create RPC: {:?}", e))?;
     scan_blocks_batch_with_history(
         &rpc,
         start_height,
@@ -2187,8 +2188,8 @@ pub async fn fetch_blocks_batch_with_history_url(
     prune: bool,
 ) -> Result<(FetchedBlocks, u64), String> {
     use crate::monero_rpc::HttpRpc;
-    let rpc = HttpRpc::new(node_url.to_string())
-        .map_err(|e| format!("Failed to create RPC: {:?}", e))?;
+    let rpc =
+        HttpRpc::new(node_url.to_string()).map_err(|e| format!("Failed to create RPC: {:?}", e))?;
     fetch_blocks_batch_with_history(&rpc, start_height, known_hashes, prune).await
 }
 
@@ -2286,8 +2287,8 @@ pub async fn scan_block_multi_wallet<R: RpcConnection + Send + Sync + Clone + 's
     // Extract spent key images (shared across all wallets)
     let mut spent_key_images = Vec::new();
     let mut spent_key_image_tx_hashes = Vec::new();
-    for (tx_hash, tx) in std::iter::once((miner_tx_hash, &miner_tx))
-        .chain(txs.iter().map(|(hash, tx)| (*hash, tx)))
+    for (tx_hash, tx) in
+        std::iter::once((miner_tx_hash, &miner_tx)).chain(txs.iter().map(|(hash, tx)| (*hash, tx)))
     {
         let tx_hash_hex = hex::encode(tx_hash);
         for input in &tx.prefix().inputs {
@@ -2309,19 +2310,18 @@ pub async fn scan_block_multi_wallet<R: RpcConnection + Send + Sync + Clone + 's
         join_set.spawn(async move {
             let network = parse_network(&wallet_config.network)?;
             let passphrase = wallet_config.passphrase.as_str();
-            let (spend_point, view_scalar, address) = if let Some((vs, sp)) =
-                parse_view_only_keys(&wallet_config.mnemonic)
-            {
-                let vp: EdwardsPoint = &vs * ED25519_BASEPOINT_TABLE;
-                let addr = standard_address(network, sp, vp).to_string();
-                (sp, vs, addr)
-            } else {
-                let seed = resolve_seed(&wallet_config.mnemonic)?;
-                let addr = address_from_seed(&seed, network, passphrase);
-                let sp = spend_key_from_seed(&seed, passphrase);
-                let vs = view_key_from_seed(&seed, passphrase);
-                (sp, vs, addr)
-            };
+            let (spend_point, view_scalar, address) =
+                if let Some((vs, sp)) = parse_view_only_keys(&wallet_config.mnemonic) {
+                    let vp: EdwardsPoint = &vs * ED25519_BASEPOINT_TABLE;
+                    let addr = standard_address(network, sp, vp).to_string();
+                    (sp, vs, addr)
+                } else {
+                    let seed = resolve_seed(&wallet_config.mnemonic)?;
+                    let addr = address_from_seed(&seed, network, passphrase);
+                    let sp = spend_key_from_seed(&seed, passphrase);
+                    let vs = view_key_from_seed(&seed, passphrase);
+                    (sp, vs, addr)
+                };
 
             let mut scanner = oxide_scanner_from_keys(&spend_point, &view_scalar)?;
             register_subaddresses(&mut scanner, wallet_config.lookahead);
@@ -2426,8 +2426,8 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
     // Extract spent key images (shared across all wallets)
     let mut spent_key_images = Vec::new();
     let mut spent_key_image_tx_hashes = Vec::new();
-    for (tx_hash, tx) in std::iter::once((miner_tx_hash, &miner_tx))
-        .chain(txs.iter().map(|(hash, tx)| (*hash, tx)))
+    for (tx_hash, tx) in
+        std::iter::once((miner_tx_hash, &miner_tx)).chain(txs.iter().map(|(hash, tx)| (*hash, tx)))
     {
         let tx_hash_hex = hex::encode(tx_hash);
         for input in &tx.prefix().inputs {
@@ -2544,7 +2544,15 @@ pub async fn scan_mempool_for_outputs_with_account_lookahead(
     use crate::monero_rpc::HttpRpc;
     let rpc = HttpRpc::new(node_url.to_string())
         .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
-    scan_mempool(&rpc, mnemonic, network_str, lookahead, accounts_to_scan, passphrase).await
+    scan_mempool(
+        &rpc,
+        mnemonic,
+        network_str,
+        lookahead,
+        accounts_to_scan,
+        passphrase,
+    )
+    .await
 }
 
 fn retain_mempool_outputs_for_accounts(
@@ -2647,7 +2655,7 @@ pub async fn scan_mempool<R: RpcConnection>(
         for output in &scanned {
             outputs.push(map_oxide_output(
                 output,
-                0,        // unconfirmed: still in the mempool
+                0,         // unconfirmed: still in the mempool
                 [0u8; 32], // mempool transactions are never coinbase
                 key_image_scalar,
             )?);
@@ -2881,13 +2889,12 @@ mod tests {
         let keys = derive_keys(TEST_VECTOR_1_SEED, "mainnet", "")
             .expect("Failed to derive keys from test vector 1");
 
-        assert_eq!(keys.secret_spend_key, TEST_VECTOR_1_SPEND_KEY);
-        assert_eq!(keys.secret_view_key, TEST_VECTOR_1_VIEW_KEY);
-        assert_eq!(keys.address, TEST_VECTOR_1_ADDRESS);
-        assert_eq!(keys.secret_spend_key.len(), 64);
-        assert_eq!(keys.secret_view_key.len(), 64);
-        assert_eq!(keys.public_spend_key.len(), 64);
-        assert_eq!(keys.public_view_key.len(), 64);
+        assert_eq!(
+            hex::encode(keys.secret_spend_key.as_deref().unwrap()),
+            TEST_VECTOR_1_SPEND_KEY
+        );
+        assert_eq!(hex::encode(&*keys.secret_view_key), TEST_VECTOR_1_VIEW_KEY);
+        assert_eq!(keys.address.to_string(), TEST_VECTOR_1_ADDRESS);
     }
 
     #[test]
@@ -2895,9 +2902,12 @@ mod tests {
         let keys = derive_keys(TEST_VECTOR_2_SEED, "stagenet", "")
             .expect("Failed to derive keys from test vector 2");
 
-        assert_eq!(keys.secret_spend_key, TEST_VECTOR_2_SPEND_KEY);
-        assert_eq!(keys.secret_view_key, TEST_VECTOR_2_VIEW_KEY);
-        assert_eq!(keys.address, TEST_VECTOR_2_ADDRESS);
+        assert_eq!(
+            hex::encode(keys.secret_spend_key.as_deref().unwrap()),
+            TEST_VECTOR_2_SPEND_KEY
+        );
+        assert_eq!(hex::encode(&*keys.secret_view_key), TEST_VECTOR_2_VIEW_KEY);
+        assert_eq!(keys.address.to_string(), TEST_VECTOR_2_ADDRESS);
     }
 
     #[test]
@@ -3000,20 +3010,12 @@ mod tests {
     }
 
     #[test]
-    fn test_derive_keys_hex_format() {
+    fn test_derive_keys_are_typed_bytes() {
         let keys = derive_keys(TEST_VECTOR_1_SEED, "mainnet", "").unwrap();
-
-        // All hex strings should be 64 characters (32 bytes)
-        assert_eq!(keys.secret_spend_key.len(), 64);
-        assert_eq!(keys.secret_view_key.len(), 64);
-        assert_eq!(keys.public_spend_key.len(), 64);
-        assert_eq!(keys.public_view_key.len(), 64);
-
-        // Should be valid hex
-        assert!(hex::decode(&keys.secret_spend_key).is_ok());
-        assert!(hex::decode(&keys.secret_view_key).is_ok());
-        assert!(hex::decode(&keys.public_spend_key).is_ok());
-        assert!(hex::decode(&keys.public_view_key).is_ok());
+        assert!(keys.secret_spend_key.is_some());
+        assert_ne!(*keys.secret_view_key, [0; 32]);
+        assert_ne!(keys.public_spend_key, [0; 32]);
+        assert_ne!(keys.public_view_key, [0; 32]);
     }
 
     #[test]
@@ -3157,22 +3159,6 @@ mod tests {
         assert_eq!(config.network, cloned.network);
         assert_eq!(config.lookahead.account, cloned.lookahead.account);
         assert_eq!(config.lookahead.subaddress, cloned.lookahead.subaddress);
-    }
-
-    #[test]
-    fn test_derived_keys_serialization() {
-        let keys = DerivedKeys {
-            secret_spend_key: "abc123".to_string(),
-            secret_view_key: "def456".to_string(),
-            public_spend_key: "ghi789".to_string(),
-            public_view_key: "jkl012".to_string(),
-            address: "test_address".to_string(),
-        };
-
-        let json = serde_json::to_string(&keys).unwrap();
-        let deserialized: DerivedKeys = serde_json::from_str(&json).unwrap();
-        assert_eq!(keys.secret_spend_key, deserialized.secret_spend_key);
-        assert_eq!(keys.address, deserialized.address);
     }
 
     #[test]
@@ -3361,26 +3347,26 @@ mod tests {
         // Mainnet keys
         let keys = derive_keys(seed, "mainnet", "hunter2").unwrap();
         assert_eq!(
-            keys.secret_spend_key,
+            hex::encode(keys.secret_spend_key.as_deref().unwrap()),
             "08813258e8b396b2629ae9ecccd95ae33ec269ab0813754f43edfae937304909"
         );
         assert_eq!(
-            keys.secret_view_key,
+            hex::encode(&*keys.secret_view_key),
             "1be97a06de0e8e32952e41fa80023e5e0d96af4e61d6d1c2f521f94d12c3170b"
         );
         assert_eq!(
-            keys.public_spend_key,
+            hex::encode(keys.public_spend_key),
             "b4e3d0ed0ab2a22cb567d2edb7d33e402d0bf1a38b75fb1adb7cca6116f2b18e"
         );
         assert_eq!(
-            keys.public_view_key,
+            hex::encode(keys.public_view_key),
             "c9efbf531801051471e29c7c2cc36458e10f5a4f2041842c818ed1654c938fde"
         );
-        assert_eq!(keys.address, "48UhC3g9s9T8UjKHj1GQsPBjb4To7AS585VYujqCfgEcQtEMx2CKgHA4RLmRYqjsG7FsErzHZbeUb8SmMihoYme6S4MBnaZ");
+        assert_eq!(keys.address.to_string(), "48UhC3g9s9T8UjKHj1GQsPBjb4To7AS585VYujqCfgEcQtEMx2CKgHA4RLmRYqjsG7FsErzHZbeUb8SmMihoYme6S4MBnaZ");
 
         // Stagenet keys (the Feather wallet was on Stagenet)
         let keys_stagenet = derive_keys(seed, "stagenet", "hunter2").unwrap();
-        assert_eq!(keys_stagenet.address, "58gjGtb7WkZ8UjKHj1GQsPBjb4To7AS585VYujqCfgEcQtEMx2CKgHA4RLmRYqjsG7FsErzHZbeUb8SmMihoYme6S9wf8gy");
+        assert_eq!(keys_stagenet.address.to_string(), "58gjGtb7WkZ8UjKHj1GQsPBjb4To7AS585VYujqCfgEcQtEMx2CKgHA4RLmRYqjsG7FsErzHZbeUb8SmMihoYme6S9wf8gy");
 
         // Without passphrase: different keys
         let keys_no_pass = derive_keys(seed, "mainnet", "").unwrap();

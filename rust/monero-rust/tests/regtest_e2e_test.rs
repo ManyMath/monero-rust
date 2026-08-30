@@ -200,11 +200,7 @@ async fn builds_signs_and_broadcasts_a_transaction() {
     let seed = Seed::from_string(Zeroizing::new(SEED.to_string())).expect("seed");
     let spend_scalar = Scalar::from_bytes_mod_order(*seed.entropy());
     let spend_point = &spend_scalar * ED25519_BASEPOINT_TABLE;
-    let view_scalar = Scalar::from_bytes_mod_order(
-        hex::decode(&keys.secret_view_key).expect("view hex")[..32]
-            .try_into()
-            .expect("32 bytes"),
-    );
+    let view_scalar = Scalar::from_bytes_mod_order(*keys.secret_view_key);
     let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
 
     let protocol = rpc.get_protocol().await.expect("get_protocol");

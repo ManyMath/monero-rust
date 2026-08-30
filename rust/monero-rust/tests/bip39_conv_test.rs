@@ -120,11 +120,11 @@ fn test_derive_keys_with_bip39_input() {
     let bip39 = "color ranch color remove subway public water embrace before begin liberty fault";
     let keys = derive_keys(bip39, "mainnet", "").unwrap();
     assert_eq!(
-        keys.address,
+        keys.address.to_string(),
         "49MggvPosJugF8Zq7WAKbsSchz6vbyL6YiUxM4ryfGQDXphs6wiWiXLFWCSshnLPcceGTWUaKfWWMHQAAKESV3TQJVQsL9a"
     );
-    assert!(!keys.secret_spend_key.is_empty());
-    assert!(!keys.secret_view_key.is_empty());
+    assert!(keys.secret_spend_key.is_some());
+    assert_ne!(*keys.secret_view_key, [0; 32]);
 }
 
 #[test]
@@ -210,7 +210,7 @@ fn test_resolve_seed_with_bip39() {
     // Verify it produces the same keys as the explicit conversion path
     let keys = derive_keys(bip39, "mainnet", "").unwrap();
     assert_eq!(
-        keys.address,
+        keys.address.to_string(),
         "49MggvPosJugF8Zq7WAKbsSchz6vbyL6YiUxM4ryfGQDXphs6wiWiXLFWCSshnLPcceGTWUaKfWWMHQAAKESV3TQJVQsL9a"
     );
 }
@@ -222,7 +222,7 @@ fn test_resolve_seed_with_classic_25_word() {
         dating dwindling king";
     let _seed = resolve_seed(classic).unwrap();
     let keys = derive_keys(classic, "mainnet", "").unwrap();
-    assert!(!keys.address.is_empty());
+    assert!(!keys.address.to_string().is_empty());
 }
 
 #[test]
@@ -262,7 +262,7 @@ fn test_resolve_seed_with_polyseed() {
     // Polyseed should pass through resolve_seed without BIP39 conversion
     let _seed = resolve_seed(&polyseed).unwrap();
     let keys = derive_keys(&polyseed, "mainnet", "").unwrap();
-    assert!(!keys.address.is_empty());
+    assert!(!keys.address.to_string().is_empty());
 }
 
 #[test]
@@ -295,7 +295,7 @@ fn test_bip39_passphrase_cake_wallet_vector() {
     );
     let keys = derive_keys(&legacy, "mainnet", "").unwrap();
     assert_eq!(
-        keys.address,
+        keys.address.to_string(),
         "44KghHsEKVxbf9kpZ5Jry33rbX2J3DkWV3HVKEMsaAykY1Gmi2s55F6fsTB41U98dnSjgswjhc7HkY9nq9nwP4cDERWwpsM"
     );
 
@@ -321,7 +321,7 @@ fn test_resolve_seed_bip39_with_passphrase() {
     );
     let keys = derive_keys(&legacy, "mainnet", "").unwrap();
     assert_eq!(
-        keys.address,
+        keys.address.to_string(),
         "47ojc1ijXPhhcB9tS9b7XoeYnqSj7AT9U9JGtYVEqmuKLnSTqhZ31UxiJJvDavsDKtBVM6n2XKUqciV9GfPtytpE2BVVxd9"
     );
 
@@ -335,7 +335,7 @@ fn test_resolve_seed_bip39_with_passphrase() {
     );
     let keys_a1 = derive_keys(&legacy_a1, "mainnet", "").unwrap();
     assert_eq!(
-        keys_a1.address,
+        keys_a1.address.to_string(),
         "42cmFtDdVjEQaP4aYPKfTEh1NrCxTpd6XGNSGyvphacMHqEKK3nWHVP6VgZV48172386mQWHSashEXpdmEdDv6vF2yu5PeP"
     );
 }
@@ -354,7 +354,7 @@ fn test_resolve_seed_bip39_with_passphrase_wallet2() {
     );
     let keys = derive_keys(&legacy, "mainnet", "").unwrap();
     assert_eq!(
-        keys.address,
+        keys.address.to_string(),
         "42CCXP59L21BEwWGKVRf7NTkWe9r7e1AAgC9Szw9pczAaij6kguRRaUbJqskePJUFfXLpWf4p7ZA4Pqfq6hBMvw66d2Mzqx"
     );
 }
@@ -388,7 +388,7 @@ fn test_resolve_seed_bip39_passthrough_classic() {
     let keys_default = derive_keys(classic, "mainnet", "").unwrap();
     // Can't compare Seed directly, but keys should match
     assert_eq!(
-        keys_default.address,
+        keys_default.address.to_string(),
         derive_address(classic, "mainnet", "").unwrap()
     );
 }
@@ -399,5 +399,5 @@ fn test_resolve_seed_bip39_passthrough_polyseed() {
     // Polyseed (16 words) should pass through regardless of passphrase/account_index
     let _seed = resolve_seed_bip39(&polyseed, "pass", 3).unwrap();
     let keys = derive_keys(&polyseed, "mainnet", "").unwrap();
-    assert!(!keys.address.is_empty());
+    assert!(!keys.address.to_string().is_empty());
 }

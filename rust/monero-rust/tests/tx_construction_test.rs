@@ -128,8 +128,7 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
     let spend_scalar = Scalar::from_bytes_mod_order(spend_bytes);
     let spend_point = &spend_scalar * ED25519_BASEPOINT_TABLE;
 
-    let view_bytes = hex::decode(&keys.secret_view_key)?;
-    let view_scalar = Scalar::from_bytes_mod_order(view_bytes[..32].try_into()?);
+    let view_scalar = Scalar::from_bytes_mod_order(*keys.secret_view_key);
     let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
 
     let derived_address = view_pair.address(NETWORK, AddressSpec::Standard);
@@ -253,8 +252,7 @@ async fn test_address_derivation_consistency() -> Result<(), Box<dyn std::error:
     let spend_point = &spend_scalar * ED25519_BASEPOINT_TABLE;
 
     let keys = derive_keys(TEST_SEED, NETWORK_STR, "")?;
-    let view_bytes = hex::decode(&keys.secret_view_key)?;
-    let view_scalar = Scalar::from_bytes_mod_order(view_bytes[..32].try_into()?);
+    let view_scalar = Scalar::from_bytes_mod_order(*keys.secret_view_key);
 
     let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
     let address3 = view_pair
@@ -366,8 +364,7 @@ async fn test_transaction_with_multiple_inputs() -> Result<(), Box<dyn std::erro
             let spend_point = &spend_scalar * ED25519_BASEPOINT_TABLE;
 
             let keys = derive_keys(TEST_SEED, NETWORK_STR, "")?;
-            let view_bytes = hex::decode(&keys.secret_view_key)?;
-            let view_scalar = Scalar::from_bytes_mod_order(view_bytes[..32].try_into()?);
+            let view_scalar = Scalar::from_bytes_mod_order(*keys.secret_view_key);
             let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
 
             let protocol = rpc.get_protocol().await?;

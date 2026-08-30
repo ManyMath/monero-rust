@@ -4,8 +4,8 @@ pub mod native {
     use crate::monero_rpc::{Rpc, RpcConnection, DEFAULT_MAX_FEE_PER_BYTE};
     use crate::seed_compat::Seed;
     use crate::wallet_compat::{
-        sign_offline, AddressSpec, transaction_fee_weight, Change, Decoys, Fee, InternalPayment, Protocol,
-        ReceivedOutput, SignableTransactionBuilder, SpendableOutput, UnsignedInput,
+        sign_offline, transaction_fee_weight, AddressSpec, Change, Decoys, Fee, InternalPayment,
+        Protocol, ReceivedOutput, SignableTransactionBuilder, SpendableOutput, UnsignedInput,
         UnsignedTransaction, ViewPair,
     };
     use curve25519_dalek::{
@@ -244,9 +244,8 @@ pub mod native {
             return vec![];
         };
         let pruned = Transaction::<Pruned>::from(tx.clone());
-        let our_outputs =
-            crate::scanner::scan_single_transaction(&mut scanner, tx_hash, &pruned)
-                .unwrap_or_default();
+        let our_outputs = crate::scanner::scan_single_transaction(&mut scanner, tx_hash, &pruned)
+            .unwrap_or_default();
 
         our_outputs
             .into_iter()
@@ -390,13 +389,9 @@ pub mod native {
             spendable_outputs.push(spendable);
         }
 
-        let decoys = select_output_decoys(
-            rpc,
-            protocol,
-            height.saturating_sub(1),
-            &spendable_outputs,
-        )
-        .await?;
+        let decoys =
+            select_output_decoys(rpc, protocol, height.saturating_sub(1), &spendable_outputs)
+                .await?;
 
         Ok(DecoyResult {
             height: height.saturating_sub(1),
@@ -486,10 +481,9 @@ pub mod native {
                 .map_err(|e| format!("Invalid destination '{}': {:?}", addr, e))?;
         }
 
-        let total_input = crate::tx_utils::checked_amount_sum(
-            stored_outputs.iter().map(|o| o.amount),
-        )
-        .ok_or_else(|| "input amounts overflow".to_string())?;
+        let total_input =
+            crate::tx_utils::checked_amount_sum(stored_outputs.iter().map(|o| o.amount))
+                .ok_or_else(|| "input amounts overflow".to_string())?;
         let total_amount =
             crate::tx_utils::checked_amount_sum(recipients.iter().map(|(_, amt)| *amt))
                 .ok_or_else(|| "requested amounts overflow".to_string())?;
@@ -647,7 +641,8 @@ pub mod native {
         let mut spendable_outputs = Vec::new();
 
         for stored in &stored_outputs {
-            let spendable = spendable_from_stored_bytes(&rpc, &stored.received_output_bytes).await?;
+            let spendable =
+                spendable_from_stored_bytes(&rpc, &stored.received_output_bytes).await?;
             spendable_outputs.push(spendable);
         }
 
@@ -818,7 +813,8 @@ pub mod native {
         let mut spendable_outputs = Vec::new();
 
         for stored in &stored_outputs {
-            let spendable = spendable_from_stored_bytes(&rpc, &stored.received_output_bytes).await?;
+            let spendable =
+                spendable_from_stored_bytes(&rpc, &stored.received_output_bytes).await?;
             spendable_outputs.push(spendable);
         }
 
@@ -1210,8 +1206,7 @@ pub mod native {
         unsigned_txset: &[u8],
         passphrase: &str,
     ) -> Result<Wallet2SourceKeyOffsetsResult, String> {
-        let (spend_secret_key, view_secret_key) =
-            private_keys_from_seed(seed_phrase, passphrase)?;
+        let (spend_secret_key, view_secret_key) = private_keys_from_seed(seed_phrase, passphrase)?;
         derive_wallet2_unsigned_source_key_offsets_from_keys(
             spend_secret_key,
             view_secret_key,
@@ -1626,8 +1621,7 @@ pub mod native {
         passphrase: &str,
         approval: &SigningApproval,
     ) -> Result<OfflineSignResult, String> {
-        let (spend_secret_key, view_secret_key) =
-            private_keys_from_seed(seed_phrase, passphrase)?;
+        let (spend_secret_key, view_secret_key) = private_keys_from_seed(seed_phrase, passphrase)?;
         sign_unsigned_transaction_with_private_keys(
             spend_secret_key,
             view_secret_key,
@@ -1876,8 +1870,7 @@ pub mod native {
         network_str: &str,
         passphrase: &str,
     ) -> Result<TransactionPreview, String> {
-        let (spend_secret_key, view_secret_key) =
-            private_keys_from_seed(seed_phrase, passphrase)?;
+        let (spend_secret_key, view_secret_key) = private_keys_from_seed(seed_phrase, passphrase)?;
         preview_unsigned_transaction(
             spend_secret_key,
             view_secret_key,
@@ -2097,7 +2090,6 @@ pub mod native {
         };
         let change_outputs = scan_transaction_outputs(&tx, &tx_id, view_pair, spend_key, lookahead);
 
-
         Ok(OfflineSignedTransaction {
             tx_id,
             fee,
@@ -2208,7 +2200,7 @@ pub mod native {
 
             let spend = spend_key_from_seed(&seed, "");
             assert_eq!(
-                hex::encode((&*spend * ED25519_BASEPOINT_TABLE).compress().to_bytes()),
+                (&*spend * ED25519_BASEPOINT_TABLE).compress().to_bytes(),
                 expected.public_spend_key,
                 "signer's spend key must be the wallet's spend key"
             );
@@ -2218,7 +2210,7 @@ pub mod native {
                 view_pair
                     .address(Network::Stagenet, AddressSpec::Standard)
                     .to_string(),
-                expected.address,
+                expected.address.to_string(),
                 "signer's view pair must be the wallet's view pair"
             );
         }
@@ -2246,12 +2238,12 @@ pub mod native {
                 .expect("the signer must accept the same passphrase");
 
             assert_eq!(
-                hex::encode(spend_secret_key),
-                expected.secret_spend_key,
+                spend_secret_key,
+                **expected.secret_spend_key.as_ref().unwrap(),
                 "signer's spend key must be the wallet's spend key"
             );
             assert_eq!(
-                hex::encode(view_secret_key), expected.secret_view_key,
+                view_secret_key, *expected.secret_view_key,
                 "signer's view key must be the wallet's view key"
             );
         }

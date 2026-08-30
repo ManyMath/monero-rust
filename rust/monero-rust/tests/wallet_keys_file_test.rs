@@ -32,11 +32,8 @@ fn import_honked_keys() {
     assert_eq!(address, HONKED_STAGENET_ADDRESS);
 
     let keys = monero_rust::derive_keys(mnemonic, "stagenet", "").unwrap();
-    assert_eq!(
-        hex::encode(imported.spend_public_key),
-        keys.public_spend_key
-    );
-    assert_eq!(hex::encode(imported.view_public_key), keys.public_view_key);
+    assert_eq!(imported.spend_public_key, keys.public_spend_key);
+    assert_eq!(imported.view_public_key, keys.public_view_key);
 }
 
 #[test]
@@ -149,14 +146,11 @@ fn rejects_a_keys_file_whose_length_overflows() {
 
     let err = monero_rust::wallet_keys_file::decrypt_keys_data(&file, "")
         .expect_err("an out-of-range ciphertext length must be rejected");
-    assert!(
-        err.contains("ciphertext length"),
-        "unexpected error: {err}"
-    );
+    assert!(err.contains("ciphertext length"), "unexpected error: {err}");
 }
 
-/// Read a vector's plaintext along with the key material `parse_decrypted_keys` needs, so a
-/// test can tamper with the JSON between decryption and parsing.
+/// Read fixture plaintext and the keys needed to parse it, allowing tests
+/// to modify the JSON after decryption.
 fn decrypt_vector(name: &str) -> (Vec<u8>, [u8; 32], [u8; 8]) {
     let bytes = std::fs::read(vector_path(name)).expect("failed to read vector");
     monero_rust::wallet_keys_file::decrypt_keys_data(&bytes, "")
@@ -195,16 +189,11 @@ fn rejects_a_keys_file_whose_secret_keys_do_not_match_its_public_keys() {
 
     let err = monero_rust::wallet_keys_file::parse_decrypted_keys(&tampered, &key, outer_iv)
         .expect_err("secret keys that do not match the file's public keys must be rejected");
-    assert!(
-        err.contains("do not match"),
-        "unexpected error: {err}"
-    );
+    assert!(err.contains("do not match"), "unexpected error: {err}");
 }
 
-/// The same check must not fire on a view-only file, whose spend secret key is all zeroes by
-/// construction. monero verifies the view key always and the spend key only when the wallet
-/// is not watch-only, and a guard that cannot tell those apart would reject every view-only
-/// wallet we import.
+/// Accept a view-only file with an absent spend secret key. Monero verifies
+/// its view key but skips the spend-key check.
 #[test]
 fn accepts_a_view_only_keys_file_whose_spend_secret_key_is_absent() {
     let (plaintext, key, outer_iv) = decrypt_vector("hemlock_view_only.keys");
@@ -246,9 +235,12 @@ fn refuses_a_keys_file_with_a_decoy_field_smuggled_past_a_string() {
 
     let honest = monero_rust::wallet_keys_file::parse_decrypted_keys(&plaintext, &key, outer_iv)
         .expect("the untampered vector should parse");
-    assert_eq!(honest.nettype, 2, "premise: honked.keys is a stagenet wallet");
+    assert_eq!(
+        honest.nettype, 2,
+        "premise: honked.keys is a stagenet wallet"
+    );
 
-    // Close seed_language's string early and leave a decoy nettype behind it.
+    // Close `seed_language` early and insert a decoy `nettype`.
     let tampered = splice_once(
         &plaintext,
         br#""seed_language":"English""#,
