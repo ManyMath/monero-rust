@@ -300,7 +300,7 @@ impl<R: RpcConnection> Rpc<R> {
             serde_json::from_str(std::str::from_utf8(&res).map_err(|_| RpcError::InvalidNode)?)
                 .map_err(|_| RpcError::InternalError("Failed to parse JSON response"))?
         } else {
-            monero_epee_bin_serde::from_bytes(&res)
+            crate::safe_epee::from_bytes(&res)
                 .map_err(|_| RpcError::InternalError("Failed to parse binary response"))?
         })
     }
@@ -1099,6 +1099,40 @@ pub struct GetBlocksFastResponse {
 mod tests {
     use super::*;
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn binary_rpc_rejects_truncation_and_recursive_unknown_fields() {
+        #[derive(Clone, Debug)]
+        struct Connection;
+        #[async_trait]
+        impl RpcConnection for Connection {
+            async fn post(&self, _: &str, _: Vec<u8>) -> Result<Vec<u8>, RpcError> {
+                unreachable!("response parsing requires no network")
+            }
+        }
+        let rpc = Rpc::new_with_connection(Connection);
+        // {x: {y: 42u64}} with both fields unknown to the target response.
+        let valid = hex::decode("0111010101010201010401780c040179052a00000000000000").unwrap();
+        for end in 0..valid.len() {
+            assert!(rpc
+                .call_tail::<EmptyResponse>("getblocks.bin", valid[..end].to_vec())
+                .await
+                .is_err());
+        }
+        rpc.call_tail::<EmptyResponse>("getblocks.bin", valid)
+            .await
+            .unwrap();
+        let mut deep = b"\x01\x11\x01\x01\x01\x01\x02\x01\x01".to_vec();
+        for _ in 0..1000 {
+            deep.extend_from_slice(&[4, 1, b'x', 12]);
+        }
+        deep.push(0);
+        assert!(rpc
+            .call_tail::<EmptyResponse>("getblocks.bin", deep)
+            .await
+            .is_err());
+    }
+
     #[test]
     fn getblocks_request_bytes_match_previous_backend() {
         // The epee request serialization must match what the
@@ -1128,7 +1162,7 @@ mod tests {
             prune: bool,
             no_miner_tx: bool,
         }
-        let parsed: Parsed = monero_epee_bin_serde::from_bytes(&bytes).unwrap();
+        let parsed: Parsed = crate::safe_epee::from_bytes(&bytes).unwrap();
         assert_eq!(parsed.block_ids.len(), 64);
         assert_eq!(parsed.start_height, 12345);
         assert!(!parsed.prune);
@@ -1165,7 +1199,7 @@ mod tests {
         struct OIndexes {
             o_indexes: Vec<u64>,
         }
-        let parsed: OIndexes = monero_epee_bin_serde::from_bytes(&bytes).unwrap();
+        let parsed: OIndexes = crate::safe_epee::from_bytes(&bytes).unwrap();
         assert!(!parsed.o_indexes.is_empty());
     }
 

@@ -3,6 +3,8 @@
 //! A portable, batteries-included wallet library for Monero.
 //! Works on both native and WASM targets.
 
+mod safe_epee;
+
 // Core modules
 pub mod bip39_conv;
 pub mod coin_selection;

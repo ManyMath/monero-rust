@@ -622,7 +622,7 @@ pub fn parse_decrypted_keys(
             unescape_json_bytes(key_data_raw)?
         };
 
-    let acct: EpeeAccountBase = monero_epee_bin_serde::from_bytes(&key_data_bytes)
+    let acct: EpeeAccountBase = crate::safe_epee::from_bytes(&key_data_bytes)
         .map_err(|e| format!("epee deserialize: {e}"))?;
 
     let spend_public_key = to_key(
@@ -716,6 +716,24 @@ pub fn parse_decrypted_keys(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keys_epee_rejects_truncation_and_recursive_unknown_fields() {
+        let valid = hex::decode("0111010101010201010401780c040179052a00000000000000").unwrap();
+        let parse = |wire: &[u8]| {
+            let plaintext = format!(r#"{{"key_data":"{}"}}"#, hex::encode(wire));
+            parse_decrypted_keys(plaintext.as_bytes(), &[0; 32], [0; 8])
+        };
+        for end in 0..valid.len() {
+            assert!(parse(&valid[..end]).is_err());
+        }
+        let mut deep = valid[..9].to_vec();
+        for _ in 0..1000 {
+            deep.extend_from_slice(&[4, 1, b'x', 12]);
+        }
+        deep.push(0);
+        assert!(parse(&deep).unwrap_err().contains("nesting"));
+    }
 
     #[test]
     fn leb128_roundtrip() {

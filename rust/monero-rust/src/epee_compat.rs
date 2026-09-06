@@ -1768,7 +1768,7 @@ fn parse_key_image_export(
         signature: Option<serde_bytes::ByteBuf>,
     }
 
-    if let Ok(export) = monero_epee_bin_serde::from_bytes::<KeyImageExport, _>(payload) {
+    if let Ok(export) = crate::safe_epee::from_bytes::<KeyImageExport, _>(payload) {
         let mut entries = Vec::with_capacity(export.key_images.len());
         for (i, entry) in export.key_images.into_iter().enumerate() {
             let key_image: [u8; 32] = entry
@@ -2095,6 +2095,46 @@ mod tests {
             err.contains("Unexpected end of binary archive"),
             "expected the read of key image #0 to run off the end, got: {err}"
         );
+    }
+
+    #[test]
+    fn signed_key_image_import_rejects_every_legacy_truncation_and_deep_unknowns() {
+        #[allow(deprecated)]
+        let valid = export_key_images(&[ExportedKeyImage {
+            key_image: "a".repeat(64),
+            tx_hash: "b".repeat(64),
+            output_index: 0,
+        }])
+        .unwrap();
+        for end in KEY_IMAGES_MAGIC.len()..valid.len() {
+            assert!(
+                import_signed_key_images_for_account(&valid[..end], None, None).is_err(),
+                "end={end}"
+            );
+        }
+        // The complete legacy document parses, then the signed API correctly
+        // rejects the unsigned exporter's missing signature.
+        assert!(import_signed_key_images_for_account(&valid, None, None)
+            .unwrap_err()
+            .contains("no ring signature"));
+        let mut deep = b"\x01\x11\x01\x01\x01\x01\x02\x01\x01".to_vec();
+        // EOF at the root count must also fail when v3 decryption is attempted.
+        assert!(import_signed_key_images_for_account(
+            &wrap_with_magic(KEY_IMAGES_MAGIC, &deep),
+            Some(&[1; 32]),
+            None
+        )
+        .is_err());
+        for _ in 0..1000 {
+            deep.extend_from_slice(&[4, 1, b'x', 12]);
+        }
+        deep.push(0);
+        assert!(import_signed_key_images_for_account(
+            &wrap_with_magic(KEY_IMAGES_MAGIC, &deep),
+            None,
+            None
+        )
+        .is_err());
     }
 
     #[test]
