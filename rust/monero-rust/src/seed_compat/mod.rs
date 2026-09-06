@@ -69,10 +69,15 @@ impl Seed {
         Seed::Classic(ClassicSeed::new(rng, lang))
     }
 
-    /// Create a new polyseed.
+    /// Create a new polyseed using the native or browser clock. If the host
+    /// clock is unavailable, record an unknown birthday for a conservative scan.
     pub fn new_polyseed<R: RngCore + CryptoRng>(rng: &mut R) -> Seed {
         use polyseed::{Language, Polyseed};
-        Seed::Polyseed(Polyseed::new(rng, Language::English))
+        Seed::Polyseed(Polyseed::new_with_birthday(
+            rng,
+            Language::English,
+            crate::wallet_state::current_time_secs().unwrap_or(0),
+        ))
     }
 
     /// Parse a seed from a String.
@@ -245,6 +250,23 @@ mod tests {
             )
             .unwrap(),
             expected
+        );
+    }
+
+    #[test]
+    fn generated_polyseed_birthday_uses_the_host_clock() {
+        use rand_core::SeedableRng;
+        let before = crate::wallet_state::current_time_secs().unwrap();
+        let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(7);
+        let seed = Seed::new_polyseed(&mut rng);
+        let after = crate::wallet_state::current_time_secs().unwrap();
+        let birthday = seed.birthday().unwrap();
+        // Polyseed encodes whole months, rounding the supplied timestamp down.
+        assert!(birthday <= after);
+        assert!(birthday > before.saturating_sub(2_629_746));
+        assert_eq!(
+            Seed::from_string(seed.to_string()).unwrap().birthday(),
+            Some(birthday)
         );
     }
 }
