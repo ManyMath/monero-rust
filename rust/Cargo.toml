@@ -4,3 +4,7 @@ members = [
     "monero-utils/polyseed",
 ]
 resolver = "2"
+
+# Optimized dependencies keep the scanning and signing tests fast.
+[profile.dev.package."*"]
+opt-level = 3
