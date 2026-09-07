@@ -54,13 +54,6 @@ if ! cargo test --workspace --no-fail-fast; then
     record_failure "default suite"
 fi
 
-step "utility crates without default features"
-# Check each no_std crate separately so workspace feature unification cannot
-# hide a dependency on std or alloc.
-if ! cargo check -p polyseed --no-default-features; then
-    record_failure "polyseed no_std"
-fi
-
 step "wasm32 build"
 if ! cargo check -p monero-rust --target wasm32-unknown-unknown; then
     record_failure "monero-rust wasm32"

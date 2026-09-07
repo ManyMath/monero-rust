@@ -1,6 +1,6 @@
 //! Monero seed handling, ported from the vendored serai mirror.
 //!
-//! Wraps classic (25-word) seeds and 16-word polyseeds behind one type,
+//! Wraps classic (25-word) seeds,
 //! including Monero's seed-offset passphrase mechanism.
 
 #![allow(dead_code)]
@@ -26,8 +26,8 @@ pub enum SeedError {
     InvalidChecksum,
     #[error("invalid seed")]
     InvalidSeed,
-    #[error("encrypted Polyseed is not supported; decrypt it with a Polyseed-compatible tool before importing")]
-    EncryptedPolyseed,
+    #[error("Polyseed is unavailable in this build")]
+    UnsupportedPolyseed,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -51,14 +51,12 @@ pub enum Language {
 #[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub enum Seed {
     Classic(ClassicSeed),
-    Polyseed(polyseed::Polyseed),
 }
 
 impl fmt::Debug for Seed {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Seed::Classic(_) => f.debug_struct("Seed::Classic").finish_non_exhaustive(),
-            Seed::Polyseed(_) => f.debug_struct("Seed::Polyseed").finish_non_exhaustive(),
         }
     }
 }
@@ -69,32 +67,11 @@ impl Seed {
         Seed::Classic(ClassicSeed::new(rng, lang))
     }
 
-    /// Create a new polyseed using the native or browser clock. If the host
-    /// clock is unavailable, record an unknown birthday for a conservative scan.
-    pub fn new_polyseed<R: RngCore + CryptoRng>(rng: &mut R) -> Seed {
-        use polyseed::{Language, Polyseed};
-        Seed::Polyseed(Polyseed::new_with_birthday(
-            rng,
-            Language::English,
-            crate::wallet_state::current_time_secs().unwrap_or(0),
-        ))
-    }
-
     /// Parse a seed from a String.
     pub fn from_string(words: Zeroizing<String>) -> Result<Seed, SeedError> {
         let word_count = words.split_whitespace().count();
         match word_count {
-            16 => {
-                use polyseed::{Coin, Language as PolyseedLanguage, Polyseed};
-                let seed = Polyseed::from_string(PolyseedLanguage::English, words, Coin::Monero, 0)
-                    .map_err(|_| SeedError::InvalidSeed)?;
-                // A classic seed-offset passphrase does not decrypt Polyseed.
-                // Never silently derive a different wallet from encrypted entropy.
-                if seed.is_encrypted() {
-                    return Err(SeedError::EncryptedPolyseed);
-                }
-                Ok(Seed::Polyseed(seed))
-            }
+            16 => Err(SeedError::UnsupportedPolyseed),
             CLASSIC_SEED_LENGTH | CLASSIC_SEED_LENGTH_WITH_CHECKSUM => {
                 ClassicSeed::from_string(words).map(Seed::Classic)
             }
@@ -111,9 +88,6 @@ impl Seed {
     pub fn to_string(&self) -> Zeroizing<String> {
         match self {
             Seed::Classic(seed) => seed.to_string(),
-            Seed::Polyseed(seed) => {
-                Zeroizing::new(seed.to_string(polyseed::Coin::Monero).to_string())
-            }
         }
     }
 
@@ -121,15 +95,13 @@ impl Seed {
     pub fn entropy(&self) -> Zeroizing<[u8; 32]> {
         match self {
             Seed::Classic(seed) => seed.entropy(),
-            Seed::Polyseed(seed) => seed.entropy().clone(),
         }
     }
 
-    /// Return the key bytes for this seed (entropy for Classic, PBKDF2-derived for Polyseed).
+    /// Return the key bytes for this classic seed.
     pub fn key_bytes(&self) -> Zeroizing<[u8; 32]> {
         match self {
             Seed::Classic(seed) => seed.entropy(),
-            Seed::Polyseed(seed) => seed.key(polyseed::Coin::Monero),
         }
     }
 
@@ -137,7 +109,7 @@ impl Seed {
     ///
     /// This implements Monero's seed offset mechanism (`cryptonote::decrypt_key`):
     /// `final_key = base_key - cn_slow_hash(passphrase)` (ed25519 scalar subtraction).
-    /// The offset applies to both Classic (25-word) and Polyseed (16-word) seeds.
+    /// The offset applies to Classic (25-word) seeds.
     /// When the passphrase is empty, this returns the same result as `key_bytes()`.
     pub fn key_bytes_with_passphrase(&self, passphrase: &str) -> Zeroizing<[u8; 32]> {
         let base_key = self.key_bytes();
@@ -158,7 +130,6 @@ impl Seed {
     pub fn birthday(&self) -> Option<u64> {
         match self {
             Seed::Classic(_) => None,
-            Seed::Polyseed(seed) => Some(seed.birthday()),
         }
     }
 }
@@ -184,21 +155,6 @@ mod tests {
     }
 
     #[test]
-    fn polyseed_roundtrip() {
-        use rand_core::SeedableRng;
-
-        let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(7);
-        let ported = Seed::new_polyseed(&mut rng);
-        let words = ported.to_string();
-        assert_eq!(words.split_whitespace().count(), 16);
-
-        let reparsed = Seed::from_string(words).unwrap();
-        assert_eq!(reparsed.entropy(), ported.entropy());
-        assert_eq!(reparsed.key_bytes(), ported.key_bytes());
-        assert!(ported.birthday().is_some());
-    }
-
-    #[test]
     fn classic_generation_roundtrips() {
         use rand_core::SeedableRng;
         let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(11);
@@ -207,66 +163,5 @@ mod tests {
         assert_eq!(words.split_whitespace().count(), 25);
         let reparsed = Seed::from_string(words).unwrap();
         assert_eq!(reparsed.entropy(), seed.entropy());
-    }
-
-    #[test]
-    fn encrypted_polyseed_is_rejected_before_wallet_derivation() {
-        use polyseed::{Coin, Language as PolyseedLanguage, Polyseed};
-        let mut entropy = [0; 32];
-        entropy[0] = 7;
-        let mut seed = Polyseed::from(
-            PolyseedLanguage::English,
-            0,
-            1_700_000_000,
-            Zeroizing::new(entropy),
-        )
-        .unwrap();
-        let words = seed.to_string(Coin::Monero);
-        let expected = crate::scanner::derive_address(&words, crate::Network::Mainnet, "").unwrap();
-        seed.crypt("password");
-        let encrypted = seed.to_string(Coin::Monero);
-        assert_eq!(
-            Seed::from_string(encrypted.clone()).unwrap_err(),
-            SeedError::EncryptedPolyseed
-        );
-        for passphrase in ["", "password", "wrong"] {
-            assert!(crate::scanner::derive_address(
-                &encrypted,
-                crate::Network::Mainnet,
-                passphrase
-            )
-            .is_err());
-            assert!(
-                crate::scanner::derive_keys(&encrypted, crate::Network::Mainnet, passphrase)
-                    .is_err()
-            );
-        }
-        seed.crypt("password");
-        assert_eq!(
-            crate::scanner::derive_address(
-                &seed.to_string(Coin::Monero),
-                crate::Network::Mainnet,
-                ""
-            )
-            .unwrap(),
-            expected
-        );
-    }
-
-    #[test]
-    fn generated_polyseed_birthday_uses_the_host_clock() {
-        use rand_core::SeedableRng;
-        let before = crate::wallet_state::current_time_secs().unwrap();
-        let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(7);
-        let seed = Seed::new_polyseed(&mut rng);
-        let after = crate::wallet_state::current_time_secs().unwrap();
-        let birthday = seed.birthday().unwrap();
-        // Polyseed encodes whole months, rounding the supplied timestamp down.
-        assert!(birthday <= after);
-        assert!(birthday > before.saturating_sub(2_629_746));
-        assert_eq!(
-            Seed::from_string(seed.to_string()).unwrap().birthday(),
-            Some(birthday)
-        );
     }
 }
