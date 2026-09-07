@@ -60,9 +60,6 @@ step "utility crates without default features"
 if ! cargo check -p polyseed --no-default-features; then
     record_failure "polyseed no_std"
 fi
-if ! cargo check -p monero-payment-proofs --no-default-features; then
-    record_failure "payment-proofs no_std"
-fi
 
 step "wasm32 build"
 if ! cargo check -p monero-rust --target wasm32-unknown-unknown; then

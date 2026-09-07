@@ -25,7 +25,6 @@ pub mod epee_compat;
 pub mod key_image_signing;
 pub mod tx_builder;
 pub mod tx_prepare;
-pub mod tx_proof;
 pub mod tx_utils;
 pub mod ur_codec;
 pub mod validation;

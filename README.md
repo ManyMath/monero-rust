@@ -5,10 +5,17 @@ Monero wallet tooling in Rust.
 ## Workspace
 
 - `rust/monero-rust`: wallet library
-- `rust/monero-utils`: local utility crates retained until upstream releases can replace them
+- `rust/monero-utils/polyseed`: local Polyseed crate
 
 The wallet library depends on the published `monero-oxide` and `monero-wallet` crates.
 CryptoNight hashing and Epee serialization use pinned upstream Git revisions.
+
+## Reduced feature branch
+
+This branch removes the vendored payment-proof implementation and the public
+`tx_proof` module. The published `monero-payment-proofs` 0.0.1 package is an
+empty placeholder, so OutProofV2 generation and verification are unavailable.
+The complete implementation remains on `staging`.
 
 ## Related repositories
 
