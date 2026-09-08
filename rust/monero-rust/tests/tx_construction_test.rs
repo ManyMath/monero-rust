@@ -2,14 +2,14 @@ mod common;
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 use monero_oxide::transaction::{NotPruned, Transaction};
+use monero_rust::native::build_unsigned_transaction;
 use monero_rust::scanner::{
     derive_address, derive_keys, scan_block_for_outputs_with_lookahead, Lookahead,
 };
 use monero_rust::seed_compat::Seed;
+use monero_rust::unsigned_tx::{sign_offline, UnsignedChange};
 use monero_rust::wallet_compat::received_from_wallet_output;
-use monero_rust::wallet_compat::{
-    AddressSpec, Change, SignableTransactionBuilder, SpendableOutput, ViewPair,
-};
+use monero_rust::wallet_compat::{AddressSpec, SpendableOutput, ViewPair};
 use monero_wallet::address::Network;
 use monero_wallet::WalletOutput;
 #[cfg(feature = "mock-rpc")]
@@ -126,6 +126,10 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
 
     let derived_address = view_pair.address(NETWORK, AddressSpec::Standard);
     assert_eq!(derived_address, address);
+    let wallet_view_pair = monero_wallet::ViewPair::new(
+        monero_wallet::ed25519::Point::from(spend_point),
+        Zeroizing::new(monero_wallet::ed25519::Scalar::from(view_scalar)),
+    )?;
 
     let test_output = &all_outputs[0];
     let output_bytes = hex::decode(&test_output.received_output_bytes)?;
@@ -136,23 +140,11 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
 
     let spendable = SpendableOutput::from(&rpc, received.clone()).await?;
 
-    let change = Change::new(&view_pair, false);
-    let mut builder = SignableTransactionBuilder::new(protocol, fee_rate, Some(change));
-    builder.add_input(spendable);
-
     let send_amount = 1_000_000_000u64;
-    builder.add_payment(address, send_amount);
-
-    let signable = builder.build()?;
-
-    assert!(signable.fee() > 0);
-    assert!(signable.fee() < test_output.amount);
-
-    let total_input = test_output.amount;
-    let total_output = send_amount + (total_input - send_amount - signable.fee());
-    let fee = signable.fee();
-
-    assert_eq!(total_input, total_output + fee);
+    let change = UnsignedChange {
+        address,
+        subaddress: None,
+    };
 
     #[cfg(feature = "mock-rpc")]
     let mut rng = rand::rngs::StdRng::seed_from_u64(12345);
@@ -160,9 +152,35 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(not(feature = "mock-rpc"))]
     let mut rng = rand::rngs::OsRng;
 
-    let tx = signable
-        .sign(&mut rng, &rpc, &Zeroizing::new(spend_scalar))
-        .await?;
+    let unsigned = build_unsigned_transaction(
+        &mut rng,
+        &rpc,
+        protocol,
+        fee_rate,
+        &[spendable],
+        vec![(address, send_amount)],
+        Some(change),
+    )
+    .await?;
+
+    let resolved = unsigned.resolve(&wallet_view_pair)?;
+    let fee = resolved.fee;
+    assert!(fee > 0);
+    assert!(fee < test_output.amount);
+
+    let total_input = test_output.amount;
+    assert_eq!(resolved.input_total, total_input);
+    let resolved_change = resolved.change.expect("transaction has change");
+    assert!(resolved_change.is_ours);
+    assert_eq!(total_input, send_amount + resolved_change.amount + fee);
+
+    let tx = sign_offline(
+        &mut rng,
+        &Zeroizing::new(spend_scalar),
+        &Zeroizing::new(view_scalar),
+        &unsigned,
+    )?
+    .tx;
 
     let tx_hash = tx.hash();
     let mut tx_bytes = Vec::new();
@@ -352,33 +370,27 @@ async fn test_transaction_with_multiple_inputs() -> Result<(), Box<dyn std::erro
             let view_scalar = Scalar::from_bytes_mod_order(*keys.secret_view_key);
             let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
 
+            let wallet_view_pair = monero_wallet::ViewPair::new(
+                monero_wallet::ed25519::Point::from(spend_point),
+                Zeroizing::new(monero_wallet::ed25519::Scalar::from(view_scalar)),
+            )?;
+
             let protocol = rpc.get_protocol().await?;
             let fee_rate = rpc.get_fee().await?;
 
-            let change = Change::new(&view_pair, false);
-            let mut builder = SignableTransactionBuilder::new(protocol, fee_rate, Some(change));
-
+            let mut spendables = Vec::new();
             let mut total_input = 0u64;
             for output in all_outputs.iter().take(2) {
                 let output_bytes = hex::decode(&output.received_output_bytes)?;
                 let mut cursor = Cursor::new(output_bytes);
                 let received = received_from_wallet_output(&WalletOutput::read(&mut cursor)?)?;
 
-                let spendable = SpendableOutput::from(&rpc, received).await?;
-                builder.add_input(spendable);
+                spendables.push(SpendableOutput::from(&rpc, received).await?);
                 total_input += output.amount;
             }
 
             let address = derive_address(TEST_SEED, monero_rust::Network::Stagenet, "")?;
             let send_amount = 1_000_000_000u64;
-            builder.add_payment(address, send_amount);
-
-            let signable = builder.build()?;
-
-            assert_eq!(
-                total_input,
-                send_amount + (total_input - send_amount - signable.fee()) + signable.fee()
-            );
 
             #[cfg(feature = "mock-rpc")]
             let mut rng = rand::rngs::StdRng::seed_from_u64(12345);
@@ -386,9 +398,34 @@ async fn test_transaction_with_multiple_inputs() -> Result<(), Box<dyn std::erro
             #[cfg(not(feature = "mock-rpc"))]
             let mut rng = rand::rngs::OsRng;
 
-            let tx = signable
-                .sign(&mut rng, &rpc, &Zeroizing::new(spend_scalar))
-                .await?;
+            let unsigned = build_unsigned_transaction(
+                &mut rng,
+                &rpc,
+                protocol,
+                fee_rate,
+                &spendables,
+                vec![(address, send_amount)],
+                Some(UnsignedChange {
+                    address: view_pair.address(NETWORK, AddressSpec::Standard),
+                    subaddress: None,
+                }),
+            )
+            .await?;
+
+            let resolved = unsigned.resolve(&wallet_view_pair)?;
+            assert_eq!(resolved.input_total, total_input);
+            assert_eq!(
+                total_input,
+                send_amount + resolved.change.expect("change").amount + resolved.fee
+            );
+
+            let tx = sign_offline(
+                &mut rng,
+                &Zeroizing::new(spend_scalar),
+                &Zeroizing::new(view_scalar),
+                &unsigned,
+            )?
+            .tx;
 
             assert_eq!(tx.prefix().inputs.len(), 2);
             assert_eq!(tx.prefix().outputs.len(), 2);

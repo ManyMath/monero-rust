@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+pub mod offline;
+
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::OnceLock;

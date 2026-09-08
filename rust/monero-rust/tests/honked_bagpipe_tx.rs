@@ -6,10 +6,10 @@ use monero_oxide::{
     transaction::{Transaction, TransactionPrefix},
 };
 use monero_rust::seed_compat::Seed;
-use monero_rust::wallet_compat::{
-    AddressSpec, Change, Fee, Protocol, Scanner, SignableTransactionBuilder, SpendableOutput,
-    ViewPair,
+use monero_rust::unsigned_tx::{
+    output_with_decoys, sign_offline, UnsignedChange, UnsignedTransaction,
 };
+use monero_rust::wallet_compat::{AddressSpec, Scanner, ViewPair};
 use monero_wallet::address::Network;
 use std::collections::HashSet;
 use std::io::Cursor;
@@ -120,25 +120,62 @@ async fn test_transaction_building() {
     let received_output = &outputs[0];
     assert_eq!(received_output.data.commitment.amount, EXPECTED_AMOUNT);
 
-    let spendable = SpendableOutput::test_new(received_output.clone(), TEST_OUTPUT_GLOBAL_INDEX);
+    use monero_wallet::ed25519::{Commitment, Point, Scalar as OxideScalar};
+    let key = Point::from(received_output.data.key);
+    let commitment = Commitment::new(
+        OxideScalar::from(received_output.data.commitment.mask),
+        received_output.data.commitment.amount,
+    );
+    let mut ring = vec![[key, commitment.commit()]];
+    for i in 1..16u64 {
+        let point = Point::from(&Scalar::from(9000 + i) * ED25519_BASEPOINT_TABLE);
+        ring.push([point, point]);
+    }
+    let mut offsets = vec![TEST_OUTPUT_GLOBAL_INDEX];
+    offsets.extend(std::iter::repeat(7).take(15));
+    let decoys = monero_wallet::ringct::clsag::Decoys::new(offsets, 0, ring).expect("decoys");
+    let input = output_with_decoys(
+        key,
+        OxideScalar::from(received_output.data.key_offset),
+        &commitment,
+        &decoys,
+    )
+    .expect("input");
 
-    let protocol = Protocol::v16;
-    let fee = Fee {
-        per_weight: 6000,
-        mask: 10000,
-    };
-    let change = Change::new(&pair, false);
     let send_amount = 1_000_000_000_000u64;
+    let unsigned = UnsignedTransaction {
+        rct_type: monero_oxide::ringct::RctType::ClsagBulletproofPlus,
+        seed: Zeroizing::new([7; 32]),
+        fee_rate: monero_wallet::interface::FeeRate::new(6000, 10000).expect("fee rate"),
+        inputs: vec![input],
+        payments: vec![(address, send_amount)],
+        change: Some(UnsignedChange {
+            address,
+            subaddress: None,
+        }),
+    };
 
-    let mut builder = SignableTransactionBuilder::new(protocol, fee, Some(change));
-    builder.add_input(spendable);
-    builder.add_payment(address, send_amount);
+    let wallet_view_pair = monero_wallet::ViewPair::new(
+        Point::from(spend_point),
+        Zeroizing::new(OxideScalar::from(view_scalar)),
+    )
+    .expect("view pair");
+    let resolved = unsigned.resolve(&wallet_view_pair).expect("resolve failed");
+    assert!(resolved.fee > 0);
+    assert_eq!(resolved.fee % 10000, 0, "fee is quantized by the mask");
+    let change = resolved.change.expect("change");
+    assert!(change.is_ours);
+    assert_eq!(send_amount + change.amount + resolved.fee, EXPECTED_AMOUNT);
 
-    let signable_tx = builder.build().expect("build failed");
-
-    let total_output =
-        send_amount + (EXPECTED_AMOUNT - send_amount - signable_tx.fee()) + signable_tx.fee();
-    assert_eq!(total_output, EXPECTED_AMOUNT);
+    let signed = sign_offline(
+        &mut rand::rngs::OsRng,
+        &Zeroizing::new(spend_key_scalar_from_seed(&seed)),
+        &Zeroizing::new(view_scalar),
+        &unsigned,
+    )
+    .expect("sign failed");
+    assert_eq!(signed.fee, resolved.fee);
+    assert_eq!(signed.tx.prefix().outputs.len(), 2);
 }
 
 #[test]

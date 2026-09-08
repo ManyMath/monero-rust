@@ -14,13 +14,15 @@ mod common;
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 use monero_rust::monero_rpc::HttpRpc;
+use monero_rust::native::build_unsigned_transaction;
 use monero_rust::scanner::{
     derive_address, derive_keys, scan_block_for_outputs_with_lookahead, scan_blocks_batch,
     Lookahead,
 };
 use monero_rust::seed_compat::Seed;
+use monero_rust::unsigned_tx::{sign_offline, UnsignedChange};
 use monero_rust::wallet_compat::received_from_wallet_output;
-use monero_rust::wallet_compat::{Change, SignableTransactionBuilder, SpendableOutput, ViewPair};
+use monero_rust::wallet_compat::SpendableOutput;
 use zeroize::Zeroizing;
 
 /// Monero's deterministic test seed, also used for cold-signing vectors.
@@ -199,31 +201,61 @@ async fn builds_signs_and_broadcasts_a_transaction() {
     let spend_scalar = Scalar::from_bytes_mod_order(*seed.entropy());
     let spend_point = &spend_scalar * ED25519_BASEPOINT_TABLE;
     let view_scalar = Scalar::from_bytes_mod_order(*keys.secret_view_key);
-    let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
+    let view_pair = monero_wallet::ViewPair::new(
+        monero_wallet::ed25519::Point::from(spend_point),
+        Zeroizing::new(monero_wallet::ed25519::Scalar::from(view_scalar)),
+    )
+    .expect("view pair");
 
     let protocol = rpc.get_protocol().await.expect("get_protocol");
     let fee_rate = rpc.get_fee().await.expect("get_fee");
 
-    let mut builder =
-        SignableTransactionBuilder::new(protocol, fee_rate, Some(Change::new(&view_pair, false)));
-    builder.add_input(spendable);
     let send_amount = 1_000_000_000u64;
-    builder.add_payment(address, send_amount);
+    let mut rng = rand::rngs::OsRng;
+    let unsigned = build_unsigned_transaction(
+        &mut rng,
+        &rpc,
+        protocol,
+        fee_rate,
+        &[spendable],
+        vec![(address, send_amount)],
+        Some(UnsignedChange {
+            address: view_pair.legacy_address(monero_rust::Network::Mainnet),
+            subaddress: None,
+        }),
+    )
+    .await
+    .expect("select live decoys and assemble the unsigned transaction");
 
-    let signable = builder.build().expect("build a signable transaction");
-    assert!(signable.fee() > 0, "a real transaction must carry a fee");
+    let resolved = unsigned
+        .resolve(&view_pair)
+        .expect("resolve fee and change");
+    assert!(resolved.fee > 0, "a real transaction must carry a fee");
     assert!(
-        signable.fee() + send_amount < input_amount,
+        resolved.fee + send_amount < input_amount,
         "the input must cover the payment and the fee"
     );
 
-    let tx = signable
-        .sign(&mut rand::rngs::OsRng, &rpc, &Zeroizing::new(spend_scalar))
-        .await
-        .expect("signing against live decoys must succeed");
+    let signed = sign_offline(
+        &mut rng,
+        &Zeroizing::new(spend_scalar),
+        &Zeroizing::new(view_scalar),
+        &unsigned,
+    )
+    .expect("signing against live decoys must succeed");
+    assert_eq!(signed.fee, resolved.fee);
+    let tx = signed.tx;
 
     assert_eq!(tx.prefix().inputs.len(), 1);
     assert_eq!(tx.prefix().outputs.len(), 2, "payment plus change");
+    assert_eq!(tx.prefix().extra.len(), 44);
+    assert_eq!(
+        u128::from(resolved.fee),
+        monero_wallet::interface::FeeRate::new(fee_rate.per_weight, fee_rate.mask)
+            .expect("fee rate")
+            .calculate_fee_from_weight(tx.weight() as u64),
+        "the fee is the node's rate applied to the signed transaction's weight"
+    );
 
     // Require daemon acceptance, including ring-signature and range-proof checks.
     rpc.publish_transaction(&tx)

@@ -13,6 +13,10 @@ use zeroize::Zeroizing;
 
 const STANDARD_ADDRESS: &str = "42ey1afDFnn4886T7196doS9GPMzexD9gXpsZJDwVjeRVdFCSoHnv7KPbBeGpzJBzHRCAs9UxqeoyFQMYbqSWYTfJJQAWDm";
 
+const WALLET2_FEE: u64 = 2_599_200_000;
+const WALLET2_CHANGE: u64 = 69_364_735_717_119;
+const WALLET2_EXTRA_LEN: usize = 44;
+
 fn vector_path(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/vectors/cold_signing_regtest_v0_18_5_0")
@@ -411,17 +415,41 @@ fn cold_signing_unsigned_txset_converts_to_app_unsigned_payload() {
 
     let unsigned_bytes =
         hex::decode(&converted.unsigned_tx_hex).expect("converted unsigned tx should be hex");
-    let app_unsigned = monero_rust::wallet_compat::UnsignedTransaction::read(
-        &mut std::io::Cursor::new(unsigned_bytes),
-    )
-    .expect("converted unsigned tx should parse as app payload");
+    let app_unsigned = monero_rust::unsigned_tx::UnsignedTransaction::from_bytes(&unsigned_bytes)
+        .expect("converted unsigned tx should parse as app payload");
     assert_eq!(app_unsigned.inputs.len(), 2);
-    assert_eq!(app_unsigned.fee, converted.fee);
 
     let spend = Zeroizing::new(Scalar::from_bytes_mod_order(cold.spend_secret_key));
+    let view = Zeroizing::new(Scalar::from_bytes_mod_order(cold.view_secret_key));
+    let view_pair = monero_wallet::ViewPair::new(
+        monero_wallet::ed25519::Point::from(&*spend * ED25519_BASEPOINT_TABLE),
+        Zeroizing::new(monero_wallet::ed25519::Scalar::from(*view)),
+    )
+    .expect("cold wallet view pair");
+    let resolved = app_unsigned
+        .resolve(&view_pair)
+        .expect("converted payload should resolve");
+    assert_eq!(resolved.fee, converted.fee);
+    assert_eq!(resolved.fee, WALLET2_FEE);
+    let change = resolved.change.expect("wallet2 transaction has change");
+    assert!(change.is_ours);
+    assert_eq!(change.amount, WALLET2_CHANGE);
+
     let mut rng = rand::rngs::OsRng;
-    let (tx, _, _) = monero_rust::wallet_compat::sign_offline(&mut rng, &spend, app_unsigned)
+    let signed = monero_rust::unsigned_tx::sign_offline(&mut rng, &spend, &view, &app_unsigned)
         .expect("converted wallet2 unsigned payload should sign offline");
+    assert_eq!(signed.fee, WALLET2_FEE);
+    let tx = signed.tx;
+    let Transaction::V2 {
+        proofs: Some(proofs),
+        ..
+    } = &tx
+    else {
+        panic!("signed converted tx should be RingCT");
+    };
+    assert_eq!(proofs.base.fee, WALLET2_FEE);
+    assert_eq!(tx.prefix().outputs.len(), 2);
+    assert_eq!(tx.prefix().extra.len(), WALLET2_EXTRA_LEN);
     let tx_bytes = tx.serialize();
     Transaction::<NotPruned>::read(&mut std::io::Cursor::new(tx_bytes.clone()))
         .expect("signed converted tx should reparse");
@@ -507,13 +535,13 @@ fn cold_signing_signed_txset_parses_wallet2_pending_summary() {
     assert_eq!(ptx.tx_input_count, 2);
     assert_eq!(ptx.tx_input_ring_sizes, vec![16, 16]);
     assert_eq!(ptx.tx_output_count, 2);
-    assert_eq!(ptx.tx_extra_len, 44);
+    assert_eq!(ptx.tx_extra_len, WALLET2_EXTRA_LEN);
     assert_eq!(ptx.rct_type, Some(6));
-    assert_eq!(ptx.rct_fee, Some(2_599_200_000));
+    assert_eq!(ptx.rct_fee, Some(WALLET2_FEE));
     assert_eq!(ptx.dust, 0);
-    assert_eq!(ptx.fee, 2_599_200_000);
+    assert_eq!(ptx.fee, WALLET2_FEE);
     assert!(!ptx.dust_added_to_fee);
-    assert_eq!(ptx.change_amount, 69_364_735_717_119);
+    assert_eq!(ptx.change_amount, WALLET2_CHANGE);
     assert_eq!(ptx.selected_transfer_count, 2);
     assert_eq!(ptx.selected_transfer_indices, vec![0, 20]);
     assert_eq!(ptx.construction.selected_transfer_indices, vec![0, 20]);
@@ -721,12 +749,26 @@ fn cold_signing_wallet2_unsigned_txset_signs_with_imported_cold_wallet_keys() {
         "mainnet",
     )
     .expect("wallet2 unsigned txset should sign through app signer");
-    assert_eq!(signed.fee, 2_599_200_000);
+    assert_eq!(signed.fee, WALLET2_FEE);
     assert!(signed.tx_id.len() == 64);
     assert!(!signed.tx_blob.is_empty());
     let tx_bytes = hex::decode(&signed.tx_blob).expect("signed tx blob should be hex");
-    Transaction::<NotPruned>::read(&mut std::io::Cursor::new(tx_bytes))
+    let tx = Transaction::<NotPruned>::read(&mut std::io::Cursor::new(tx_bytes))
         .expect("signed wallet2-converted tx should parse");
+
+    let Transaction::V2 {
+        proofs: Some(proofs),
+        ..
+    } = &tx
+    else {
+        panic!("signed wallet2-converted tx should be RingCT");
+    };
+    assert_eq!(proofs.base.fee, WALLET2_FEE);
+    assert_eq!(tx.prefix().outputs.len(), 2);
+    assert_eq!(tx.prefix().extra.len(), WALLET2_EXTRA_LEN);
+    let mut received: Vec<u64> = signed.change_outputs.iter().map(|o| o.amount).collect();
+    received.sort();
+    assert_eq!(received, vec![1_000_000_000_000, WALLET2_CHANGE]);
     assert_eq!(signed.spent_key_images.len(), 2);
     for expected_index in [0usize, 20usize] {
         assert!(

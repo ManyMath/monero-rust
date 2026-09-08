@@ -3,10 +3,13 @@
 pub mod native {
     use crate::monero_rpc::{Rpc, RpcConnection, DEFAULT_MAX_FEE_PER_BYTE};
     use crate::seed_compat::Seed;
+    use crate::unsigned_tx::{
+        check_input_ownership, output_with_decoys, sign_offline, UnsignedChange,
+        UnsignedTransaction,
+    };
     use crate::wallet_compat::{
-        sign_offline, transaction_fee_weight, AddressSpec, Change, Decoys, Fee, InternalPayment,
-        Protocol, ReceivedOutput, SignableTransactionBuilder, SpendableOutput, UnsignedInput,
-        UnsignedTransaction, ViewPair,
+        extra_fee_weight, transaction_fee_weight, AddressSpec, Decoys, Fee, Protocol,
+        ReceivedOutput, SpendableOutput, ViewPair,
     };
     use curve25519_dalek::{
         constants::ED25519_BASEPOINT_TABLE,
@@ -14,8 +17,11 @@ pub mod native {
         scalar::Scalar,
     };
     use monero_oxide::transaction::{NotPruned, Pruned, Transaction};
-    use monero_wallet::address::{AddressType, MoneroAddress, Network};
-    use rand_core::RngCore;
+    use monero_wallet::address::{AddressType, MoneroAddress, Network, SubaddressIndex};
+    use monero_wallet::interface::FeeRate;
+    use monero_wallet::ringct::RctType;
+    use monero_wallet::OutputWithDecoys;
+    use rand_core::{CryptoRng, RngCore};
 
     /// Compute the key image `x * H_p(xG)` for an owned one-time key.
     fn generate_key_image(secret: &Zeroizing<Scalar>) -> EdwardsPoint {
@@ -63,6 +69,96 @@ pub mod native {
             decoys.push(Decoys::from_oxide(&selected));
         }
         Ok(decoys)
+    }
+
+    /// Select decoys for every output and assemble the unsigned transaction.
+    pub async fn build_unsigned_transaction<G: RngCore + CryptoRng, R: RpcConnection>(
+        rng: &mut G,
+        rpc: &Rpc<R>,
+        protocol: Protocol,
+        fee_rate: Fee,
+        outputs: &[SpendableOutput],
+        payments: Vec<(MoneroAddress, u64)>,
+        change: Option<UnsignedChange>,
+    ) -> Result<UnsignedTransaction, String> {
+        let fee_rate = FeeRate::new(fee_rate.per_weight, fee_rate.mask)
+            .ok_or_else(|| "Fee rate and quantization mask must be nonzero".to_string())?;
+        let ring_len = u8::try_from(protocol.ring_len())
+            .map_err(|_| "Ring length exceeds supported range".to_string())?;
+        let height = rpc
+            .get_height()
+            .await
+            .map_err(|e| format!("Failed to get height: {:?}", e))?;
+
+        let mut inputs = Vec::with_capacity(outputs.len());
+        for output in outputs {
+            let spent = crate::decoy_select::SpentOutput {
+                index_on_blockchain: output.global_index,
+                key: output.key(),
+                commitment: output.commitment().calculate(),
+            };
+            let decoys = crate::decoy_select::select_decoys(
+                rng,
+                rpc,
+                ring_len,
+                height.saturating_sub(1),
+                &spent,
+            )
+            .await
+            .map_err(|e| format!("Decoy selection failed: {}", e))?;
+            inputs.push(output_with_decoys(
+                monero_wallet::ed25519::Point::from(output.key()),
+                monero_wallet::ed25519::Scalar::from(output.key_offset()),
+                &output.commitment().to_oxide(),
+                &decoys,
+            )?);
+        }
+
+        let mut seed = Zeroizing::new([0u8; 32]);
+        rng.fill_bytes(seed.as_mut());
+
+        Ok(UnsignedTransaction {
+            rct_type: protocol.rct_type(),
+            seed,
+            fee_rate,
+            inputs,
+            payments,
+            change,
+        })
+    }
+
+    fn check_funds(
+        protocol: Protocol,
+        fee_rate: Fee,
+        total_input: u64,
+        input_count: usize,
+        payments: &[(MoneroAddress, u64)],
+        with_change: bool,
+    ) -> Result<(), String> {
+        let outputs = payments.len() + usize::from(with_change);
+        let has_payment_id = outputs == 2
+            || payments
+                .iter()
+                .any(|(address, _)| address.payment_id().is_some());
+        let extra = extra_fee_weight(outputs, true, has_payment_id, &[]);
+        let fee = fee_rate.calculate(transaction_fee_weight(
+            protocol,
+            input_count,
+            outputs,
+            extra,
+        ));
+        let total_send = crate::tx_utils::checked_amount_sum(payments.iter().map(|p| p.1))
+            .ok_or_else(|| "requested amounts overflow".to_string())?;
+        let needed = total_send
+            .checked_add(fee)
+            .ok_or_else(|| "requested amount plus fee overflows".to_string())?;
+        if total_input < needed {
+            return Err(format!(
+                "Insufficient funds: have {} piconero, need {} (amount {} + fee up to {})",
+                total_input, needed, total_send, fee
+            ));
+        }
+        Ok(())
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -229,6 +325,7 @@ pub mod native {
         view_pair: ViewPair,
         spend_key: Zeroizing<Scalar>,
         lookahead: Lookahead,
+        change_subaddress: Option<SubaddressIndex>,
     ) -> Vec<ChangeOutputInfo> {
         let Ok(mut scanner) =
             crate::scanner::oxide_scanner_from_keys(&view_pair.spend(), view_pair.view_scalar())
@@ -236,6 +333,10 @@ pub mod native {
             return vec![];
         };
         crate::scanner::register_subaddresses(&mut scanner, lookahead);
+        // Change may go to a subaddress outside the lookahead.
+        if let Some(index) = change_subaddress {
+            scanner.register_subaddress(index);
+        }
 
         let Ok(tx_hash) = hex::decode(tx_id) else {
             return vec![];
@@ -682,44 +783,50 @@ pub mod native {
             _ => {}
         }
 
-        let change_opt = match change_decision {
-            ChangeDecision::IncludeChange => Some(Change::new(&view_pair, false)),
-            ChangeDecision::AbsorbDust => None,
+        let with_change = match change_decision {
+            ChangeDecision::IncludeChange => true,
+            ChangeDecision::AbsorbDust => false,
             ChangeDecision::DustError => unreachable!(),
         };
 
-        let mut builder = SignableTransactionBuilder::new(protocol, fee, change_opt);
+        let payments: Vec<(MoneroAddress, u64)> = dest_addrs
+            .into_iter()
+            .zip(recipients.iter().map(|(_, amount)| *amount))
+            .collect();
+        check_funds(
+            protocol,
+            fee,
+            total_input,
+            spendable_outputs.len(),
+            &payments,
+            with_change,
+        )?;
 
-        // Generate and set r_seed so we can access the eventuality (and tx_key)
-        let mut rng = rand::rngs::OsRng;
-        let mut r_seed = Zeroizing::new([0u8; 32]);
-        rng.fill_bytes(r_seed.as_mut());
-        builder.set_r_seed(r_seed);
-
-        for output in spendable_outputs {
-            builder.add_input(output);
-        }
-
-        // Add all payments
-        for (dest_addr, (_, amount)) in dest_addrs.into_iter().zip(recipients.iter()) {
-            builder.add_payment(dest_addr, *amount);
-        }
-
-        let signable = builder
-            .build()
-            .map_err(|e| format!("Failed to build transaction: {:?}", e))?;
-
-        let fee_amount = signable.fee();
+        let change = with_change.then(|| UnsignedChange {
+            address: view_pair.address(network, AddressSpec::Standard),
+            subaddress: None,
+        });
 
         // Select decoys online, then sign; the signer returns the tx keys
-        let unsigned = signable
-            .prepare_unsigned(&mut rng, &rpc)
-            .await
-            .map_err(|e| format!("Failed to prepare transaction: {:?}", e))?;
-        let (tx, tx_key, tx_key_additional) = sign_offline(&mut rng, &spend_key, unsigned)
-            .map_err(|e| format!("Failed to sign transaction: {:?}", e))?;
-        let tx_key = hex::encode(tx_key.to_bytes());
-        let tx_key_additional: Vec<String> = tx_key_additional
+        let mut rng = rand::rngs::OsRng;
+        let unsigned = build_unsigned_transaction(
+            &mut rng,
+            rpc,
+            protocol,
+            fee,
+            &spendable_outputs,
+            payments,
+            change,
+        )
+        .await
+        .map_err(|e| format!("Failed to prepare transaction: {}", e))?;
+        let signed = sign_offline(&mut rng, &spend_key, view_pair.view_scalar(), &unsigned)
+            .map_err(|e| format!("Failed to sign transaction: {}", e))?;
+        let fee_amount = signed.fee;
+        let tx = signed.tx;
+        let tx_key = hex::encode(signed.tx_key.to_bytes());
+        let tx_key_additional: Vec<String> = signed
+            .additional_tx_keys
             .iter()
             .map(|k| hex::encode(k.to_bytes()))
             .collect();
@@ -736,7 +843,8 @@ pub mod native {
             account: max_account,
             subaddress: DEFAULT_LOOKAHEAD.subaddress,
         };
-        let change_outputs = scan_transaction_outputs(&tx, &tx_id, view_pair, spend_key, lookahead);
+        let change_outputs =
+            scan_transaction_outputs(&tx, &tx_id, view_pair, spend_key, lookahead, None);
 
         Ok(TransactionResult {
             tx_id,
@@ -842,42 +950,28 @@ pub mod native {
             )
         })?;
 
-        // Monero requires >=2 outputs for RingCT. Create the real output
-        // with the full sweep amount and a 0-value dummy, matching wallet2.
-
-        // Build transaction with NO change address (None)
-        let mut builder = SignableTransactionBuilder::new(protocol, fee, None);
-
-        // Generate and set r_seed so we can access the eventuality (and tx_key)
-        let mut rng = rand::rngs::OsRng;
-        let mut r_seed = Zeroizing::new([0u8; 32]);
-        rng.fill_bytes(r_seed.as_mut());
-        builder.set_r_seed(r_seed);
-
-        // Add all inputs
-        for output in spendable_outputs {
-            builder.add_input(output);
-        }
-
-        // Add 2 payments to satisfy Monero's privacy requirement
-        builder.add_payment(dest_addr, sweep_amount);
-        builder.add_payment(dest_addr, 0);
-
-        let signable = builder
-            .build()
-            .map_err(|e| format!("Failed to build sweep transaction: {:?}", e))?;
-
-        let actual_fee = signable.fee();
+        let payments = vec![(dest_addr, sweep_amount), (dest_addr, 0)];
 
         // Select decoys online, then sign; the signer returns the tx keys
-        let unsigned = signable
-            .prepare_unsigned(&mut rng, &rpc)
-            .await
-            .map_err(|e| format!("Failed to prepare sweep transaction: {:?}", e))?;
-        let (tx, tx_key, tx_key_additional) = sign_offline(&mut rng, &spend_key, unsigned)
-            .map_err(|e| format!("Failed to sign sweep transaction: {:?}", e))?;
-        let tx_key = hex::encode(tx_key.to_bytes());
-        let tx_key_additional: Vec<String> = tx_key_additional
+        let mut rng = rand::rngs::OsRng;
+        let unsigned = build_unsigned_transaction(
+            &mut rng,
+            rpc,
+            protocol,
+            fee,
+            &spendable_outputs,
+            payments,
+            None,
+        )
+        .await
+        .map_err(|e| format!("Failed to prepare sweep transaction: {}", e))?;
+        let signed = sign_offline(&mut rng, &spend_key, view_pair.view_scalar(), &unsigned)
+            .map_err(|e| format!("Failed to sign sweep transaction: {}", e))?;
+        let actual_fee = signed.fee;
+        let tx = signed.tx;
+        let tx_key = hex::encode(signed.tx_key.to_bytes());
+        let tx_key_additional: Vec<String> = signed
+            .additional_tx_keys
             .iter()
             .map(|k| hex::encode(k.to_bytes()))
             .collect();
@@ -894,7 +988,8 @@ pub mod native {
             account: max_account,
             subaddress: DEFAULT_LOOKAHEAD.subaddress,
         };
-        let change_outputs = scan_transaction_outputs(&tx, &tx_id, view_pair, spend_key, lookahead);
+        let change_outputs =
+            scan_transaction_outputs(&tx, &tx_id, view_pair, spend_key, lookahead, None);
 
         Ok(TransactionResult {
             tx_id,
@@ -1244,13 +1339,23 @@ pub mod native {
         Ok(MoneroAddress::new(network, address_type, spend, view))
     }
 
-    fn wallet2_source_decoys(
+    fn wallet2_input(
         source: &crate::epee_compat::TxSourceEntrySummary,
-    ) -> Result<Decoys, String> {
+        key_offset: Scalar,
+    ) -> Result<OutputWithDecoys, String> {
+        use monero_wallet::ed25519::{
+            Commitment, CompressedPoint, Point as OxidePoint, Scalar as OxideScalar,
+        };
+
         let real_output: u8 = source
             .real_output
             .try_into()
             .map_err(|_| "Wallet2 source real output index exceeds u8".to_string())?;
+        let real = source
+            .ring
+            .get(usize::from(real_output))
+            .ok_or_else(|| "Wallet2 source real output index is out of range".to_string())?;
+
         let mut previous = 0u64;
         let mut offsets = Vec::with_capacity(source.ring.len());
         let mut ring = Vec::with_capacity(source.ring.len());
@@ -1261,60 +1366,28 @@ pub mod native {
                 .ok_or_else(|| "Wallet2 source ring global indices are not sorted".to_string())?;
             previous = member.global_output_index;
             offsets.push(offset);
-            let output_public_key = CompressedEdwardsY(member.output_public_key)
+            let output_public_key = CompressedPoint::from(member.output_public_key)
                 .decompress()
                 .ok_or_else(|| "Invalid wallet2 source ring output public key".to_string())?;
-            let commitment = CompressedEdwardsY(member.commitment)
+            let commitment = CompressedPoint::from(member.commitment)
                 .decompress()
                 .ok_or_else(|| "Invalid wallet2 source ring commitment".to_string())?;
             ring.push([output_public_key, commitment]);
         }
-        Ok(Decoys {
-            i: real_output,
-            offsets,
-            ring,
-        })
-    }
+        let decoys = monero_wallet::ringct::clsag::Decoys::new(offsets, real_output, ring)
+            .ok_or_else(|| "Invalid wallet2 source ring".to_string())?;
 
-    fn wallet2_spendable_output(
-        source: &crate::epee_compat::TxSourceEntrySummary,
-        key_offset: Scalar,
-        subaddress_index: Option<(u32, u32)>,
-    ) -> Result<SpendableOutput, String> {
-        let real_output_index: usize = source
-            .real_output
-            .try_into()
-            .map_err(|_| "Wallet2 source real output index exceeds usize".to_string())?;
-        let real = source
-            .ring
-            .get(real_output_index)
-            .ok_or_else(|| "Wallet2 source real output index is out of range".to_string())?;
-        let output_index: u8 = source
-            .real_output_in_tx_index
-            .try_into()
-            .map_err(|_| "Wallet2 source output index exceeds u8".to_string())?;
-
-        let mut bytes = Vec::with_capacity(32 + 1 + 32 + 32 + 32 + 8 + 1 + 8 + 4 + 8);
-        bytes.extend_from_slice(&[0u8; 32]);
-        bytes.push(output_index);
-        bytes.extend_from_slice(&real.output_public_key);
-        bytes.extend_from_slice(&key_offset.to_bytes());
-        bytes.extend_from_slice(&source.mask);
-        bytes.extend_from_slice(&source.amount.to_le_bytes());
-        match subaddress_index {
-            Some((account, address)) if !(account == 0 && address == 0) => {
-                bytes.push(1);
-                bytes.extend_from_slice(&account.to_le_bytes());
-                bytes.extend_from_slice(&address.to_le_bytes());
-            }
-            _ => bytes.push(0),
-        }
-        bytes.extend_from_slice(&[0u8; 8]);
-        bytes.extend_from_slice(&0u32.to_le_bytes());
-        bytes.extend_from_slice(&real.global_output_index.to_le_bytes());
-
-        SpendableOutput::read(&mut std::io::Cursor::new(bytes))
-            .map_err(|e| format!("Failed to build wallet2 spendable output: {e:?}"))
+        let key: OxidePoint = CompressedPoint::from(real.output_public_key)
+            .decompress()
+            .ok_or_else(|| "Invalid wallet2 source output public key".to_string())?;
+        let mask = Option::<Scalar>::from(Scalar::from_canonical_bytes(source.mask))
+            .ok_or_else(|| "Invalid wallet2 source commitment mask".to_string())?;
+        output_with_decoys(
+            key,
+            OxideScalar::from(key_offset),
+            &Commitment::new(OxideScalar::from(mask), source.amount),
+            &decoys,
+        )
     }
 
     fn wallet2_r_seed(
@@ -1343,36 +1416,31 @@ pub mod native {
     ) -> Result<UnsignedTransactionResult, String> {
         let mut inputs = Vec::with_capacity(construction.sources.len());
         for source in &construction.sources {
-            let (key_offset, _, subaddress_index) = derive_source_key_offset(
+            let (key_offset, _, _) = derive_source_key_offset(
                 source,
                 spend_secret,
                 view_secret_key,
                 construction.subaddr_account,
                 &construction.subaddr_indices,
             )?;
-            inputs.push(UnsignedInput {
-                output: wallet2_spendable_output(source, key_offset, subaddress_index)?,
-                decoys: wallet2_source_decoys(source)?,
-            });
+            inputs.push(wallet2_input(source, key_offset)?);
         }
 
-        let mut payments = Vec::with_capacity(construction.destinations.len() + 1);
+        let mut payments = Vec::with_capacity(construction.destinations.len());
         let mut recipients = Vec::with_capacity(construction.destinations.len());
         for destination in &construction.destinations {
             let address = parse_wallet2_destination_address(destination, network)?;
             recipients.push((address.to_string(), destination.amount));
-            payments.push(InternalPayment::Payment((address, destination.amount)));
+            payments.push((address, destination.amount));
         }
-        if construction.change_amount > 0 {
-            let change_address = parse_wallet2_destination_address(&construction.change, network)?;
-            let change = Change::from_raw(
-                change_address,
-                Some(Zeroizing::new(Scalar::from_bytes_mod_order(
-                    view_secret_key,
-                ))),
-            );
-            payments.push(InternalPayment::Change(change, construction.change_amount));
-        }
+        let change = if construction.change_amount > 0 {
+            Some(UnsignedChange {
+                address: parse_wallet2_destination_address(&construction.change, network)?,
+                subaddress: SubaddressIndex::new(construction.subaddr_account, 0),
+            })
+        } else {
+            None
+        };
 
         let total_input = construction
             .sources
@@ -1387,14 +1455,33 @@ pub mod native {
             .checked_sub(total_output)
             .ok_or_else(|| "Wallet2 outputs exceed inputs".to_string())?;
 
+        // A rate of 1 with the fee as mask charges exactly `fee` for any weight
+        // up to `fee`.
+        let fee_rate =
+            FeeRate::new(1, fee).ok_or_else(|| "Wallet2 transaction pays no fee".to_string())?;
         let unsigned = UnsignedTransaction {
-            protocol: Protocol::v16,
-            r_seed: wallet2_r_seed(unsigned_txset, tx_count, construction_index),
-            fee,
-            payments,
-            data: vec![],
+            rct_type: RctType::ClsagBulletproofPlus,
+            seed: wallet2_r_seed(unsigned_txset, tx_count, construction_index),
+            fee_rate,
             inputs,
+            payments,
+            change,
         };
+
+        let view_pair = signer_view_pair(
+            &Zeroizing::new(spend_secret),
+            &Zeroizing::new(Scalar::from_bytes_mod_order(view_secret_key)),
+        )?;
+        let resolved = unsigned.resolve(&view_pair)?;
+        let resolved_change = resolved.change.map_or(0, |change| change.amount);
+        if resolved.fee != fee || resolved_change != construction.change_amount {
+            return Err(format!(
+                "Cannot reproduce the wallet2 transaction exactly: wallet2 has fee {} and change \
+                 {}, the rebuilt transaction has fee {} and change {}",
+                fee, construction.change_amount, resolved.fee, resolved_change
+            ));
+        }
+
         Ok(UnsignedTransactionResult {
             unsigned_tx_hex: hex::encode(unsigned.serialize()),
             fee,
@@ -1575,40 +1662,47 @@ pub mod native {
             _ => {}
         }
 
-        let change_opt = match change_decision {
-            ChangeDecision::IncludeChange => Some(Change::new(&view_pair, false)),
-            ChangeDecision::AbsorbDust => None,
+        let with_change = match change_decision {
+            ChangeDecision::IncludeChange => true,
+            ChangeDecision::AbsorbDust => false,
             ChangeDecision::DustError => unreachable!(),
         };
 
-        let mut builder = SignableTransactionBuilder::new(protocol, fee_rate, change_opt);
+        let payments: Vec<(MoneroAddress, u64)> = dest_addrs
+            .into_iter()
+            .zip(recipients.iter().map(|(_, amount)| *amount))
+            .collect();
+        check_funds(
+            protocol,
+            fee_rate,
+            total_input,
+            spendable_outputs.len(),
+            &payments,
+            with_change,
+        )?;
+
+        let change = with_change.then(|| UnsignedChange {
+            address: view_pair.address(network, AddressSpec::Standard),
+            subaddress: None,
+        });
 
         let mut rng = rand::rngs::OsRng;
-        let mut r_seed = Zeroizing::new([0u8; 32]);
-        rng.fill_bytes(r_seed.as_mut());
-        builder.set_r_seed(r_seed);
+        let unsigned = build_unsigned_transaction(
+            &mut rng,
+            rpc,
+            protocol,
+            fee_rate,
+            &spendable_outputs,
+            payments,
+            change,
+        )
+        .await
+        .map_err(|e| format!("Failed to prepare unsigned tx: {}", e))?;
 
-        for output in spendable_outputs {
-            builder.add_input(output);
-        }
-        for (dest_addr, (_, amount)) in dest_addrs.into_iter().zip(recipients.iter()) {
-            builder.add_payment(dest_addr, *amount);
-        }
-
-        let signable = builder
-            .build()
-            .map_err(|e| format!("Failed to build transaction: {:?}", e))?;
-        let fee = signable.fee();
-
-        let unsigned = signable
-            .prepare_unsigned(&mut rng, &rpc)
-            .await
-            .map_err(|e| format!("Failed to prepare unsigned tx: {:?}", e))?;
-
-        let unsigned_bytes = unsigned.serialize();
+        let fee = unsigned.resolve(&view_pair.to_oxide()?)?.fee;
 
         Ok(UnsignedTransactionResult {
-            unsigned_tx_hex: hex::encode(unsigned_bytes),
+            unsigned_tx_hex: hex::encode(unsigned.serialize()),
             fee,
             recipients: recipients.to_vec(),
         })
@@ -1669,7 +1763,7 @@ pub mod native {
                         signed.push(sign_app_unsigned_transaction_with_private_keys(
                             spend_secret_key,
                             view_secret_key,
-                            unsigned_bytes,
+                            &unsigned_bytes,
                             network_str,
                         )?);
                     }
@@ -1686,7 +1780,7 @@ pub mod native {
         let signed = sign_app_unsigned_transaction_with_private_keys(
             spend_secret_key,
             view_secret_key,
-            unsigned_bytes,
+            &unsigned_bytes,
             network_str,
         )?;
         offline_sign_result_from_transactions(vec![signed])
@@ -1834,7 +1928,7 @@ pub mod native {
         use sha3::{Digest, Keccak256};
         parse_network(network_str)?;
         let mut digest = Keccak256::new();
-        digest.update(b"monero-rust offline transaction approval v1");
+        digest.update(b"monero-rust offline transaction approval v2");
         digest.update((network_str.len() as u64).to_le_bytes());
         digest.update(network_str.as_bytes());
         // Bind public identities, never retain secret key bytes in the review.
@@ -1907,10 +2001,12 @@ pub mod native {
                     .map_err(|e| format!("Failed to convert wallet2 unsigned txset: {e}"))?;
                     let mut all = Vec::new();
                     for unsigned in converted {
+                        let converted_bytes = hex::decode(unsigned.unsigned_tx_hex)
+                            .map_err(|e| format!("Invalid converted unsigned tx hex: {:?}", e))?;
                         all.push(preview_app_unsigned_transaction(
                             spend_secret_key,
                             view_secret_key,
-                            &unsigned.unsigned_tx_hex,
+                            &converted_bytes,
                             network_str,
                         )?);
                     }
@@ -1934,7 +2030,7 @@ pub mod native {
         let transaction = preview_app_unsigned_transaction(
             spend_secret_key,
             view_secret_key,
-            unsigned_tx_hex,
+            &unsigned_bytes,
             network_str,
         )?;
         finish_preview(
@@ -1946,59 +2042,63 @@ pub mod native {
         )
     }
 
+    fn signer_view_pair(
+        spend_key: &Zeroizing<Scalar>,
+        view_key: &Zeroizing<Scalar>,
+    ) -> Result<monero_wallet::ViewPair, String> {
+        monero_wallet::ViewPair::new(
+            monero_wallet::ed25519::Point::from(&**spend_key * ED25519_BASEPOINT_TABLE),
+            Zeroizing::new(monero_wallet::ed25519::Scalar::from(**view_key)),
+        )
+        .map_err(|e| format!("Invalid wallet keys: {}", e))
+    }
+
     fn preview_app_unsigned_transaction(
         spend_secret_key: [u8; 32],
         view_secret_key: [u8; 32],
-        unsigned_tx_hex: &str,
+        unsigned_bytes: &[u8],
         network_str: &str,
     ) -> Result<TransactionSummary, String> {
-        let unsigned_bytes = hex::decode(unsigned_tx_hex)
-            .map_err(|e| format!("Invalid unsigned tx hex: {:?}", e))?;
-        let mut cursor = std::io::Cursor::new(&unsigned_bytes);
-        let unsigned = UnsignedTransaction::read(&mut cursor)
-            .map_err(|e| format!("Failed to parse unsigned tx: {:?}", e))?;
-        if cursor.position() != unsigned_bytes.len() as u64 {
-            return Err("unsigned transaction has trailing bytes".into());
-        }
+        let unsigned = UnsignedTransaction::from_bytes(unsigned_bytes)?;
         let spend_key = Zeroizing::new(Scalar::from_bytes_mod_order(spend_secret_key));
+        let view_key = Zeroizing::new(Scalar::from_bytes_mod_order(view_secret_key));
         let spend_point = &*spend_key * ED25519_BASEPOINT_TABLE;
-        let view_scalar = Scalar::from_bytes_mod_order(view_secret_key);
-        let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
+        let view_pair = ViewPair::new(spend_point, view_key.clone());
         let network = parse_network(network_str)?;
         let lookahead = signer_lookahead();
         if unsigned.inputs.is_empty() {
             return Err("unsigned transaction has no inputs".into());
         }
-        for input in &unsigned.inputs {
-            if (&(*spend_key + input.output.key_offset()) * ED25519_BASEPOINT_TABLE)
-                != input.output.key()
-            {
-                return Err(
-                    "Refusing to sign: unsigned input does not belong to this wallet".into(),
-                );
-            }
-        }
-        let destinations: Vec<_> = unsigned
+        check_input_ownership(&spend_key, &unsigned).map_err(|_| {
+            "Refusing to sign: unsigned input does not belong to this wallet".to_string()
+        })?;
+
+        let resolved = unsigned.resolve(&signer_view_pair(&spend_key, &view_key)?)?;
+
+        let mut destinations: Vec<_> = unsigned
             .payments
             .iter()
-            .map(|payment| {
-                let (address, amount) = payment.address_and_amount();
-                DestinationPreview {
-                    address: address.to_string(),
-                    amount,
-                    is_change: matches!(payment, InternalPayment::Change(_, _)),
-                    is_ours: address_is_ours(address, &view_pair, network, lookahead),
-                }
+            .map(|(address, amount)| DestinationPreview {
+                address: address.to_string(),
+                amount: *amount,
+                is_change: false,
+                is_ours: address_is_ours(address, &view_pair, network, lookahead),
             })
             .collect();
-        let input_total = crate::tx_utils::checked_amount_sum(
-            unsigned.inputs.iter().map(|i| i.output.commitment().amount),
-        )
-        .ok_or_else(|| "unsigned input amounts overflow".to_string())?;
+        if let Some(change) = &resolved.change {
+            destinations.push(DestinationPreview {
+                address: change.address.to_string(),
+                amount: change.amount,
+                is_change: true,
+                is_ours: change.is_ours,
+            });
+        }
+
+        let input_total = resolved.input_total;
         let output_total =
             crate::tx_utils::checked_amount_sum(destinations.iter().map(|d| d.amount))
                 .ok_or_else(|| "unsigned output amounts overflow".to_string())?;
-        if output_total.checked_add(unsigned.fee) != Some(input_total) {
+        if output_total.checked_add(resolved.fee) != Some(input_total) {
             return Err("unsigned transaction fee doesn't match its amounts".into());
         }
         let returned = crate::tx_utils::checked_amount_sum(
@@ -2008,7 +2108,7 @@ pub mod native {
         Ok(TransactionSummary {
             destinations,
             input_total,
-            fee: unsigned.fee,
+            fee: resolved.fee,
             wallet_debit: input_total
                 .checked_sub(returned)
                 .ok_or_else(|| "unsigned wallet debit underflow".to_string())?,
@@ -2018,84 +2118,41 @@ pub mod native {
     fn sign_app_unsigned_transaction_with_private_keys(
         spend_secret_key: [u8; 32],
         view_secret_key: [u8; 32],
-        unsigned_bytes: Vec<u8>,
+        unsigned_bytes: &[u8],
         network_str: &str,
     ) -> Result<OfflineSignedTransaction, String> {
         let spend_key = Zeroizing::new(Scalar::from_bytes_mod_order(spend_secret_key));
+        let view_key = Zeroizing::new(Scalar::from_bytes_mod_order(view_secret_key));
         let spend_point = &*spend_key * ED25519_BASEPOINT_TABLE;
-        let view_scalar = Scalar::from_bytes_mod_order(view_secret_key);
-        let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
-        let unsigned = UnsignedTransaction::read(&mut std::io::Cursor::new(unsigned_bytes))
-            .map_err(|e| format!("Failed to parse unsigned tx: {:?}", e))?;
-
-        let fee = unsigned.fee;
-
-        // The online wallet chooses every destination, including change.
-        // `sign_offline()` checks input ownership and balanced amounts, but those
-        // checks also pass if the change is redirected to an attacker.
-        //
-        // Require the change address to belong to this wallet. Comparing the total
-        // value returned to us is insufficient: a payment to us could satisfy that
-        // comparison while the separately declared change goes elsewhere.
-        // Compare keys and derivation modes; see `address_identity`.
-        let change_addresses = unsigned
-            .payments
-            .iter()
-            .filter_map(|payment| match payment {
-                InternalPayment::Change(change, _) => Some(change.address().clone()),
-                InternalPayment::Payment(_) => None,
-            })
-            .collect::<Vec<_>>();
-        let mut distinct = change_addresses
-            .iter()
-            .map(address_identity)
-            .collect::<Vec<_>>();
-        distinct.sort();
-        distinct.dedup();
-        if distinct.len() > 1 {
-            return Err(
-                "Refusing to sign: the unsigned transaction splits change across more than one \
-                 address, which a wallet building its own transaction never does."
-                    .to_string(),
-            );
-        }
-
-        let network = parse_network(network_str)?;
-        for change_address in &change_addresses {
-            if !address_is_ours(change_address, &view_pair, network, signer_lookahead()) {
-                return Err(format!(
-                    "Refusing to sign: this transaction sends its change to {change_address}, \
-                     which is not an address this wallet can spend from. An unsigned \
-                     transaction is built by the online, view-only wallet, and a tampered one \
-                     redirects the change while still balancing its amounts. (A change address \
-                     outside the signer's subaddress lookahead also lands here - it fails \
-                     closed.)"
-                ));
-            }
-        }
+        let view_pair = ViewPair::new(spend_point, view_key.clone());
+        parse_network(network_str)?;
+        let unsigned = UnsignedTransaction::from_bytes(unsigned_bytes)?;
 
         let mut rng = rand::rngs::OsRng;
-        let (tx, tx_key, tx_key_additional) = sign_offline(&mut rng, &spend_key, unsigned)
-            .map_err(|e| format!("Failed to sign offline: {:?}", e))?;
+        let signed = sign_offline(&mut rng, &spend_key, &view_key, &unsigned)?;
 
+        let tx = signed.tx;
         let tx_id = hex::encode(tx.hash());
         let tx_bytes = tx.serialize();
         let spent_key_images = crate::scanner::extract_key_images_from_raw_tx(&tx_bytes);
         let tx_blob = hex::encode(tx_bytes);
 
-        let max_account = 0u32; // offline signer doesn't have stored output metadata
-        let lookahead = Lookahead {
-            account: max_account,
-            subaddress: DEFAULT_LOOKAHEAD.subaddress,
-        };
-        let change_outputs = scan_transaction_outputs(&tx, &tx_id, view_pair, spend_key, lookahead);
+        let change_outputs = scan_transaction_outputs(
+            &tx,
+            &tx_id,
+            view_pair,
+            spend_key,
+            signer_lookahead(),
+            unsigned.change.and_then(|change| change.subaddress),
+        );
 
         Ok(OfflineSignedTransaction {
             tx_id,
-            fee,
+            fee: signed.fee,
             tx_blob,
-            tx_key: hex::encode(tx_key.to_bytes()),
-            tx_key_additional: tx_key_additional
+            tx_key: hex::encode(signed.tx_key.to_bytes()),
+            tx_key_additional: signed
+                .additional_tx_keys
                 .iter()
                 .map(|k| hex::encode(k.to_bytes()))
                 .collect(),
@@ -2208,9 +2265,7 @@ pub mod native {
 
             let view_pair = view_pair_from_seed(&seed, "");
             assert_eq!(
-                view_pair
-                    .address(Network::Stagenet, AddressSpec::Standard)
-                    .to_string(),
+                view_pair.legacy_address(Network::Stagenet).to_string(),
                 expected.address.to_string(),
                 "signer's view pair must be the wallet's view pair"
             );

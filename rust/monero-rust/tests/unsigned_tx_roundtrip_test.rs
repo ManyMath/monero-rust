@@ -5,12 +5,14 @@ mod mock_rpc;
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 use monero_oxide::transaction::{NotPruned, Transaction};
+use monero_rust::native::build_unsigned_transaction;
 use monero_rust::scanner::{
     derive_address, derive_keys, scan_block_for_outputs_with_lookahead, Lookahead,
 };
 use monero_rust::seed_compat::Seed;
+use monero_rust::unsigned_tx::{UnsignedChange, UnsignedTransaction};
 use monero_rust::wallet_compat::received_from_wallet_output;
-use monero_rust::wallet_compat::{Change, SignableTransactionBuilder, SpendableOutput, ViewPair};
+use monero_rust::wallet_compat::SpendableOutput;
 use monero_rust::Network;
 use monero_wallet::WalletOutput;
 #[cfg(feature = "mock-rpc")]
@@ -99,7 +101,10 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
     let spend_point = &spend_scalar * ED25519_BASEPOINT_TABLE;
 
     let view_scalar = Scalar::from_bytes_mod_order(*keys.secret_view_key);
-    let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
+    let view_pair = monero_wallet::ViewPair::new(
+        monero_wallet::ed25519::Point::from(spend_point),
+        Zeroizing::new(monero_wallet::ed25519::Scalar::from(view_scalar)),
+    )?;
 
     let test_output = &all_outputs[0];
     let output_bytes = hex::decode(&test_output.received_output_bytes)?;
@@ -107,16 +112,11 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
         received_from_wallet_output(&WalletOutput::read(&mut Cursor::new(output_bytes))?)?;
     let spendable = SpendableOutput::from(&rpc, received.clone()).await?;
 
-    let change = Change::new(&view_pair, false);
-    let mut builder = SignableTransactionBuilder::new(protocol, fee_rate, Some(change));
-    builder.add_input(spendable);
-
     let send_amount = 1_000_000_000u64;
-    builder.add_payment(address, send_amount);
-
-    let signable = builder.build()?;
-    let expected_fee = signable.fee();
-    assert!(expected_fee > 0, "Fee must be non-zero");
+    let change = UnsignedChange {
+        address: view_pair.legacy_address(NETWORK),
+        subaddress: None,
+    };
 
     // --- Step 3: Prepare as UnsignedTransaction and serialize to hex ---
     #[cfg(feature = "mock-rpc")]
@@ -124,10 +124,20 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
     #[cfg(not(feature = "mock-rpc"))]
     let mut rng = rand::rngs::OsRng;
 
-    let unsigned = signable
-        .prepare_unsigned(&mut rng, &rpc)
-        .await
-        .map_err(|e| format!("prepare_unsigned failed: {:?}", e))?;
+    let unsigned = build_unsigned_transaction(
+        &mut rng,
+        &rpc,
+        protocol,
+        fee_rate,
+        &[spendable],
+        vec![(address, send_amount)],
+        Some(change),
+    )
+    .await
+    .map_err(|e| format!("build_unsigned_transaction failed: {:?}", e))?;
+
+    let expected_fee = unsigned.resolve(&view_pair)?.fee;
+    assert!(expected_fee > 0, "Fee must be non-zero");
 
     let unsigned_bytes = unsigned.serialize();
     assert!(
@@ -137,10 +147,14 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
     let unsigned_tx_hex = hex::encode(&unsigned_bytes);
 
     // Verify the unsigned bytes can be deserialized back
-    let unsigned_roundtrip =
-        monero_rust::wallet_compat::UnsignedTransaction::read(&mut Cursor::new(&unsigned_bytes))?;
+    let unsigned_roundtrip = UnsignedTransaction::from_bytes(&unsigned_bytes)?;
     assert_eq!(
-        unsigned_roundtrip.fee, expected_fee,
+        unsigned_roundtrip, unsigned,
+        "Unsigned TX must survive a serialize/deserialize roundtrip"
+    );
+    assert_eq!(
+        unsigned_roundtrip.resolve(&view_pair)?.fee,
+        expected_fee,
         "Fee must survive unsigned TX serialize/deserialize roundtrip"
     );
     assert_eq!(
