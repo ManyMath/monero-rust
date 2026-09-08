@@ -9,9 +9,9 @@ use monero_rust::seed_compat::Seed;
 use monero_rust::unsigned_tx::{
     output_with_decoys, sign_offline, UnsignedChange, UnsignedTransaction,
 };
-use monero_rust::wallet_compat::{AddressSpec, Scanner, ViewPair};
 use monero_wallet::address::Network;
-use std::collections::HashSet;
+use monero_wallet::ed25519::{Point, Scalar as OxideScalar};
+use monero_wallet::{Scanner, ViewPair};
 use std::io::Cursor;
 use zeroize::Zeroizing;
 
@@ -95,8 +95,12 @@ async fn test_transaction_building() {
     let spend_point = spend_key_from_seed(&seed);
     let view_scalar = view_key_from_seed(&seed);
 
-    let pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
-    let address = pair.address(Network::Stagenet, AddressSpec::Standard);
+    let pair = ViewPair::new(
+        Point::from(spend_point),
+        Zeroizing::new(OxideScalar::from(view_scalar)),
+    )
+    .expect("view pair");
+    let address = pair.legacy_address(Network::Stagenet);
 
     assert_eq!(address.to_string(), EXPECTED_ADDRESS);
 
@@ -112,20 +116,20 @@ async fn test_transaction_building() {
     let transaction =
         parse_pruned_transaction(&mut cursor, prunable_hash_array).expect("parse failed");
 
-    let mut scanner = Scanner::from_view(pair.clone(), Some(HashSet::new()));
-    let scan_result = scanner.scan_transaction(&transaction);
-    let outputs = scan_result.ignore_timelock();
+    let mut scanner = Scanner::new(pair.clone());
+    let outputs = monero_rust::scanner::scan_single_transaction(
+        &mut scanner,
+        transaction.hash(),
+        &Transaction::<monero_oxide::transaction::Pruned>::from(transaction),
+    )
+    .expect("scan failed");
 
     assert_eq!(outputs.len(), 1);
     let received_output = &outputs[0];
-    assert_eq!(received_output.data.commitment.amount, EXPECTED_AMOUNT);
+    assert_eq!(received_output.commitment().amount, EXPECTED_AMOUNT);
 
-    use monero_wallet::ed25519::{Commitment, Point, Scalar as OxideScalar};
-    let key = Point::from(received_output.data.key);
-    let commitment = Commitment::new(
-        OxideScalar::from(received_output.data.commitment.mask),
-        received_output.data.commitment.amount,
-    );
+    let key = received_output.key();
+    let commitment = received_output.commitment().clone();
     let mut ring = vec![[key, commitment.commit()]];
     for i in 1..16u64 {
         let point = Point::from(&Scalar::from(9000 + i) * ED25519_BASEPOINT_TABLE);
@@ -134,13 +138,8 @@ async fn test_transaction_building() {
     let mut offsets = vec![TEST_OUTPUT_GLOBAL_INDEX];
     offsets.extend(std::iter::repeat(7).take(15));
     let decoys = monero_wallet::ringct::clsag::Decoys::new(offsets, 0, ring).expect("decoys");
-    let input = output_with_decoys(
-        key,
-        OxideScalar::from(received_output.data.key_offset),
-        &commitment,
-        &decoys,
-    )
-    .expect("input");
+    let input =
+        output_with_decoys(key, received_output.key_offset(), &commitment, &decoys).expect("input");
 
     let send_amount = 1_000_000_000_000u64;
     let unsigned = UnsignedTransaction {
@@ -155,12 +154,7 @@ async fn test_transaction_building() {
         }),
     };
 
-    let wallet_view_pair = monero_wallet::ViewPair::new(
-        Point::from(spend_point),
-        Zeroizing::new(OxideScalar::from(view_scalar)),
-    )
-    .expect("view pair");
-    let resolved = unsigned.resolve(&wallet_view_pair).expect("resolve failed");
+    let resolved = unsigned.resolve(&pair).expect("resolve failed");
     assert!(resolved.fee > 0);
     assert_eq!(resolved.fee % 10000, 0, "fee is quantized by the mask");
     let change = resolved.change.expect("change");

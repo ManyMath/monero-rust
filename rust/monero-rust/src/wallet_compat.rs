@@ -5,9 +5,6 @@
 //! serialize through them, while the cryptography behind them moves to the
 //! monero-oxide crates. Conversions into `monero-wallet` types live here too.
 
-// Consumed by the send-path port over the next commits.
-#![allow(dead_code)]
-
 use std::io::{self, Read, Write};
 
 use curve25519_dalek::{
@@ -40,24 +37,8 @@ pub(crate) fn write_varint<W: Write>(varint: &u64, w: &mut W) -> io::Result<()> 
     Ok(())
 }
 
-pub(crate) fn write_scalar<W: Write>(scalar: &Scalar, w: &mut W) -> io::Result<()> {
-    w.write_all(&scalar.to_bytes())
-}
-
 pub(crate) fn write_point<W: Write>(point: &EdwardsPoint, w: &mut W) -> io::Result<()> {
     w.write_all(&point.compress().to_bytes())
-}
-
-pub(crate) fn write_vec<T, W: Write, F: Fn(&T, &mut W) -> io::Result<()>>(
-    f: F,
-    v: &[T],
-    w: &mut W,
-) -> io::Result<()> {
-    write_varint(&(v.len() as u64), w)?;
-    for item in v {
-        f(item, w)?;
-    }
-    Ok(())
 }
 
 pub(crate) fn read_bytes<R: Read, const N: usize>(r: &mut R) -> io::Result<[u8; N]> {
@@ -120,16 +101,6 @@ pub(crate) fn read_raw_vec<R: Read, T, F: Fn(&mut R) -> io::Result<T>>(
         res.push(f(r)?);
     }
     Ok(res)
-}
-
-pub(crate) fn read_vec<R: Read, T, F: Fn(&mut R) -> io::Result<T>>(
-    f: F,
-    r: &mut R,
-) -> io::Result<Vec<T>> {
-    let len = read_varint(r)?
-        .try_into()
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "length overflow"))?;
-    read_raw_vec(f, len, r)
 }
 
 // ---------------------------------------------------------------------------
@@ -567,24 +538,6 @@ impl Decoys {
         Ok(Decoys { i, offsets, ring })
     }
 
-    /// Convert into the `monero-oxide` decoy representation.
-    pub(crate) fn to_oxide(&self) -> Result<monero_oxide::ringct::clsag::Decoys, String> {
-        let ring = self
-            .ring
-            .iter()
-            .map(|pair| {
-                let convert = |point: &EdwardsPoint| {
-                    monero_wallet::ed25519::CompressedPoint::from(point.compress().to_bytes())
-                        .decompress()
-                        .ok_or_else(|| "ring member failed to decompress".to_string())
-                };
-                Ok([convert(&pair[0])?, convert(&pair[1])?])
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-        monero_oxide::ringct::clsag::Decoys::new(self.offsets.clone(), self.i, ring)
-            .ok_or_else(|| "invalid decoy set".to_string())
-    }
-
     /// Convert from the `monero-oxide` decoy representation.
     pub(crate) fn from_oxide(decoys: &monero_oxide::ringct::clsag::Decoys) -> Self {
         Decoys {
@@ -662,67 +615,6 @@ impl SpendableOutput {
         };
         output.refresh_global_index(rpc).await?;
         Ok(output)
-    }
-}
-
-/// A collection of received outputs, restricted by their timelocks.
-///
-/// Matches the previous backend's scanner result shape.
-pub struct Timelocked(pub(crate) Vec<ReceivedOutput>);
-
-impl Timelocked {
-    /// Ignore the timelocks and return all outputs within this container.
-    pub fn ignore_timelock(self) -> Vec<ReceivedOutput> {
-        self.0
-    }
-}
-
-/// A per-transaction scanner matching the previous backend's API.
-///
-/// `monero-wallet` only scans whole blocks; this wraps its scanner with the
-/// synthetic-block machinery the production paths use for mempool scanning.
-pub struct Scanner {
-    inner: monero_wallet::Scanner,
-}
-
-impl Scanner {
-    /// Create a Scanner from a ViewPair.
-    ///
-    /// The burning-bug filter set of the previous API is accepted and ignored;
-    /// callers are responsible for output deduplication.
-    pub fn from_view(
-        pair: ViewPair,
-        _burning_bug: Option<
-            std::collections::HashSet<curve25519_dalek::edwards::CompressedEdwardsY>,
-        >,
-    ) -> Scanner {
-        let inner = pair
-            .to_oxide()
-            .map(monero_wallet::Scanner::new)
-            .expect("creating a scanner from an invalid view pair");
-        Scanner { inner }
-    }
-
-    /// Register a subaddress to scan for.
-    pub fn register_subaddress(&mut self, subaddress: SubaddressIndex) {
-        self.inner.register_subaddress(subaddress);
-    }
-
-    /// Scan a single transaction for outputs owned by this scanner's keys.
-    pub fn scan_transaction(&mut self, tx: &monero_oxide::transaction::Transaction) -> Timelocked {
-        let tx_hash = tx.hash();
-        let pruned =
-            monero_oxide::transaction::Transaction::<monero_oxide::transaction::Pruned>::from(
-                tx.clone(),
-            );
-        let outputs = crate::scanner::scan_single_transaction(&mut self.inner, tx_hash, &pruned)
-            .unwrap_or_default();
-        Timelocked(
-            outputs
-                .iter()
-                .filter_map(|output| received_from_wallet_output(output).ok())
-                .collect(),
-        )
     }
 }
 
@@ -820,8 +712,6 @@ impl ViewPair {
 // Fee weight estimation (mirror arithmetic)
 // ---------------------------------------------------------------------------
 
-const MAX_ARBITRARY_DATA_SIZE: usize = 255 - 1;
-const MAX_OUTPUTS: usize = 16;
 const BP_LOG_N: usize = 6;
 
 fn varint_len(varint: usize) -> usize {
@@ -982,7 +872,7 @@ mod tests {
     }
 
     #[test]
-    fn decoys_roundtrip_and_oxide_conversion() {
+    fn decoys_roundtrip_and_conversion_from_oxide() {
         let ring: Vec<[EdwardsPoint; 2]> = (0..16u64)
             .map(|i| {
                 let point = &Scalar::from(300 + i) * ED25519_BASEPOINT_TABLE;
@@ -1001,9 +891,14 @@ mod tests {
         let read = Decoys::read(&mut bytes.as_slice()).unwrap();
         assert_eq!(read, decoys);
 
-        let oxide = decoys.to_oxide().unwrap();
-        assert_eq!(oxide.signer_index(), 7);
-        assert_eq!(oxide.offsets(), &decoys.offsets[..]);
+        let oxide_ring = decoys
+            .ring
+            .iter()
+            .map(|pair| pair.map(monero_wallet::ed25519::Point::from))
+            .collect();
+        let oxide =
+            monero_oxide::ringct::clsag::Decoys::new(decoys.offsets.clone(), decoys.i, oxide_ring)
+                .unwrap();
         let back = Decoys::from_oxide(&oxide);
         assert_eq!(back, decoys);
     }

@@ -177,10 +177,12 @@ async fn test_step5_invalid_seed_handling() {
 
 #[test]
 fn test_step7_direct_scanner_e2e() {
+    use monero_oxide::transaction::{NotPruned, Pruned, Transaction};
+    use monero_rust::scanner::scan_single_transaction;
     use monero_rust::seed_compat::Seed;
-    use monero_rust::wallet_compat::{AddressSpec, Scanner, ViewPair};
     use monero_wallet::address::Network;
-    use std::collections::HashSet;
+    use monero_wallet::ed25519::{Point, Scalar as OxideScalar};
+    use monero_wallet::{Scanner, ViewPair};
     use zeroize::Zeroizing;
 
     let seed = Seed::from_string(Zeroizing::new(TEST_SEED.to_string())).expect("valid mnemonic");
@@ -188,28 +190,31 @@ fn test_step7_direct_scanner_e2e() {
     let spend = spend_key_from_seed(&seed);
     let view = view_key_from_seed(&seed);
 
-    let pair = ViewPair::new(spend, Zeroizing::new(view));
-    let address = pair.address(Network::Stagenet, AddressSpec::Standard);
+    let pair = ViewPair::new(Point::from(spend), Zeroizing::new(OxideScalar::from(view)))
+        .expect("view pair");
+    let address = pair.legacy_address(Network::Stagenet);
     assert_eq!(address.to_string(), EXPECTED_ADDRESS);
 
-    let mut scanner = Scanner::from_view(pair, Some(HashSet::new()));
+    let mut scanner = Scanner::new(pair);
 
     let tx_hex = get_transaction_hex(EXPECTED_TX_HASH);
     let tx_bytes = hex::decode(&tx_hex).expect("failed to decode transaction hex");
 
-    let transaction = monero_oxide::transaction::Transaction::<
-        monero_oxide::transaction::NotPruned,
-    >::read::<&[u8]>(&mut tx_bytes.as_ref())
-    .expect("failed to parse transaction");
+    let transaction = Transaction::<NotPruned>::read::<&[u8]>(&mut tx_bytes.as_ref())
+        .expect("failed to parse transaction");
 
-    let scan_result = scanner.scan_transaction(&transaction);
-    let outputs = scan_result.ignore_timelock();
+    let outputs = scan_single_transaction(
+        &mut scanner,
+        transaction.hash(),
+        &Transaction::<Pruned>::from(transaction),
+    )
+    .expect("scan failed");
 
     assert!(!outputs.is_empty(), "Should detect at least one output");
 
     let output = &outputs[0];
-    assert_eq!(output.data.commitment.amount, EXPECTED_AMOUNT);
-    assert_eq!(output.metadata.subaddress, None);
+    assert_eq!(output.commitment().amount, EXPECTED_AMOUNT);
+    assert_eq!(output.subaddress(), None);
 }
 
 fn spend_key_from_seed(seed: &Seed) -> curve25519_dalek::edwards::EdwardsPoint {

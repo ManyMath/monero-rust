@@ -6,9 +6,6 @@
 //! bit-for-bit in its sampling logic while sourcing chain data from our RPC
 //! client, so one code path serves native and wasm targets.
 
-// Consumed by the send-path port over the next commits.
-#![allow(dead_code)]
-
 use std::collections::HashSet;
 
 use curve25519_dalek::traits::IsIdentity as _;

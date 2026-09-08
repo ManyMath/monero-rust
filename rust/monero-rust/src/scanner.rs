@@ -901,7 +901,7 @@ fn scan_parsed_block_expanding(
 /// `monero-wallet` only scans whole blocks, so the transaction is wrapped in
 /// a synthetic single-transaction block. The RingCT indices embedded in the
 /// returned outputs are relative to the transaction, not the chain.
-pub(crate) fn scan_single_transaction(
+pub fn scan_single_transaction(
     scanner: &mut Scanner,
     tx_hash: [u8; 32],
     tx: &OxideTransaction<Pruned>,

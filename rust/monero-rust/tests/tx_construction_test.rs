@@ -225,12 +225,12 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(proofs.base.commitments.len(), 2);
     assert_eq!(proofs.base.fee, fee);
 
-    use monero_rust::wallet_compat::Scanner;
-    use std::collections::HashSet;
+    use monero_oxide::transaction::Pruned;
+    use monero_rust::scanner::scan_single_transaction;
 
-    let mut scanner = Scanner::from_view(view_pair.clone(), Some(HashSet::new()));
-    let scan_result = scanner.scan_transaction(&tx);
-    let found_outputs = scan_result.ignore_timelock();
+    let mut scanner = monero_wallet::Scanner::new(wallet_view_pair.clone());
+    let found_outputs =
+        scan_single_transaction(&mut scanner, tx_hash, &Transaction::<Pruned>::from(tx))?;
 
     assert!(!found_outputs.is_empty());
 
