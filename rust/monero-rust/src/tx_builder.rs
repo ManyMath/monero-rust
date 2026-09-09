@@ -1,13 +1,13 @@
 //! Transaction building.
 
 pub mod native {
+    use crate::fee_estimate::{fee_for_weight, transaction_weight_upper_bound};
     use crate::monero_rpc::{Rpc, RpcConnection, DEFAULT_MAX_FEE_PER_BYTE};
     use crate::seed_compat::Seed;
     use crate::unsigned_tx::{
-        check_input_ownership, output_with_decoys, sign_offline, UnsignedChange,
+        check_input_ownership, output_with_decoys, ring_len, sign_offline, UnsignedChange,
         UnsignedTransaction,
     };
-    use crate::wallet_compat::{extra_fee_weight, transaction_fee_weight, Fee, Protocol};
     use curve25519_dalek::{
         constants::ED25519_BASEPOINT_TABLE,
         edwards::{CompressedEdwardsY, EdwardsPoint},
@@ -70,12 +70,11 @@ pub mod native {
     async fn select_output_decoys<G: RngCore + CryptoRng, R: RpcConnection>(
         rng: &mut G,
         rpc: &Rpc<R>,
-        protocol: Protocol,
+        rct_type: RctType,
         height: usize,
         outputs: &[(WalletOutput, u64)],
     ) -> Result<Vec<Decoys>, String> {
-        let ring_len = u8::try_from(protocol.ring_len())
-            .map_err(|_| "Ring length exceeds supported range".to_string())?;
+        let ring_len = ring_len(rct_type).ok_or_else(|| "Unsupported RingCT type".to_string())?;
         let mut decoys = Vec::with_capacity(outputs.len());
         for (output, global_index) in outputs {
             let spent = spent_output(output, *global_index);
@@ -92,21 +91,19 @@ pub mod native {
     pub async fn build_unsigned_transaction<G: RngCore + CryptoRng, R: RpcConnection>(
         rng: &mut G,
         rpc: &Rpc<R>,
-        protocol: Protocol,
-        fee_rate: Fee,
+        rct_type: RctType,
+        fee_rate: FeeRate,
         outputs: &[(WalletOutput, u64)],
         payments: Vec<(MoneroAddress, u64)>,
         change: Option<UnsignedChange>,
     ) -> Result<UnsignedTransaction, String> {
-        let fee_rate = FeeRate::new(fee_rate.per_weight, fee_rate.mask)
-            .ok_or_else(|| "Fee rate and quantization mask must be nonzero".to_string())?;
         let height = rpc
             .get_height()
             .await
             .map_err(|e| format!("Failed to get height: {:?}", e))?;
 
         let decoys =
-            select_output_decoys(rng, rpc, protocol, height.saturating_sub(1), outputs).await?;
+            select_output_decoys(rng, rpc, rct_type, height.saturating_sub(1), outputs).await?;
         let mut inputs = Vec::with_capacity(outputs.len());
         for ((output, _), decoys) in outputs.iter().zip(&decoys) {
             inputs.push(output_with_decoys(
@@ -121,7 +118,7 @@ pub mod native {
         rng.fill_bytes(seed.as_mut());
 
         Ok(UnsignedTransaction {
-            rct_type: protocol.rct_type(),
+            rct_type,
             seed,
             fee_rate,
             inputs,
@@ -131,8 +128,8 @@ pub mod native {
     }
 
     fn check_funds(
-        protocol: Protocol,
-        fee_rate: Fee,
+        rct_type: RctType,
+        fee_rate: FeeRate,
         total_input: u64,
         input_count: usize,
         payments: &[(MoneroAddress, u64)],
@@ -143,13 +140,10 @@ pub mod native {
             || payments
                 .iter()
                 .any(|(address, _)| address.payment_id().is_some());
-        let extra = extra_fee_weight(outputs, true, has_payment_id, &[]);
-        let fee = fee_rate.calculate(transaction_fee_weight(
-            protocol,
-            input_count,
-            outputs,
-            extra,
-        ));
+        let fee = fee_for_weight(
+            fee_rate,
+            transaction_weight_upper_bound(rct_type, input_count, outputs, has_payment_id)?,
+        )?;
         let total_send = crate::tx_utils::checked_amount_sum(payments.iter().map(|p| p.1))
             .ok_or_else(|| "requested amounts overflow".to_string())?;
         let needed = total_send
@@ -162,6 +156,21 @@ pub mod native {
             ));
         }
         Ok(())
+    }
+
+    fn fee_rate_of(fee: crate::monero_rpc::Fee) -> Result<FeeRate, String> {
+        fee.rate()
+            .ok_or_else(|| "Fee rate and quantization mask must be nonzero".to_string())
+    }
+
+    fn fee_upper_bound(
+        rct_type: RctType,
+        fee_rate: FeeRate,
+        inputs: usize,
+        outputs: usize,
+    ) -> Result<(usize, u64), String> {
+        let weight = transaction_weight_upper_bound(rct_type, inputs, outputs, true)?;
+        Ok((weight, fee_for_weight(fee_rate, weight)?))
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -288,38 +297,6 @@ pub mod native {
         pub total_input: u64,
         pub change: u64,
         pub stored_outputs: Vec<StoredOutputData>,
-    }
-
-    fn extra_weight(outputs: usize, has_payment_id: bool, data_sizes: &[usize]) -> usize {
-        // tx public key: tag (1) + key (32)
-        let base = 1 + 32;
-        // assume additional keys needed (worst case for subaddresses)
-        let additional = 1 + 1 + (outputs * 32);
-        // payment id: nonce tag (1) + length (1) + encrypted tag (1) + id (8)
-        let payment_id = if has_payment_id { 11 } else { 0 };
-        // arbitrary data
-        let data: usize = data_sizes
-            .iter()
-            .map(|len| {
-                // nonce tag (1) + varint length + marker (1) + data
-                1 + varint_len(1 + len) + 1 + len
-            })
-            .sum();
-        base + additional + payment_id + data
-    }
-
-    fn varint_len(val: usize) -> usize {
-        if val < 0x80 {
-            1
-        } else if val < 0x4000 {
-            2
-        } else if val < 0x200000 {
-            3
-        } else if val < 0x10000000 {
-            4
-        } else {
-            5
-        }
     }
 
     fn scan_transaction_outputs(
@@ -459,8 +436,8 @@ pub mod native {
             return Err("No outputs provided".to_string());
         }
 
-        let protocol = rpc
-            .get_protocol()
+        let rct_type = rpc
+            .get_rct_type()
             .await
             .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
 
@@ -478,7 +455,7 @@ pub mod native {
         let decoys = select_output_decoys(
             &mut rand::rngs::OsRng,
             rpc,
-            protocol,
+            rct_type,
             height.saturating_sub(1),
             &spendable_outputs,
         )
@@ -518,26 +495,25 @@ pub mod native {
         if num_outputs > 16 {
             return Err("Maximum 16 outputs allowed (bulletproofs limit)".to_string());
         }
-        let protocol = rpc
-            .get_protocol()
+        let rct_type = rpc
+            .get_rct_type()
             .await
             .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
 
-        let fee_rate: Fee = rpc
+        let node_fee = rpc
             .get_fee_checked(DEFAULT_MAX_FEE_PER_BYTE)
             .await
             .map_err(|e| format!("Failed to get fee rate: {:?}", e))?;
 
         // Worst-case extra: assume payment ID and additional keys
-        let extra = extra_weight(num_outputs, true, &[]);
-        let weight = transaction_fee_weight(protocol, num_inputs, num_outputs, extra);
-        let fee = fee_rate.calculate(weight);
+        let (weight, fee) =
+            fee_upper_bound(rct_type, fee_rate_of(node_fee)?, num_inputs, num_outputs)?;
 
         Ok(FeeEstimate {
             fee,
             weight,
-            per_weight: fee_rate.per_weight,
-            mask: fee_rate.mask,
+            per_weight: node_fee.per_weight,
+            mask: node_fee.mask,
             inputs: num_inputs,
             outputs: num_outputs,
         })
@@ -712,15 +688,16 @@ pub mod native {
         let view_key = view_key_from_spend_key(&spend_key);
         let view_pair = signer_view_pair(&spend_key, &view_key)?;
 
-        let protocol = rpc
-            .get_protocol()
+        let rct_type = rpc
+            .get_rct_type()
             .await
             .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
 
-        let fee = rpc
-            .get_fee_checked(DEFAULT_MAX_FEE_PER_BYTE)
-            .await
-            .map_err(|e| format!("Failed to get fee: {:?}", e))?;
+        let fee = fee_rate_of(
+            rpc.get_fee_checked(DEFAULT_MAX_FEE_PER_BYTE)
+                .await
+                .map_err(|e| format!("Failed to get fee: {:?}", e))?,
+        )?;
 
         // Parse and validate all destination addresses
         let mut dest_addrs = Vec::with_capacity(recipients.len());
@@ -749,14 +726,8 @@ pub mod native {
             crate::tx_utils::checked_amount_sum(recipients.iter().map(|(_, amt)| *amt))
                 .ok_or_else(|| "requested amounts overflow".to_string())?;
         let num_out_with_change = recipients.len() + 1;
-        let extra_wc = extra_weight(num_out_with_change, true, &[]);
-        let weight_wc = transaction_fee_weight(
-            protocol,
-            spendable_outputs.len(),
-            num_out_with_change,
-            extra_wc,
-        );
-        let fee_wc = fee.calculate(weight_wc);
+        let (_, fee_wc) =
+            fee_upper_bound(rct_type, fee, spendable_outputs.len(), num_out_with_change)?;
         // Reject overflow before subtracting the send amount and fee from the inputs.
         let expected_change = total_input.saturating_sub(
             total_send
@@ -787,7 +758,7 @@ pub mod native {
             .zip(recipients.iter().map(|(_, amount)| *amount))
             .collect();
         check_funds(
-            protocol,
+            rct_type,
             fee,
             total_input,
             spendable_outputs.len(),
@@ -805,7 +776,7 @@ pub mod native {
         let unsigned = build_unsigned_transaction(
             &mut rng,
             rpc,
-            protocol,
+            rct_type,
             fee,
             &spendable_outputs,
             payments,
@@ -893,15 +864,16 @@ pub mod native {
         let view_key = view_key_from_spend_key(&spend_key);
         let view_pair = signer_view_pair(&spend_key, &view_key)?;
 
-        let protocol = rpc
-            .get_protocol()
+        let rct_type = rpc
+            .get_rct_type()
             .await
             .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
 
-        let fee = rpc
-            .get_fee_checked(DEFAULT_MAX_FEE_PER_BYTE)
-            .await
-            .map_err(|e| format!("Failed to get fee: {:?}", e))?;
+        let fee = fee_rate_of(
+            rpc.get_fee_checked(DEFAULT_MAX_FEE_PER_BYTE)
+                .await
+                .map_err(|e| format!("Failed to get fee: {:?}", e))?,
+        )?;
 
         // Parse destination address
         let dest_addr = MoneroAddress::from_str(network, destination_address).map_err(|e| {
@@ -932,11 +904,7 @@ pub mod native {
         // Sweep always creates 2 outputs (no change)
         let num_outputs = 2;
         // Worst-case extra: assume payment ID and additional keys
-        let extra = extra_weight(num_outputs, true, &[]);
-        let estimated_tx_size =
-            transaction_fee_weight(protocol, spendable_outputs.len(), num_outputs, extra);
-
-        let fee_amount = fee.calculate(estimated_tx_size);
+        let (_, fee_amount) = fee_upper_bound(rct_type, fee, spendable_outputs.len(), num_outputs)?;
 
         // Calculate sweep amount (total - fee)
         let sweep_amount = total_in.checked_sub(fee_amount).ok_or_else(|| {
@@ -953,7 +921,7 @@ pub mod native {
         let unsigned = build_unsigned_transaction(
             &mut rng,
             rpc,
-            protocol,
+            rct_type,
             fee,
             &spendable_outputs,
             payments,
@@ -1607,14 +1575,15 @@ pub mod native {
         )
         .map_err(|e| format!("Invalid view keys: {}", e))?;
 
-        let protocol = rpc
-            .get_protocol()
+        let rct_type = rpc
+            .get_rct_type()
             .await
             .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
-        let fee_rate: Fee = rpc
-            .get_fee_checked(max_fee_per_weight.unwrap_or(DEFAULT_MAX_FEE_PER_BYTE))
-            .await
-            .map_err(|e| format!("Failed to get fee: {:?}", e))?;
+        let fee_rate = fee_rate_of(
+            rpc.get_fee_checked(max_fee_per_weight.unwrap_or(DEFAULT_MAX_FEE_PER_BYTE))
+                .await
+                .map_err(|e| format!("Failed to get fee: {:?}", e))?,
+        )?;
 
         let mut dest_addrs = Vec::with_capacity(recipients.len());
         for (addr_str, _) in recipients {
@@ -1639,14 +1608,12 @@ pub mod native {
             crate::tx_utils::checked_amount_sum(recipients.iter().map(|(_, amt)| *amt))
                 .ok_or_else(|| "requested amounts overflow".to_string())?;
         let num_out_with_change = recipients.len() + 1;
-        let extra_wc = extra_weight(num_out_with_change, true, &[]);
-        let weight_wc = transaction_fee_weight(
-            protocol,
+        let (_, fee_wc) = fee_upper_bound(
+            rct_type,
+            fee_rate,
             spendable_outputs.len(),
             num_out_with_change,
-            extra_wc,
-        );
-        let fee_wc = fee_rate.calculate(weight_wc);
+        )?;
         // Reject overflow before subtracting the send amount and fee from the inputs.
         let expected_change = total_input.saturating_sub(
             total_send
@@ -1676,7 +1643,7 @@ pub mod native {
             .zip(recipients.iter().map(|(_, amount)| *amount))
             .collect();
         check_funds(
-            protocol,
+            rct_type,
             fee_rate,
             total_input,
             spendable_outputs.len(),
@@ -1693,7 +1660,7 @@ pub mod native {
         let unsigned = build_unsigned_transaction(
             &mut rng,
             rpc,
-            protocol,
+            rct_type,
             fee_rate,
             &spendable_outputs,
             payments,
@@ -2181,44 +2148,6 @@ pub mod native {
     #[cfg(test)]
     mod tests {
         use super::*;
-
-        #[test]
-        fn test_varint_len() {
-            assert_eq!(varint_len(0), 1);
-            assert_eq!(varint_len(0x7f), 1);
-            assert_eq!(varint_len(0x80), 2);
-            assert_eq!(varint_len(0x3fff), 2);
-            assert_eq!(varint_len(0x4000), 3);
-            assert_eq!(varint_len(0x1fffff), 3);
-            assert_eq!(varint_len(0x200000), 4);
-            assert_eq!(varint_len(0xfffffff), 4);
-            assert_eq!(varint_len(0x10000000), 5);
-            assert_eq!(varint_len(usize::MAX), 5);
-        }
-
-        #[test]
-        fn test_extra_weight_no_payment_id() {
-            // 2 outputs, no payment ID, no data
-            let weight = extra_weight(2, false, &[]);
-            // base (33) + additional (1 + 1 + 2*32 = 66) = 99
-            assert_eq!(weight, 99);
-        }
-
-        #[test]
-        fn test_extra_weight_with_payment_id() {
-            // 2 outputs, with payment ID, no data
-            let weight = extra_weight(2, true, &[]);
-            // base (33) + additional (66) + payment_id (11) = 110
-            assert_eq!(weight, 110);
-        }
-
-        #[test]
-        fn test_extra_weight_with_data() {
-            // 2 outputs, no payment ID, with 10 bytes of data
-            let weight = extra_weight(2, false, &[10]);
-            // base (33) + additional (66) + data (1 + 1 + 1 + 10 = 13) = 112
-            assert_eq!(weight, 112);
-        }
 
         /// Derive the same polyseed wallet as the scanner and key-image signer.
         ///

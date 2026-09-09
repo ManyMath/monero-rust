@@ -38,6 +38,15 @@ pub const MAX_CHANGE_ACCOUNT: u32 = WALLET_CLI_SOFTWARE_LOOKAHEAD.account;
 /// Highest subaddress index the signer accepts change at.
 pub const MAX_CHANGE_SUBADDRESS: u32 = DEFAULT_LOOKAHEAD.subaddress;
 
+/// The ring size of the RingCT types an unsigned transaction can have.
+pub fn ring_len(rct_type: RctType) -> Option<u8> {
+    match rct_type {
+        RctType::ClsagBulletproof => Some(11),
+        RctType::ClsagBulletproofPlus => Some(16),
+        _ => None,
+    }
+}
+
 /// Where change goes. The signer refuses to sign unless `address` is what it
 /// derives at `subaddress`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -148,10 +157,10 @@ impl UnsignedTransaction {
                  {VERSION}"
             )));
         }
-        let rct_type = match RctType::try_from(read_byte(r)?) {
-            Ok(rct_type @ (RctType::ClsagBulletproof | RctType::ClsagBulletproofPlus)) => rct_type,
-            _ => return Err(invalid("unsupported RingCT type")),
-        };
+        let rct_type = RctType::try_from(read_byte(r)?)
+            .ok()
+            .filter(|rct_type| ring_len(*rct_type).is_some())
+            .ok_or_else(|| invalid("unsupported RingCT type"))?;
         let seed = Zeroizing::new(read_bytes(r)?);
         let fee_rate = FeeRate::read(r)?;
         let inputs = read_vec(OutputWithDecoys::read, Some(MAX_INPUTS), r)?;
@@ -958,6 +967,50 @@ mod tests {
             .err()
             .unwrap()
             .contains("no inputs"));
+    }
+
+    #[test]
+    fn the_weight_estimate_bounds_signed_transactions() {
+        use crate::fee_estimate::transaction_weight_upper_bound;
+
+        let standard = recipient().address();
+        let subaddress = recipient().subaddress(0, 1);
+        let two_inputs = vec![
+            input(&sender(), 0, INPUT_AMOUNT),
+            input(&sender(), 1, INPUT_AMOUNT),
+        ];
+        let mut shapes = Vec::new();
+        for payments in [
+            vec![(standard, 1_000_000_000)],
+            vec![(subaddress, 1_000_000_000)],
+            vec![(subaddress, 400_000_000), (standard, 300_000_000)],
+            vec![(subaddress, 400_000_000), (subaddress, 300_000_000)],
+        ] {
+            shapes.push(unsigned(payments.clone()));
+            let mut more_inputs = unsigned(payments);
+            more_inputs.inputs = two_inputs.clone();
+            shapes.push(more_inputs);
+        }
+        let mut sweep = unsigned(vec![(subaddress, 1_000_000_000), (subaddress, 0)]);
+        sweep.change = None;
+        shapes.push(sweep);
+
+        for tx in shapes {
+            let outputs = tx.payments.len() + usize::from(tx.change.is_some());
+            let payment_id = outputs == 2;
+            let bound =
+                transaction_weight_upper_bound(tx.rct_type, tx.inputs.len(), outputs, payment_id)
+                    .unwrap();
+            let signed = sign(&tx).unwrap();
+            assert!(
+                signed.tx.weight() <= bound,
+                "{} inputs, {} outputs: weight {} is above the estimate {}",
+                tx.inputs.len(),
+                outputs,
+                signed.tx.weight(),
+                bound
+            );
+        }
     }
 
     #[test]

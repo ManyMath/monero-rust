@@ -106,11 +106,12 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
 
     assert!(!all_outputs.is_empty(), "No outputs found in test range");
 
-    let protocol = rpc.get_protocol().await?;
-    let fee_rate = rpc.get_fee().await?;
+    let rct_type = rpc.get_rct_type().await?;
+    let node_fee = rpc.get_fee().await?;
 
-    assert!(protocol.ring_len() >= 11);
-    assert!(fee_rate.per_weight > 0);
+    assert!(monero_rust::unsigned_tx::ring_len(rct_type).is_some_and(|len| len >= 11));
+    assert!(node_fee.per_weight > 0);
+    let fee_rate = node_fee.rate().ok_or("node reported a zero fee rate")?;
 
     let seed = Seed::from_string(Zeroizing::new(TEST_SEED.to_string()))?;
     let entropy = seed.entropy();
@@ -153,7 +154,7 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
     let unsigned = build_unsigned_transaction(
         &mut rng,
         &rpc,
-        protocol,
+        rct_type,
         fee_rate,
         &[spendable],
         vec![(address, send_amount)],
@@ -374,8 +375,12 @@ async fn test_transaction_with_multiple_inputs() -> Result<(), Box<dyn std::erro
                 Zeroizing::new(monero_wallet::ed25519::Scalar::from(view_scalar)),
             )?;
 
-            let protocol = rpc.get_protocol().await?;
-            let fee_rate = rpc.get_fee().await?;
+            let rct_type = rpc.get_rct_type().await?;
+            let fee_rate = rpc
+                .get_fee()
+                .await?
+                .rate()
+                .ok_or("node reported a zero fee rate")?;
 
             let mut spendables = Vec::new();
             let mut total_input = 0u64;
@@ -401,7 +406,7 @@ async fn test_transaction_with_multiple_inputs() -> Result<(), Box<dyn std::erro
             let unsigned = build_unsigned_transaction(
                 &mut rng,
                 &rpc,
-                protocol,
+                rct_type,
                 fee_rate,
                 &spendables,
                 vec![(address, send_amount)],

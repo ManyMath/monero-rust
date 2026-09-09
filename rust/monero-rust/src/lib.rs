@@ -16,12 +16,12 @@ pub mod monero_rpc;
 pub mod scan_coordinator;
 pub mod scanner;
 pub mod seed_compat;
-pub mod wallet_compat;
 pub mod wallet_output;
 pub mod wallet_state;
 
 // Transaction building
 pub mod epee_compat;
+pub mod fee_estimate;
 pub mod key_image_signing;
 pub mod tx_builder;
 pub mod tx_prepare;

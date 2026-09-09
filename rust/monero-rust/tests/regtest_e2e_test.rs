@@ -203,15 +203,20 @@ async fn builds_signs_and_broadcasts_a_transaction() {
     )
     .expect("view pair");
 
-    let protocol = rpc.get_protocol().await.expect("get_protocol");
-    let fee_rate = rpc.get_fee().await.expect("get_fee");
+    let rct_type = rpc.get_rct_type().await.expect("get_rct_type");
+    let fee_rate = rpc
+        .get_fee()
+        .await
+        .expect("get_fee")
+        .rate()
+        .expect("nonzero fee rate");
 
     let send_amount = 1_000_000_000u64;
     let mut rng = rand::rngs::OsRng;
     let unsigned = build_unsigned_transaction(
         &mut rng,
         &rpc,
-        protocol,
+        rct_type,
         fee_rate,
         &[spendable],
         vec![(address, send_amount)],
@@ -247,9 +252,7 @@ async fn builds_signs_and_broadcasts_a_transaction() {
     assert_eq!(tx.prefix().extra.len(), 44);
     assert_eq!(
         u128::from(resolved.fee),
-        monero_wallet::interface::FeeRate::new(fee_rate.per_weight, fee_rate.mask)
-            .expect("fee rate")
-            .calculate_fee_from_weight(tx.weight() as u64),
+        fee_rate.calculate_fee_from_weight(tx.weight() as u64),
         "the fee is the node's rate applied to the signed transaction's weight"
     );
 

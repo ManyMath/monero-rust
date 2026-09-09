@@ -88,8 +88,12 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
     assert!(!all_outputs.is_empty(), "No outputs found in test range");
 
     // --- Step 2: Build signable transaction ---
-    let protocol = rpc.get_protocol().await?;
-    let fee_rate = rpc.get_fee().await?;
+    let rct_type = rpc.get_rct_type().await?;
+    let fee_rate = rpc
+        .get_fee()
+        .await?
+        .rate()
+        .ok_or("node reported a zero fee rate")?;
 
     let seed = Seed::from_string(Zeroizing::new(TEST_SEED.to_string()))?;
     let entropy = seed.entropy();
@@ -125,7 +129,7 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
     let unsigned = build_unsigned_transaction(
         &mut rng,
         &rpc,
-        protocol,
+        rct_type,
         fee_rate,
         &[spendable],
         vec![(address, send_amount)],

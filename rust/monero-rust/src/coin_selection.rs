@@ -1,11 +1,7 @@
 use crate::wallet_output::WalletOutput;
 
-/// Fee estimation constants (conservative estimates).
-/// Derived from Protocol::v16 (ring_len=16, bp_plus=true) at min fee rate
-/// (per_weight=20000, mask=10000). Actual per-input marginal weight is 771 bytes
-/// (Input 163 + CLSAG 576 + pseudo_out 32) = 15,420,000 piconero. Base overhead
-/// for a 2-output tx is ~915 bytes = 18,300,000 piconero. Constants include ~4%
-/// margin for fee rate fluctuations.
+/// `estimate_fee`'s per-input and base fees: CLSAG, 16-member rings, the
+/// minimum fee rate, and about 4% margin.
 pub const FEE_PER_INPUT_ESTIMATE: u64 = 16_000_000;
 pub const BASE_FEE_ESTIMATE: u64 = 19_000_000;
 

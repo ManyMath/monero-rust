@@ -25,10 +25,24 @@ use reqwest::Client;
 
 use monero_oxide::{
     block::Block,
+    ringct::RctType,
     transaction::{Input, NotPruned, Timelock, Transaction},
 };
+use monero_wallet::interface::FeeRate;
 
-use crate::wallet_compat::{Fee, Protocol};
+/// A node's fee estimate: piconero per byte of weight, and the quantization mask.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Fee {
+    pub per_weight: u64,
+    pub mask: u64,
+}
+
+impl Fee {
+    /// The estimate as a `FeeRate`; `None` if either number is zero.
+    pub fn rate(&self) -> Option<FeeRate> {
+        FeeRate::new(self.per_weight, self.mask)
+    }
+}
 
 #[derive(Deserialize, Debug)]
 pub struct EmptyResponse {}
@@ -305,8 +319,8 @@ impl<R: RpcConnection> Rpc<R> {
         })
     }
 
-    /// Get the active blockchain protocol version.
-    pub async fn get_protocol(&self) -> Result<Protocol, RpcError> {
+    /// The RingCT type of a transaction built under the node's current hard fork.
+    pub async fn get_rct_type(&self) -> Result<RctType, RpcError> {
         #[derive(Deserialize, Debug)]
         struct ProtocolResponse {
             major_version: usize,
@@ -324,8 +338,8 @@ impl<R: RpcConnection> Rpc<R> {
                 .block_header
                 .major_version
             {
-                13 | 14 => Protocol::v14,
-                15 | 16 => Protocol::v16,
+                13 | 14 => RctType::ClsagBulletproof,
+                15 | 16 => RctType::ClsagBulletproofPlus,
                 protocol => Err(RpcError::UnsupportedProtocol(protocol))?,
             },
         )
