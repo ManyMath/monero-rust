@@ -5,14 +5,12 @@ mod mock_rpc;
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 use monero_oxide::transaction::{NotPruned, Transaction};
-use monero_rust::native::build_unsigned_transaction;
+use monero_rust::native::{build_unsigned_transaction, resolve_global_index};
 use monero_rust::scanner::{
     derive_address, derive_keys, scan_block_for_outputs_with_lookahead, Lookahead,
 };
 use monero_rust::seed_compat::Seed;
 use monero_rust::unsigned_tx::{UnsignedChange, UnsignedTransaction};
-use monero_rust::wallet_compat::received_from_wallet_output;
-use monero_rust::wallet_compat::SpendableOutput;
 use monero_rust::Network;
 use monero_wallet::WalletOutput;
 #[cfg(feature = "mock-rpc")]
@@ -108,9 +106,9 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
 
     let test_output = &all_outputs[0];
     let output_bytes = hex::decode(&test_output.received_output_bytes)?;
-    let received =
-        received_from_wallet_output(&WalletOutput::read(&mut Cursor::new(output_bytes))?)?;
-    let spendable = SpendableOutput::from(&rpc, received.clone()).await?;
+    let wallet_output = WalletOutput::read(&mut Cursor::new(output_bytes))?;
+    let global_index = resolve_global_index(&rpc, &wallet_output).await?;
+    let spendable = (wallet_output, global_index);
 
     let send_amount = 1_000_000_000u64;
     let change = UnsignedChange {

@@ -1214,7 +1214,7 @@ mod tests {
         );
         // version 2, timelock at the block/time threshold
         let mut data = vec![2];
-        crate::wallet_compat::write_varint(&500_000_000u64, &mut data).unwrap();
+        monero_oxide::io::VarInt::write(&500_000_000u64, &mut data).unwrap();
         assert_eq!(prefix_timelock(&data).unwrap(), Timelock::Time(500_000_000));
     }
 }

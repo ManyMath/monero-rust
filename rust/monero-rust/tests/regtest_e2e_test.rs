@@ -14,15 +14,13 @@ mod common;
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 use monero_rust::monero_rpc::HttpRpc;
-use monero_rust::native::build_unsigned_transaction;
+use monero_rust::native::{build_unsigned_transaction, resolve_global_index};
 use monero_rust::scanner::{
     derive_address, derive_keys, scan_block_for_outputs_with_lookahead, scan_blocks_batch,
     Lookahead,
 };
 use monero_rust::seed_compat::Seed;
 use monero_rust::unsigned_tx::{sign_offline, UnsignedChange};
-use monero_rust::wallet_compat::received_from_wallet_output;
-use monero_rust::wallet_compat::SpendableOutput;
 use zeroize::Zeroizing;
 
 /// Monero's deterministic test seed, also used for cold-signing vectors.
@@ -184,17 +182,15 @@ async fn builds_signs_and_broadcasts_a_transaction() {
             let bytes = hex::decode(&output.received_output_bytes).expect("hex");
             let wallet_output =
                 monero_wallet::WalletOutput::read(&mut bytes.as_slice()).expect("stored output");
-            let received = received_from_wallet_output(&wallet_output).expect("compat output");
-            spendable = Some(
-                SpendableOutput::from(&rpc, received)
-                    .await
-                    .expect("resolve the global index from the daemon"),
-            );
+            let global_index = resolve_global_index(&rpc, &wallet_output)
+                .await
+                .expect("resolve the global index from the daemon");
+            spendable = Some((wallet_output, global_index));
             break;
         }
     }
     let spendable = spendable.expect("no mature output to spend");
-    let input_amount = spendable.commitment().amount;
+    let input_amount = spendable.0.commitment().amount;
 
     let keys = derive_keys(SEED, monero_rust::Network::Mainnet, "").expect("derive keys");
     let seed = Seed::from_string(Zeroizing::new(SEED.to_string())).expect("seed");

@@ -2,14 +2,12 @@ mod common;
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 use monero_oxide::transaction::{NotPruned, Transaction};
-use monero_rust::native::build_unsigned_transaction;
+use monero_rust::native::{build_unsigned_transaction, resolve_global_index};
 use monero_rust::scanner::{
     derive_address, derive_keys, scan_block_for_outputs_with_lookahead, Lookahead,
 };
 use monero_rust::seed_compat::Seed;
 use monero_rust::unsigned_tx::{sign_offline, UnsignedChange};
-use monero_rust::wallet_compat::received_from_wallet_output;
-use monero_rust::wallet_compat::{AddressSpec, SpendableOutput, ViewPair};
 use monero_wallet::address::Network;
 use monero_wallet::WalletOutput;
 #[cfg(feature = "mock-rpc")]
@@ -122,23 +120,23 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
     let spend_point = &spend_scalar * ED25519_BASEPOINT_TABLE;
 
     let view_scalar = Scalar::from_bytes_mod_order(*keys.secret_view_key);
-    let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
-
-    let derived_address = view_pair.address(NETWORK, AddressSpec::Standard);
-    assert_eq!(derived_address, address);
     let wallet_view_pair = monero_wallet::ViewPair::new(
         monero_wallet::ed25519::Point::from(spend_point),
         Zeroizing::new(monero_wallet::ed25519::Scalar::from(view_scalar)),
     )?;
 
+    let derived_address = wallet_view_pair.legacy_address(NETWORK);
+    assert_eq!(derived_address, address);
+
     let test_output = &all_outputs[0];
     let output_bytes = hex::decode(&test_output.received_output_bytes)?;
     let mut cursor = Cursor::new(output_bytes);
-    let received = received_from_wallet_output(&WalletOutput::read(&mut cursor)?)?;
+    let wallet_output = WalletOutput::read(&mut cursor)?;
 
-    assert_eq!(received.commitment().amount, test_output.amount);
+    assert_eq!(wallet_output.commitment().amount, test_output.amount);
 
-    let spendable = SpendableOutput::from(&rpc, received.clone()).await?;
+    let global_index = resolve_global_index(&rpc, &wallet_output).await?;
+    let spendable = (wallet_output, global_index);
 
     let send_amount = 1_000_000_000u64;
     let change = UnsignedChange {
@@ -264,8 +262,11 @@ async fn test_address_derivation_consistency() -> Result<(), Box<dyn std::error:
     let keys = derive_keys(TEST_SEED, monero_rust::Network::Stagenet, "")?;
     let view_scalar = Scalar::from_bytes_mod_order(*keys.secret_view_key);
 
-    let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
-    let address3 = view_pair.address(NETWORK, AddressSpec::Standard);
+    let view_pair = monero_wallet::ViewPair::new(
+        monero_wallet::ed25519::Point::from(spend_point),
+        Zeroizing::new(monero_wallet::ed25519::Scalar::from(view_scalar)),
+    )?;
+    let address3 = view_pair.legacy_address(NETWORK);
 
     assert_eq!(address1, address3);
 
@@ -368,8 +369,6 @@ async fn test_transaction_with_multiple_inputs() -> Result<(), Box<dyn std::erro
 
             let keys = derive_keys(TEST_SEED, monero_rust::Network::Stagenet, "")?;
             let view_scalar = Scalar::from_bytes_mod_order(*keys.secret_view_key);
-            let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
-
             let wallet_view_pair = monero_wallet::ViewPair::new(
                 monero_wallet::ed25519::Point::from(spend_point),
                 Zeroizing::new(monero_wallet::ed25519::Scalar::from(view_scalar)),
@@ -383,9 +382,10 @@ async fn test_transaction_with_multiple_inputs() -> Result<(), Box<dyn std::erro
             for output in all_outputs.iter().take(2) {
                 let output_bytes = hex::decode(&output.received_output_bytes)?;
                 let mut cursor = Cursor::new(output_bytes);
-                let received = received_from_wallet_output(&WalletOutput::read(&mut cursor)?)?;
+                let wallet_output = WalletOutput::read(&mut cursor)?;
 
-                spendables.push(SpendableOutput::from(&rpc, received).await?);
+                let global_index = resolve_global_index(&rpc, &wallet_output).await?;
+                spendables.push((wallet_output, global_index));
                 total_input += output.amount;
             }
 
@@ -406,7 +406,7 @@ async fn test_transaction_with_multiple_inputs() -> Result<(), Box<dyn std::erro
                 &spendables,
                 vec![(address, send_amount)],
                 Some(UnsignedChange {
-                    address: view_pair.address(NETWORK, AddressSpec::Standard),
+                    address: wallet_view_pair.legacy_address(NETWORK),
                     subaddress: None,
                 }),
             )
@@ -470,9 +470,9 @@ async fn test_transaction_parsing_and_validation() -> Result<(), Box<dyn std::er
         if let Some(output) = test_output {
             let output_bytes = hex::decode(&output.received_output_bytes)?;
             let mut cursor = Cursor::new(&output_bytes);
-            let received = received_from_wallet_output(&WalletOutput::read(&mut cursor)?)?;
+            let wallet_output = WalletOutput::read(&mut cursor)?;
 
-            assert_eq!(received.commitment().amount, output.amount);
+            assert_eq!(wallet_output.commitment().amount, output.amount);
             assert!(!output.key.is_empty());
             assert!(!output.key_offset.is_empty());
             assert!(!output.commitment_mask.is_empty());

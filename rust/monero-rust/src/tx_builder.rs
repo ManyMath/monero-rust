@@ -7,10 +7,7 @@ pub mod native {
         check_input_ownership, output_with_decoys, sign_offline, UnsignedChange,
         UnsignedTransaction,
     };
-    use crate::wallet_compat::{
-        extra_fee_weight, transaction_fee_weight, AddressSpec, Decoys, Fee, Protocol,
-        ReceivedOutput, SpendableOutput, ViewPair,
-    };
+    use crate::wallet_compat::{extra_fee_weight, transaction_fee_weight, Fee, Protocol};
     use curve25519_dalek::{
         constants::ED25519_BASEPOINT_TABLE,
         edwards::{CompressedEdwardsY, EdwardsPoint},
@@ -19,8 +16,8 @@ pub mod native {
     use monero_oxide::transaction::{NotPruned, Pruned, Transaction};
     use monero_wallet::address::{AddressType, MoneroAddress, Network, SubaddressIndex};
     use monero_wallet::interface::FeeRate;
-    use monero_wallet::ringct::RctType;
-    use monero_wallet::OutputWithDecoys;
+    use monero_wallet::ringct::{clsag::Decoys, RctType};
+    use monero_wallet::{OutputWithDecoys, ViewPair, WalletOutput};
     use rand_core::{CryptoRng, RngCore};
 
     /// Compute the key image `x * H_p(xG)` for an owned one-time key.
@@ -31,42 +28,62 @@ pub mod native {
         hash_point * **secret
     }
 
-    /// Parse stored output bytes (the `monero-wallet` serialization written by
-    /// the scanner) and resolve the output's global RingCT index.
+    fn parse_stored_output(received_output_bytes_hex: &str) -> Result<WalletOutput, String> {
+        let bytes = hex::decode(received_output_bytes_hex)
+            .map_err(|e| format!("Invalid output bytes: {:?}", e))?;
+        WalletOutput::read(&mut bytes.as_slice())
+            .map_err(|e| format!("Failed to parse output: {}", e))
+    }
+
+    /// Ask the daemon for an output's global RingCT index.
+    pub async fn resolve_global_index<R: RpcConnection>(
+        rpc: &Rpc<R>,
+        output: &WalletOutput,
+    ) -> Result<u64, String> {
+        let indexes = rpc
+            .get_o_indexes(output.transaction())
+            .await
+            .map_err(|e| format!("Failed to resolve the output's global index: {:?}", e))?;
+        usize::try_from(output.index_in_transaction())
+            .ok()
+            .and_then(|position| indexes.get(position).copied())
+            .ok_or_else(|| "Daemon returned too few output indexes".to_string())
+    }
+
     async fn spendable_from_stored_bytes<R: RpcConnection>(
         rpc: &Rpc<R>,
         received_output_bytes_hex: &str,
-    ) -> Result<SpendableOutput, String> {
-        let bytes = hex::decode(received_output_bytes_hex)
-            .map_err(|e| format!("Invalid output bytes: {:?}", e))?;
-        let wallet_output = monero_wallet::WalletOutput::read(&mut bytes.as_slice())
-            .map_err(|e| format!("Failed to parse output: {}", e))?;
-        let received = crate::wallet_compat::received_from_wallet_output(&wallet_output)?;
-        create_spendable_output(rpc, received).await
+    ) -> Result<(WalletOutput, u64), String> {
+        let output = parse_stored_output(received_output_bytes_hex)?;
+        let global_index = resolve_global_index(rpc, &output).await?;
+        Ok((output, global_index))
     }
 
-    /// Select decoys for a set of spendable outputs.
-    async fn select_output_decoys<R: RpcConnection>(
+    fn spent_output(output: &WalletOutput, global_index: u64) -> crate::decoy_select::SpentOutput {
+        crate::decoy_select::SpentOutput {
+            index_on_blockchain: global_index,
+            key: output.key().into(),
+            commitment: output.commitment().commit().into(),
+        }
+    }
+
+    async fn select_output_decoys<G: RngCore + CryptoRng, R: RpcConnection>(
+        rng: &mut G,
         rpc: &Rpc<R>,
         protocol: Protocol,
         height: usize,
-        outputs: &[SpendableOutput],
+        outputs: &[(WalletOutput, u64)],
     ) -> Result<Vec<Decoys>, String> {
         let ring_len = u8::try_from(protocol.ring_len())
             .map_err(|_| "Ring length exceeds supported range".to_string())?;
-        let mut rng = rand::rngs::OsRng;
         let mut decoys = Vec::with_capacity(outputs.len());
-        for output in outputs {
-            let spent = crate::decoy_select::SpentOutput {
-                index_on_blockchain: output.global_index,
-                key: output.key(),
-                commitment: output.commitment().calculate(),
-            };
-            let selected =
-                crate::decoy_select::select_decoys(&mut rng, rpc, ring_len, height, &spent)
+        for (output, global_index) in outputs {
+            let spent = spent_output(output, *global_index);
+            decoys.push(
+                crate::decoy_select::select_decoys(rng, rpc, ring_len, height, &spent)
                     .await
-                    .map_err(|e| format!("Decoy selection failed: {}", e))?;
-            decoys.push(Decoys::from_oxide(&selected));
+                    .map_err(|e| format!("Decoy selection failed: {}", e))?,
+            );
         }
         Ok(decoys)
     }
@@ -77,40 +94,26 @@ pub mod native {
         rpc: &Rpc<R>,
         protocol: Protocol,
         fee_rate: Fee,
-        outputs: &[SpendableOutput],
+        outputs: &[(WalletOutput, u64)],
         payments: Vec<(MoneroAddress, u64)>,
         change: Option<UnsignedChange>,
     ) -> Result<UnsignedTransaction, String> {
         let fee_rate = FeeRate::new(fee_rate.per_weight, fee_rate.mask)
             .ok_or_else(|| "Fee rate and quantization mask must be nonzero".to_string())?;
-        let ring_len = u8::try_from(protocol.ring_len())
-            .map_err(|_| "Ring length exceeds supported range".to_string())?;
         let height = rpc
             .get_height()
             .await
             .map_err(|e| format!("Failed to get height: {:?}", e))?;
 
+        let decoys =
+            select_output_decoys(rng, rpc, protocol, height.saturating_sub(1), outputs).await?;
         let mut inputs = Vec::with_capacity(outputs.len());
-        for output in outputs {
-            let spent = crate::decoy_select::SpentOutput {
-                index_on_blockchain: output.global_index,
-                key: output.key(),
-                commitment: output.commitment().calculate(),
-            };
-            let decoys = crate::decoy_select::select_decoys(
-                rng,
-                rpc,
-                ring_len,
-                height.saturating_sub(1),
-                &spent,
-            )
-            .await
-            .map_err(|e| format!("Decoy selection failed: {}", e))?;
+        for ((output, _), decoys) in outputs.iter().zip(&decoys) {
             inputs.push(output_with_decoys(
-                monero_wallet::ed25519::Point::from(output.key()),
-                monero_wallet::ed25519::Scalar::from(output.key_offset()),
-                &output.commitment().to_oxide(),
-                &decoys,
+                output.key(),
+                output.key_offset(),
+                output.commitment(),
+                decoys,
             )?);
         }
 
@@ -251,14 +254,14 @@ pub mod native {
     impl DecoySelection {
         fn from_decoys(d: &Decoys) -> Self {
             DecoySelection {
-                real_index: d.i,
-                offsets: d.offsets.clone(),
+                real_index: d.signer_index(),
+                offsets: d.offsets().to_vec(),
                 ring: d
-                    .ring
+                    .ring()
                     .iter()
                     .map(|[key, commitment]| RingMember {
-                        key: hex::encode(key.compress().as_bytes()),
-                        commitment: hex::encode(commitment.compress().as_bytes()),
+                        key: hex::encode(key.compress().to_bytes()),
+                        commitment: hex::encode(commitment.compress().to_bytes()),
                     })
                     .collect(),
             }
@@ -327,11 +330,7 @@ pub mod native {
         lookahead: Lookahead,
         change_subaddress: Option<SubaddressIndex>,
     ) -> Vec<ChangeOutputInfo> {
-        let Ok(mut scanner) =
-            crate::scanner::oxide_scanner_from_keys(&view_pair.spend(), view_pair.view_scalar())
-        else {
-            return vec![];
-        };
+        let mut scanner = monero_wallet::Scanner::new(view_pair);
         crate::scanner::register_subaddresses(&mut scanner, lookahead);
         // Change may go to a subaddress outside the lookahead.
         if let Some(index) = change_subaddress {
@@ -399,20 +398,26 @@ pub mod native {
         Zeroizing::new(Scalar::from_bytes_mod_order(spend_bytes))
     }
 
+    fn view_key_from_spend_key(spend_key: &Zeroizing<Scalar>) -> Zeroizing<Scalar> {
+        let view: [u8; 32] = Keccak256::digest(spend_key.to_bytes()).into();
+        Zeroizing::new(Scalar::from_bytes_mod_order(view))
+    }
+
     fn view_pair_from_seed(seed: &Seed, passphrase: &str) -> ViewPair {
-        let entropy = seed.key_bytes_with_passphrase(passphrase);
-        let mut spend_bytes = [0u8; 32];
-        spend_bytes.copy_from_slice(&entropy[..]);
+        let spend_key = spend_key_from_seed(seed, passphrase);
+        let view_key = view_key_from_spend_key(&spend_key);
+        signer_view_pair(&spend_key, &view_key).expect("valid wallet keys")
+    }
 
-        let spend_scalar = Scalar::from_bytes_mod_order(spend_bytes);
-        let spend_point = &spend_scalar * ED25519_BASEPOINT_TABLE;
-
-        // Hash the reduced spend scalar to derive the view key, matching the scanner
-        // and key-image signer. A polyseed's PBKDF2 output may not be canonical.
-        let view: [u8; 32] = Keccak256::digest(spend_scalar.to_bytes()).into();
-        let view_scalar = Scalar::from_bytes_mod_order(view);
-
-        ViewPair::new(spend_point, Zeroizing::new(view_scalar))
+    fn signer_view_pair(
+        spend_key: &Zeroizing<Scalar>,
+        view_key: &Zeroizing<Scalar>,
+    ) -> Result<ViewPair, String> {
+        ViewPair::new(
+            monero_wallet::ed25519::Point::from(&**spend_key * ED25519_BASEPOINT_TABLE),
+            Zeroizing::new(monero_wallet::ed25519::Scalar::from(**view_key)),
+        )
+        .map_err(|e| format!("Invalid wallet keys: {}", e))
     }
 
     /// Derive the private spend and view keys for the offline signing APIs.
@@ -432,26 +437,6 @@ pub mod native {
             spend_secret_key,
             Scalar::from_bytes_mod_order(view_secret_key).to_bytes(),
         ))
-    }
-
-    pub async fn create_spendable_output<R: RpcConnection>(
-        rpc: &Rpc<R>,
-        received_output: ReceivedOutput,
-    ) -> Result<SpendableOutput, String> {
-        // Resolve the global RingCT index from the daemon; the scanner can't
-        // always know it at scan time.
-        let indexes = rpc
-            .get_o_indexes(received_output.absolute.tx)
-            .await
-            .map_err(|e| format!("Failed to create spendable output: {:?}", e))?;
-        let global_index = indexes
-            .get(usize::from(received_output.absolute.o))
-            .copied()
-            .ok_or_else(|| "Daemon returned too few output indexes".to_string())?;
-        Ok(SpendableOutput {
-            output: received_output,
-            global_index,
-        })
     }
 
     /// Fetch decoys for a set of outputs to be spent.
@@ -490,9 +475,14 @@ pub mod native {
             spendable_outputs.push(spendable);
         }
 
-        let decoys =
-            select_output_decoys(rpc, protocol, height.saturating_sub(1), &spendable_outputs)
-                .await?;
+        let decoys = select_output_decoys(
+            &mut rand::rngs::OsRng,
+            rpc,
+            protocol,
+            height.saturating_sub(1),
+            &spendable_outputs,
+        )
+        .await?;
 
         Ok(DecoyResult {
             height: height.saturating_sub(1),
@@ -719,7 +709,8 @@ pub mod native {
         let seed = resolve_seed(seed_phrase)?;
 
         let spend_key = spend_key_from_seed(&seed, passphrase);
-        let view_pair = view_pair_from_seed(&seed, passphrase);
+        let view_key = view_key_from_spend_key(&spend_key);
+        let view_pair = signer_view_pair(&spend_key, &view_key)?;
 
         let protocol = rpc
             .get_protocol()
@@ -749,7 +740,9 @@ pub mod native {
 
         // Compute expected change to detect dust
         let total_input = crate::tx_utils::checked_amount_sum(
-            spendable_outputs.iter().map(|o| o.commitment().amount),
+            spendable_outputs
+                .iter()
+                .map(|(output, _)| output.commitment().amount),
         )
         .ok_or_else(|| "input amounts overflow".to_string())?;
         let total_send =
@@ -803,7 +796,7 @@ pub mod native {
         )?;
 
         let change = with_change.then(|| UnsignedChange {
-            address: view_pair.address(network, AddressSpec::Standard),
+            address: view_pair.legacy_address(network),
             subaddress: None,
         });
 
@@ -820,7 +813,7 @@ pub mod native {
         )
         .await
         .map_err(|e| format!("Failed to prepare transaction: {}", e))?;
-        let signed = sign_offline(&mut rng, &spend_key, view_pair.view_scalar(), &unsigned)
+        let signed = sign_offline(&mut rng, &spend_key, &view_key, &unsigned)
             .map_err(|e| format!("Failed to sign transaction: {}", e))?;
         let fee_amount = signed.fee;
         let tx = signed.tx;
@@ -897,7 +890,8 @@ pub mod native {
         let seed = resolve_seed(seed_phrase)?;
 
         let spend_key = spend_key_from_seed(&seed, passphrase);
-        let view_pair = view_pair_from_seed(&seed, passphrase);
+        let view_key = view_key_from_spend_key(&spend_key);
+        let view_pair = signer_view_pair(&spend_key, &view_key)?;
 
         let protocol = rpc
             .get_protocol()
@@ -928,7 +922,9 @@ pub mod native {
 
         // Calculate total input amount
         let total_in = crate::tx_utils::checked_amount_sum(
-            spendable_outputs.iter().map(|o| o.commitment().amount),
+            spendable_outputs
+                .iter()
+                .map(|(output, _)| output.commitment().amount),
         )
         .ok_or_else(|| "input amounts overflow".to_string())?;
 
@@ -965,7 +961,7 @@ pub mod native {
         )
         .await
         .map_err(|e| format!("Failed to prepare sweep transaction: {}", e))?;
-        let signed = sign_offline(&mut rng, &spend_key, view_pair.view_scalar(), &unsigned)
+        let signed = sign_offline(&mut rng, &spend_key, &view_key, &unsigned)
             .map_err(|e| format!("Failed to sign sweep transaction: {}", e))?;
         let actual_fee = signed.fee;
         let tx = signed.tx;
@@ -1038,11 +1034,11 @@ pub mod native {
         block_height: u64,
         seed_phrase: &str,
         passphrase: &str,
-    ) -> Result<Vec<ReceivedOutput>, String> {
+    ) -> Result<Vec<WalletOutput>, String> {
         let seed = resolve_seed(seed_phrase)?;
-        let view_pair = view_pair_from_seed(&seed, passphrase);
-        let mut scanner =
-            crate::scanner::oxide_scanner_from_keys(&view_pair.spend(), view_pair.view_scalar())?;
+        let spend_key = spend_key_from_seed(&seed, passphrase);
+        let view_pair = signer_view_pair(&spend_key, &view_key_from_spend_key(&spend_key))?;
+        let mut scanner = monero_wallet::Scanner::new(view_pair);
 
         let block = rpc
             .get_block_by_number(block_height as usize)
@@ -1067,10 +1063,11 @@ pub mod native {
 
         let mut received_outputs = Vec::new();
         for (tx_hash, tx) in &txs_with_hashes {
-            let outputs = crate::scanner::scan_single_transaction(&mut scanner, *tx_hash, tx)?;
-            for output in &outputs {
-                received_outputs.push(crate::wallet_compat::received_from_wallet_output(output)?);
-            }
+            received_outputs.extend(crate::scanner::scan_single_transaction(
+                &mut scanner,
+                *tx_hash,
+                tx,
+            )?);
         }
         Ok(received_outputs)
     }
@@ -1082,7 +1079,7 @@ pub mod native {
         seed_phrase: &str,
         _network_str: &str,
         passphrase: &str,
-    ) -> Result<Vec<ReceivedOutput>, String> {
+    ) -> Result<Vec<WalletOutput>, String> {
         let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
         received_outputs_from_scan_inner(&rpc, block_height, seed_phrase, passphrase).await
@@ -1094,7 +1091,7 @@ pub mod native {
         seed_phrase: &str,
         _network_str: &str,
         passphrase: &str,
-    ) -> Result<Vec<ReceivedOutput>, String> {
+    ) -> Result<Vec<WalletOutput>, String> {
         received_outputs_from_scan_inner(rpc, block_height, seed_phrase, passphrase).await
     }
 
@@ -1604,7 +1601,11 @@ pub mod native {
         let spend_point = crate::scanner::decompress_public_spend_key(spend_arr)
             .ok_or("Invalid public spend key point")?;
 
-        let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
+        let view_pair = ViewPair::new(
+            monero_wallet::ed25519::Point::from(spend_point),
+            Zeroizing::new(monero_wallet::ed25519::Scalar::from(view_scalar)),
+        )
+        .map_err(|e| format!("Invalid view keys: {}", e))?;
 
         let protocol = rpc
             .get_protocol()
@@ -1629,7 +1630,9 @@ pub mod native {
         }
 
         let total_input = crate::tx_utils::checked_amount_sum(
-            spendable_outputs.iter().map(|o| o.commitment().amount),
+            spendable_outputs
+                .iter()
+                .map(|(output, _)| output.commitment().amount),
         )
         .ok_or_else(|| "input amounts overflow".to_string())?;
         let total_send =
@@ -1682,7 +1685,7 @@ pub mod native {
         )?;
 
         let change = with_change.then(|| UnsignedChange {
-            address: view_pair.address(network, AddressSpec::Standard),
+            address: view_pair.legacy_address(network),
             subaddress: None,
         });
 
@@ -1699,7 +1702,7 @@ pub mod native {
         .await
         .map_err(|e| format!("Failed to prepare unsigned tx: {}", e))?;
 
-        let fee = unsigned.resolve(&view_pair.to_oxide()?)?.fee;
+        let fee = unsigned.resolve(&view_pair)?.fee;
 
         Ok(UnsignedTransactionResult {
             unsigned_tx_hex: hex::encode(unsigned.serialize()),
@@ -1823,13 +1826,9 @@ pub mod native {
         network: Network,
         lookahead: Lookahead,
     ) -> Vec<([u8; 32], [u8; 32], bool, bool)> {
-        let mut keys = vec![address_identity(
-            &view_pair.address(network, AddressSpec::Standard),
-        )];
+        let mut keys = vec![address_identity(&view_pair.legacy_address(network))];
         for index in crate::scanner::build_subaddress_indices(lookahead) {
-            keys.push(address_identity(
-                &view_pair.address(network, AddressSpec::Subaddress(index)),
-            ));
+            keys.push(address_identity(&view_pair.subaddress(network, index)));
         }
         keys
     }
@@ -2042,17 +2041,6 @@ pub mod native {
         )
     }
 
-    fn signer_view_pair(
-        spend_key: &Zeroizing<Scalar>,
-        view_key: &Zeroizing<Scalar>,
-    ) -> Result<monero_wallet::ViewPair, String> {
-        monero_wallet::ViewPair::new(
-            monero_wallet::ed25519::Point::from(&**spend_key * ED25519_BASEPOINT_TABLE),
-            Zeroizing::new(monero_wallet::ed25519::Scalar::from(**view_key)),
-        )
-        .map_err(|e| format!("Invalid wallet keys: {}", e))
-    }
-
     fn preview_app_unsigned_transaction(
         spend_secret_key: [u8; 32],
         view_secret_key: [u8; 32],
@@ -2062,8 +2050,7 @@ pub mod native {
         let unsigned = UnsignedTransaction::from_bytes(unsigned_bytes)?;
         let spend_key = Zeroizing::new(Scalar::from_bytes_mod_order(spend_secret_key));
         let view_key = Zeroizing::new(Scalar::from_bytes_mod_order(view_secret_key));
-        let spend_point = &*spend_key * ED25519_BASEPOINT_TABLE;
-        let view_pair = ViewPair::new(spend_point, view_key.clone());
+        let view_pair = signer_view_pair(&spend_key, &view_key)?;
         let network = parse_network(network_str)?;
         let lookahead = signer_lookahead();
         if unsigned.inputs.is_empty() {
@@ -2073,7 +2060,7 @@ pub mod native {
             "Refusing to sign: unsigned input does not belong to this wallet".to_string()
         })?;
 
-        let resolved = unsigned.resolve(&signer_view_pair(&spend_key, &view_key)?)?;
+        let resolved = unsigned.resolve(&view_pair)?;
 
         let mut destinations: Vec<_> = unsigned
             .payments
@@ -2123,8 +2110,7 @@ pub mod native {
     ) -> Result<OfflineSignedTransaction, String> {
         let spend_key = Zeroizing::new(Scalar::from_bytes_mod_order(spend_secret_key));
         let view_key = Zeroizing::new(Scalar::from_bytes_mod_order(view_secret_key));
-        let spend_point = &*spend_key * ED25519_BASEPOINT_TABLE;
-        let view_pair = ViewPair::new(spend_point, view_key.clone());
+        let view_pair = signer_view_pair(&spend_key, &view_key)?;
         parse_network(network_str)?;
         let unsigned = UnsignedTransaction::from_bytes(unsigned_bytes)?;
 
@@ -2357,40 +2343,76 @@ pub mod native {
             let seed_phrase = "hemlock jubilee eden hacksaw boil superior inroads epoxy exhale orders cavernous second brunt saved richly lower upgrade hitched launching deepest mostly playful layout lower eden";
             let seed = Seed::from_string(Zeroizing::new(seed_phrase.to_string())).unwrap();
 
-            let view_pair = view_pair_from_seed(&seed, "");
+            let spend_key = spend_key_from_seed(&seed, "");
+            let view_key = view_key_from_spend_key(&spend_key);
+            let view_pair = signer_view_pair(&spend_key, &view_key).unwrap();
 
-            // View pair should be deterministic - test by generating the same spend point
-            let view_pair2 = view_pair_from_seed(&seed, "");
+            let expected = crate::scanner::derive_keys(seed_phrase, Network::Stagenet, "").unwrap();
+            assert_eq!(view_key.to_bytes(), *expected.secret_view_key);
             assert_eq!(
-                view_pair.spend().compress().to_bytes(),
-                view_pair2.spend().compress().to_bytes()
+                view_pair.legacy_address(Network::Stagenet),
+                expected.address
             );
-
-            // The view pair should successfully be created for valid seed
-            // (detailed field comparisons not possible due to privacy, but we verified determinism)
         }
 
         #[test]
         fn test_decoy_selection_from_decoys() {
             // Test the conversion from Decoys to DecoySelection
-            use curve25519_dalek::edwards::EdwardsPoint;
-
-            // Create mock ring data using a known scalar
-            let one_bytes = [1u8; 32];
-            let scalar_one = Scalar::from_bytes_mod_order(one_bytes);
-            let g: EdwardsPoint = &scalar_one * ED25519_BASEPOINT_TABLE;
-            let ring = vec![[g, g], [g, g]];
-
-            let decoys = Decoys {
-                i: 1,
-                offsets: vec![0, 5, 10],
-                ring,
-            };
+            let g = monero_wallet::ed25519::Point::from(
+                &Scalar::from_bytes_mod_order([1u8; 32]) * ED25519_BASEPOINT_TABLE,
+            );
+            let decoys = Decoys::new(vec![7, 5, 10], 1, vec![[g, g], [g, g], [g, g]]).unwrap();
 
             let selection = DecoySelection::from_decoys(&decoys);
             assert_eq!(selection.real_index, 1);
-            assert_eq!(selection.offsets, vec![0, 5, 10]);
-            assert_eq!(selection.ring.len(), 2);
+            assert_eq!(selection.offsets, vec![7, 5, 10]);
+            assert_eq!(selection.ring.len(), 3);
+            assert_eq!(selection.ring[0].key, hex::encode(g.compress().to_bytes()));
+        }
+
+        fn stored_output_bytes(chunks: u64) -> Vec<u8> {
+            let key = &Scalar::from(9u64) * ED25519_BASEPOINT_TABLE;
+            let mut bytes = Vec::new();
+            bytes.extend_from_slice(&[0x11; 32]); // transaction hash
+            bytes.extend_from_slice(&1u64.to_le_bytes()); // index in transaction
+            bytes.extend_from_slice(&0u64.to_le_bytes()); // index on blockchain
+            bytes.extend_from_slice(key.compress().as_bytes());
+            bytes.extend_from_slice(&Scalar::from(5u64).to_bytes()); // key offset
+            bytes.extend_from_slice(&Scalar::from(3u64).to_bytes()); // commitment mask
+            bytes.extend_from_slice(&1234u64.to_le_bytes()); // amount
+            bytes.push(0); // no additional timelock
+            bytes.push(0); // no subaddress
+            bytes.push(0); // no payment id
+            monero_oxide::io::VarInt::write(&chunks, &mut bytes).unwrap();
+            bytes
+        }
+
+        #[test]
+        fn decoy_selection_ignores_the_stored_global_index() {
+            let output = parse_stored_output(&hex::encode(stored_output_bytes(0))).unwrap();
+            assert_eq!(output.index_on_blockchain(), 0);
+
+            let spent = spent_output(&output, 424242);
+            assert_eq!(spent.index_on_blockchain, 424242);
+            let key: EdwardsPoint = output.key().into();
+            assert_eq!(spent.key, key);
+            let commitment: EdwardsPoint = output.commitment().commit().into();
+            assert_eq!(spent.commitment, commitment);
+        }
+
+        #[test]
+        fn stored_output_refuses_an_absurd_arbitrary_data_count() {
+            // Accept a valid count before testing the limit.
+            let mut within = stored_output_bytes(2);
+            within.extend_from_slice(&[3, 1, 2, 3]);
+            within.extend_from_slice(&[1, 9]);
+            let output =
+                parse_stored_output(&hex::encode(within)).expect("a real chunk count must read");
+            assert_eq!(output.arbitrary_data(), &[vec![1, 2, 3], vec![9]]);
+
+            let error = parse_stored_output(&hex::encode(stored_output_bytes(1_000_000)))
+                .expect_err("a million declared chunks must be refused");
+            assert!(error.contains("arbitrary data chunks"), "{error}");
         }
 
         #[test]

@@ -631,6 +631,29 @@ mod tests {
     }
 
     #[test]
+    fn output_with_decoys_keeps_the_output_and_its_ring() {
+        let key_offset = OxideScalar::from(Scalar::from(13u64));
+        let key = OxidePoint::from(&Scalar::from(11u64) * ED25519_BASEPOINT_TABLE);
+        let commitment = Commitment::new(OxideScalar::from(Scalar::from(17u64)), 1_000_000);
+        let ring: Vec<[OxidePoint; 2]> = (0..16u64)
+            .map(|i| {
+                let point = OxidePoint::from(&Scalar::from(500 + i) * ED25519_BASEPOINT_TABLE);
+                [point, point]
+            })
+            .collect();
+        let decoys = Decoys::new(ring_offsets(), SIGNER_INDEX, ring.clone()).unwrap();
+
+        let input = output_with_decoys(key, key_offset, &commitment, &decoys).unwrap();
+        assert_eq!(input.key(), key);
+        assert_eq!(input.key_offset(), key_offset);
+        assert_eq!(input.commitment().amount, 1_000_000);
+        assert_eq!(input.commitment().mask, commitment.mask);
+        assert_eq!(input.decoys().offsets(), ring_offsets().as_slice());
+        assert_eq!(input.decoys().signer_index(), SIGNER_INDEX);
+        assert_eq!(input.decoys().ring(), ring.as_slice());
+    }
+
+    #[test]
     fn envelope_roundtrips() {
         let mut tx = unsigned(vec![
             (recipient().address(), 1_000_000_000),

@@ -10,8 +10,7 @@ mod mock_rpc;
 
 use mock_rpc::MockRpc;
 use monero_rust::monero_rpc::Rpc;
-use monero_rust::tx_builder::native::create_spendable_output;
-use monero_rust::wallet_compat::received_from_wallet_output;
+use monero_rust::tx_builder::native::resolve_global_index;
 use serde::Serialize;
 
 /// Global index returned by the daemon for transaction output 1.
@@ -59,14 +58,10 @@ fn get_o_indexes_response(indexes: Vec<u64>) -> Vec<u8> {
     .expect("epee encode")
 }
 
-fn mock_daemon() -> Rpc<MockRpc> {
-    // The stored output is at transaction index 1, so use `indexes[1]`.
+fn mock_daemon(indexes: Vec<u64>) -> Rpc<MockRpc> {
     let rpc = MockRpc::from_json("[]")
         .expect("mock")
-        .with_binary_response(
-            "get_o_indexes.bin",
-            get_o_indexes_response(vec![7, DAEMON_INDEX, 9]),
-        );
+        .with_binary_response("get_o_indexes.bin", get_o_indexes_response(indexes));
     Rpc::new_with_connection(rpc)
 }
 
@@ -82,30 +77,24 @@ async fn spending_re_resolves_the_stored_index_from_the_daemon() {
         "fixture must carry the placeholder, or this proves nothing"
     );
 
-    let received = received_from_wallet_output(&wallet_output).expect("convert to compat output");
-    let spendable = create_spendable_output(&mock_daemon(), received)
+    let global_index = resolve_global_index(&mock_daemon(vec![7, DAEMON_INDEX, 9]), &wallet_output)
         .await
         .expect("resolving the global index must succeed");
 
     assert_eq!(
-        spendable.global_index, DAEMON_INDEX,
+        global_index, DAEMON_INDEX,
         "the daemon's index must win over the stored placeholder"
     );
-    assert_ne!(
-        spendable.global_index, 0,
-        "the placeholder must not survive"
-    );
+    assert_ne!(global_index, 0, "the placeholder must not survive");
 }
 
-/// The conversion to `ReceivedOutput` discards the global index, requiring
-/// the spend path to fetch it again.
-#[test]
-fn the_compat_output_has_nowhere_to_carry_a_stale_index() {
+#[tokio::test]
+async fn a_short_daemon_answer_does_not_fall_back_to_the_stored_index() {
     let stored = stored_output_with_zero_index();
     let wallet_output = monero_wallet::WalletOutput::read(&mut stored.as_slice()).unwrap();
-    let received = received_from_wallet_output(&wallet_output).unwrap();
 
-    // `ReceivedOutput` retains only the index within the transaction.
-    assert_eq!(received.absolute.tx, [0x11; 32]);
-    assert_eq!(received.absolute.o, 1);
+    let error = resolve_global_index(&mock_daemon(vec![7]), &wallet_output)
+        .await
+        .expect_err("one index cannot answer for the output at position 1");
+    assert!(error.contains("too few output indexes"), "{error}");
 }

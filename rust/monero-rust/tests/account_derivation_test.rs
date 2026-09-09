@@ -6,8 +6,9 @@
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 use monero_rust::crypto::hash_to_scalar;
 use monero_rust::seed_compat::Seed;
-use monero_rust::wallet_compat::{AddressSpec, ViewPair};
 use monero_wallet::address::{Network, SubaddressIndex};
+use monero_wallet::ed25519::{Point, Scalar as OxideScalar};
+use monero_wallet::ViewPair;
 use zeroize::Zeroizing;
 
 const HONKED_BAGPIPE_MNEMONIC: &str = "honked bagpipe alpine juicy faked afoot jostle claim cowl tunnel orphans negative pheasants feast jetting quote frown teeming cycling tribal womanly hills cottage daytime daytime";
@@ -41,10 +42,11 @@ fn test_account_0_subaddress_0_is_standard_address() {
     let spend = spend_key_from_seed(&seed);
     let view = view_key_from_seed(&seed);
 
-    let pair = ViewPair::new(spend, Zeroizing::new(view));
+    let pair = ViewPair::new(Point::from(spend), Zeroizing::new(OxideScalar::from(view)))
+        .expect("view pair");
 
     // Standard address
-    let standard_address = pair.address(Network::Stagenet, AddressSpec::Standard);
+    let standard_address = pair.legacy_address(Network::Stagenet);
     assert_eq!(
         standard_address.to_string(),
         EXPECTED_ACCOUNT_0_SUBADDRESS_0
@@ -64,14 +66,15 @@ fn test_account_1_subaddress_0_derivation() {
     let spend = spend_key_from_seed(&seed);
     let view = view_key_from_seed(&seed);
 
-    let pair = ViewPair::new(spend, Zeroizing::new(view));
+    let pair = ViewPair::new(Point::from(spend), Zeroizing::new(OxideScalar::from(view)))
+        .expect("view pair");
 
     // Create subaddress index for account 1, subaddress 0
     let subaddress_index =
         SubaddressIndex::new(1, 0).expect("SubaddressIndex::new(1, 0) should return Some");
 
     // Derive the subaddress
-    let subaddress = pair.address(Network::Stagenet, AddressSpec::Subaddress(subaddress_index));
+    let subaddress = pair.subaddress(Network::Stagenet, subaddress_index);
 
     // Verify the derived address matches the expected address
     assert_eq!(
@@ -90,15 +93,16 @@ fn test_account_0_subaddress_1_is_different() {
     let spend = spend_key_from_seed(&seed);
     let view = view_key_from_seed(&seed);
 
-    let pair = ViewPair::new(spend, Zeroizing::new(view));
+    let pair = ViewPair::new(Point::from(spend), Zeroizing::new(OxideScalar::from(view)))
+        .expect("view pair");
 
-    let standard_address = pair.address(Network::Stagenet, AddressSpec::Standard);
+    let standard_address = pair.legacy_address(Network::Stagenet);
 
     // Create subaddress index for account 0, subaddress 1
     let subaddress_index =
         SubaddressIndex::new(0, 1).expect("SubaddressIndex::new(0, 1) should return Some");
 
-    let subaddress = pair.address(Network::Stagenet, AddressSpec::Subaddress(subaddress_index));
+    let subaddress = pair.subaddress(Network::Stagenet, subaddress_index);
 
     // Verify that the subaddress is different from the standard address
     assert_ne!(
@@ -117,14 +121,15 @@ fn test_account_1_subaddress_1_derivation() {
     let spend = spend_key_from_seed(&seed);
     let view = view_key_from_seed(&seed);
 
-    let pair = ViewPair::new(spend, Zeroizing::new(view));
+    let pair = ViewPair::new(Point::from(spend), Zeroizing::new(OxideScalar::from(view)))
+        .expect("view pair");
 
     // Create subaddress index for account 1, subaddress 1
     let subaddress_index =
         SubaddressIndex::new(1, 1).expect("SubaddressIndex::new(1, 1) should return Some");
 
     // Derive the subaddress
-    let subaddress = pair.address(Network::Stagenet, AddressSpec::Subaddress(subaddress_index));
+    let subaddress = pair.subaddress(Network::Stagenet, subaddress_index);
 
     // Verify the derived address matches the expected address
     assert_eq!(
@@ -166,22 +171,14 @@ fn test_multiple_accounts_have_different_addresses() {
     let spend = spend_key_from_seed(&seed);
     let view = view_key_from_seed(&seed);
 
-    let pair = ViewPair::new(spend, Zeroizing::new(view));
+    let pair = ViewPair::new(Point::from(spend), Zeroizing::new(OxideScalar::from(view)))
+        .expect("view pair");
 
-    let account_1_addr = pair.address(
-        Network::Stagenet,
-        AddressSpec::Subaddress(SubaddressIndex::new(1, 0).unwrap()),
-    );
+    let account_1_addr = pair.subaddress(Network::Stagenet, SubaddressIndex::new(1, 0).unwrap());
 
-    let account_2_addr = pair.address(
-        Network::Stagenet,
-        AddressSpec::Subaddress(SubaddressIndex::new(2, 0).unwrap()),
-    );
+    let account_2_addr = pair.subaddress(Network::Stagenet, SubaddressIndex::new(2, 0).unwrap());
 
-    let account_3_addr = pair.address(
-        Network::Stagenet,
-        AddressSpec::Subaddress(SubaddressIndex::new(3, 0).unwrap()),
-    );
+    let account_3_addr = pair.subaddress(Network::Stagenet, SubaddressIndex::new(3, 0).unwrap());
 
     // Verify all accounts have different addresses
     assert_ne!(account_1_addr.to_string(), account_2_addr.to_string());

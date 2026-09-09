@@ -52,6 +52,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn checked_amount_sum_refuses_a_wrap() {
+        assert_eq!(checked_amount_sum([1u64, 2, 3]), Some(6));
+        assert_eq!(checked_amount_sum([u64::MAX, 0]), Some(u64::MAX));
+        assert_eq!(checked_amount_sum([u64::MAX, 1]), None);
+        assert_eq!(checked_amount_sum([u64::MAX, 2_000_000_001]), None);
+        assert_eq!(checked_amount_sum(std::iter::empty()), Some(0));
+    }
+
+    #[test]
     fn classify_double_spend() {
         let (ds, retry) = classify_broadcast_error("double spend detected");
         assert!(ds);

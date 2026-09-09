@@ -588,8 +588,6 @@ pub fn derive_subaddress(
     address_index: u32,
     passphrase: &str,
 ) -> Result<MoneroAddress, String> {
-    use crate::wallet_compat::{AddressSpec, ViewPair};
-
     let (spend_point, view_scalar) = if let Some((vs, sp)) = parse_view_only_keys(mnemonic) {
         (sp, vs)
     } else {
@@ -602,11 +600,14 @@ pub fn derive_subaddress(
         (sp, vs)
     };
 
-    let view_pair = ViewPair::new(spend_point, Zeroizing::new(view_scalar));
+    let view_pair = OxideViewPair::new(
+        OxidePoint::from(spend_point),
+        Zeroizing::new(OxideScalar::from(view_scalar)),
+    )
+    .map_err(|e| format!("Invalid view keys: {}", e))?;
 
     if account == 0 && address_index == 0 {
-        let address = view_pair.address(network, AddressSpec::Standard);
-        return Ok(address);
+        return Ok(view_pair.legacy_address(network));
     }
 
     let subaddress_index = SubaddressIndex::new(account, address_index).ok_or_else(|| {
@@ -616,8 +617,7 @@ pub fn derive_subaddress(
         )
     })?;
 
-    let address = view_pair.address(network, AddressSpec::Subaddress(subaddress_index));
-    Ok(address)
+    Ok(view_pair.subaddress(network, subaddress_index))
 }
 
 pub fn derive_keys(
