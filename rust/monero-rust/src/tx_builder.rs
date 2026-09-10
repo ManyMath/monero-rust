@@ -62,16 +62,13 @@ pub mod native {
         outputs: &[(WalletOutput, u64)],
     ) -> Result<Vec<Decoys>, String> {
         let ring_len = ring_len(rct_type).ok_or_else(|| "Unsupported RingCT type".to_string())?;
-        let mut decoys = Vec::with_capacity(outputs.len());
+        let mut spent = Vec::with_capacity(outputs.len());
         for (output, global_index) in outputs {
-            let spent = spent_output(output, *global_index);
-            decoys.push(
-                crate::decoy_select::select_decoys(rng, rpc, ring_len, height, &spent)
-                    .await
-                    .map_err(|e| format!("Decoy selection failed: {}", e))?,
-            );
+            spent.push(spent_output(output, *global_index));
         }
-        Ok(decoys)
+        crate::decoy_select::select_decoys_for_outputs(rng, rpc, ring_len, height, &spent)
+            .await
+            .map_err(|e| format!("Decoy selection failed: {}", e))
     }
 
     /// Select decoys for every output and assemble the unsigned transaction.

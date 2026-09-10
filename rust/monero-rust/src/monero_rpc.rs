@@ -64,6 +64,59 @@ struct TransactionsResponse {
     txs: Vec<TransactionResponse>,
 }
 
+#[derive(Clone, Copy, Serialize, Deserialize, Debug)]
+struct GetOutputsOut {
+    amount: u64,
+    index: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct GetOutputsRequest {
+    outputs: Vec<GetOutputsOut>,
+    get_txid: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct GetOutputsResponse {
+    outs: Vec<GetOutputsKey>,
+    status: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct GetOutputsKey {
+    #[serde(with = "epee_byte_blob")]
+    key: Vec<u8>,
+    #[serde(with = "epee_byte_blob")]
+    mask: Vec<u8>,
+    unlocked: bool,
+    height: u64,
+    #[serde(with = "epee_byte_blob")]
+    txid: Vec<u8>,
+}
+
+#[derive(Serialize, Debug)]
+struct OutputDistributionRequest {
+    amounts: Vec<u64>,
+    compress: bool,
+}
+
+#[derive(Deserialize, Debug)]
+struct OutputDistributionResponse {
+    distributions: Vec<CompressedOutputDistribution>,
+    status: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct CompressedOutputDistribution {
+    amount: u64,
+    start_height: u64,
+    binary: bool,
+    compress: bool,
+    #[serde(with = "epee_byte_blob")]
+    compressed_data: Vec<u8>,
+    base: u64,
+}
+
 #[derive(Clone, PartialEq, Eq, Debug, Error)]
 pub enum RpcError {
     #[error("internal error ({0})")]
@@ -585,41 +638,58 @@ impl<R: RpcConnection> Rpc<R> {
     /// specified height (both inclusive).
     pub async fn get_output_distribution(
         &self,
-        from: usize,
-        to: usize,
+        _from: usize,
+        _to: usize,
     ) -> Result<Vec<u64>, RpcError> {
-        #[allow(dead_code)]
-        #[derive(Deserialize, Debug)]
-        struct Distribution {
-            distribution: Vec<u64>,
-        }
-
-        #[allow(dead_code)]
-        #[derive(Deserialize, Debug)]
-        struct Distributions {
-            distributions: Vec<Distribution>,
-        }
-
-        let mut distributions: Distributions = self
-            .json_rpc_call(
-                "get_output_distribution",
-                Some(json!({
-                  "binary": false,
-                  "amounts": [0],
-                  "cumulative": true,
-                  "from_height": from,
-                  "to_height": to,
-                })),
+        let response: OutputDistributionResponse = self
+            .bin_call(
+                "get_output_distribution.bin",
+                monero_epee_bin_serde::to_bytes(&OutputDistributionRequest {
+                    amounts: vec![0],
+                    compress: true,
+                })
+                .map_err(|_| {
+                    RpcError::InternalError(
+                        "epee serialization failed for output distribution request",
+                    )
+                })?,
             )
             .await?;
-
-        // Check the count before `swap_remove(0)` so an empty reply returns an error.
-        if distributions.distributions.is_empty() {
+        let [distribution] = response.distributions.as_slice() else {
+            return Err(RpcError::InvalidNode);
+        };
+        if distribution.amount != 0 || !distribution.binary || !distribution.compress {
             return Err(RpcError::InvalidNode);
         }
-        let distribution = distributions.distributions.swap_remove(0).distribution;
-        check_distribution_is_monotonic(&distribution)?;
-        Ok(distribution)
+
+        let mut position = 0usize;
+        let mut cumulative = distribution.base;
+        let mut result = Vec::with_capacity(distribution.compressed_data.len());
+        while position < distribution.compressed_data.len() {
+            let mut value = 0u64;
+            let mut shift = 0u32;
+            loop {
+                let byte = *distribution
+                    .compressed_data
+                    .get(position)
+                    .ok_or(RpcError::InvalidNode)?;
+                position += 1;
+                value |= u64::from(byte & 0x7f)
+                    .checked_shl(shift)
+                    .ok_or(RpcError::InvalidNode)?;
+                if byte & 0x80 == 0 {
+                    break;
+                }
+                shift += 7;
+                if shift >= 64 {
+                    return Err(RpcError::InvalidNode);
+                }
+            }
+            cumulative = cumulative.checked_add(value).ok_or(RpcError::InvalidNode)?;
+            result.push(cumulative);
+        }
+        check_distribution_is_monotonic(&result)?;
+        Ok(result)
     }
 
     /// Get the specified outputs from the RingCT (zero-amount) pool, but only
@@ -631,64 +701,53 @@ impl<R: RpcConnection> Rpc<R> {
         indexes: &[u64],
         height: usize,
     ) -> Result<Vec<Option<[EdwardsPoint; 2]>>, RpcError> {
-        #[derive(Deserialize, Debug)]
-        struct Out {
-            key: String,
-            mask: String,
-            txid: String,
-        }
+        const WALLET2_GET_OUTS_CHUNK: usize = 1000;
+        let mut result = Vec::with_capacity(indexes.len());
+        for indexes in indexes.chunks(WALLET2_GET_OUTS_CHUNK) {
+            let request = GetOutputsRequest {
+                get_txid: false,
+                outputs: indexes
+                    .iter()
+                    .map(|index| GetOutputsOut {
+                        amount: 0,
+                        index: *index,
+                    })
+                    .collect(),
+            };
+            let outs: GetOutputsResponse = self
+                .bin_call(
+                    "get_outs.bin",
+                    monero_epee_bin_serde::to_bytes(&request).map_err(|_| {
+                        RpcError::InternalError("epee serialization failed for get_outs request")
+                    })?,
+                )
+                .await?;
 
-        #[derive(Deserialize, Debug)]
-        struct Outs {
-            outs: Vec<Out>,
-        }
+            if outs.outs.len() != indexes.len() {
+                return Err(RpcError::InvalidNode);
+            }
 
-        let outs: Outs = self
-            .rpc_call(
-                "get_outs",
-                Some(json!({
-                  "get_txid": true,
-                  "outputs": indexes.iter().map(|o| json!({
-                      "amount": 0,
-                      "index": o
-                  })).collect::<Vec<_>>()
-                })),
-            )
-            .await?;
-
-        // Decoy selection pairs entry `i` with `indexes[i]`. Require the requested
-        // number of outputs before callers index or zip these lists.
-        if outs.outs.len() != indexes.len() {
-            return Err(RpcError::InvalidNode);
-        }
-
-        let timelocks = self
-            .get_transaction_timelocks(
-                &outs
-                    .outs
+            result.extend(
+                outs.outs
                     .iter()
                     .map(|out| {
-                        rpc_hex(&out.txid)?
-                            .try_into()
-                            .map_err(|_| RpcError::InvalidNode)
+                        let point = |bytes: &[u8]| {
+                            let compressed = CompressedEdwardsY(
+                                bytes.try_into().map_err(|_| RpcError::InvalidNode)?,
+                            );
+                            compressed
+                                .decompress()
+                                .ok_or_else(|| RpcError::InvalidPoint(hex::encode(bytes)))
+                        };
+                        Ok((out.unlocked
+                            && usize::try_from(out.height).map_or(false, |h| h <= height))
+                        .then(|| Ok([point(&out.key)?, point(&out.mask)?]))
+                        .transpose()?)
                     })
-                    .collect::<Result<Vec<_>, _>>()?,
-            )
-            .await?;
-
-        outs.outs
-            .iter()
-            .enumerate()
-            .map(|(i, out)| {
-                Ok(Some([rpc_point(&out.key)?, rpc_point(&out.mask)?]).filter(
-                    |_| match timelocks[i] {
-                        Timelock::None => true,
-                        Timelock::Block(t_height) => t_height <= height,
-                        _ => false,
-                    },
-                ))
-            })
-            .collect()
+                    .collect::<Result<Vec<_>, RpcError>>()?,
+            );
+        }
+        Ok(result)
     }
 
     /// Get the currently estimated fee from the node. This may be manipulated
@@ -1112,6 +1171,115 @@ pub struct GetBlocksFastResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn decoy_outputs_use_wallet2s_binary_rpc_without_txids() {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone, Debug)]
+        struct Connection(Arc<Mutex<Vec<(String, Vec<u8>)>>>);
+        #[async_trait]
+        impl RpcConnection for Connection {
+            async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
+                self.0.lock().unwrap().push((route.to_string(), body));
+                Err(RpcError::ConnectionError)
+            }
+        }
+
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let rpc = Rpc::new_with_connection(Connection(calls.clone()));
+        assert!(rpc.get_unlocked_outputs(&[7, 11], 100).await.is_err());
+
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "get_outs.bin");
+        #[derive(Deserialize)]
+        struct Request {
+            outputs: Vec<GetOutputsOut>,
+            get_txid: bool,
+        }
+        let request: Request = crate::safe_epee::from_bytes(&calls[0].1).unwrap();
+        assert!(!request.get_txid);
+        assert_eq!(request.outputs.len(), 2);
+        assert_eq!(request.outputs[0].amount, 0);
+        assert_eq!(request.outputs[0].index, 7);
+        assert_eq!(request.outputs[1].index, 11);
+    }
+
+    #[tokio::test]
+    async fn decoy_outputs_use_wallet2s_thousand_output_chunks() {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone, Debug)]
+        struct Connection(Arc<Mutex<Vec<usize>>>);
+        #[async_trait]
+        impl RpcConnection for Connection {
+            async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
+                assert_eq!(route, "get_outs.bin");
+                let request: GetOutputsRequest = crate::safe_epee::from_bytes(&body).unwrap();
+                self.0.lock().unwrap().push(request.outputs.len());
+                let point = curve25519_dalek::constants::ED25519_BASEPOINT_POINT
+                    .compress()
+                    .to_bytes()
+                    .to_vec();
+                monero_epee_bin_serde::to_bytes(&GetOutputsResponse {
+                    outs: request
+                        .outputs
+                        .iter()
+                        .map(|_| GetOutputsKey {
+                            key: point.clone(),
+                            mask: point.clone(),
+                            unlocked: true,
+                            height: 1,
+                            txid: vec![],
+                        })
+                        .collect(),
+                    status: "OK".to_string(),
+                })
+                .map_err(|_| RpcError::InternalError("test response serialization failed"))
+            }
+        }
+
+        let chunks = Arc::new(Mutex::new(Vec::new()));
+        let rpc = Rpc::new_with_connection(Connection(chunks.clone()));
+        let indexes = (0..1001).collect::<Vec<_>>();
+        assert_eq!(
+            rpc.get_unlocked_outputs(&indexes, 100).await.unwrap().len(),
+            indexes.len()
+        );
+        assert_eq!(*chunks.lock().unwrap(), vec![1000, 1]);
+    }
+
+    #[tokio::test]
+    async fn decoy_distribution_uses_wallet2s_compressed_binary_rpc() {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone, Debug)]
+        struct Connection(Arc<Mutex<Vec<(String, Vec<u8>)>>>);
+        #[async_trait]
+        impl RpcConnection for Connection {
+            async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
+                self.0.lock().unwrap().push((route.to_string(), body));
+                Err(RpcError::ConnectionError)
+            }
+        }
+
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let rpc = Rpc::new_with_connection(Connection(calls.clone()));
+        assert!(rpc.get_output_distribution(0, 100).await.is_err());
+
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "get_output_distribution.bin");
+        #[derive(Deserialize)]
+        struct Request {
+            amounts: Vec<u64>,
+            compress: bool,
+        }
+        let request: Request = crate::safe_epee::from_bytes(&calls[0].1).unwrap();
+        assert_eq!(request.amounts, vec![0]);
+        assert!(request.compress);
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[tokio::test]
