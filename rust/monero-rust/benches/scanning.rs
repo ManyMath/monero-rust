@@ -59,6 +59,7 @@ fn make_sample_wallet_output(index: u64) -> WalletOutput {
         subaddress_index: Some((0, 1)),
         payment_id: None,
         received_output_bytes: "d".repeat(128),
+        global_index: Some(index),
         block_height: 100_000 + index,
         spent: false,
         spent_height: None,

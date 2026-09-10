@@ -154,6 +154,7 @@ mod tests {
             subaddress_index: Some((0, 0)),
             payment_id: None,
             received_output_bytes: "".into(),
+            global_index: None,
             block_height: height,
             spent: false,
             spent_height: None,

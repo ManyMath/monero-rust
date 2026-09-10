@@ -12,6 +12,7 @@ fn make_test_output(amount: u64, height: u64, tx_hash: &str, account: u32) -> Wa
         subaddress_index: Some((account, 0)),
         payment_id: None,
         received_output_bytes: String::new(),
+        global_index: Some(height),
         block_height: height,
         spent: false,
         spent_height: None,

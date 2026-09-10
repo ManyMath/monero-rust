@@ -16,6 +16,7 @@ fn make_output(amount: u64, height: u64, tx_hash: &str, account: u32) -> WalletO
         subaddress_index: Some((account, 0)),
         payment_id: None,
         received_output_bytes: "".into(),
+        global_index: Some(height),
         block_height: height,
         spent: false,
         spent_height: None,

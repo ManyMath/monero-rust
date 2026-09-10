@@ -17,6 +17,10 @@ pub struct WalletOutput {
     pub subaddress_index: Option<(u32, u32)>,
     pub payment_id: Option<String>,
     pub received_output_bytes: String,
+    /// The output's global index; `None` for mempool and legacy records, which must
+    /// be refreshed before spending: a lookup by tx hash reveals the real input.
+    #[serde(default)]
+    pub global_index: Option<u64>,
     pub block_height: u64,
     pub spent: bool,
     /// Height at which this output was spent. None if unspent or unknown.
@@ -41,6 +45,7 @@ impl From<&WalletOutput> for StoredOutputData {
             subaddress: o.subaddress_index,
             payment_id: o.payment_id.clone(),
             received_output_bytes: o.received_output_bytes.clone(),
+            global_index: o.global_index,
         }
     }
 }
@@ -57,6 +62,7 @@ impl From<WalletOutput> for StoredOutputData {
             subaddress: o.subaddress_index,
             payment_id: o.payment_id,
             received_output_bytes: o.received_output_bytes,
+            global_index: o.global_index,
         }
     }
 }
@@ -107,6 +113,7 @@ mod tests {
             subaddress_index: Some((0, 1)),
             payment_id: None,
             received_output_bytes: "bytes".into(),
+            global_index: Some(42),
             block_height: 100,
             spent: false,
             spent_height: None,

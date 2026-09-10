@@ -5,7 +5,7 @@ mod mock_rpc;
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 use monero_oxide::transaction::{NotPruned, Transaction};
-use monero_rust::native::{build_unsigned_transaction, resolve_global_index};
+use monero_rust::native::build_unsigned_transaction;
 use monero_rust::scanner::{
     derive_address, derive_keys, scan_block_for_outputs_with_lookahead, Lookahead,
 };
@@ -111,7 +111,9 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
     let test_output = &all_outputs[0];
     let output_bytes = hex::decode(&test_output.received_output_bytes)?;
     let wallet_output = WalletOutput::read(&mut Cursor::new(output_bytes))?;
-    let global_index = resolve_global_index(&rpc, &wallet_output).await?;
+    let global_index = test_output
+        .global_index
+        .ok_or("indexed block scan did not return a global output index")?;
     let spendable = (wallet_output, global_index);
 
     let send_amount = 1_000_000_000u64;

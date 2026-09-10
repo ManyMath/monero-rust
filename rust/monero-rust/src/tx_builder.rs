@@ -35,27 +35,14 @@ pub mod native {
             .map_err(|e| format!("Failed to parse output: {}", e))
     }
 
-    /// Ask the daemon for an output's global RingCT index.
-    pub async fn resolve_global_index<R: RpcConnection>(
-        rpc: &Rpc<R>,
-        output: &WalletOutput,
-    ) -> Result<u64, String> {
-        let indexes = rpc
-            .get_o_indexes(output.transaction())
-            .await
-            .map_err(|e| format!("Failed to resolve the output's global index: {:?}", e))?;
-        usize::try_from(output.index_in_transaction())
-            .ok()
-            .and_then(|position| indexes.get(position).copied())
-            .ok_or_else(|| "Daemon returned too few output indexes".to_string())
-    }
-
-    async fn spendable_from_stored_bytes<R: RpcConnection>(
-        rpc: &Rpc<R>,
-        received_output_bytes_hex: &str,
+    fn spendable_from_stored_data(
+        stored: &StoredOutputData,
     ) -> Result<(WalletOutput, u64), String> {
-        let output = parse_stored_output(received_output_bytes_hex)?;
-        let global_index = resolve_global_index(rpc, &output).await?;
+        let output = parse_stored_output(&stored.received_output_bytes)?;
+        let global_index = stored.global_index.ok_or_else(|| {
+            "Output has no authoritative global index; refresh/rescan it before spending"
+                .to_string()
+        })?;
         Ok((output, global_index))
     }
 
@@ -236,6 +223,9 @@ pub mod native {
         pub subaddress: Option<(u32, u32)>,
         pub payment_id: Option<String>,
         pub received_output_bytes: String,
+        /// Global RingCT index learned during refresh.
+        #[serde(default)]
+        pub global_index: Option<u64>,
     }
 
     /// Ring member data (key + commitment as hex)
@@ -448,7 +438,7 @@ pub mod native {
 
         let mut spendable_outputs = Vec::with_capacity(stored_outputs.len());
         for stored in &stored_outputs {
-            let spendable = spendable_from_stored_bytes(rpc, &stored.received_output_bytes).await?;
+            let spendable = spendable_from_stored_data(stored)?;
             spendable_outputs.push(spendable);
         }
 
@@ -710,8 +700,7 @@ pub mod native {
         let mut spendable_outputs = Vec::new();
 
         for stored in &stored_outputs {
-            let spendable =
-                spendable_from_stored_bytes(&rpc, &stored.received_output_bytes).await?;
+            let spendable = spendable_from_stored_data(stored)?;
             spendable_outputs.push(spendable);
         }
 
@@ -887,8 +876,7 @@ pub mod native {
         let mut spendable_outputs = Vec::new();
 
         for stored in &stored_outputs {
-            let spendable =
-                spendable_from_stored_bytes(&rpc, &stored.received_output_bytes).await?;
+            let spendable = spendable_from_stored_data(stored)?;
             spendable_outputs.push(spendable);
         }
 
@@ -1594,7 +1582,7 @@ pub mod native {
 
         let mut spendable_outputs = Vec::with_capacity(stored_outputs.len());
         for stored in &stored_outputs {
-            let spendable = spendable_from_stored_bytes(rpc, &stored.received_output_bytes).await?;
+            let spendable = spendable_from_stored_data(stored)?;
             spendable_outputs.push(spendable);
         }
 
@@ -2317,11 +2305,24 @@ pub mod native {
         }
 
         #[test]
-        fn decoy_selection_ignores_the_stored_global_index() {
+        fn spend_uses_the_persisted_global_index() {
             let output = parse_stored_output(&hex::encode(stored_output_bytes(0))).unwrap();
             assert_eq!(output.index_on_blockchain(), 0);
 
-            let spent = spent_output(&output, 424242);
+            let stored = StoredOutputData {
+                tx_hash: hex::encode(output.transaction()),
+                output_index: 1,
+                amount: 1234,
+                key: String::new(),
+                key_offset: String::new(),
+                commitment_mask: String::new(),
+                subaddress: None,
+                payment_id: None,
+                received_output_bytes: hex::encode(stored_output_bytes(0)),
+                global_index: Some(424242),
+            };
+            let (output, global_index) = spendable_from_stored_data(&stored).unwrap();
+            let spent = spent_output(&output, global_index);
             assert_eq!(spent.index_on_blockchain, 424242);
             let key: EdwardsPoint = output.key().into();
             assert_eq!(spent.key, key);
@@ -2357,6 +2358,7 @@ pub mod native {
                 subaddress: None,
                 payment_id: None,
                 received_output_bytes: "".to_string(),
+                global_index: None,
             };
 
             // Test that it can be serialized and deserialized

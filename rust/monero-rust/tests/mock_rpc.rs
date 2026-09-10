@@ -4,7 +4,7 @@
 
 use base64::Engine;
 use monero_rust::monero_rpc::{Rpc, RpcConnection, RpcError};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -52,6 +52,104 @@ fn resize_outs(mut call: RpcCall, wanted: usize) -> RpcCall {
     }
     call.response = serde_json::to_string(&resp).expect("re-serialising a parsed response");
     call
+}
+
+#[derive(Deserialize)]
+struct BinaryGetOutsRequest {
+    #[allow(dead_code)]
+    get_txid: bool,
+    outputs: Vec<BinaryGetOut>,
+}
+
+#[derive(Deserialize)]
+struct BinaryGetOut {
+    #[allow(dead_code)]
+    amount: u64,
+    #[allow(dead_code)]
+    index: u64,
+}
+
+#[derive(Serialize)]
+struct BinaryGetOutsResponse {
+    outs: Vec<BinaryGetOutKey>,
+    status: String,
+}
+
+#[derive(Clone, Serialize)]
+struct BinaryGetOutKey {
+    #[serde(with = "serde_bytes")]
+    key: Vec<u8>,
+    #[serde(with = "serde_bytes")]
+    mask: Vec<u8>,
+    unlocked: bool,
+    height: u64,
+    #[serde(with = "serde_bytes")]
+    txid: Vec<u8>,
+}
+
+#[derive(Serialize)]
+struct BinaryDistributionResponse {
+    distributions: Vec<BinaryDistribution>,
+    status: String,
+}
+
+#[derive(Serialize)]
+struct BinaryDistribution {
+    amount: u64,
+    start_height: u64,
+    binary: bool,
+    compress: bool,
+    #[serde(with = "serde_bytes")]
+    compressed_data: Vec<u8>,
+    base: u64,
+}
+
+#[derive(Deserialize)]
+struct BinaryGetBlocksRequest {
+    #[serde(with = "serde_bytes")]
+    block_ids: Vec<u8>,
+    start_height: u64,
+    prune: bool,
+    no_miner_tx: bool,
+}
+
+#[derive(Serialize)]
+struct BinaryBlockEntryWithoutTxs {
+    #[serde(with = "serde_bytes")]
+    block: Vec<u8>,
+    pruned: bool,
+    block_weight: u64,
+}
+
+#[derive(Serialize)]
+struct BinaryTxOutputIndices {
+    indices: Vec<u64>,
+}
+
+#[derive(Serialize)]
+struct BinaryBlockOutputIndices {
+    indices: Vec<BinaryTxOutputIndices>,
+}
+
+#[derive(Serialize)]
+struct BinaryGetBlocksResponse {
+    status: String,
+    blocks: Vec<BinaryBlockEntryWithoutTxs>,
+    start_height: u64,
+    current_height: u64,
+    output_indices: Vec<BinaryBlockOutputIndices>,
+    untrusted: bool,
+    credits: u64,
+    top_hash: String,
+    daemon_time: u64,
+}
+
+fn push_varint(mut value: u64, bytes: &mut Vec<u8>) {
+    while value >= 0x80 {
+        bytes.push((value as u8) | 0x80);
+        value >>= 7;
+    }
+    bytes.push(value as u8);
 }
 
 impl MockRpc {
@@ -234,6 +332,42 @@ impl MockRpc {
             }
         }
 
+        if route == "json_rpc" {
+            let request = serde_json::from_slice::<serde_json::Value>(body).ok();
+            let requested_height = request
+                .as_ref()
+                .filter(|req| req["method"] == "get_block_header_by_height")
+                .and_then(|req| req["params"]["height"].as_u64());
+            if let Some(requested_height) = requested_height {
+                for call in self.calls.iter().filter(|call| call.route == "json_rpc") {
+                    let Ok(stored) = serde_json::from_str::<serde_json::Value>(&call.body) else {
+                        continue;
+                    };
+                    if stored["method"] != "get_block_header_by_height"
+                        || stored["params"]["height"].as_u64() != requested_height.checked_add(1)
+                    {
+                        continue;
+                    }
+                    let Ok(mut response) =
+                        serde_json::from_str::<serde_json::Value>(&call.response)
+                    else {
+                        continue;
+                    };
+                    let Some(parent_hash) = response["result"]["block_header"]["prev_hash"]
+                        .as_str()
+                        .map(str::to_owned)
+                    else {
+                        continue;
+                    };
+                    response["result"]["block_header"]["hash"] = parent_hash.into();
+                    response["result"]["block_header"]["height"] = requested_height.into();
+                    let mut synthesized = call.clone();
+                    synthesized.response = serde_json::to_string(&response).unwrap();
+                    return Some(synthesized);
+                }
+            }
+        }
+
         if route == "get_outs" {
             let body_str = String::from_utf8_lossy(body).to_string();
             if let Ok(req) = serde_json::from_str::<serde_json::Value>(&body_str) {
@@ -339,6 +473,147 @@ impl MockRpc {
                     }
                 }
             }
+        }
+
+        if route == "getblocks.bin" {
+            let request: BinaryGetBlocksRequest = monero_epee_bin_serde::from_bytes(body).ok()?;
+            let header_call = self.calls.iter().find(|call| {
+                if call.route != "json_rpc" {
+                    return false;
+                }
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(&call.body) else {
+                    return false;
+                };
+                value["method"] == "get_block_header_by_height"
+                    && value["params"]["height"].as_u64() == Some(request.start_height)
+            })?;
+            let header_response: serde_json::Value =
+                serde_json::from_str(&header_call.response).ok()?;
+            let block_hash = header_response["result"]["block_header"]["hash"].as_str()?;
+            let call = self.calls.iter().find(|call| {
+                if call.route != "json_rpc" {
+                    return false;
+                }
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(&call.body) else {
+                    return false;
+                };
+                value["method"] == "get_block"
+                    && value["params"]["hash"].as_str() == Some(block_hash)
+            })?;
+            let response: serde_json::Value = serde_json::from_str(&call.response).ok()?;
+            let result = response.get("result")?;
+            let block = hex::decode(result.get("blob")?.as_str()?).ok()?;
+            let block_weight = result
+                .get("block_header")
+                .and_then(|header| header.get("block_weight"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_default();
+            let current_height = self
+                .calls
+                .iter()
+                .filter(|call| call.route == "get_height")
+                .find_map(|call| {
+                    serde_json::from_str::<serde_json::Value>(&call.response)
+                        .ok()?
+                        .get("height")?
+                        .as_u64()
+                })
+                .unwrap_or(request.start_height + 1);
+            let response = BinaryGetBlocksResponse {
+                status: "OK".to_string(),
+                blocks: vec![BinaryBlockEntryWithoutTxs {
+                    block,
+                    pruned: false,
+                    block_weight,
+                }],
+                start_height: request.start_height,
+                current_height,
+                output_indices: vec![BinaryBlockOutputIndices {
+                    indices: vec![BinaryTxOutputIndices {
+                        indices: vec![request.start_height],
+                    }],
+                }],
+                untrusted: false,
+                credits: 0,
+                top_hash: String::new(),
+                daemon_time: 0,
+            };
+            let encoded = monero_epee_bin_serde::to_bytes(&response).ok()?;
+            return Some(RpcCall {
+                route: route.to_string(),
+                body: String::new(),
+                response: base64::engine::general_purpose::STANDARD.encode(encoded),
+                is_binary: true,
+            });
+        }
+
+        if route == "get_output_distribution.bin" {
+            let call = self.calls.iter().find(|call| {
+                call.route == "json_rpc"
+                    && serde_json::from_str::<serde_json::Value>(&call.body)
+                        .ok()
+                        .and_then(|value| value.get("method").cloned())
+                        == Some(serde_json::Value::String(
+                            "get_output_distribution".to_string(),
+                        ))
+            })?;
+            let response: serde_json::Value = serde_json::from_str(&call.response).ok()?;
+            let distribution = response
+                .get("result")?
+                .get("distributions")?
+                .as_array()?
+                .first()?;
+            let cumulative = distribution.get("distribution")?.as_array()?;
+            let mut previous = 0u64;
+            let mut compressed = Vec::with_capacity(cumulative.len());
+            for value in cumulative {
+                let value = value.as_u64()?;
+                push_varint(value.checked_sub(previous)?, &mut compressed);
+                previous = value;
+            }
+            let response = BinaryDistributionResponse {
+                distributions: vec![BinaryDistribution {
+                    amount: 0,
+                    start_height: distribution.get("start_height")?.as_u64()?,
+                    binary: true,
+                    compress: true,
+                    compressed_data: compressed,
+                    base: 0,
+                }],
+                status: "OK".to_string(),
+            };
+            return Some(RpcCall {
+                route: route.to_string(),
+                body: String::new(),
+                response: base64::engine::general_purpose::STANDARD
+                    .encode(monero_epee_bin_serde::to_bytes(&response).ok()?),
+                is_binary: true,
+            });
+        }
+
+        if route == "get_outs.bin" {
+            let request: BinaryGetOutsRequest = monero_epee_bin_serde::from_bytes(body).ok()?;
+            let call = self.calls.iter().find(|call| call.route == "get_outs")?;
+            let response: serde_json::Value = serde_json::from_str(&call.response).ok()?;
+            let output = response.get("outs")?.as_array()?.first()?;
+            let template = BinaryGetOutKey {
+                key: hex::decode(output.get("key")?.as_str()?).ok()?,
+                mask: hex::decode(output.get("mask")?.as_str()?).ok()?,
+                unlocked: output.get("unlocked")?.as_bool()?,
+                height: output.get("height")?.as_u64()?,
+                txid: hex::decode(output.get("txid")?.as_str()?).ok()?,
+            };
+            let response = BinaryGetOutsResponse {
+                outs: vec![template; request.outputs.len()],
+                status: "OK".to_string(),
+            };
+            return Some(RpcCall {
+                route: route.to_string(),
+                body: String::new(),
+                response: base64::engine::general_purpose::STANDARD
+                    .encode(monero_epee_bin_serde::to_bytes(&response).ok()?),
+                is_binary: true,
+            });
         }
 
         None

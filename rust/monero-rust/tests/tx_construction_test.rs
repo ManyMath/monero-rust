@@ -2,7 +2,7 @@ mod common;
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 use monero_oxide::transaction::{NotPruned, Transaction};
-use monero_rust::native::{build_unsigned_transaction, resolve_global_index};
+use monero_rust::native::build_unsigned_transaction;
 use monero_rust::scanner::{
     derive_address, derive_keys, scan_block_for_outputs_with_lookahead, Lookahead,
 };
@@ -44,6 +44,7 @@ struct TestOutput {
     amount: u64,
     #[allow(dead_code)]
     key_image: String,
+    global_index: u64,
     received_output_bytes: String,
 }
 
@@ -99,6 +100,9 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
                 output_index: output.output_index,
                 amount: output.amount,
                 key_image: output.key_image,
+                global_index: output
+                    .global_index
+                    .ok_or("indexed block scan did not return a global output index")?,
                 received_output_bytes: output.received_output_bytes,
             });
         }
@@ -136,8 +140,7 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
 
     assert_eq!(wallet_output.commitment().amount, test_output.amount);
 
-    let global_index = resolve_global_index(&rpc, &wallet_output).await?;
-    let spendable = (wallet_output, global_index);
+    let spendable = (wallet_output, test_output.global_index);
 
     let send_amount = 1_000_000_000u64;
     let change = UnsignedChange {

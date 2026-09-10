@@ -267,6 +267,7 @@ mod tests {
             subaddress_index: None,
             payment_id: None,
             received_output_bytes: "".into(),
+            global_index: None,
             block_height: 100,
             spent: false,
             spent_height: None,

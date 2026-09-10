@@ -1,6 +1,9 @@
 use async_trait::async_trait;
 use monero_rust::monero_rpc::{Rpc, RpcConnection, RpcError};
-use monero_rust::scanner::{derive_address, scan_block_for_outputs, BlockScanResult};
+use monero_rust::scanner::{
+    derive_address, scan_block_for_outputs, scan_block_multi_wallet, BlockScanResult, Lookahead,
+    WalletScanConfig,
+};
 use monero_rust::seed_compat::Seed;
 use monero_rust::Network;
 use serde_json::Value;
@@ -62,6 +65,134 @@ impl MockRpcConnection {
 #[async_trait]
 impl RpcConnection for MockRpcConnection {
     async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
+        if route == "getblocks.bin" {
+            #[derive(serde::Serialize)]
+            struct Blob(#[serde(with = "serde_bytes")] Vec<u8>);
+            #[derive(serde::Serialize)]
+            struct Entry {
+                #[serde(with = "serde_bytes")]
+                block: Vec<u8>,
+                txs: Vec<Blob>,
+                pruned: bool,
+                block_weight: u64,
+            }
+            #[derive(serde::Serialize)]
+            struct TxIndices {
+                indices: Vec<u64>,
+            }
+            #[derive(serde::Serialize)]
+            struct BlockIndices {
+                indices: Vec<TxIndices>,
+            }
+            #[derive(serde::Serialize)]
+            struct Response {
+                status: String,
+                blocks: Vec<Entry>,
+                start_height: u64,
+                current_height: u64,
+                output_indices: Vec<BlockIndices>,
+                untrusted: bool,
+                credits: u64,
+                top_hash: String,
+                daemon_time: u64,
+            }
+
+            let block_response: Value = serde_json::from_str(
+                &self
+                    .test_vectors
+                    .iter()
+                    .find(|call| call.route == "json_rpc")
+                    .ok_or(RpcError::InvalidNode)?
+                    .response,
+            )
+            .map_err(|_| RpcError::InvalidNode)?;
+            let block = hex::decode(
+                block_response["result"]["blob"]
+                    .as_str()
+                    .ok_or(RpcError::InvalidNode)?,
+            )
+            .map_err(|_| RpcError::InvalidNode)?;
+            let transactions_response: Value = serde_json::from_str(
+                &self
+                    .test_vectors
+                    .iter()
+                    .find(|call| call.route == "get_transactions")
+                    .ok_or(RpcError::InvalidNode)?
+                    .response,
+            )
+            .map_err(|_| RpcError::InvalidNode)?;
+            let txs = transactions_response["txs"]
+                .as_array()
+                .ok_or(RpcError::InvalidNode)?
+                .iter()
+                .map(|tx| {
+                    hex::decode(tx["as_hex"].as_str().ok_or(RpcError::InvalidNode)?)
+                        .map(Blob)
+                        .map_err(|_| RpcError::InvalidNode)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let indices = transactions_response["txs"]
+                .as_array()
+                .ok_or(RpcError::InvalidNode)?
+                .iter()
+                .map(|tx| {
+                    Ok(TxIndices {
+                        indices: serde_json::from_value(tx["output_indices"].clone())
+                            .map_err(|_| RpcError::InvalidNode)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, RpcError>>()?;
+            let height_response: Value = serde_json::from_str(
+                &self
+                    .test_vectors
+                    .iter()
+                    .find(|call| call.route == "get_height")
+                    .ok_or(RpcError::InvalidNode)?
+                    .response,
+            )
+            .map_err(|_| RpcError::InvalidNode)?;
+            return monero_epee_bin_serde::to_bytes(&Response {
+                status: "OK".to_string(),
+                blocks: vec![Entry {
+                    block,
+                    txs,
+                    pruned: false,
+                    block_weight: 0,
+                }],
+                start_height: TEST_BLOCK_HEIGHT,
+                current_height: height_response["height"]
+                    .as_u64()
+                    .unwrap_or(TEST_BLOCK_HEIGHT + 1),
+                // The captured response omits the miner transaction's entry.
+                output_indices: vec![BlockIndices { indices }],
+                untrusted: false,
+                credits: 0,
+                top_hash: String::new(),
+                daemon_time: 0,
+            })
+            .map_err(|_| RpcError::InvalidNode);
+        }
+        if route == "get_o_indexes.bin" {
+            #[derive(serde::Serialize)]
+            struct OutputIndexes {
+                o_indexes: Vec<u64>,
+                status: String,
+                untrusted: bool,
+                credits: usize,
+                top_hash: String,
+            }
+            return monero_epee_bin_serde::to_bytes(&OutputIndexes {
+                o_indexes: vec![6_693_929, 6_693_930],
+                status: "OK".to_string(),
+                untrusted: false,
+                credits: 0,
+                top_hash: String::new(),
+            })
+            .map_err(|_| RpcError::InvalidNode);
+        }
+        if route.ends_with(".bin") {
+            return Err(RpcError::InvalidNode);
+        }
         let body_str = String::from_utf8(body).map_err(|_| RpcError::InvalidNode)?;
 
         self.find_response(route, &body_str)
@@ -103,6 +234,7 @@ async fn test_step2_scan_and_detect_output() {
     assert_eq!(output.tx_hash, EXPECTED_TX_HASH);
     assert_eq!(output.amount, EXPECTED_AMOUNT);
     assert_eq!(output.output_index, 1);
+    assert_eq!(output.global_index, Some(6_693_930));
     assert!(!output.spent);
     assert_eq!(output.subaddress_index, None);
 
@@ -113,6 +245,32 @@ async fn test_step2_scan_and_detect_output() {
     assert!(!output.key_offset.is_empty());
     assert!(!output.commitment_mask.is_empty());
     assert!(!output.received_output_bytes.is_empty());
+}
+
+#[tokio::test]
+async fn single_block_multi_wallet_scan_returns_spendable_indexes() {
+    let rpc = Rpc::new_with_connection(MockRpcConnection::new());
+    let result = scan_block_multi_wallet(
+        &rpc,
+        TEST_BLOCK_HEIGHT,
+        vec![WalletScanConfig {
+            mnemonic: TEST_SEED.to_string(),
+            network: Network::Stagenet,
+            lookahead: Lookahead {
+                account: 0,
+                subaddress: 20,
+            },
+            passphrase: String::new(),
+        }],
+    )
+    .await
+    .expect("indexed multi-wallet scan");
+    let output = result
+        .wallet_results
+        .get(EXPECTED_ADDRESS)
+        .and_then(|wallet| wallet.outputs.first())
+        .expect("owned output");
+    assert_eq!(output.global_index, Some(6_693_930));
 }
 
 #[tokio::test]

@@ -31,11 +31,6 @@ use crate::wallet_output::WalletOutput;
 use std::collections::{HashMap, HashSet};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::Arc;
-#[cfg(not(target_arch = "wasm32"))]
-use tokio::task::JoinSet;
-
 /// Yield interval for the non-WASM code path; WASM uses time-based yielding (~16 ms).
 #[cfg(not(target_arch = "wasm32"))]
 #[allow(dead_code)]
@@ -789,21 +784,15 @@ pub(crate) fn parse_full_tx_blob(bytes: &[u8]) -> Option<([u8; 32], OxideTransac
     Some((tx.hash(), OxideTransaction::<Pruned>::from(tx)))
 }
 
-/// Infer the global RingCT index of a block's first RingCT output from
-/// `/getblocks.bin` per-transaction output indices.
-///
-/// Daemons include an entry for the miner transaction; some captured vectors
-/// only carry entries for the non-miner transactions. Both layouts are
-/// accepted. Falls back to `0` when no usable metadata is present so output
-/// detection still works; the global index embedded in scanned outputs is
-/// re-derived from the daemon at spend time.
+/// The global index of a block's first RingCT output, from its `/getblocks.bin`
+/// output indices; `None` when they give none.
 fn first_ringct_index_from_rpc(
     block: &OxideBlock,
     txs: &[OxideTransaction<Pruned>],
     indices: Option<&BlockOutputIndices>,
-) -> u64 {
+) -> Option<u64> {
     let Some(block_indices) = indices else {
-        return 0;
+        return None;
     };
     let entries = block_indices.indices.as_slice();
     let miner = block.miner_transaction();
@@ -813,7 +802,7 @@ fn first_ringct_index_from_rpc(
     if entries.len() == 1 + block.transactions.len() {
         if miner_is_v2 {
             if let Some(&first) = entries[0].indices.first() {
-                return first;
+                return Some(first);
             }
         }
         return first_ringct_index_from_tx_entries(&entries[1..], txs, 0);
@@ -829,7 +818,7 @@ fn first_ringct_index_from_rpc(
         return first_ringct_index_from_tx_entries(entries, txs, miner_outputs);
     }
 
-    0
+    None
 }
 
 /// Walk non-miner transactions until one carries daemon output indices and
@@ -838,7 +827,7 @@ fn first_ringct_index_from_tx_entries(
     entries: &[crate::monero_rpc::TxOutputIndices],
     txs: &[OxideTransaction<Pruned>],
     mut ringct_outputs_before: u64,
-) -> u64 {
+) -> Option<u64> {
     for (entry, tx) in entries.iter().zip(txs) {
         if !matches!(tx, OxideTransaction::V2 { .. }) {
             // v1 outputs don't occupy RingCT indices and their daemon indices
@@ -846,11 +835,11 @@ fn first_ringct_index_from_tx_entries(
             continue;
         }
         if let Some(&first) = entry.indices.first() {
-            return first.saturating_sub(ringct_outputs_before);
+            return Some(first.saturating_sub(ringct_outputs_before));
         }
         ringct_outputs_before += tx.prefix().outputs.len() as u64;
     }
-    0
+    None
 }
 
 /// Scan one fully parsed block for the scanner's outputs.
@@ -979,6 +968,7 @@ fn map_oxide_output(
     block_height: u64,
     miner_tx_hash: [u8; 32],
     key_image_scalar: Option<&Scalar>,
+    global_index_is_authoritative: bool,
 ) -> Result<WalletOutput, String> {
     let output_index = u8::try_from(output.index_in_transaction()).map_err(|_| {
         format!(
@@ -1011,6 +1001,7 @@ fn map_oxide_output(
             .map(|idx| (idx.account(), idx.address())),
         payment_id: output.payment_id().and_then(oxide_payment_id_hex),
         received_output_bytes: hex::encode(output.serialize()),
+        global_index: global_index_is_authoritative.then(|| output.index_on_blockchain()),
         block_height,
         spent: false,
         spent_height: None,
@@ -1046,111 +1037,24 @@ pub async fn scan_block_for_outputs_with_lookahead<R: RpcConnection>(
     lookahead: Lookahead,
     passphrase: &str,
 ) -> Result<BlockScanResult, String> {
-    let view_only = parse_view_only_keys(mnemonic);
-    let seed_opt = if view_only.is_none() {
-        Some(resolve_seed(mnemonic)?)
-    } else {
-        None
-    };
-    let spend_point = view_only
-        .as_ref()
-        .map(|(_, sp)| *sp)
-        .unwrap_or_else(|| spend_key_from_seed(seed_opt.as_ref().unwrap(), passphrase));
-    let view_scalar = view_only
-        .as_ref()
-        .map(|(vs, _)| *vs)
-        .unwrap_or_else(|| view_key_from_seed(seed_opt.as_ref().unwrap(), passphrase));
-    #[cfg(target_arch = "wasm32")]
-    let spend_scalar = if view_only.is_some() {
-        Scalar::ZERO
-    } else {
-        spend_key_scalar_from_seed(seed_opt.as_ref().unwrap(), passphrase)
-    };
-
-    let mut scanner = oxide_scanner_from_keys(&spend_point, &view_scalar)?;
-    register_subaddresses(&mut scanner, lookahead);
-
-    let block_hash_bytes = rpc
-        .get_block_hash(block_height as usize)
-        .await
-        .map_err(|e| format!("Failed to fetch block hash: {:?}", e))?;
-    let block_hash = hex::encode(block_hash_bytes);
-
-    let daemon_height =
-        rpc.get_height()
-            .await
-            .map_err(|e| format!("Failed to fetch daemon height: {:?}", e))? as u64;
-
-    let block = rpc
-        .get_block_by_number(block_height as usize)
-        .await
-        .map_err(|e| format!("Failed to fetch block: {:?}", e))?;
-
-    let block_timestamp = block.header.timestamp;
-    let tx_hashes = block.transactions.clone();
-    let oxide_block = block;
-    let miner_tx_hash = oxide_block.miner_transaction().hash();
-    let miner_tx = OxideTransaction::<Pruned>::from(oxide_block.miner_transaction().clone());
-
-    let mut txs = Vec::with_capacity(tx_hashes.len());
-    if !tx_hashes.is_empty() {
-        let fetched_txs = rpc
-            .get_transactions(&tx_hashes)
-            .await
-            .map_err(|e| format!("Failed to fetch transactions: {:?}", e))?;
-        for tx in &fetched_txs {
-            let (tx_hash, parsed) = parse_full_tx_blob(&tx.serialize())
-                .ok_or_else(|| format!("Failed to parse transaction {}", hex::encode(tx.hash())))?;
-            txs.push((tx_hash, parsed));
-        }
+    if parse_view_only_keys(mnemonic).is_none() {
+        resolve_seed(mnemonic)?;
     }
-
-    let tx_count = 1 + txs.len();
-    let mut spent_key_images = Vec::new();
-    let mut spent_key_image_tx_hashes = Vec::new();
-    for (tx_hash, tx) in
-        std::iter::once((miner_tx_hash, &miner_tx)).chain(txs.iter().map(|(hash, tx)| (*hash, tx)))
-    {
-        let tx_hash_hex = hex::encode(tx_hash);
-        for input in &tx.prefix().inputs {
-            if let OxideInput::ToKey { key_image, .. } = input {
-                spent_key_images.push(hex::encode(key_image.to_bytes()));
-                spent_key_image_tx_hashes.push(tx_hash_hex.clone());
-            }
-        }
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    let key_image_scalar = if spend_scalar == Scalar::ZERO {
-        None
-    } else {
-        Some(&spend_scalar)
-    };
-    #[cfg(not(target_arch = "wasm32"))]
-    let key_image_scalar: Option<&Scalar> = None;
-
-    let scan_txs: Vec<OxideTransaction<Pruned>> = txs.iter().map(|(_, tx)| tx.clone()).collect();
-    let scanned = scan_parsed_block(&mut scanner, &oxide_block, &scan_txs, 0)?;
-    let mut outputs = Vec::with_capacity(scanned.len());
-    for output in &scanned {
-        outputs.push(map_oxide_output(
-            output,
-            block_height,
-            miner_tx_hash,
-            key_image_scalar,
-        )?);
-    }
-
-    Ok(BlockScanResult {
+    // `/getblocks.bin` gives the whole block's output indexes; asking per matching
+    // transaction would tell the node which ones pay the wallet.
+    scan_blocks_batch(
+        rpc,
         block_height,
-        block_hash,
-        block_timestamp,
-        tx_count,
-        outputs,
-        daemon_height,
-        spent_key_images,
-        spent_key_image_tx_hashes,
-    })
+        mnemonic,
+        _network,
+        lookahead,
+        false,
+        passphrase,
+    )
+    .await?
+    .into_iter()
+    .find(|result| result.block_height == block_height)
+    .ok_or_else(|| format!("Node did not return requested block {block_height}"))
 }
 
 /// Reject a batch that starts after the requested height.
@@ -1481,35 +1385,38 @@ pub async fn process_batch_response(
                 }
             }
 
-            let scanned = if parsed_txs.len() == block.transactions.len() {
-                let scan_txs: Vec<OxideTransaction<Pruned>> =
-                    parsed_txs.iter().map(|(_, tx)| tx.clone()).collect();
-                let first_ringct_index = first_ringct_index_from_rpc(
-                    &block,
-                    &scan_txs,
-                    response.output_indices.get(block_idx),
-                );
-                scan_parsed_block_expanding(
-                    &mut scanner.scanner,
-                    &mut scanner.watermark,
-                    scanner.lookahead,
-                    &block,
-                    &scan_txs,
-                    first_ringct_index,
-                )?
-            } else {
-                // A transaction blob was rejected by the parser: the whole
-                // block can't be scanned, so scan the parseable transactions
-                // individually.
-                let mut txs_with_hashes = vec![(miner_tx_hash, miner_tx.clone())];
-                txs_with_hashes.extend(parsed_txs.iter().cloned());
-                scan_parsed_txs_individually(
-                    &mut scanner.scanner,
-                    &mut scanner.watermark,
-                    scanner.lookahead,
-                    &txs_with_hashes,
-                )?
-            };
+            let (scanned, global_index_is_authoritative) =
+                if parsed_txs.len() == block.transactions.len() {
+                    let scan_txs: Vec<OxideTransaction<Pruned>> =
+                        parsed_txs.iter().map(|(_, tx)| tx.clone()).collect();
+                    let first_ringct_index = first_ringct_index_from_rpc(
+                        &block,
+                        &scan_txs,
+                        response.output_indices.get(block_idx),
+                    );
+                    let scanned = scan_parsed_block_expanding(
+                        &mut scanner.scanner,
+                        &mut scanner.watermark,
+                        scanner.lookahead,
+                        &block,
+                        &scan_txs,
+                        first_ringct_index.unwrap_or(0),
+                    )?;
+                    (scanned, first_ringct_index.is_some())
+                } else {
+                    // A transaction blob was rejected by the parser: the whole
+                    // block can't be scanned, so scan the parseable transactions
+                    // individually.
+                    let mut txs_with_hashes = vec![(miner_tx_hash, miner_tx.clone())];
+                    txs_with_hashes.extend(parsed_txs.iter().cloned());
+                    let scanned = scan_parsed_txs_individually(
+                        &mut scanner.scanner,
+                        &mut scanner.watermark,
+                        scanner.lookahead,
+                        &txs_with_hashes,
+                    )?;
+                    (scanned, false)
+                };
 
             #[cfg(target_arch = "wasm32")]
             let key_image_scalar = if scanner.spend_scalar == Scalar::ZERO {
@@ -1527,7 +1434,14 @@ pub async fn process_batch_response(
                     block_height,
                     miner_tx_hash,
                     key_image_scalar,
+                    global_index_is_authoritative,
                 )?);
+            }
+            if outputs.iter().any(|output| output.global_index.is_none()) {
+                return Err(format!(
+                    "Block {block_height} contains a wallet output but no authoritative global \
+                     output index; refuse to store an output that cannot be spent privately"
+                ));
             }
 
             results.push(BlockScanResult {
@@ -1846,7 +1760,7 @@ pub async fn process_batch_multi_wallet_response(
                         entry.lookahead,
                         &block,
                         &scan_txs,
-                        first_ringct_index,
+                        first_ringct_index.unwrap_or(0),
                     )?
                 } else {
                     // A transaction blob was rejected by the parser: the whole
@@ -1878,7 +1792,14 @@ pub async fn process_batch_multi_wallet_response(
                         block_height,
                         miner_tx_hash,
                         key_image_scalar,
+                        whole_block && first_ringct_index.is_some(),
                     )?);
+                }
+                if outputs.iter().any(|output| output.global_index.is_none()) {
+                    return Err(format!(
+                        "Block {block_height} contains a wallet output but no authoritative global \
+                         output index; refuse to store an output that cannot be spent privately"
+                    ));
                 }
                 wallet_results.insert(
                     entry.address.clone(),
@@ -2203,140 +2124,18 @@ pub async fn process_fetched_batch_multi_wallet_cached(
     .await
 }
 
-/// Scan a single block for outputs belonging to multiple wallets simultaneously.
-/// This is more efficient than scanning each wallet separately as it fetches
-/// block data only once and processes all wallets in parallel.
-///
-/// # Arguments
-/// * `rpc` - RPC connection to use for fetching block data
-/// * `block_height` - Height of the block to scan
-/// * `wallet_configs` - Vector of wallet configurations to scan for
-///
-/// # Returns
-/// A `MultiWalletScanResult` containing outputs for each wallet
+/// Scan one confirmed block for multiple wallets through `/getblocks.bin`.
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn scan_block_multi_wallet<R: RpcConnection + Send + Sync + Clone + 'static>(
     rpc: &Rpc<R>,
     block_height: u64,
     wallet_configs: Vec<WalletScanConfig>,
 ) -> Result<MultiWalletScanResult, String> {
-    if wallet_configs.is_empty() {
-        return Err("No wallet configurations provided".to_string());
-    }
-
-    // Step 1: Fetch block data once (shared across all wallets)
-    let block_hash_bytes = rpc
-        .get_block_hash(block_height as usize)
-        .await
-        .map_err(|e| format!("Failed to fetch block hash: {:?}", e))?;
-    let block_hash = hex::encode(block_hash_bytes);
-
-    let daemon_height =
-        rpc.get_height()
-            .await
-            .map_err(|e| format!("Failed to fetch daemon height: {:?}", e))? as u64;
-
-    let block = rpc
-        .get_block_by_number(block_height as usize)
-        .await
-        .map_err(|e| format!("Failed to fetch block: {:?}", e))?;
-
-    let block_timestamp = block.header.timestamp;
-    let tx_hashes = block.transactions.clone();
-    let oxide_block = block;
-    let miner_tx_hash = oxide_block.miner_transaction().hash();
-    let miner_tx = OxideTransaction::<Pruned>::from(oxide_block.miner_transaction().clone());
-
-    let mut txs = Vec::with_capacity(tx_hashes.len());
-    if !tx_hashes.is_empty() {
-        let fetched_txs = rpc
-            .get_transactions(&tx_hashes)
-            .await
-            .map_err(|e| format!("Failed to fetch transactions: {:?}", e))?;
-        for tx in &fetched_txs {
-            let (tx_hash, parsed) = parse_full_tx_blob(&tx.serialize())
-                .ok_or_else(|| format!("Failed to parse transaction {}", hex::encode(tx.hash())))?;
-            txs.push((tx_hash, parsed));
-        }
-    }
-
-    let tx_count = 1 + txs.len();
-
-    // Extract spent key images (shared across all wallets)
-    let mut spent_key_images = Vec::new();
-    let mut spent_key_image_tx_hashes = Vec::new();
-    for (tx_hash, tx) in
-        std::iter::once((miner_tx_hash, &miner_tx)).chain(txs.iter().map(|(hash, tx)| (*hash, tx)))
-    {
-        let tx_hash_hex = hex::encode(tx_hash);
-        for input in &tx.prefix().inputs {
-            if let OxideInput::ToKey { key_image, .. } = input {
-                spent_key_images.push(hex::encode(key_image.to_bytes()));
-                spent_key_image_tx_hashes.push(tx_hash_hex.clone());
-            }
-        }
-    }
-
-    // Step 2: Spawn parallel scanning tasks for each wallet
-    let mut join_set = JoinSet::new();
-    let scan_txs: Vec<OxideTransaction<Pruned>> = txs.iter().map(|(_, tx)| tx.clone()).collect();
-    let shared_block = Arc::new((oxide_block, scan_txs));
-
-    for wallet_config in wallet_configs {
-        let shared_block = Arc::clone(&shared_block);
-
-        join_set.spawn(async move {
-            let network = wallet_config.network;
-            let passphrase = wallet_config.passphrase.as_str();
-            let (spend_point, view_scalar, address) =
-                if let Some((vs, sp)) = parse_view_only_keys(&wallet_config.mnemonic) {
-                    let vp: EdwardsPoint = &vs * ED25519_BASEPOINT_TABLE;
-                    let addr = standard_address(network, sp, vp).to_string();
-                    (sp, vs, addr)
-                } else {
-                    let seed = resolve_seed(&wallet_config.mnemonic)?;
-                    let addr = address_from_seed(&seed, network, passphrase).to_string();
-                    let sp = spend_key_from_seed(&seed, passphrase);
-                    let vs = view_key_from_seed(&seed, passphrase);
-                    (sp, vs, addr)
-                };
-
-            let mut scanner = oxide_scanner_from_keys(&spend_point, &view_scalar)?;
-            register_subaddresses(&mut scanner, wallet_config.lookahead);
-
-            let (block, scan_txs) = shared_block.as_ref();
-            let scanned = scan_parsed_block(&mut scanner, block, scan_txs, 0)?;
-            let mut outputs = Vec::with_capacity(scanned.len());
-            for output in &scanned {
-                outputs.push(map_oxide_output(output, block_height, miner_tx_hash, None)?);
-            }
-
-            Ok::<(String, WalletScanData), String>((
-                address.clone(),
-                WalletScanData { address, outputs },
-            ))
-        });
-    }
-
-    // Step 3: Collect results from all wallet scanning tasks
-    let mut wallet_results = HashMap::new();
-
-    while let Some(result) = join_set.join_next().await {
-        let join_result = result.map_err(|e| format!("Task join error: {:?}", e))?;
-        let (address, wallet_data) = join_result?;
-        wallet_results.insert(address, wallet_data);
-    }
-
-    Ok(MultiWalletScanResult {
-        block_height,
-        block_hash,
-        block_timestamp,
-        tx_count,
-        daemon_height,
-        spent_key_images,
-        spent_key_image_tx_hashes,
-        wallet_results,
-    })
+    scan_blocks_batch_multi_wallet(rpc, block_height, wallet_configs, false)
+        .await?
+        .into_iter()
+        .find(|result| result.block_height == block_height)
+        .ok_or_else(|| format!("Node did not return requested block {block_height}"))
 }
 
 /// Convenience wrapper for multi-wallet scanning with URL-based RPC creation
@@ -2352,135 +2151,18 @@ pub async fn scan_block_multi_wallet_with_url(
     scan_block_multi_wallet(&rpc, block_height, wallet_configs).await
 }
 
-/// WASM-compatible multi-wallet scanning (sequential, not parallel)
+/// WASM variant of `scan_block_multi_wallet`.
 #[cfg(target_arch = "wasm32")]
 pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
     rpc: &Rpc<R>,
     block_height: u64,
     wallet_configs: Vec<WalletScanConfig>,
 ) -> Result<MultiWalletScanResult, String> {
-    if wallet_configs.is_empty() {
-        return Err("No wallet configurations provided".to_string());
-    }
-
-    // Step 1: Fetch block data once (shared across all wallets)
-    let block_hash_bytes = rpc
-        .get_block_hash(block_height as usize)
-        .await
-        .map_err(|e| format!("Failed to fetch block hash: {:?}", e))?;
-    let block_hash = hex::encode(block_hash_bytes);
-
-    let daemon_height =
-        rpc.get_height()
-            .await
-            .map_err(|e| format!("Failed to fetch daemon height: {:?}", e))? as u64;
-
-    let block = rpc
-        .get_block_by_number(block_height as usize)
-        .await
-        .map_err(|e| format!("Failed to fetch block: {:?}", e))?;
-
-    let block_timestamp = block.header.timestamp;
-    let tx_hashes = block.transactions.clone();
-    let oxide_block = block;
-    let miner_tx_hash = oxide_block.miner_transaction().hash();
-    let miner_tx = OxideTransaction::<Pruned>::from(oxide_block.miner_transaction().clone());
-
-    let mut txs = Vec::with_capacity(tx_hashes.len());
-    if !tx_hashes.is_empty() {
-        let fetched_txs = rpc
-            .get_transactions(&tx_hashes)
-            .await
-            .map_err(|e| format!("Failed to fetch transactions: {:?}", e))?;
-        for tx in &fetched_txs {
-            let (tx_hash, parsed) = parse_full_tx_blob(&tx.serialize())
-                .ok_or_else(|| format!("Failed to parse transaction {}", hex::encode(tx.hash())))?;
-            txs.push((tx_hash, parsed));
-        }
-    }
-
-    let tx_count = 1 + txs.len();
-
-    // Extract spent key images (shared across all wallets)
-    let mut spent_key_images = Vec::new();
-    let mut spent_key_image_tx_hashes = Vec::new();
-    for (tx_hash, tx) in
-        std::iter::once((miner_tx_hash, &miner_tx)).chain(txs.iter().map(|(hash, tx)| (*hash, tx)))
-    {
-        let tx_hash_hex = hex::encode(tx_hash);
-        for input in &tx.prefix().inputs {
-            if let OxideInput::ToKey { key_image, .. } = input {
-                spent_key_images.push(hex::encode(key_image.to_bytes()));
-                spent_key_image_tx_hashes.push(tx_hash_hex.clone());
-            }
-        }
-    }
-
-    // Step 2: Scan sequentially for each wallet (WASM is single-threaded)
-    let scan_txs: Vec<OxideTransaction<Pruned>> = txs.iter().map(|(_, tx)| tx.clone()).collect();
-    let mut wallet_results = HashMap::new();
-
-    for wallet_config in wallet_configs {
-        let network = wallet_config.network;
-        let passphrase = wallet_config.passphrase.as_str();
-        let view_only = parse_view_only_keys(&wallet_config.mnemonic);
-        let seed_opt = if view_only.is_none() {
-            Some(resolve_seed(&wallet_config.mnemonic)?)
-        } else {
-            None
-        };
-        let (spend_point, view_scalar, address) = if let Some((vs, sp)) = view_only.as_ref() {
-            let vp: EdwardsPoint = vs * ED25519_BASEPOINT_TABLE;
-            let addr = standard_address(network, *sp, vp).to_string();
-            (*sp, *vs, addr)
-        } else {
-            let seed = seed_opt.as_ref().unwrap();
-            let addr = address_from_seed(seed, network, passphrase).to_string();
-            (
-                spend_key_from_seed(seed, passphrase),
-                view_key_from_seed(seed, passphrase),
-                addr,
-            )
-        };
-        let spend_scalar = if view_only.is_some() {
-            Scalar::ZERO
-        } else {
-            spend_key_scalar_from_seed(seed_opt.as_ref().unwrap(), passphrase)
-        };
-
-        let mut scanner = oxide_scanner_from_keys(&spend_point, &view_scalar)?;
-        register_subaddresses(&mut scanner, wallet_config.lookahead);
-
-        let key_image_scalar = if spend_scalar == Scalar::ZERO {
-            None // view-only: no spend key available
-        } else {
-            Some(&spend_scalar)
-        };
-
-        let scanned = scan_parsed_block(&mut scanner, &oxide_block, &scan_txs, 0)?;
-        let mut outputs = Vec::with_capacity(scanned.len());
-        for output in &scanned {
-            outputs.push(map_oxide_output(
-                output,
-                block_height,
-                miner_tx_hash,
-                key_image_scalar,
-            )?);
-        }
-
-        wallet_results.insert(address.clone(), WalletScanData { address, outputs });
-    }
-
-    Ok(MultiWalletScanResult {
-        block_height,
-        block_hash,
-        block_timestamp,
-        tx_count,
-        daemon_height,
-        spent_key_images,
-        spent_key_image_tx_hashes,
-        wallet_results,
-    })
+    scan_blocks_batch_multi_wallet(rpc, block_height, wallet_configs, false)
+        .await?
+        .into_iter()
+        .find(|result| result.block_height == block_height)
+        .ok_or_else(|| format!("Node did not return requested block {block_height}"))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2636,6 +2318,7 @@ pub async fn scan_mempool<R: RpcConnection>(
                 0,         // unconfirmed: still in the mempool
                 [0u8; 32], // mempool transactions are never coinbase
                 key_image_scalar,
+                false,
             )?);
         }
     }
@@ -3012,6 +2695,7 @@ mod tests {
             subaddress_index: Some((0, 1)),
             payment_id: None,
             received_output_bytes: "bytes".to_string(),
+            global_index: Some(42),
             block_height: 100,
             spent: false,
             spent_height: None,
@@ -3054,6 +2738,7 @@ mod tests {
                 subaddress_index: account.map(|account| (account, 0)),
                 payment_id: None,
                 received_output_bytes: "bytes".to_string(),
+                global_index: None,
                 block_height: 0,
                 spent: false,
                 spent_height: None,
@@ -3094,6 +2779,7 @@ mod tests {
             subaddress_index: Some((1, 0)),
             payment_id: None,
             received_output_bytes: "bytes".to_string(),
+            global_index: None,
             block_height: 0,
             spent: false,
             spent_height: None,

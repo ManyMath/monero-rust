@@ -288,6 +288,11 @@ impl WalletState {
                     }
                 }
                 let existing = &mut self.outputs[existing_idx];
+                // Take the latest scan's index, so a rescan corrects a wrong one.
+                if output.global_index.is_some() && existing.global_index != output.global_index {
+                    existing.global_index = output.global_index;
+                    existing.received_output_bytes = output.received_output_bytes.clone();
+                }
                 if !existing.key_image.is_empty() {
                     output.key_image = existing.key_image.clone();
                 } else if !output.key_image.is_empty() {
@@ -1081,6 +1086,7 @@ mod tests {
             subaddress_index: Some((0, 0)),
             payment_id: None,
             received_output_bytes: "".into(),
+            global_index: None,
             block_height: height,
             spent: false,
             spent_height: None,
@@ -1346,6 +1352,24 @@ mod tests {
     }
 
     #[test]
+    fn rescan_upgrades_a_placeholder_global_index() {
+        let mut state = WalletState::new();
+        let mut placeholder = make_output(1_000_000_000_000, 100, "ki1");
+        placeholder.global_index = None;
+        placeholder.received_output_bytes = "placeholder".into();
+        state.add_outputs(vec![placeholder]);
+
+        let mut refreshed = make_output(1_000_000_000_000, 100, "ki1");
+        refreshed.global_index = Some(424_242);
+        refreshed.received_output_bytes = "authoritative".into();
+        state.add_outputs(vec![refreshed]);
+
+        assert_eq!(state.outputs().len(), 1);
+        assert_eq!(state.outputs()[0].global_index, Some(424_242));
+        assert_eq!(state.outputs()[0].received_output_bytes, "authoritative");
+    }
+
+    #[test]
     fn test_replace_outputs_replaces() {
         let mut state = WalletState::new();
         state.add_outputs(vec![
@@ -1376,6 +1400,23 @@ mod tests {
     }
 
     // ---- Spendable output queries ----
+
+    #[test]
+    fn rescan_replaces_a_stored_global_index() {
+        let mut state = WalletState::new();
+        let mut first = make_output(1_000_000_000_000, 80, "ki1");
+        first.global_index = Some(1_000_706);
+        state.add_outputs(vec![first]);
+
+        let mut rescanned = make_output(1_000_000_000_000, 80, "ki1");
+        rescanned.global_index = Some(706);
+        state.add_outputs(vec![rescanned]);
+        assert_eq!(state.outputs().len(), 1);
+        assert_eq!(state.outputs()[0].global_index, Some(706));
+
+        state.add_outputs(vec![make_output(1_000_000_000_000, 80, "ki1")]);
+        assert_eq!(state.outputs()[0].global_index, Some(706));
+    }
 
     #[test]
     fn test_spendable_outputs() {

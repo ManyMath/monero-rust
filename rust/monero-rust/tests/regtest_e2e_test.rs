@@ -14,7 +14,7 @@ mod common;
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 use monero_rust::monero_rpc::HttpRpc;
-use monero_rust::native::{build_unsigned_transaction, resolve_global_index};
+use monero_rust::native::build_unsigned_transaction;
 use monero_rust::scanner::{
     derive_address, derive_keys, scan_block_for_outputs_with_lookahead, scan_blocks_batch,
     Lookahead,
@@ -182,9 +182,9 @@ async fn builds_signs_and_broadcasts_a_transaction() {
             let bytes = hex::decode(&output.received_output_bytes).expect("hex");
             let wallet_output =
                 monero_wallet::WalletOutput::read(&mut bytes.as_slice()).expect("stored output");
-            let global_index = resolve_global_index(&rpc, &wallet_output)
-                .await
-                .expect("resolve the global index from the daemon");
+            let global_index = output
+                .global_index
+                .expect("refresh must persist the authoritative global index");
             spendable = Some((wallet_output, global_index));
             break;
         }
