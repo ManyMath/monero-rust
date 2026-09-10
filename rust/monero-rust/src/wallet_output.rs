@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::tx_builder::native::StoredOutputData;
+use crate::tx_builder::native::{DecoySelection, StoredOutputData};
 
 /// Canonical wallet output type representing a received, owned output.
 ///
@@ -21,6 +21,9 @@ pub struct WalletOutput {
     /// be refreshed before spending: a lookup by tx hash reveals the real input.
     #[serde(default)]
     pub global_index: Option<u64>,
+    /// Ring selected for this output.
+    #[serde(default)]
+    pub ring: Option<DecoySelection>,
     pub block_height: u64,
     pub spent: bool,
     /// Height at which this output was spent. None if unspent or unknown.
@@ -46,6 +49,8 @@ impl From<&WalletOutput> for StoredOutputData {
             payment_id: o.payment_id.clone(),
             received_output_bytes: o.received_output_bytes.clone(),
             global_index: o.global_index,
+            key_image: o.key_image.clone(),
+            ring: o.ring.clone(),
         }
     }
 }
@@ -63,6 +68,8 @@ impl From<WalletOutput> for StoredOutputData {
             payment_id: o.payment_id,
             received_output_bytes: o.received_output_bytes,
             global_index: o.global_index,
+            key_image: o.key_image,
+            ring: o.ring,
         }
     }
 }
@@ -114,6 +121,7 @@ mod tests {
             payment_id: None,
             received_output_bytes: "bytes".into(),
             global_index: Some(42),
+            ring: None,
             block_height: 100,
             spent: false,
             spent_height: None,

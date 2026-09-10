@@ -50,12 +50,19 @@ fn sample_candidates<R: RngCore + CryptoRng>(
     distribution: &[u64],
     highest_output_exclusive_bound: u64,
     per_second: f64,
-    output_being_spent_index: u64,
+    initial: &[u64],
     count: usize,
 ) -> Result<Vec<u64>, String> {
     let mut selected = Vec::with_capacity(count);
-    selected.push(output_being_spent_index);
-    let mut do_not_select = HashSet::from([output_being_spent_index]);
+    let mut do_not_select = HashSet::new();
+    for index in initial {
+        if do_not_select.insert(*index) {
+            selected.push(*index);
+        }
+    }
+    if selected.len() > count {
+        return Err("persisted ring is larger than the candidate request".to_string());
+    }
     let mut iters = 0usize;
     while selected.len() < count {
         iters += 1;
@@ -106,7 +113,42 @@ fn ring_from_candidates(
     secret_order: &[u64],
     request_order: &[u64],
     fetched: &[Option<[curve25519_dalek::EdwardsPoint; 2]>],
+    existing: Option<&Decoys>,
 ) -> Result<Decoys, String> {
+    if let Some(existing) = existing {
+        let indexes = absolute_indexes(existing)?;
+        if indexes.len() != usize::from(ring_len) {
+            return Err("persisted ring has the wrong size for this protocol".to_string());
+        }
+        if indexes.get(usize::from(existing.signer_index())) != Some(&input.index_on_blockchain) {
+            return Err("persisted ring does not contain the real output".to_string());
+        }
+        for (member, index) in indexes.iter().enumerate() {
+            let position = request_order
+                .binary_search(index)
+                .map_err(|_| "persisted ring member was not requested".to_string())?;
+            let Some([key, commitment]) = fetched.get(position).copied().flatten() else {
+                return Err("persisted ring member is no longer available".to_string());
+            };
+            if member == usize::from(existing.signer_index()) {
+                if key != input.key || commitment != input.commitment {
+                    return Err(
+                        "node presented different view of output we're trying to spend".into(),
+                    );
+                }
+            } else {
+                let expected_key: curve25519_dalek::EdwardsPoint =
+                    existing.ring()[member][0].into();
+                let expected_commitment: curve25519_dalek::EdwardsPoint =
+                    existing.ring()[member][1].into();
+                if key != expected_key || commitment != expected_commitment {
+                    return Err("node presented a different persisted ring member".to_string());
+                }
+            }
+        }
+        return Ok(existing.clone());
+    }
+
     let mut ring = Vec::with_capacity(usize::from(ring_len));
     for index in secret_order {
         let position = request_order
@@ -170,15 +212,31 @@ fn ring_from_candidates(
     .ok_or_else(|| "selected a syntactically-invalid set of decoys".to_string())
 }
 
+fn absolute_indexes(decoys: &Decoys) -> Result<Vec<u64>, String> {
+    let mut absolute = Vec::with_capacity(decoys.offsets().len());
+    let mut index = 0u64;
+    for offset in decoys.offsets() {
+        index = index
+            .checked_add(*offset)
+            .ok_or_else(|| "persisted ring offsets overflow".to_string())?;
+        absolute.push(index);
+    }
+    Ok(absolute)
+}
+
 pub(crate) async fn select_decoys_for_outputs<R: RngCore + CryptoRng, C: RpcConnection>(
     rng: &mut R,
     rpc: &Rpc<C>,
     ring_len: u8,
     block_number: usize,
     inputs: &[SpentOutput],
+    existing_rings: &[Option<Decoys>],
 ) -> Result<Vec<Decoys>, String> {
     if ring_len == 0 {
         return Err("requesting a ring of length 0".to_string());
+    }
+    if inputs.len() != existing_rings.len() {
+        return Err("persisted ring count does not match input count".to_string());
     }
     if block_number <= DEFAULT_LOCK_WINDOW {
         return Err("not enough blocks to select decoys".to_string());
@@ -222,13 +280,17 @@ pub(crate) async fn select_decoys_for_outputs<R: RngCore + CryptoRng, C: RpcConn
     let mut secret_orders = Vec::with_capacity(inputs.len());
     let mut request_orders = Vec::with_capacity(inputs.len());
     let mut flattened = Vec::with_capacity(inputs.len() * count);
-    for input in inputs {
+    for (input, existing) in inputs.iter().zip(existing_rings) {
+        let initial = match existing {
+            Some(ring) => absolute_indexes(ring)?,
+            None => vec![input.index_on_blockchain],
+        };
         let secret = sample_candidates(
             rng,
             &distribution,
             highest_output_exclusive_bound,
             per_second,
-            input.index_on_blockchain,
+            &initial,
             count,
         )?;
         let mut requested = secret.clone();
@@ -254,6 +316,7 @@ pub(crate) async fn select_decoys_for_outputs<R: RngCore + CryptoRng, C: RpcConn
             fetched
                 .get(start..end)
                 .ok_or_else(|| "node returned too few ring candidates".to_string())?,
+            existing_rings[position].as_ref(),
         )?);
     }
     Ok(rings)

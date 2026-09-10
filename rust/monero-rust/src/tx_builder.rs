@@ -46,6 +46,19 @@ pub mod native {
         Ok((output, global_index))
     }
 
+    fn persisted_rings(stored_outputs: &[StoredOutputData]) -> Result<Vec<Option<Decoys>>, String> {
+        stored_outputs
+            .iter()
+            .map(|stored| {
+                stored
+                    .ring
+                    .as_ref()
+                    .map(DecoySelection::to_decoys)
+                    .transpose()
+            })
+            .collect()
+    }
+
     fn spent_output(output: &WalletOutput, global_index: u64) -> crate::decoy_select::SpentOutput {
         crate::decoy_select::SpentOutput {
             index_on_blockchain: global_index,
@@ -60,15 +73,23 @@ pub mod native {
         rct_type: RctType,
         height: usize,
         outputs: &[(WalletOutput, u64)],
+        existing_rings: &[Option<Decoys>],
     ) -> Result<Vec<Decoys>, String> {
         let ring_len = ring_len(rct_type).ok_or_else(|| "Unsupported RingCT type".to_string())?;
         let mut spent = Vec::with_capacity(outputs.len());
         for (output, global_index) in outputs {
             spent.push(spent_output(output, *global_index));
         }
-        crate::decoy_select::select_decoys_for_outputs(rng, rpc, ring_len, height, &spent)
-            .await
-            .map_err(|e| format!("Decoy selection failed: {}", e))
+        crate::decoy_select::select_decoys_for_outputs(
+            rng,
+            rpc,
+            ring_len,
+            height,
+            &spent,
+            existing_rings,
+        )
+        .await
+        .map_err(|e| format!("Decoy selection failed: {}", e))
     }
 
     /// Select decoys for every output and assemble the unsigned transaction.
@@ -81,13 +102,44 @@ pub mod native {
         payments: Vec<(MoneroAddress, u64)>,
         change: Option<UnsignedChange>,
     ) -> Result<UnsignedTransaction, String> {
+        let existing_rings = vec![None; outputs.len()];
+        build_unsigned_transaction_with_rings(
+            rng,
+            rpc,
+            rct_type,
+            fee_rate,
+            outputs,
+            &existing_rings,
+            payments,
+            change,
+        )
+        .await
+    }
+
+    async fn build_unsigned_transaction_with_rings<G: RngCore + CryptoRng, R: RpcConnection>(
+        rng: &mut G,
+        rpc: &Rpc<R>,
+        rct_type: RctType,
+        fee_rate: FeeRate,
+        outputs: &[(WalletOutput, u64)],
+        existing_rings: &[Option<Decoys>],
+        payments: Vec<(MoneroAddress, u64)>,
+        change: Option<UnsignedChange>,
+    ) -> Result<UnsignedTransaction, String> {
         let height = rpc
             .get_height()
             .await
             .map_err(|e| format!("Failed to get height: {:?}", e))?;
 
-        let decoys =
-            select_output_decoys(rng, rpc, rct_type, height.saturating_sub(1), outputs).await?;
+        let decoys = select_output_decoys(
+            rng,
+            rpc,
+            rct_type,
+            height.saturating_sub(1),
+            outputs,
+            existing_rings,
+        )
+        .await?;
         let mut inputs = Vec::with_capacity(outputs.len());
         for ((output, _), decoys) in outputs.iter().zip(&decoys) {
             inputs.push(output_with_decoys(
@@ -207,6 +259,9 @@ pub mod native {
         /// Additional private keys for subaddress outputs, hex-encoded.
         pub tx_key_additional: Vec<String>,
         pub change_outputs: Vec<ChangeOutputInfo>,
+        /// The ring of each input, by key image.
+        #[serde(default)]
+        pub input_rings: Vec<InputRing>,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -223,21 +278,34 @@ pub mod native {
         /// Global RingCT index learned during refresh.
         #[serde(default)]
         pub global_index: Option<u64>,
+        /// Key image, which keys the wallet's ring database.
+        #[serde(default)]
+        pub key_image: String,
+        /// The ring a build reuses for this output.
+        #[serde(default)]
+        pub ring: Option<DecoySelection>,
     }
 
     /// Ring member data (key + commitment as hex)
-    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     pub struct RingMember {
         pub key: String,
         pub commitment: String,
     }
 
     /// Decoy selection result for a single input
-    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     pub struct DecoySelection {
         pub real_index: u8,
         pub offsets: Vec<u64>,
         pub ring: Vec<RingMember>,
+    }
+
+    /// A selected ring keyed the same way as wallet2's ring database.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct InputRing {
+        pub key_image: String,
+        pub ring: DecoySelection,
     }
 
     /// Result of decoy fetching operation
@@ -262,6 +330,46 @@ pub mod native {
                     .collect(),
             }
         }
+
+        fn to_decoys(&self) -> Result<Decoys, String> {
+            let ring = self
+                .ring
+                .iter()
+                .map(|member| {
+                    let point = |encoded: &str| {
+                        let bytes: [u8; 32] = hex::decode(encoded)
+                            .map_err(|_| "persisted ring member is not hex".to_string())?
+                            .try_into()
+                            .map_err(|_| {
+                                "persisted ring member is not a 32-byte point".to_string()
+                            })?;
+                        monero_wallet::ed25519::CompressedPoint::from(bytes)
+                            .decompress()
+                            .ok_or_else(|| "persisted ring member is not a point".to_string())
+                    };
+                    Ok([point(&member.key)?, point(&member.commitment)?])
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            Decoys::new(self.offsets.clone(), self.real_index, ring)
+                .ok_or_else(|| "persisted ring is syntactically invalid".to_string())
+        }
+    }
+
+    fn selected_input_rings(
+        stored_outputs: &[StoredOutputData],
+        unsigned: &UnsignedTransaction,
+    ) -> Result<Vec<InputRing>, String> {
+        if stored_outputs.len() != unsigned.inputs.len() {
+            return Err("selected ring count does not match stored input count".to_string());
+        }
+        Ok(stored_outputs
+            .iter()
+            .zip(&unsigned.inputs)
+            .map(|(stored, input)| InputRing {
+                key_image: stored.key_image.clone(),
+                ring: DecoySelection::from_decoys(input.decoys()),
+            })
+            .collect())
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -445,6 +553,7 @@ pub mod native {
             rct_type,
             height.saturating_sub(1),
             &spendable_outputs,
+            &persisted_rings(&stored_outputs)?,
         )
         .await?;
 
@@ -759,17 +868,19 @@ pub mod native {
 
         // Select decoys online, then sign; the signer returns the tx keys
         let mut rng = rand::rngs::OsRng;
-        let unsigned = build_unsigned_transaction(
+        let unsigned = build_unsigned_transaction_with_rings(
             &mut rng,
             rpc,
             rct_type,
             fee,
             &spendable_outputs,
+            &persisted_rings(&stored_outputs)?,
             payments,
             change,
         )
         .await
         .map_err(|e| format!("Failed to prepare transaction: {}", e))?;
+        let input_rings = selected_input_rings(&stored_outputs, &unsigned)?;
         let signed = sign_offline(&mut rng, &spend_key, &view_key, &unsigned)
             .map_err(|e| format!("Failed to sign transaction: {}", e))?;
         let fee_amount = signed.fee;
@@ -803,6 +914,7 @@ pub mod native {
             tx_key,
             tx_key_additional,
             change_outputs,
+            input_rings,
         })
     }
 
@@ -903,17 +1015,19 @@ pub mod native {
 
         // Select decoys online, then sign; the signer returns the tx keys
         let mut rng = rand::rngs::OsRng;
-        let unsigned = build_unsigned_transaction(
+        let unsigned = build_unsigned_transaction_with_rings(
             &mut rng,
             rpc,
             rct_type,
             fee,
             &spendable_outputs,
+            &persisted_rings(&stored_outputs)?,
             payments,
             None,
         )
         .await
         .map_err(|e| format!("Failed to prepare sweep transaction: {}", e))?;
+        let input_rings = selected_input_rings(&stored_outputs, &unsigned)?;
         let signed = sign_offline(&mut rng, &spend_key, &view_key, &unsigned)
             .map_err(|e| format!("Failed to sign sweep transaction: {}", e))?;
         let actual_fee = signed.fee;
@@ -947,6 +1061,7 @@ pub mod native {
             tx_key,
             tx_key_additional,
             change_outputs,
+            input_rings,
         })
     }
 
@@ -1053,6 +1168,9 @@ pub mod native {
         pub unsigned_tx_hex: String,
         pub fee: u64,
         pub recipients: Vec<(String, u64)>,
+        /// The ring of each input, by key image.
+        #[serde(default)]
+        pub input_rings: Vec<InputRing>,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1436,6 +1554,7 @@ pub mod native {
             unsigned_tx_hex: hex::encode(unsigned.serialize()),
             fee,
             recipients,
+            input_rings: vec![],
         })
     }
 
@@ -1642,12 +1761,13 @@ pub mod native {
         });
 
         let mut rng = rand::rngs::OsRng;
-        let unsigned = build_unsigned_transaction(
+        let unsigned = build_unsigned_transaction_with_rings(
             &mut rng,
             rpc,
             rct_type,
             fee_rate,
             &spendable_outputs,
+            &persisted_rings(&stored_outputs)?,
             payments,
             change,
         )
@@ -1655,11 +1775,13 @@ pub mod native {
         .map_err(|e| format!("Failed to prepare unsigned tx: {}", e))?;
 
         let fee = unsigned.resolve(&view_pair)?.fee;
+        let input_rings = selected_input_rings(&stored_outputs, &unsigned)?;
 
         Ok(UnsignedTransactionResult {
             unsigned_tx_hex: hex::encode(unsigned.serialize()),
             fee,
             recipients: recipients.to_vec(),
+            input_rings,
         })
     }
 
@@ -2282,6 +2404,10 @@ pub mod native {
             assert_eq!(selection.offsets, vec![7, 5, 10]);
             assert_eq!(selection.ring.len(), 3);
             assert_eq!(selection.ring[0].key, hex::encode(g.compress().to_bytes()));
+            let restored = selection.to_decoys().unwrap();
+            assert_eq!(restored.offsets(), decoys.offsets());
+            assert_eq!(restored.signer_index(), decoys.signer_index());
+            assert_eq!(restored.ring(), decoys.ring());
         }
 
         fn stored_output_bytes(chunks: u64) -> Vec<u8> {
@@ -2317,6 +2443,8 @@ pub mod native {
                 payment_id: None,
                 received_output_bytes: hex::encode(stored_output_bytes(0)),
                 global_index: Some(424242),
+                key_image: String::new(),
+                ring: None,
             };
             let (output, global_index) = spendable_from_stored_data(&stored).unwrap();
             let spent = spent_output(&output, global_index);
@@ -2356,6 +2484,8 @@ pub mod native {
                 payment_id: None,
                 received_output_bytes: "".to_string(),
                 global_index: None,
+                key_image: String::new(),
+                ring: None,
             };
 
             // Test that it can be serialized and deserialized
@@ -2375,6 +2505,7 @@ pub mod native {
                 tx_key: "abc123".to_string(),
                 tx_key_additional: vec!["def456".to_string()],
                 change_outputs: vec![],
+                input_rings: vec![],
             };
 
             let json = serde_json::to_string(&result).unwrap();

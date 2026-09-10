@@ -252,6 +252,18 @@ impl WalletState {
         }
     }
 
+    /// Record rings by key image, so rebuilt and conflicting spends reuse them.
+    pub fn record_input_rings(&mut self, rings: &[crate::tx_builder::native::InputRing]) -> usize {
+        let mut recorded = 0;
+        for input_ring in rings {
+            if let Some(&index) = self.key_image_index.get(&input_ring.key_image) {
+                self.outputs[index].ring = Some(input_ring.ring.clone());
+                recorded += 1;
+            }
+        }
+        recorded
+    }
+
     /// Extend outputs in blockchain scan order (transaction order within each
     /// block, then output order within each transaction). Preserve this order
     /// in persistence for positional Monero key-image imports.
@@ -1087,6 +1099,7 @@ mod tests {
             payment_id: None,
             received_output_bytes: "".into(),
             global_index: None,
+            ring: None,
             block_height: height,
             spent: false,
             spent_height: None,
@@ -1349,6 +1362,35 @@ mod tests {
 
         state.add_outputs(vec![make_output(2_000_000_000_000, 101, "ki2")]);
         assert_eq!(state.outputs().len(), 2);
+    }
+
+    #[test]
+    fn recorded_rings_follow_key_images_into_prepared_inputs() {
+        use crate::tx_builder::native::{DecoySelection, InputRing, RingMember};
+
+        let ring = DecoySelection {
+            real_index: 0,
+            offsets: vec![42; 16],
+            ring: vec![
+                RingMember {
+                    key: "00".repeat(32),
+                    commitment: "00".repeat(32),
+                };
+                16
+            ],
+        };
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1_000_000_000_000, 100, "ki1")]);
+        assert_eq!(
+            state.record_input_rings(&[InputRing {
+                key_image: "ki1".into(),
+                ring: ring.clone(),
+            }]),
+            1
+        );
+        let stored: crate::tx_builder::native::StoredOutputData = state.outputs()[0].clone().into();
+        assert_eq!(stored.key_image, "ki1");
+        assert_eq!(stored.ring, Some(ring));
     }
 
     #[test]

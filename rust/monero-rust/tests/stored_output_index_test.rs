@@ -14,6 +14,7 @@ fn scanned_output(global_index: Option<u64>) -> WalletOutput {
         payment_id: None,
         received_output_bytes: "55".repeat(32),
         global_index,
+        ring: None,
         block_height: 100,
         spent: false,
         spent_height: None,

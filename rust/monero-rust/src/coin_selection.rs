@@ -268,6 +268,7 @@ mod tests {
             payment_id: None,
             received_output_bytes: "".into(),
             global_index: None,
+            ring: None,
             block_height: 100,
             spent: false,
             spent_height: None,

@@ -72,6 +72,7 @@ fn test_outputs(entries: &[KeyImageExportEntry]) -> Vec<monero_rust::WalletOutpu
             payment_id: None,
             received_output_bytes: String::new(),
             global_index: Some(i as u64),
+            ring: None,
             block_height: 10 + i as u64,
             spent: false,
             spent_height: None,
