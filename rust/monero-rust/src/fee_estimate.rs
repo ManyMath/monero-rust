@@ -5,6 +5,7 @@ use monero_wallet::{interface::FeeRate, ringct::RctType};
 use crate::unsigned_tx::ring_len;
 
 const BP_LOG_N: usize = 6;
+const MAX_U64_VARINT_LEN: usize = 10;
 
 fn varint_len(varint: usize) -> usize {
     ((usize::try_from(usize::BITS - varint.leading_zeros())
@@ -16,7 +17,7 @@ fn varint_len(varint: usize) -> usize {
 
 fn input_weight(ring_len: usize) -> usize {
     // 1 byte VarInt amount (0), 1 byte input type, 1 byte ring length
-    1 + 1 + 1 + (8 * ring_len) + 32
+    1 + 1 + 1 + (MAX_U64_VARINT_LEN * ring_len) + 32
 }
 
 fn output_weight() -> usize {
@@ -58,7 +59,7 @@ fn bulletproofs_weight(plus: bool, outputs: usize) -> usize {
 }
 
 fn rct_base_weight(outputs: usize) -> usize {
-    1 + 8 + (outputs * (8 + 32))
+    1 + MAX_U64_VARINT_LEN + (outputs * (8 + 32))
 }
 
 /// The largest `extra` a transaction with `outputs` outputs can carry.
@@ -129,20 +130,20 @@ mod tests {
     }
 
     #[test]
-    fn weight_bounds_are_unchanged() {
+    fn weight_bounds_cover_maximum_width_u64_varints() {
         let plus = RctType::ClsagBulletproofPlus;
         let original = RctType::ClsagBulletproof;
         for (rct_type, inputs, outputs, payment_id, weight) in [
-            (plus, 1, 2, true, 1686),
-            (plus, 2, 2, true, 2457),
-            (plus, 1, 3, false, 2307),
-            (plus, 10, 16, true, 13746),
-            (plus, 200, 2, true, 155116),
-            (original, 1, 2, true, 1582),
-            (original, 2, 2, true, 2153),
-            (original, 1, 3, false, 2280),
-            (original, 10, 16, true, 12380),
-            (original, 200, 2, true, 115212),
+            (plus, 1, 2, true, 1720),
+            (plus, 2, 2, true, 2523),
+            (plus, 1, 3, false, 2341),
+            (plus, 10, 16, true, 14068),
+            (plus, 200, 2, true, 161518),
+            (original, 1, 2, true, 1606),
+            (original, 2, 2, true, 2199),
+            (original, 1, 3, false, 2304),
+            (original, 10, 16, true, 12602),
+            (original, 200, 2, true, 119614),
         ] {
             assert_eq!(
                 transaction_weight_upper_bound(rct_type, inputs, outputs, payment_id),
