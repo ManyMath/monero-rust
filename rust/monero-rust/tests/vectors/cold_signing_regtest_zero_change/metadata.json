@@ -1,0 +1,120 @@
+{
+  "artifacts": {
+    "cold_full.keys": {
+      "bytes": 1687,
+      "sha256": "995a9cc36a53298b23f1ef82094b48e0f6216ce26e9ff984958b312e0d392ac0"
+    },
+    "hot_view_only.keys": {
+      "bytes": 1696,
+      "sha256": "7fa86d6ed4a92e301d71e215fbbd7120bc0477ec11f547273217cd79b4a9fd12"
+    },
+    "key_images_rpc.json": {
+      "bytes": 20047,
+      "sha256": "a82f7c5f1765995c0aa10e1c4576c23e7718b1f0cad342bb33ee37346bc7b659"
+    },
+    "outputs": {
+      "bytes": 6401,
+      "sha256": "1ba1116d5805202f831c9831f6dbc86f8df1eb7b9faa9a5127c0804584baab17"
+    },
+    "signed_monero_tx": {
+      "bytes": 8522,
+      "sha256": "8d442ee5e771a550fb7e8d5429250f6a4aa49f11856974c196c0859c4d5242c8"
+    },
+    "transfer_description.json": {
+      "bytes": 1158,
+      "sha256": "9037b682d4ac08a7f0eca76a319eb5de38fe21cd84b9499ec1d392aaec7e4a08"
+    },
+    "unsigned_monero_tx": {
+      "bytes": 3204,
+      "sha256": "510ff565221cd8952c5177da86a54b088dc2f0356ee286285a4397066e369190"
+    },
+    "zero_change_standard_signed_monero_tx": {
+      "bytes": 6088,
+      "sha256": "4d203cc8f1dea024df812c646c39e06ede45345cdb5eced81b44b6c1c8ffdc99"
+    },
+    "zero_change_standard_unsigned_monero_tx": {
+      "bytes": 1728,
+      "sha256": "6b8291149e4ac1ac8c98a40afb26a9f13503528374a4a2b29de4af920e0f35d9"
+    },
+    "zero_change_subaddress_signed_monero_tx": {
+      "bytes": 6088,
+      "sha256": "ac7a7f9e945105df123df129d69a08fa81a24f1dd155bda239eed0e10afd0ac5"
+    },
+    "zero_change_subaddress_unsigned_monero_tx": {
+      "bytes": 1728,
+      "sha256": "efe41c844aa15c9203373d22542cf32f57d580fe692f1c1e478be598c26c568b"
+    }
+  },
+  "flow": {
+    "blocks_mined": 80,
+    "chain_height_after_mining": 80,
+    "cli_submit_stdout": null,
+    "hot_refresh_blocks_fetched": 80,
+    "incoming_transfer_count": 80,
+    "key_image_count": 80,
+    "key_image_import": {
+      "height": 80,
+      "spent": 0,
+      "unspent": 2814535029460039
+    },
+    "key_image_offset": 0,
+    "monero_wallet_rpc_signed_tx_hash_list": null,
+    "multi_tx_unsigned": null,
+    "outputs_imported": 80,
+    "rebuilt_signed_txset_sha256": null,
+    "ring_size": 16,
+    "signed_tx_hash_list": [
+      "56237383d7a8b504cdcd0e30208381c9452fdface677db409869aa80de2fac0e"
+    ],
+    "signed_txset_source": "monero-wallet-rpc sign_transfer",
+    "submit_method": "monero-wallet-rpc submit_transfer hex",
+    "submitted_tx_hash_list": [
+      "56237383d7a8b504cdcd0e30208381c9452fdface677db409869aa80de2fac0e"
+    ],
+    "transfer_amount_atomic": 1000000000000,
+    "unsigned_tx_hash": "360fa5bde55da29749e2e672b5ead2d31becb0482cacc84236626b28e5273254",
+    "zero_change_unsigned": {
+      "standard": {
+        "amount": 35182463025600,
+        "destination": "44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A",
+        "fee": 1808400000,
+        "input_amount": 35184271425600,
+        "tx_hash_list": [
+          "7105ecb37e29f441b2c631604184b42b385c74747a500d2c829da16179eb70f6"
+        ],
+        "tx_key_list": [
+          "bceab7567ebececed9aaee2942785b66519570a3df0bbe78b521c55e1037ef0e"
+        ]
+      },
+      "subaddress": {
+        "amount": 35182395916927,
+        "destination": "888tNkZrPN6JsEgekjMnABU4TBzc2Dt29EPAvkRxbANsAnjyPbb3iQ1YBRk1UXcdRsiKc9dhwMVgN5S9cQUiyoogDavup3H",
+        "fee": 1808400000,
+        "input_amount": 35184204316927,
+        "tx_hash_list": [
+          "e7e5d1a608ae84f47c1ec1be813b85b5eff8275c54e6a41939be862d413dad07"
+        ],
+        "tx_key_list": [
+          "89d85c5c153a117cf929090f119f1551600facee9518f1f5fa0abed983a7700a"
+        ]
+      }
+    }
+  },
+  "generated_at_utc": "2026-11-18T04:24:21+00:00",
+  "monero": {
+    "monerod_sha256": "e7b6c5785f780ffe4e10b535a412aa89d556e0390a1caf0b1223fbf6943b7bb5",
+    "monerod_version": "Monero 'Fluorine Fermi' (v0.18.1.0-d0d418483)",
+    "wallet_rpc_sha256": "ad208410a49d6b02fe07162ee359d983a17e702850d8f0b47c53ca40ace51dbd",
+    "wallet_rpc_version": "Monero 'Fluorine Fermi' (v0.18.1.0-d0d418483)"
+  },
+  "network": "regtest",
+  "schema": "monero-rust cold signing vector v1",
+  "source_flow": "monero-project/monero tests/functional_tests/cold_signing.py",
+  "wallet": {
+    "cold_restore_address": "42ey1afDFnn4886T7196doS9GPMzexD9gXpsZJDwVjeRVdFCSoHnv7KPbBeGpzJBzHRCAs9UxqeoyFQMYbqSWYTfJJQAWDm",
+    "seed": "velvet lymph giddy number token physics poetry unquoted nibs useful sabotage limits benches lifestyle eden nitrogen anvil fewest avoid batch vials washing fences goat unquoted",
+    "spend_key": "148d78d2aba7dbca5cd8f6abcfb0b3c009ffbdbea1ff373d50ed94d78286640e",
+    "standard_address": "42ey1afDFnn4886T7196doS9GPMzexD9gXpsZJDwVjeRVdFCSoHnv7KPbBeGpzJBzHRCAs9UxqeoyFQMYbqSWYTfJJQAWDm",
+    "view_key": "49774391fa5e8d249fc2c5b45dadef13534bf2483dede880dac88f061e809100"
+  }
+}

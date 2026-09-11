@@ -1,11 +1,11 @@
 //! The unsigned transaction envelope and its offline signer. The envelope
-//! carries no change key: the signer derives change from its own keys.
+//! carries no change or dummy-output key: the signer uses its own.
 
 use std::io::{self, Read, Write};
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, edwards::EdwardsPoint, scalar::Scalar};
 use rand_core::{CryptoRng, RngCore};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use monero_wallet::{
     address::{MoneroAddress, Network, SubaddressIndex},
@@ -26,7 +26,7 @@ use crate::tx_utils::checked_amount_sum;
 pub const MAGIC: [u8; 4] = *b"MRUT";
 
 /// The envelope version this build reads and writes.
-pub const VERSION: u8 = 2;
+pub const VERSION: u8 = 3;
 
 const MAX_INPUTS: usize = 1000;
 
@@ -47,12 +47,28 @@ pub fn ring_len(rct_type: RctType) -> Option<u8> {
     }
 }
 
-/// Where change goes. The signer refuses to sign unless `address` is what it
-/// derives at `subaddress`.
+/// The output an unsigned transaction has besides its payments.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct UnsignedChange {
-    pub address: MoneroAddress,
-    pub subaddress: Option<SubaddressIndex>,
+pub enum UnsignedChange {
+    /// Change back to the wallet. The signer refuses to sign unless `address` is
+    /// what it derives at `subaddress`.
+    Own {
+        address: MoneroAddress,
+        subaddress: Option<SubaddressIndex>,
+    },
+    /// A zero-amount output to a throwaway key, as wallet2 adds to a single
+    /// payment with no change. The signer draws the key.
+    Dummy,
+}
+
+impl UnsignedChange {
+    /// The change subaddress; `None` for the primary address or a dummy output.
+    pub fn subaddress(&self) -> Option<SubaddressIndex> {
+        match self {
+            UnsignedChange::Own { subaddress, .. } => *subaddress,
+            UnsignedChange::Dummy => None,
+        }
+    }
 }
 
 /// A transaction prepared for signing.
@@ -119,10 +135,13 @@ impl UnsignedTransaction {
         )?;
         match &self.change {
             None => w.write_all(&[0]),
-            Some(change) => {
+            Some(UnsignedChange::Own {
+                address,
+                subaddress,
+            }) => {
                 w.write_all(&[1])?;
-                write_address(&change.address, w)?;
-                match change.subaddress {
+                write_address(address, w)?;
+                match subaddress {
                     None => w.write_all(&[0]),
                     Some(index) => {
                         w.write_all(&[1])?;
@@ -131,6 +150,7 @@ impl UnsignedTransaction {
                     }
                 }
             }
+            Some(UnsignedChange::Dummy) => w.write_all(&[2]),
         }
     }
 
@@ -171,7 +191,7 @@ impl UnsignedTransaction {
         )?;
         let change = match read_byte(r)? {
             0 => None,
-            1 => Some(UnsignedChange {
+            1 => Some(UnsignedChange::Own {
                 address: read_address(r)?,
                 subaddress: match read_byte(r)? {
                     0 => None,
@@ -182,6 +202,7 @@ impl UnsignedTransaction {
                     _ => return Err(invalid("invalid change subaddress")),
                 },
             }),
+            2 => Some(UnsignedChange::Dummy),
             _ => return Err(invalid("invalid change")),
         };
         Ok(UnsignedTransaction {
@@ -206,8 +227,18 @@ impl UnsignedTransaction {
     }
 
     /// The fee and change once signed by the wallet of `view_pair`. Foreign change
-    /// is reported in `ResolvedChange::is_ours`; `sign_offline` refuses it.
+    /// and a nonzero `dummy_amount` are reported; `sign_offline` refuses them.
     pub fn resolve(&self, view_pair: &ViewPair) -> Result<ResolvedTransaction, String> {
+        // A dummy is the same size whatever its key, so the wallet's keys stand in.
+        self.build(view_pair, view_pair)
+            .map(|(_, resolved)| resolved)
+    }
+
+    fn build(
+        &self,
+        view_pair: &ViewPair,
+        dummy: &ViewPair,
+    ) -> Result<(SignableTransaction, ResolvedTransaction), String> {
         if self.inputs.is_empty() {
             return Err("unsigned transaction has no inputs".to_string());
         }
@@ -219,16 +250,30 @@ impl UnsignedTransaction {
 
         let (change, declared) = match &self.change {
             None => (Change::fingerprintable(None), None),
-            Some(declared) => {
-                let derived = change_address(view_pair, declared.subaddress);
-                let is_ours = change_index_allowed(declared.subaddress)
-                    && same_destination(&derived, &declared.address);
+            Some(UnsignedChange::Own {
+                address,
+                subaddress,
+            }) => {
+                let derived = change_address(view_pair, *subaddress);
+                let is_ours =
+                    change_index_allowed(*subaddress) && same_destination(&derived, address);
                 (
-                    Change::new(view_pair.clone(), declared.subaddress),
-                    Some((declared.address, is_ours)),
+                    Change::new(view_pair.clone(), *subaddress),
+                    Some((*address, is_ours)),
                 )
             }
+            Some(UnsignedChange::Dummy) => {
+                if self.payments.len() != 1 {
+                    return Err(format!(
+                        "unsigned transaction asks for a dummy output with {} payments; one is \
+                         only added to a single payment",
+                        self.payments.len()
+                    ));
+                }
+                (Change::new(dummy.clone(), None), None)
+            }
         };
+        let has_dummy = matches!(self.change, Some(UnsignedChange::Dummy));
 
         let signable = SignableTransaction::new(
             self.rct_type,
@@ -244,12 +289,18 @@ impl UnsignedTransaction {
         let left_over = input_total
             .checked_sub(payment_total)
             .ok_or_else(|| "unsigned transaction pays out more than its inputs".to_string())?;
-        let (fee, change) = match declared {
-            Some((address, is_ours)) => {
-                let fee = signable.necessary_fee();
-                let amount = left_over.checked_sub(fee).ok_or_else(|| {
+        let after_fee = || {
+            let fee = signable.necessary_fee();
+            left_over
+                .checked_sub(fee)
+                .map(|rest| (fee, rest))
+                .ok_or_else(|| {
                     "unsigned transaction cannot pay its fee from its inputs".to_string()
-                })?;
+                })
+        };
+        let (fee, change, dummy_amount) = match declared {
+            Some((address, is_ours)) => {
+                let (fee, amount) = after_fee()?;
                 (
                     fee,
                     Some(ResolvedChange {
@@ -257,17 +308,25 @@ impl UnsignedTransaction {
                         amount,
                         is_ours,
                     }),
+                    None,
                 )
             }
-            None => (left_over, None),
+            None if has_dummy => {
+                let (fee, amount) = after_fee()?;
+                (fee, None, Some(amount))
+            }
+            None => (left_over, None, None),
         };
 
-        Ok(ResolvedTransaction {
+        Ok((
             signable,
-            input_total,
-            fee,
-            change,
-        })
+            ResolvedTransaction {
+                input_total,
+                fee,
+                change,
+                dummy_amount,
+            },
+        ))
     }
 }
 
@@ -282,11 +341,14 @@ pub struct ResolvedChange {
 }
 
 /// An unsigned transaction with its fee and change worked out.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ResolvedTransaction {
-    signable: SignableTransaction,
     pub input_total: u64,
     pub fee: u64,
     pub change: Option<ResolvedChange>,
+    /// What a dummy output would carry. It goes to a key nobody keeps, so signing
+    /// refuses anything but zero.
+    pub dummy_amount: Option<u64>,
 }
 
 fn change_address(view_pair: &ViewPair, subaddress: Option<SubaddressIndex>) -> MoneroAddress {
@@ -367,7 +429,31 @@ pub fn sign_offline<R: RngCore + CryptoRng>(
         Zeroizing::new(OxideScalar::from(**view)),
     )
     .map_err(|e| format!("Invalid wallet keys: {e}"))?;
-    let resolved = unsigned.resolve(&view_pair)?;
+
+    // The online wallet holds the view key, so a dummy sent to a spend key it
+    // chose would be its to spend. Draw the key here.
+    let dummy = match unsigned.change {
+        Some(UnsignedChange::Dummy) => Some(throwaway_view_pair(rng, view)?),
+        _ => None,
+    };
+    let (signable, resolved) = unsigned.build(&view_pair, dummy.as_ref().unwrap_or(&view_pair))?;
+    if dummy.is_some() && unsigned.resolve(&view_pair)? != resolved {
+        return Err(
+            "the transaction to sign does not have the fee and amounts it resolved to".to_string(),
+        );
+    }
+
+    if let Some(amount) = resolved.dummy_amount {
+        if amount != 0 {
+            return Err(format!(
+                "Refusing to sign: this transaction asks for a dummy output, which must carry \
+                 nothing, but its payment and fee leave {amount} piconero over. A dummy output \
+                 goes to a key nobody keeps, so that amount would be lost. An unsigned \
+                 transaction is built by the online, view-only wallet, and one built correctly \
+                 sends what is left over back as change."
+            ));
+        }
+    }
 
     if let Some(change) = &resolved.change {
         if !change.is_ours {
@@ -384,8 +470,7 @@ pub fn sign_offline<R: RngCore + CryptoRng>(
     }
 
     let spend_oxide = Zeroizing::new(OxideScalar::from(**spend));
-    let tx = resolved
-        .signable
+    let tx = signable
         .sign(rng, &spend_oxide)
         .map_err(|e| format!("Failed to sign transaction: {e}"))?;
 
@@ -407,6 +492,22 @@ pub fn sign_offline<R: RngCore + CryptoRng>(
         additional_tx_keys,
         fee: resolved.fee,
     })
+}
+
+fn throwaway_view_pair<R: RngCore + CryptoRng>(
+    rng: &mut R,
+    view: &Zeroizing<Scalar>,
+) -> Result<ViewPair, String> {
+    let mut wide = Zeroizing::new([0u8; 64]);
+    rng.fill_bytes(wide.as_mut());
+    let mut spend = Scalar::from_bytes_mod_order_wide(&wide);
+    let spend_public = &spend * ED25519_BASEPOINT_TABLE;
+    spend.zeroize();
+    ViewPair::new(
+        OxidePoint::from(spend_public),
+        Zeroizing::new(OxideScalar::from(**view)),
+    )
+    .map_err(|e| format!("Invalid dummy output key: {e}"))
 }
 
 /// Check the spend key opens every input's one-time key.
@@ -444,10 +545,12 @@ fn transaction_keys(
     // A transaction key is a multiple of the basepoint or of a paid subaddress's
     // spend key.
     let mut bases = vec![curve25519_dalek::constants::ED25519_BASEPOINT_POINT];
-    let change = unsigned
-        .change
-        .as_ref()
-        .map(|change| change_address(view_pair, change.subaddress));
+    let change = match &unsigned.change {
+        Some(UnsignedChange::Own { subaddress, .. }) => {
+            Some(change_address(view_pair, *subaddress))
+        }
+        Some(UnsignedChange::Dummy) | None => None,
+    };
     for address in unsigned
         .payments
         .iter()
@@ -584,7 +687,7 @@ mod tests {
             fee_rate: fee_rate(),
             inputs: vec![input(&sender(), 0, INPUT_AMOUNT)],
             payments,
-            change: Some(UnsignedChange {
+            change: Some(UnsignedChange::Own {
                 address: sender().address(),
                 subaddress: None,
             }),
@@ -670,14 +773,15 @@ mod tests {
         ]);
         for change in [
             None,
-            Some(UnsignedChange {
+            Some(UnsignedChange::Own {
                 address: sender().address(),
                 subaddress: None,
             }),
-            Some(UnsignedChange {
+            Some(UnsignedChange::Own {
                 address: sender().subaddress(3, 0),
                 subaddress: SubaddressIndex::new(3, 0),
             }),
+            Some(UnsignedChange::Dummy),
         ] {
             tx.change = change;
             let bytes = tx.serialize();
@@ -713,7 +817,7 @@ mod tests {
         bytes[4] = VERSION + 1;
         let error = UnsignedTransaction::from_bytes(&bytes).unwrap_err();
         assert!(
-            error.contains("unsupported unsigned transaction version 3"),
+            error.contains("unsupported unsigned transaction version 4"),
             "{error}"
         );
 
@@ -827,6 +931,98 @@ mod tests {
         let spend: EdwardsPoint = destination.spend().into();
         assert_eq!(tx_keys, vec![*signed.tx_key * spend]);
         assert_eq!(signed.tx.prefix().extra.len(), 44);
+    }
+
+    #[test]
+    fn synthetic_change_view_pair_has_the_wallet2_shape() {
+        let sender = sender();
+        let destination = recipient().subaddress(0, 1);
+        let dummy_change = ViewPair::new(
+            OxidePoint::from(&Scalar::from(123_456_789u64) * ED25519_BASEPOINT_TABLE),
+            Zeroizing::new(OxideScalar::from(*sender.view)),
+        )
+        .unwrap();
+        let build = |amount| {
+            SignableTransaction::new(
+                RctType::ClsagBulletproofPlus,
+                Zeroizing::new([42; 32]),
+                vec![input(&sender, 0, INPUT_AMOUNT)],
+                vec![(destination, amount)],
+                Change::new(dummy_change.clone(), None),
+                vec![],
+                fee_rate(),
+            )
+            .unwrap()
+        };
+
+        let fee = build(1).necessary_fee();
+        let amount = INPUT_AMOUNT - fee;
+        let signable = build(amount);
+        assert_eq!(signable.necessary_fee(), fee);
+
+        let mut rng = rand::rngs::StdRng::seed_from_u64(12345);
+        let signed = signable
+            .sign(&mut rng, &Zeroizing::new(OxideScalar::from(*sender.spend)))
+            .unwrap();
+        assert_eq!(signed.prefix().outputs.len(), 2);
+        assert_eq!(signed.prefix().extra.len(), 44);
+        assert!(extra_keys(&signed).1.is_empty());
+        assert_eq!(signed_fee(&signed), fee);
+        assert_eq!(
+            received_amounts(
+                &recipient(),
+                Some(SubaddressIndex::new(0, 1).unwrap()),
+                &signed
+            ),
+            vec![amount]
+        );
+    }
+
+    #[test]
+    fn dummy_output_has_the_wallet2_shape_and_must_be_zero() {
+        let sender = sender();
+        let recipient = recipient();
+        let destination = recipient.subaddress(0, 1);
+        let mut unsigned = unsigned(vec![(destination, 1)]);
+        unsigned.change = Some(UnsignedChange::Dummy);
+
+        let fee = unsigned.resolve(&sender.view_pair()).unwrap().fee;
+        unsigned.payments[0].1 = INPUT_AMOUNT - fee;
+        let resolved = unsigned.resolve(&sender.view_pair()).unwrap();
+        assert_eq!(resolved.dummy_amount, Some(0));
+        assert!(resolved.change.is_none());
+
+        let signed = sign(&unsigned).unwrap();
+        let (tx_keys, additional) = extra_keys(&signed.tx);
+        let destination_spend: EdwardsPoint = destination.spend().into();
+        assert_eq!(signed.tx.prefix().outputs.len(), 2);
+        assert_eq!(tx_keys, vec![*signed.tx_key * destination_spend]);
+        assert!(additional.is_empty());
+        assert_eq!(signed.tx.prefix().extra.len(), 44);
+        assert_eq!(
+            received_amounts(
+                &recipient,
+                Some(SubaddressIndex::new(0, 1).unwrap()),
+                &signed.tx,
+            ),
+            vec![INPUT_AMOUNT - fee]
+        );
+        assert!(
+            received_amounts(&sender, None, &signed.tx).is_empty(),
+            "the sender must not recognize the throwaway output"
+        );
+
+        let mut hostile = unsigned;
+        hostile.payments[0].1 -= 1;
+        assert_eq!(
+            hostile.resolve(&sender.view_pair()).unwrap().dummy_amount,
+            Some(1)
+        );
+        let error = sign(&hostile)
+            .err()
+            .expect("a nonzero dummy output must be refused");
+        assert!(error.contains("dummy output"), "{error}");
+        assert!(error.contains("must carry nothing"), "{error}");
     }
 
     #[test]
@@ -1026,15 +1222,15 @@ mod tests {
             assert!(error.contains("Refusing to sign"), "{error}");
         };
 
-        refused(UnsignedChange {
+        refused(UnsignedChange::Own {
             address: recipient().address(),
             subaddress: None,
         });
-        refused(UnsignedChange {
+        refused(UnsignedChange::Own {
             address: sender.subaddress(0, 2),
             subaddress: SubaddressIndex::new(0, 1),
         });
-        refused(UnsignedChange {
+        refused(UnsignedChange::Own {
             address: sender.subaddress(0, 1),
             subaddress: None,
         });
@@ -1048,7 +1244,7 @@ mod tests {
                 guaranteed: true,
             },
         ] {
-            refused(UnsignedChange {
+            refused(UnsignedChange::Own {
                 address: MoneroAddress::new(
                     Network::Mainnet,
                     kind,
@@ -1059,14 +1255,14 @@ mod tests {
             });
         }
         for (account, index) in [(MAX_CHANGE_ACCOUNT + 1, 0), (0, MAX_CHANGE_SUBADDRESS + 1)] {
-            refused(UnsignedChange {
+            refused(UnsignedChange::Own {
                 address: sender.subaddress(account, index),
                 subaddress: SubaddressIndex::new(account, index),
             });
         }
 
         let mut tx = unsigned(payments.clone());
-        tx.change = Some(UnsignedChange {
+        tx.change = Some(UnsignedChange::Own {
             address: sender.view_pair().legacy_address(Network::Stagenet),
             subaddress: None,
         });
@@ -1085,7 +1281,7 @@ mod tests {
         let sender = sender();
         let index = SubaddressIndex::new(3, 0).unwrap();
         let mut tx = unsigned(vec![(recipient().address(), 1_000_000_000)]);
-        tx.change = Some(UnsignedChange {
+        tx.change = Some(UnsignedChange::Own {
             address: sender.subaddress(3, 0),
             subaddress: Some(index),
         });

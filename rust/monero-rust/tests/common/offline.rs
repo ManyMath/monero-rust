@@ -103,7 +103,7 @@ pub fn unsigned_for(
         fee_rate: pinned_fee(FEE),
         inputs: vec![default_input(owner)],
         payments,
-        change: Some(UnsignedChange {
+        change: Some(UnsignedChange::Own {
             address: owner.address(network),
             subaddress: None,
         }),

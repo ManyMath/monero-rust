@@ -194,6 +194,34 @@ pub mod native {
         Ok(())
     }
 
+    fn pay_everything(
+        unsigned: &mut UnsignedTransaction,
+        view_pair: &ViewPair,
+    ) -> Result<u64, String> {
+        if unsigned.payments.len() != 1 || unsigned.change != Some(UnsignedChange::Dummy) {
+            return Err("only one payment with a dummy output can take everything".to_string());
+        }
+        let provisional = unsigned.resolve(view_pair)?;
+        let amount = provisional
+            .input_total
+            .checked_sub(provisional.fee)
+            .ok_or_else(|| "inputs cannot pay the fee".to_string())?;
+        unsigned.payments[0].1 = amount;
+
+        let resolved = unsigned.resolve(view_pair)?;
+        if resolved.fee != provisional.fee
+            || resolved.dummy_amount != Some(0)
+            || resolved.change.is_some()
+        {
+            return Err(format!(
+                "the fee moved from {} to {} when the amount was set, leaving {:?} for the dummy \
+                 output",
+                provisional.fee, resolved.fee, resolved.dummy_amount
+            ));
+        }
+        Ok(amount)
+    }
+
     fn fee_rate_of(fee: crate::monero_rpc::Fee) -> Result<FeeRate, String> {
         fee.rate()
             .ok_or_else(|| "Fee rate and quantization mask must be nonzero".to_string())
@@ -699,7 +727,7 @@ pub mod native {
     /// Decision on whether to include a change output.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum ChangeDecision {
-        /// Include change output (normal case, or single-recipient with any change).
+        /// Include a change output.
         IncludeChange,
         /// Absorb small change into miner fee (multi-recipient only).
         AbsorbDust,
@@ -707,31 +735,9 @@ pub mod native {
         DustError,
     }
 
-    /// Decide whether to include a change output based on the expected change
-    /// amount and number of recipients.
-    ///
-    /// Rules:
-    /// - Single-recipient: always include change (monero-serai requires >=2 outputs,
-    ///   so we need either change or a second payment). If the change is dust,
-    ///   return DustError so the caller can redirect to sweep_all.
-    /// - Multi-recipient (>=2 payments): if change is dust, absorb into miner fee
-    ///   by omitting the change output. Otherwise include change.
-    pub fn decide_change(expected_change: u64, num_recipients: usize) -> ChangeDecision {
-        let is_dust =
-            expected_change > 0 && expected_change < crate::coin_selection::DUST_THRESHOLD;
-
-        if is_dust {
-            if num_recipients < 2 {
-                ChangeDecision::DustError
-            } else {
-                ChangeDecision::AbsorbDust
-            }
-        } else {
-            // Always include change for single-recipient (monero-serai needs >=2
-            // outputs). For expected_change == 0, monero-serai computes the real
-            // fee and handles any residual automatically.
-            ChangeDecision::IncludeChange
-        }
+    /// Always `IncludeChange`: wallet2 keeps every nonzero RingCT change.
+    pub fn decide_change(_expected_change: u64, _num_recipients: usize) -> ChangeDecision {
+        ChangeDecision::IncludeChange
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -861,7 +867,7 @@ pub mod native {
             with_change,
         )?;
 
-        let change = with_change.then(|| UnsignedChange {
+        let change = with_change.then(|| UnsignedChange::Own {
             address: view_pair.legacy_address(network),
             subaddress: None,
         });
@@ -997,36 +1003,31 @@ pub mod native {
         )
         .ok_or_else(|| "input amounts overflow".to_string())?;
 
-        // Estimate transaction size for fee calculation
-        // Sweep always creates 2 outputs (no change)
         let num_outputs = 2;
-        // Worst-case extra: assume payment ID and additional keys
-        let (_, fee_amount) = fee_upper_bound(rct_type, fee, spendable_outputs.len(), num_outputs)?;
-
-        // Calculate sweep amount (total - fee)
-        let sweep_amount = total_in.checked_sub(fee_amount).ok_or_else(|| {
+        let (_, fee_bound) = fee_upper_bound(rct_type, fee, spendable_outputs.len(), num_outputs)?;
+        let provisional_amount = total_in.checked_sub(fee_bound).ok_or_else(|| {
             format!(
                 "Insufficient funds: have {} atomic units, need {} for fee",
-                total_in, fee_amount
+                total_in, fee_bound
             )
         })?;
 
-        let payments = vec![(dest_addr, sweep_amount), (dest_addr, 0)];
-
-        // Select decoys online, then sign; the signer returns the tx keys
         let mut rng = rand::rngs::OsRng;
-        let unsigned = build_unsigned_transaction_with_rings(
+        let mut unsigned = build_unsigned_transaction_with_rings(
             &mut rng,
             rpc,
             rct_type,
             fee,
             &spendable_outputs,
             &persisted_rings(&stored_outputs)?,
-            payments,
-            None,
+            vec![(dest_addr, provisional_amount)],
+            Some(UnsignedChange::Dummy),
         )
         .await
         .map_err(|e| format!("Failed to prepare sweep transaction: {}", e))?;
+        pay_everything(&mut unsigned, &view_pair)
+            .map_err(|e| format!("Failed to prepare sweep transaction: {}", e))?;
+
         let input_rings = selected_input_rings(&stored_outputs, &unsigned)?;
         let signed = sign_offline(&mut rng, &spend_key, &view_key, &unsigned)
             .map_err(|e| format!("Failed to sign sweep transaction: {}", e))?;
@@ -1502,10 +1503,12 @@ pub mod native {
             payments.push((address, destination.amount));
         }
         let change = if construction.change_amount > 0 {
-            Some(UnsignedChange {
+            Some(UnsignedChange::Own {
                 address: parse_wallet2_destination_address(&construction.change, network)?,
                 subaddress: SubaddressIndex::new(construction.subaddr_account, 0),
             })
+        } else if payments.len() == 1 {
+            Some(UnsignedChange::Dummy)
         } else {
             None
         };
@@ -1542,11 +1545,13 @@ pub mod native {
         )?;
         let resolved = unsigned.resolve(&view_pair)?;
         let resolved_change = resolved.change.map_or(0, |change| change.amount);
-        if resolved.fee != fee || resolved_change != construction.change_amount {
+        let dummy_amount = resolved.dummy_amount.unwrap_or(0);
+        if resolved.fee != fee || resolved_change != construction.change_amount || dummy_amount != 0
+        {
             return Err(format!(
                 "Cannot reproduce the wallet2 transaction exactly: wallet2 has fee {} and change \
-                 {}, the rebuilt transaction has fee {} and change {}",
-                fee, construction.change_amount, resolved.fee, resolved_change
+                 {}, the rebuilt transaction has fee {}, change {} and {} in a dummy output",
+                fee, construction.change_amount, resolved.fee, resolved_change, dummy_amount
             ));
         }
 
@@ -1755,7 +1760,7 @@ pub mod native {
             with_change,
         )?;
 
-        let change = with_change.then(|| UnsignedChange {
+        let change = with_change.then(|| UnsignedChange::Own {
             address: view_pair.legacy_address(network),
             subaddress: None,
         });
@@ -1930,6 +1935,9 @@ pub mod native {
         /// Whether this wallet owns `address` within the lookahead.
         /// Signing rejects change sent to an address outside this set.
         pub is_ours: bool,
+        /// The dummy output of a one-payment transaction without change. Its
+        /// `address` is empty.
+        pub is_dummy: bool,
     }
 
     /// One transaction boundary in the reviewed container. Amounts are piconero.
@@ -2001,7 +2009,7 @@ pub mod native {
         use sha3::{Digest, Keccak256};
         parse_network(network_str)?;
         let mut digest = Keccak256::new();
-        digest.update(b"monero-rust offline transaction approval v2");
+        digest.update(b"monero-rust offline transaction approval v3");
         digest.update((network_str.len() as u64).to_le_bytes());
         digest.update(network_str.as_bytes());
         // Bind public identities, never retain secret key bytes in the review.
@@ -2144,6 +2152,7 @@ pub mod native {
                 amount: *amount,
                 is_change: false,
                 is_ours: address_is_ours(address, &view_pair, network, lookahead),
+                is_dummy: false,
             })
             .collect();
         if let Some(change) = &resolved.change {
@@ -2152,6 +2161,16 @@ pub mod native {
                 amount: change.amount,
                 is_change: true,
                 is_ours: change.is_ours,
+                is_dummy: false,
+            });
+        }
+        if let Some(amount) = resolved.dummy_amount {
+            destinations.push(DestinationPreview {
+                address: String::new(),
+                amount,
+                is_change: false,
+                is_ours: false,
+                is_dummy: true,
             });
         }
 
@@ -2203,7 +2222,7 @@ pub mod native {
             view_pair,
             spend_key,
             signer_lookahead(),
-            unsigned.change.and_then(|change| change.subaddress),
+            unsigned.change.and_then(|change| change.subaddress()),
         );
 
         Ok(OfflineSignedTransaction {
@@ -2561,28 +2580,25 @@ pub mod native {
 
         #[test]
         fn test_decide_change_dust_single_recipient() {
-            // Dust change, single recipient -> error (use sweep_all)
             let result = decide_change(1_000_000, 1);
-            assert_eq!(result, ChangeDecision::DustError);
+            assert_eq!(result, ChangeDecision::IncludeChange);
         }
 
         #[test]
         fn test_decide_change_dust_multi_recipient() {
-            // Dust change, multi-recipient -> absorb into miner fee
             let result = decide_change(1_000_000, 2);
-            assert_eq!(result, ChangeDecision::AbsorbDust);
+            assert_eq!(result, ChangeDecision::IncludeChange);
         }
 
         #[test]
         fn test_decide_change_at_dust_threshold_boundary() {
             use crate::coin_selection::DUST_THRESHOLD;
 
-            // Just below threshold -> dust
             let result = decide_change(DUST_THRESHOLD - 1, 1);
-            assert_eq!(result, ChangeDecision::DustError);
+            assert_eq!(result, ChangeDecision::IncludeChange);
 
             let result = decide_change(DUST_THRESHOLD - 1, 2);
-            assert_eq!(result, ChangeDecision::AbsorbDust);
+            assert_eq!(result, ChangeDecision::IncludeChange);
 
             // At threshold -> not dust, include change
             let result = decide_change(DUST_THRESHOLD, 1);
@@ -2594,12 +2610,11 @@ pub mod native {
 
         #[test]
         fn test_decide_change_one_piconero() {
-            // 1 piconero is dust
             let result = decide_change(1, 1);
-            assert_eq!(result, ChangeDecision::DustError);
+            assert_eq!(result, ChangeDecision::IncludeChange);
 
             let result = decide_change(1, 3);
-            assert_eq!(result, ChangeDecision::AbsorbDust);
+            assert_eq!(result, ChangeDecision::IncludeChange);
         }
 
         #[test]

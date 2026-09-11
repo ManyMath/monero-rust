@@ -148,7 +148,7 @@ async fn test_transaction_building() {
         fee_rate: monero_wallet::interface::FeeRate::new(6000, 10000).expect("fee rate"),
         inputs: vec![input],
         payments: vec![(address, send_amount)],
-        change: Some(UnsignedChange {
+        change: Some(UnsignedChange::Own {
             address,
             subaddress: None,
         }),

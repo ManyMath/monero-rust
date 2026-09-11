@@ -234,7 +234,7 @@ fn refuses_to_sign_a_transaction_whose_change_is_redirected() {
     let wallet = seed_wallet();
 
     let mut unsigned_tx = synthetic_unsigned_for(&wallet);
-    unsigned_tx.change = Some(UnsignedChange {
+    unsigned_tx.change = Some(UnsignedChange::Own {
         address: other_wallet().address(Network::Stagenet),
         subaddress: None,
     });
@@ -303,7 +303,7 @@ fn change_ownership_requires_the_correct_address_derivation_mode() {
         let hostile = MoneroAddress::new(Network::Mainnet, wrong_type, owned.spend(), owned.view());
 
         let mut unsigned = synthetic_unsigned_for(&wallet);
-        unsigned.change = Some(UnsignedChange {
+        unsigned.change = Some(UnsignedChange::Own {
             address: owned,
             subaddress,
         });
@@ -315,7 +315,7 @@ fn change_ownership_requires_the_correct_address_derivation_mode() {
             999_900_000_000
         );
 
-        unsigned.change = Some(UnsignedChange {
+        unsigned.change = Some(UnsignedChange::Own {
             address: hostile,
             subaddress,
         });
@@ -327,7 +327,7 @@ fn change_ownership_requires_the_correct_address_derivation_mode() {
         let error = sign_reviewed_keys(&wallet, &encoded, NETWORK_STR).unwrap_err();
         assert!(error.contains("Refusing to sign"));
 
-        unsigned.change = Some(UnsignedChange {
+        unsigned.change = Some(UnsignedChange::Own {
             address: owned,
             subaddress: SubaddressIndex::new(0, 2),
         });
@@ -349,7 +349,7 @@ fn ordinary_change_is_recovered_and_guaranteed_claim_is_rejected() {
     for guaranteed in [false, true] {
         if guaranteed {
             let ours = wallet.address(Network::Stagenet);
-            unsigned.change = Some(UnsignedChange {
+            unsigned.change = Some(UnsignedChange::Own {
                 address: MoneroAddress::new(
                     Network::Stagenet,
                     AddressType::Featured {
@@ -396,6 +396,59 @@ fn refuses_an_unsigned_transaction_in_the_old_format() {
     )
     .unwrap_err();
     assert!(error.contains("older version"), "{error}");
+}
+
+#[test]
+fn dummy_output_is_reviewed_as_nobody_and_nonzero_value_is_refused() {
+    use monero_rust::native::{
+        preview_unsigned_transaction, sign_unsigned_transaction_with_private_keys,
+    };
+
+    let wallet = Wallet::from_spend(Scalar::from(123456789u64));
+    let recipient = other_wallet();
+    let (spend, view) = (wallet.spend.to_bytes(), wallet.view.to_bytes());
+    let mut unsigned = unsigned_for(
+        &wallet,
+        Network::Stagenet,
+        vec![(recipient.address(Network::Stagenet), INPUT_AMOUNT - FEE)],
+    );
+    unsigned.change = Some(UnsignedChange::Dummy);
+
+    let encoded = encode(&unsigned);
+    let preview = preview_unsigned_transaction(spend, view, &encoded, NETWORK_STR).unwrap();
+    let transaction = &preview.transactions[0];
+    assert_eq!(transaction.destinations.len(), 2);
+    assert_eq!(transaction.destinations[0].amount, INPUT_AMOUNT - FEE);
+    assert!(!transaction.destinations[0].is_dummy);
+    assert_eq!(transaction.destinations[1].address, "");
+    assert_eq!(transaction.destinations[1].amount, 0);
+    assert!(!transaction.destinations[1].is_change);
+    assert!(!transaction.destinations[1].is_ours);
+    assert!(transaction.destinations[1].is_dummy);
+    assert_eq!(preview.input_total, INPUT_AMOUNT);
+    assert_eq!(preview.fee, FEE);
+    assert_eq!(preview.wallet_debit, INPUT_AMOUNT);
+
+    let approval = preview.approve(FEE, INPUT_AMOUNT).unwrap();
+    sign_unsigned_transaction_with_private_keys(spend, view, &encoded, NETWORK_STR, &approval)
+        .expect("a zero-amount dummy should sign");
+
+    unsigned.payments[0].1 -= 1;
+    let hostile_encoded = encode(&unsigned);
+    let hostile = preview_unsigned_transaction(spend, view, &hostile_encoded, NETWORK_STR).unwrap();
+    assert_eq!(hostile.transactions[0].destinations[1].amount, 1);
+    assert!(hostile.transactions[0].destinations[1].is_dummy);
+    let hostile_approval = hostile.approve(FEE, INPUT_AMOUNT).unwrap();
+    let error = sign_unsigned_transaction_with_private_keys(
+        spend,
+        view,
+        &hostile_encoded,
+        NETWORK_STR,
+        &hostile_approval,
+    )
+    .unwrap_err();
+    assert!(error.contains("dummy output"), "{error}");
+    assert!(error.contains("must carry nothing"), "{error}");
 }
 
 #[test]

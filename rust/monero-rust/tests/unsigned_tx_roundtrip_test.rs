@@ -117,7 +117,7 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
     let spendable = (wallet_output, global_index);
 
     let send_amount = 1_000_000_000u64;
-    let change = UnsignedChange {
+    let change = UnsignedChange::Own {
         address: view_pair.legacy_address(NETWORK),
         subaddress: None,
     };

@@ -143,7 +143,7 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
     let spendable = (wallet_output, test_output.global_index);
 
     let send_amount = 1_000_000_000u64;
-    let change = UnsignedChange {
+    let change = UnsignedChange::Own {
         address,
         subaddress: None,
     };
@@ -241,6 +241,91 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .any(|o| o.commitment().amount == expected_change);
     assert!(has_change);
+
+    Ok(())
+}
+
+#[cfg(feature = "mock-rpc")]
+#[tokio::test(flavor = "multi_thread")]
+async fn sweep_uses_the_exact_fee_and_a_throwaway_dummy_output(
+) -> Result<(), Box<dyn std::error::Error>> {
+    use common::offline::Wallet;
+    use monero_oxide::transaction::Pruned;
+    use monero_rust::native::{sweep_all_with_rpc, StoredOutputData};
+    use monero_rust::scanner::scan_single_transaction;
+    use monero_wallet::{address::SubaddressIndex, extra::Extra, interface::FeeRate};
+
+    let mock = MockRpc::from_file(TEST_VECTORS_PATH)?;
+    let rpc = mock_rpc::create_rpc(mock);
+    let fee_rate = FeeRate::new(25_000, 10_000).ok_or("zero fee rate")?;
+
+    let mut stored = Vec::new();
+    for height in START_BLOCK..=END_BLOCK {
+        let scan = scan_block_for_outputs_with_lookahead(
+            &rpc,
+            height,
+            TEST_SEED,
+            NETWORK,
+            Lookahead {
+                account: 0,
+                subaddress: 10,
+            },
+            "",
+        )
+        .await?;
+        stored.extend(scan.outputs.into_iter().map(|output| StoredOutputData {
+            tx_hash: output.tx_hash,
+            output_index: output.output_index,
+            amount: output.amount,
+            key: output.key,
+            key_offset: String::new(),
+            commitment_mask: String::new(),
+            key_image: output.key_image,
+            global_index: output.global_index,
+            ring: None,
+            subaddress: None,
+            payment_id: None,
+            received_output_bytes: output.received_output_bytes,
+        }));
+    }
+    stored.truncate(1);
+    let input_total: u64 = stored.iter().map(|output| output.amount).sum();
+
+    let recipient = Wallet::from_spend(Scalar::from(777u64));
+    let destination = recipient.subaddress(NETWORK, 0, 1);
+    let result = sweep_all_with_rpc(
+        &rpc,
+        TEST_SEED,
+        "stagenet",
+        stored,
+        &destination.to_string(),
+        "",
+    )
+    .await?;
+    let bytes = hex::decode(result.tx_blob)?;
+    let tx = Transaction::<NotPruned>::read(&mut bytes.as_slice())?;
+
+    assert_eq!(tx.prefix().outputs.len(), 2);
+    let extra = Extra::read(&mut tx.prefix().extra.as_slice())?;
+    let (tx_keys, additional) = extra.keys().ok_or("transaction has no public key")?;
+    assert_eq!(tx_keys.len(), 1);
+    assert_eq!(additional.map_or(0, |keys| keys.len()), 0);
+    assert_eq!(tx.prefix().extra.len(), 44);
+    assert_eq!(
+        u128::from(result.fee),
+        fee_rate.calculate_fee_from_weight(tx.weight() as u64)
+    );
+    assert!(result.change_outputs.is_empty());
+
+    let mut recipient_scanner = monero_wallet::Scanner::new(recipient.view_pair());
+    recipient_scanner.register_subaddress(SubaddressIndex::new(0, 1).unwrap());
+    let received = scan_single_transaction(
+        &mut recipient_scanner,
+        tx.hash(),
+        &Transaction::<Pruned>::from(tx),
+    )?;
+    assert_eq!(received.len(), 1, "the recipient must not see the dummy");
+    assert_eq!(received[0].commitment().amount, input_total - result.fee);
 
     Ok(())
 }
@@ -392,8 +477,12 @@ async fn test_transaction_with_multiple_inputs() -> Result<(), Box<dyn std::erro
                 let mut cursor = Cursor::new(output_bytes);
                 let wallet_output = WalletOutput::read(&mut cursor)?;
 
-                let global_index = resolve_global_index(&rpc, &wallet_output).await?;
-                spendables.push((wallet_output, global_index));
+                spendables.push((
+                    wallet_output,
+                    output
+                        .global_index
+                        .ok_or("indexed block scan did not return a global output index")?,
+                ));
                 total_input += output.amount;
             }
 
@@ -413,7 +502,7 @@ async fn test_transaction_with_multiple_inputs() -> Result<(), Box<dyn std::erro
                 fee_rate,
                 &spendables,
                 vec![(address, send_amount)],
-                Some(UnsignedChange {
+                Some(UnsignedChange::Own {
                     address: wallet_view_pair.legacy_address(NETWORK),
                     subaddress: None,
                 }),

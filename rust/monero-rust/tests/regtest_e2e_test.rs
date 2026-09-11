@@ -220,7 +220,7 @@ async fn builds_signs_and_broadcasts_a_transaction() {
         fee_rate,
         &[spendable],
         vec![(address, send_amount)],
-        Some(UnsignedChange {
+        Some(UnsignedChange::Own {
             address: view_pair.legacy_address(monero_rust::Network::Mainnet),
             subaddress: None,
         }),

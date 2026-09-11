@@ -1,35 +1,7 @@
 #!/usr/bin/env python3
 """Generate a Monero regtest cold-signing vector bundle.
 
-This follows the core flow from Monero's `tests/functional_tests/cold_signing.py`:
-
-1. Restore a full offline wallet from Monero's deterministic test seed.
-2. Create an online view-only wallet from the address and private view key.
-3. Mine regtest outputs to the wallet.
-4. Export/import outputs, export/import key images, create an unsigned txset,
-   sign it offline, and submit the signed txset online.
-
-The script expects official Monero CLI binaries to already exist. A typical setup:
-
-    mkdir -p /tmp/monero-vector-tools
-    cd /tmp/monero-vector-tools
-    curl -fLO https://downloads.getmonero.org/cli/monero-linux-x64-v0.18.5.0.tar.bz2
-    sha256sum monero-linux-x64-v0.18.5.0.tar.bz2
-    tar -xf monero-linux-x64-v0.18.5.0.tar.bz2
-    scripts/generate_cold_signing_vector.py \
-      --monero-bin-dir /tmp/monero-vector-tools/monero-x86_64-linux-gnu-v0.18.5.0
-
-Add `--verify-rust-rebuilt-submit` to sign the generated wallet2 unsigned txset
-through `monero-rust`, repackage it as `signed_monero_tx`, and verify Monero's
-own wallet RPC accepts that rebuilt container via `submit_transfer`.
-
-Add `--verify-rust-rebuilt-cli-submit` to submit the rebuilt `signed_monero_tx`
-file through `monero-wallet-cli submit_transfer` instead of wallet RPC.
-
-Add `--include-multi-tx-unsigned` to also persist a deterministic
-`multi_unsigned_monero_tx` generated with `transfer_split`. This captures a real
-wallet2 multi-transaction unsigned container for parser/signing boundary work
-without changing the single-transaction submit flow.
+    scripts/generate_cold_signing_vector.py --monero-bin-dir <dir with monerod and monero-wallet-rpc>
 """
 
 from __future__ import annotations
@@ -62,6 +34,15 @@ TRANSFER_AMOUNT_ATOMIC = 1_000_000_000_000
 BLOCKS_TO_MINE = 80
 RING_SIZE = 16
 MULTI_TX_DESTINATION_COUNT = 20
+# The Monero project's donation address and subaddress; neither belongs to the test wallet.
+ZERO_CHANGE_DESTINATIONS = {
+    "standard": (
+        "44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A"
+    ),
+    "subaddress": (
+        "888tNkZrPN6JsEgekjMnABU4TBzc2Dt29EPAvkRxbANsAnjyPbb3iQ1YBRk1UXcdRsiKc9dhwMVgN5S9cQUiyoogDavup3H"
+    ),
+}
 
 
 def sha256_file(path: Path) -> str:
@@ -121,7 +102,11 @@ def sanitize_cli_stdout(stdout: str, monero_bin_dir: Path, work: Path) -> str:
 
 
 def write_readme(
-    path: Path, monero_version: str, rebuilt: bool, include_multi_tx_unsigned: bool
+    path: Path,
+    monero_version: str,
+    rebuilt: bool,
+    include_multi_tx_unsigned: bool,
+    include_zero_change_unsigned: bool,
 ) -> None:
     signed_source = (
         "rebuilt by monero-rust's app signer and accepted by "
@@ -139,6 +124,18 @@ def write_readme(
         "- `multi_unsigned_monero_tx`: binary unsigned txset generated with "
         "`transfer_split`; intentionally unsigned and not submitted.\n"
         if include_multi_tx_unsigned
+        else ""
+    )
+    zero_change_artifacts = (
+        "".join(
+            f"- `zero_change_{name}_unsigned_monero_tx`: binary unsigned txset "
+            f"generated with `sweep_single` to a {name} destination, so it has no "
+            "change; not submitted.\n"
+            f"- `zero_change_{name}_signed_monero_tx`: the same txset signed by "
+            "the cold wallet with `sign_transfer`.\n"
+            for name in ZERO_CHANGE_DESTINATIONS
+        )
+        if include_zero_change_unsigned
         else ""
     )
     path.write_text(
@@ -168,7 +165,7 @@ Artifacts:
 - `outputs`: binary output-export artifact, starts with `Monero output export\\x04`.
 - `key_images_rpc.json`: `export_key_images` RPC response.
 - `unsigned_monero_tx`: binary unsigned txset, starts with `Monero unsigned tx set\\x05`.
-{multi_tx_artifact}- `signed_monero_tx`: binary signed txset, starts with `Monero signed tx set\\x05`.
+{multi_tx_artifact}{zero_change_artifacts}- `signed_monero_tx`: binary signed txset, starts with `Monero signed tx set\\x05`.
 {reference_artifact}- `transfer_description.json`: `describe_transfer` RPC response.
 - `metadata.json`: tool versions, wallet seed/keys, flow summary, artifact hashes.
 
@@ -215,6 +212,15 @@ def main() -> None:
             "Also write multi_unsigned_monero_tx from wallet-rpc transfer_split "
             "for multi-transaction wallet2 parser/signing boundary coverage. "
             "The multi-transaction txset is not signed or submitted."
+        ),
+    )
+    parser.add_argument(
+        "--include-zero-change-unsigned",
+        action="store_true",
+        help=(
+            "Also write zero_change_*_unsigned_monero_tx from wallet-rpc "
+            "sweep_single, and the cold wallet's signed txsets for them. "
+            "These transactions have no change and are not submitted."
         ),
     )
     parser.add_argument("--cargo-bin", default="cargo")
@@ -459,6 +465,47 @@ def main() -> None:
         else:
             submitted = rpc(hot_rpc, "submit_transfer", {"tx_data_hex": signed_txset_for_submit})
 
+        zero_change = None
+        if args.include_zero_change_unsigned:
+            spendable = [
+                transfer_details
+                for transfer_details in rpc(
+                    hot_rpc, "incoming_transfers", {"transfer_type": "available"}
+                ).get("transfers", [])
+                if transfer_details.get("unlocked") and not transfer_details.get("frozen")
+            ]
+            if len(spendable) < len(ZERO_CHANGE_DESTINATIONS):
+                raise RuntimeError("not enough unlocked outputs for the zero-change sweeps")
+            zero_change = {}
+            for (name, address), transfer_details in zip(
+                ZERO_CHANGE_DESTINATIONS.items(), spendable
+            ):
+                sweep = rpc(
+                    hot_rpc,
+                    "sweep_single",
+                    {
+                        "address": address,
+                        "key_image": transfer_details["key_image"],
+                        "ring_size": RING_SIZE,
+                        "get_tx_key": False,
+                    },
+                )
+                sweep_signed = rpc(
+                    cold_rpc,
+                    "sign_transfer",
+                    {"unsigned_txset": sweep["unsigned_txset"], "get_tx_keys": True},
+                )
+                zero_change[name] = {
+                    "destination": address,
+                    "input_amount": transfer_details["amount"],
+                    "amount": sweep["amount"],
+                    "fee": sweep["fee"],
+                    "unsigned_txset": sweep["unsigned_txset"],
+                    "signed_txset": sweep_signed["signed_txset"],
+                    "tx_hash_list": sweep_signed["tx_hash_list"],
+                    "tx_key_list": sweep_signed.get("tx_key_list"),
+                }
+
         out_dir = args.out_dir
         if out_dir.exists():
             shutil.rmtree(out_dir)
@@ -473,6 +520,16 @@ def main() -> None:
                 out_dir / "multi_unsigned_monero_tx",
                 multi_tx_transfer["unsigned_txset"],
             )
+        if zero_change is not None:
+            for name, sweep in zero_change.items():
+                write_hex_file(
+                    out_dir / f"zero_change_{name}_unsigned_monero_tx",
+                    sweep["unsigned_txset"],
+                )
+                write_hex_file(
+                    out_dir / f"zero_change_{name}_signed_monero_tx",
+                    sweep["signed_txset"],
+                )
         write_hex_file(out_dir / "signed_monero_tx", signed_txset_for_submit)
         if args.verify_rust_rebuilt_submit or args.verify_rust_rebuilt_cli_submit:
             write_hex_file(out_dir / "monero_wallet_rpc_signed_monero_tx", signed["signed_txset"])
@@ -533,6 +590,18 @@ def main() -> None:
                     if multi_tx_transfer is not None
                     else None
                 ),
+                "zero_change_unsigned": (
+                    {
+                        name: {
+                            key: value
+                            for key, value in sweep.items()
+                            if key not in ("unsigned_txset", "signed_txset")
+                        }
+                        for name, sweep in zero_change.items()
+                    }
+                    if zero_change is not None
+                    else None
+                ),
                 "signed_tx_hash_list": (
                     submitted["tx_hash_list"]
                     if rebuilt_with_monero_rust
@@ -571,6 +640,7 @@ def main() -> None:
             wallet_rpc_version,
             rebuilt_with_monero_rust,
             args.include_multi_tx_unsigned,
+            args.include_zero_change_unsigned,
         )
 
         print(f"wrote {out_dir}")

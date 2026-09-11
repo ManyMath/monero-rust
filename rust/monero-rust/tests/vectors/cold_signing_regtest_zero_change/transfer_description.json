@@ -1,0 +1,35 @@
+{
+  "desc": [
+    {
+      "amount_in": 70367334917119,
+      "amount_out": 70364735717119,
+      "change_address": "42ey1afDFnn4886T7196doS9GPMzexD9gXpsZJDwVjeRVdFCSoHnv7KPbBeGpzJBzHRCAs9UxqeoyFQMYbqSWYTfJJQAWDm",
+      "change_amount": 69364735717119,
+      "dummy_outputs": 0,
+      "extra": "013cb0733a4797dbb92cebac6c3e68fc03669bcf1ed953b4ed2c96735744e812c00209010000000000000000",
+      "fee": 2599200000,
+      "payment_id": "",
+      "recipients": [
+        {
+          "address": "42ey1afDFnn4886T7196doS9GPMzexD9gXpsZJDwVjeRVdFCSoHnv7KPbBeGpzJBzHRCAs9UxqeoyFQMYbqSWYTfJJQAWDm",
+          "amount": 1000000000000
+        }
+      ],
+      "ring_size": 16,
+      "unlock_time": 0
+    }
+  ],
+  "summary": {
+    "amount_in": 70367334917119,
+    "amount_out": 70364735717119,
+    "change_address": "42ey1afDFnn4886T7196doS9GPMzexD9gXpsZJDwVjeRVdFCSoHnv7KPbBeGpzJBzHRCAs9UxqeoyFQMYbqSWYTfJJQAWDm",
+    "change_amount": 69364735717119,
+    "fee": 2599200000,
+    "recipients": [
+      {
+        "address": "42ey1afDFnn4886T7196doS9GPMzexD9gXpsZJDwVjeRVdFCSoHnv7KPbBeGpzJBzHRCAs9UxqeoyFQMYbqSWYTfJJQAWDm",
+        "amount": 1000000000000
+      }
+    ]
+  }
+}
