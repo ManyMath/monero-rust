@@ -399,6 +399,20 @@ fn refuses_an_unsigned_transaction_in_the_old_format() {
 }
 
 #[test]
+fn preview_rejects_oversized_hex_before_decoding_it() {
+    let wallet = seed_wallet();
+    let oversized = "00".repeat(4_194_305);
+    let error = monero_rust::native::preview_unsigned_transaction(
+        wallet.spend.to_bytes(),
+        wallet.view.to_bytes(),
+        &oversized,
+        NETWORK_STR,
+    )
+    .unwrap_err();
+    assert!(error.contains("exceeds 8388608 hex characters"), "{error}");
+}
+
+#[test]
 fn dummy_output_is_reviewed_as_nobody_and_nonzero_value_is_refused() {
     use monero_rust::native::{
         preview_unsigned_transaction, sign_unsigned_transaction_with_private_keys,

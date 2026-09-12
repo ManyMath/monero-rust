@@ -20,6 +20,17 @@ pub mod native {
     use monero_wallet::{OutputWithDecoys, ViewPair, WalletOutput};
     use rand_core::{CryptoRng, RngCore};
 
+    const MAX_UNSIGNED_TX_HEX_LEN: usize = 8 * 1024 * 1024;
+
+    fn decode_unsigned_tx_hex(unsigned_tx_hex: &str) -> Result<Vec<u8>, String> {
+        if unsigned_tx_hex.len() > MAX_UNSIGNED_TX_HEX_LEN {
+            return Err(format!(
+                "Unsigned transaction exceeds {MAX_UNSIGNED_TX_HEX_LEN} hex characters"
+            ));
+        }
+        hex::decode(unsigned_tx_hex).map_err(|e| format!("Invalid unsigned tx hex: {e:?}"))
+    }
+
     /// Compute the key image `x * H_p(xG)` for an owned one-time key.
     fn generate_key_image(secret: &Zeroizing<Scalar>) -> EdwardsPoint {
         let public = &**secret * ED25519_BASEPOINT_TABLE;
@@ -1826,8 +1837,7 @@ pub mod native {
             );
         }
         reviewed.check_limits(approval.max_total_fee, approval.max_wallet_debit)?;
-        let unsigned_bytes = hex::decode(unsigned_tx_hex)
-            .map_err(|e| format!("Invalid unsigned tx hex: {:?}", e))?;
+        let unsigned_bytes = decode_unsigned_tx_hex(unsigned_tx_hex)?;
         if let Some(kind) = crate::epee_compat::detect_monero_txset(&unsigned_bytes) {
             match kind {
                 crate::epee_compat::MoneroTxSetKind::Unsigned => {
@@ -2067,8 +2077,7 @@ pub mod native {
         unsigned_tx_hex: &str,
         network_str: &str,
     ) -> Result<TransactionPreview, String> {
-        let unsigned_bytes = hex::decode(unsigned_tx_hex)
-            .map_err(|e| format!("Invalid unsigned tx hex: {:?}", e))?;
+        let unsigned_bytes = decode_unsigned_tx_hex(unsigned_tx_hex)?;
 
         if let Some(kind) = crate::epee_compat::detect_monero_txset(&unsigned_bytes) {
             match kind {

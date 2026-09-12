@@ -118,6 +118,57 @@ fn read_address<R: Read>(r: &mut R) -> io::Result<MoneroAddress> {
         .ok_or_else(|| invalid("invalid address"))
 }
 
+fn copy_varint<R: Read>(r: &mut R, bytes: &mut Vec<u8>) -> io::Result<u64> {
+    let mut value = 0u64;
+    for index in 0..10u32 {
+        let byte = read_byte(r)?;
+        bytes.push(byte);
+        if index == 9 && byte > 1 {
+            return Err(invalid("varint exceeds u64"));
+        }
+        value |= u64::from(byte & 0x7f) << (index * 7);
+        if byte & 0x80 == 0 {
+            return Ok(value);
+        }
+    }
+    Err(invalid("varint exceeds u64"))
+}
+
+/// Read an input, refusing a ring length other than `expected_ring_len` before
+/// any ring member is read or decompressed.
+fn read_input<R: Read>(r: &mut R, expected_ring_len: u8) -> io::Result<OutputWithDecoys> {
+    const OUTPUT_DATA_LEN: usize = 32 + 32 + 40;
+    let mut bytes = Zeroizing::new(Vec::with_capacity(
+        OUTPUT_DATA_LEN + 2 + (usize::from(expected_ring_len) * (10 + 64)),
+    ));
+    let mut output_data = [0u8; OUTPUT_DATA_LEN];
+    r.read_exact(&mut output_data)?;
+    bytes.extend_from_slice(&output_data);
+
+    let ring_len = copy_varint(r, &mut bytes)?;
+    if ring_len != u64::from(expected_ring_len) {
+        return Err(invalid(format!(
+            "ring length {ring_len} does not match required length {expected_ring_len}"
+        )));
+    }
+    for _ in 0..expected_ring_len {
+        copy_varint(r, &mut bytes)?;
+    }
+    bytes.push(read_byte(r)?); // signer index
+
+    let ring_bytes = usize::from(expected_ring_len) * 64;
+    let start = bytes.len();
+    bytes.resize(start + ring_bytes, 0);
+    r.read_exact(&mut bytes[start..])?;
+
+    let mut reader = bytes.as_slice();
+    let input = OutputWithDecoys::read(&mut reader)?;
+    if !reader.is_empty() || input.decoys().len() != usize::from(expected_ring_len) {
+        return Err(invalid("invalid input ring"));
+    }
+    Ok(input)
+}
+
 impl UnsignedTransaction {
     pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
         w.write_all(&MAGIC)?;
@@ -183,7 +234,12 @@ impl UnsignedTransaction {
             .ok_or_else(|| invalid("unsupported RingCT type"))?;
         let seed = Zeroizing::new(read_bytes(r)?);
         let fee_rate = FeeRate::read(r)?;
-        let inputs = read_vec(OutputWithDecoys::read, Some(MAX_INPUTS), r)?;
+        let expected_ring_len = ring_len(rct_type).expect("RingCT type was checked above");
+        let inputs = read_vec(
+            |r: &mut R| read_input(r, expected_ring_len),
+            Some(MAX_INPUTS),
+            r,
+        )?;
         let payments = read_vec(
             |r: &mut R| Ok((read_address(r)?, read_u64(r)?)),
             Some(MAX_PAYMENTS),
@@ -854,6 +910,24 @@ mod tests {
         VarInt::write(&100_000u64, &mut bytes).unwrap();
         let error = UnsignedTransaction::from_bytes(&bytes).unwrap_err();
         assert!(error.contains("exceeds bound"), "{error}");
+    }
+
+    #[test]
+    fn refuses_a_non_protocol_ring_before_reading_its_members() {
+        let tx = unsigned(vec![(recipient().address(), 1)]);
+        let mut input = tx.inputs[0].serialize();
+        assert_eq!(input[104], 16);
+        input.splice(104..105, [0xff, 0x01]);
+
+        let mut bytes = MAGIC.to_vec();
+        bytes.extend_from_slice(&[VERSION, u8::from(RctType::ClsagBulletproofPlus)]);
+        bytes.extend_from_slice(tx.seed.as_ref());
+        tx.fee_rate.write(&mut bytes).unwrap();
+        bytes.push(1);
+        bytes.extend_from_slice(&input);
+
+        let error = UnsignedTransaction::from_bytes(&bytes).unwrap_err();
+        assert!(error.contains("ring length 255"), "{error}");
     }
 
     #[test]
