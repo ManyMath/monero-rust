@@ -5,6 +5,7 @@ use std::io::{self, Read, Write};
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, edwards::EdwardsPoint, scalar::Scalar};
 use rand_core::{CryptoRng, RngCore};
+use sha3::{Digest, Keccak256};
 use zeroize::{Zeroize, Zeroizing};
 
 use monero_wallet::{
@@ -75,7 +76,7 @@ impl UnsignedChange {
 #[derive(Clone, PartialEq, Eq)]
 pub struct UnsignedTransaction {
     pub rct_type: RctType,
-    /// Seeds the transaction keys: anyone who knows it can recompute them.
+    /// The online wallet's part of the signing seed; the signer mixes in its own.
     pub seed: Zeroizing<[u8; 32]>,
     pub fee_rate: FeeRate,
     pub inputs: Vec<OutputWithDecoys>,
@@ -480,6 +481,18 @@ pub fn sign_offline<R: RngCore + CryptoRng>(
     }
     check_input_ownership(spend, unsigned)?;
 
+    // The online wallet picks `unsigned.seed`. Mix in signer entropy so it cannot
+    // grind or reuse transaction keys, output order or proof randomness.
+    let mut signer_contribution = Zeroizing::new([0u8; 32]);
+    rng.fill_bytes(signer_contribution.as_mut());
+    let mut seed_hash = Keccak256::new();
+    seed_hash.update(b"monero-rust signer transaction seed v1");
+    seed_hash.update(unsigned.seed.as_ref());
+    seed_hash.update(signer_contribution.as_ref());
+    let effective_seed = Zeroizing::new(seed_hash.finalize().into());
+    let mut effective = unsigned.clone();
+    effective.seed = effective_seed;
+
     let view_pair = ViewPair::new(
         OxidePoint::from(&**spend * ED25519_BASEPOINT_TABLE),
         Zeroizing::new(OxideScalar::from(**view)),
@@ -492,8 +505,8 @@ pub fn sign_offline<R: RngCore + CryptoRng>(
         Some(UnsignedChange::Dummy) => Some(throwaway_view_pair(rng, view)?),
         _ => None,
     };
-    let (signable, resolved) = unsigned.build(&view_pair, dummy.as_ref().unwrap_or(&view_pair))?;
-    if dummy.is_some() && unsigned.resolve(&view_pair)? != resolved {
+    let (signable, resolved) = effective.build(&view_pair, dummy.as_ref().unwrap_or(&view_pair))?;
+    if unsigned.resolve(&view_pair)? != resolved {
         return Err(
             "the transaction to sign does not have the fee and amounts it resolved to".to_string(),
         );
@@ -541,7 +554,7 @@ pub fn sign_offline<R: RngCore + CryptoRng>(
         return Err("signed transaction fee differs from the resolved fee".to_string());
     }
 
-    let (tx_key, additional_tx_keys) = transaction_keys(unsigned, &view_pair, &tx)?;
+    let (tx_key, additional_tx_keys) = transaction_keys(&effective, &view_pair, &tx)?;
     Ok(SignedTransaction {
         tx,
         tx_key,
@@ -987,11 +1000,23 @@ mod tests {
         assert_eq!(tx_keys, vec![&*signed.tx_key * ED25519_BASEPOINT_TABLE]);
         assert!(additional.is_empty());
 
-        // Deterministic given the same seed material
         let mut rng = rand::rngs::StdRng::seed_from_u64(999);
         let again = sign_offline(&mut rng, &sender.spend, &sender.view, &unsigned).unwrap();
-        assert_eq!(again.tx_key, signed.tx_key);
-        assert_eq!(again.tx.prefix().extra, tx.prefix().extra);
+        assert_ne!(again.tx_key, signed.tx_key);
+        assert_ne!(again.tx.prefix().extra, tx.prefix().extra);
+    }
+
+    #[test]
+    fn signer_entropy_changes_transaction_keys_for_the_same_envelope() {
+        let unsigned = unsigned(vec![(recipient().address(), 1_000_000_000)]);
+        let sender = sender();
+        let mut first_rng = rand::rngs::StdRng::seed_from_u64(1);
+        let mut second_rng = rand::rngs::StdRng::seed_from_u64(2);
+
+        let first = sign_offline(&mut first_rng, &sender.spend, &sender.view, &unsigned).unwrap();
+        let second = sign_offline(&mut second_rng, &sender.spend, &sender.view, &unsigned).unwrap();
+
+        assert_ne!(first.tx_key.to_bytes(), second.tx_key.to_bytes());
     }
 
     #[test]
