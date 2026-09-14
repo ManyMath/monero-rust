@@ -20,14 +20,14 @@ use monero_wallet::{
     OutputWithDecoys, ViewPair,
 };
 
-use crate::scanner::{DEFAULT_LOOKAHEAD, WALLET_CLI_SOFTWARE_LOOKAHEAD};
+use crate::scanner::WALLET_CLI_SOFTWARE_LOOKAHEAD;
 use crate::tx_utils::checked_amount_sum;
 
 /// Leading bytes of every unsigned transaction.
 pub const MAGIC: [u8; 4] = *b"MRUT";
 
 /// The envelope version this build reads and writes.
-pub const VERSION: u8 = 3;
+pub const VERSION: u8 = 4;
 
 const MAX_INPUTS: usize = 1000;
 
@@ -35,9 +35,6 @@ const MAX_PAYMENTS: usize = 16;
 
 /// Highest account the signer accepts change in.
 pub const MAX_CHANGE_ACCOUNT: u32 = WALLET_CLI_SOFTWARE_LOOKAHEAD.account;
-
-/// Highest subaddress index the signer accepts change at.
-pub const MAX_CHANGE_SUBADDRESS: u32 = DEFAULT_LOOKAHEAD.subaddress;
 
 /// The ring size of the RingCT types an unsigned transaction can have.
 pub fn ring_len(rct_type: RctType) -> Option<u8> {
@@ -79,6 +76,9 @@ pub struct UnsignedTransaction {
     /// The online wallet's part of the signing seed; the signer mixes in its own.
     pub seed: Zeroizing<[u8; 32]>,
     pub fee_rate: FeeRate,
+    /// The account every input was selected from. As in wallet2, change must go
+    /// to its minor index 0 (the primary address for account 0).
+    pub source_account: u32,
     pub inputs: Vec<OutputWithDecoys>,
     pub payments: Vec<(MoneroAddress, u64)>,
     /// `None`: the payments are the only outputs, and whatever they leave over is
@@ -92,6 +92,7 @@ impl std::fmt::Debug for UnsignedTransaction {
         f.debug_struct("UnsignedTransaction")
             .field("rct_type", &self.rct_type)
             .field("fee_rate", &self.fee_rate)
+            .field("source_account", &self.source_account)
             .field("inputs", &self.inputs.len())
             .field("payments", &self.payments)
             .field("change", &self.change)
@@ -176,6 +177,7 @@ impl UnsignedTransaction {
         w.write_all(&[VERSION, u8::from(self.rct_type)])?;
         w.write_all(self.seed.as_ref())?;
         self.fee_rate.write(w)?;
+        w.write_all(&self.source_account.to_le_bytes())?;
         write_vec(OutputWithDecoys::write, &self.inputs, w)?;
         write_vec(
             |(address, amount): &(MoneroAddress, u64), w: &mut W| {
@@ -235,6 +237,12 @@ impl UnsignedTransaction {
             .ok_or_else(|| invalid("unsupported RingCT type"))?;
         let seed = Zeroizing::new(read_bytes(r)?);
         let fee_rate = FeeRate::read(r)?;
+        let source_account = read_u32(r)?;
+        if source_account > MAX_CHANGE_ACCOUNT {
+            return Err(invalid(format!(
+                "source account {source_account} exceeds signer lookahead {MAX_CHANGE_ACCOUNT}"
+            )));
+        }
         let expected_ring_len = ring_len(rct_type).expect("RingCT type was checked above");
         let inputs = read_vec(
             |r: &mut R| read_input(r, expected_ring_len),
@@ -266,6 +274,7 @@ impl UnsignedTransaction {
             rct_type,
             seed,
             fee_rate,
+            source_account,
             inputs,
             payments,
             change,
@@ -296,6 +305,12 @@ impl UnsignedTransaction {
         view_pair: &ViewPair,
         dummy: &ViewPair,
     ) -> Result<(SignableTransaction, ResolvedTransaction), String> {
+        if self.source_account > MAX_CHANGE_ACCOUNT {
+            return Err(format!(
+                "source account {} exceeds signer lookahead {MAX_CHANGE_ACCOUNT}",
+                self.source_account
+            ));
+        }
         if self.inputs.is_empty() {
             return Err("unsigned transaction has no inputs".to_string());
         }
@@ -312,8 +327,8 @@ impl UnsignedTransaction {
                 subaddress,
             }) => {
                 let derived = change_address(view_pair, *subaddress);
-                let is_ours =
-                    change_index_allowed(*subaddress) && same_destination(&derived, address);
+                let is_ours = change_index_allowed(self.source_account, *subaddress)
+                    && same_destination(&derived, address);
                 (
                     Change::new(view_pair.clone(), *subaddress),
                     Some((*address, is_ours)),
@@ -416,10 +431,12 @@ fn change_address(view_pair: &ViewPair, subaddress: Option<SubaddressIndex>) -> 
     }
 }
 
-fn change_index_allowed(subaddress: Option<SubaddressIndex>) -> bool {
-    subaddress.map_or(true, |index| {
-        index.account() <= MAX_CHANGE_ACCOUNT && index.address() <= MAX_CHANGE_SUBADDRESS
-    })
+fn change_index_allowed(source_account: u32, subaddress: Option<SubaddressIndex>) -> bool {
+    match (source_account, subaddress) {
+        (0, None) => true,
+        (account, Some(index)) => index.account() == account && index.address() == 0,
+        _ => false,
+    }
 }
 
 /// Whether two addresses have the same keys and kind. The network is ignored.
@@ -530,9 +547,8 @@ pub fn sign_offline<R: RngCore + CryptoRng>(
                 "Refusing to sign: this transaction sends its change to {}, which is not the \
                  address this wallet derives for its own change. An unsigned transaction is \
                  built by the online, view-only wallet, and a tampered one redirects the change \
-                 while still balancing its amounts. (Change to a subaddress beyond account \
-                 {MAX_CHANGE_ACCOUNT} or index {MAX_CHANGE_SUBADDRESS} also lands here: it fails \
-                 closed.)",
+                 while still balancing its amounts. wallet2 change must be minor index zero of \
+                 the reviewed source account (and the primary address for account zero).",
                 change.address
             ));
         }
@@ -754,6 +770,7 @@ mod tests {
             rct_type: RctType::ClsagBulletproofPlus,
             seed: Zeroizing::new([42; 32]),
             fee_rate: fee_rate(),
+            source_account: 0,
             inputs: vec![input(&sender(), 0, INPUT_AMOUNT)],
             payments,
             change: Some(UnsignedChange::Own {
@@ -886,7 +903,7 @@ mod tests {
         bytes[4] = VERSION + 1;
         let error = UnsignedTransaction::from_bytes(&bytes).unwrap_err();
         assert!(
-            error.contains("unsupported unsigned transaction version 4"),
+            error.contains("unsupported unsigned transaction version 5"),
             "{error}"
         );
 
@@ -903,6 +920,7 @@ mod tests {
             bytes.extend_from_slice(&[VERSION, u8::from(RctType::ClsagBulletproofPlus)]);
             bytes.extend_from_slice(&[42; 32]);
             fee_rate().write(&mut bytes).unwrap();
+            bytes.extend_from_slice(&0u32.to_le_bytes());
             bytes
         };
 
@@ -936,6 +954,7 @@ mod tests {
         bytes.extend_from_slice(&[VERSION, u8::from(RctType::ClsagBulletproofPlus)]);
         bytes.extend_from_slice(tx.seed.as_ref());
         tx.fee_rate.write(&mut bytes).unwrap();
+        bytes.extend_from_slice(&tx.source_account.to_le_bytes());
         bytes.push(1);
         bytes.extend_from_slice(&input);
 
@@ -1353,7 +1372,7 @@ mod tests {
                 subaddress: None,
             });
         }
-        for (account, index) in [(MAX_CHANGE_ACCOUNT + 1, 0), (0, MAX_CHANGE_SUBADDRESS + 1)] {
+        for (account, index) in [(0, 1), (3, 0), (MAX_CHANGE_ACCOUNT, 20)] {
             refused(UnsignedChange::Own {
                 address: sender.subaddress(account, index),
                 subaddress: SubaddressIndex::new(account, index),
@@ -1380,6 +1399,7 @@ mod tests {
         let sender = sender();
         let index = SubaddressIndex::new(3, 0).unwrap();
         let mut tx = unsigned(vec![(recipient().address(), 1_000_000_000)]);
+        tx.source_account = 3;
         tx.change = Some(UnsignedChange::Own {
             address: sender.subaddress(3, 0),
             subaddress: Some(index),

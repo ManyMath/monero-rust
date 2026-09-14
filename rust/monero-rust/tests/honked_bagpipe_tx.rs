@@ -146,6 +146,7 @@ async fn test_transaction_building() {
         rct_type: monero_oxide::ringct::RctType::ClsagBulletproofPlus,
         seed: Zeroizing::new([7; 32]),
         fee_rate: monero_wallet::interface::FeeRate::new(6000, 10000).expect("fee rate"),
+        source_account: 0,
         inputs: vec![input],
         payments: vec![(address, send_amount)],
         change: Some(UnsignedChange::Own {

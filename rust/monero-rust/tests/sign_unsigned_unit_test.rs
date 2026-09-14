@@ -289,7 +289,7 @@ fn change_ownership_requires_the_correct_address_derivation_mode() {
         .unwrap()
     };
 
-    for subaddress in [None, SubaddressIndex::new(0, 1)] {
+    for (source_account, subaddress) in [(0, None), (3, SubaddressIndex::new(3, 0))] {
         // A different network prefix does not change ownership.
         let owned = match subaddress {
             None => wallet.address(Network::Mainnet),
@@ -303,6 +303,7 @@ fn change_ownership_requires_the_correct_address_derivation_mode() {
         let hostile = MoneroAddress::new(Network::Mainnet, wrong_type, owned.spend(), owned.view());
 
         let mut unsigned = synthetic_unsigned_for(&wallet);
+        unsigned.source_account = source_account;
         unsigned.change = Some(UnsignedChange::Own {
             address: owned,
             subaddress,
@@ -329,7 +330,7 @@ fn change_ownership_requires_the_correct_address_derivation_mode() {
 
         unsigned.change = Some(UnsignedChange::Own {
             address: owned,
-            subaddress: SubaddressIndex::new(0, 2),
+            subaddress: SubaddressIndex::new(source_account, 1),
         });
         let encoded = encode(&unsigned);
         assert!(!preview_of(&encoded).transactions[0].destinations[1].is_ours);

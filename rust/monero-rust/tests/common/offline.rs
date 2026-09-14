@@ -101,6 +101,7 @@ pub fn unsigned_for(
         rct_type: RctType::ClsagBulletproofPlus,
         seed: Zeroizing::new([0x42; 32]),
         fee_rate: pinned_fee(FEE),
+        source_account: 0,
         inputs: vec![default_input(owner)],
         payments,
         change: Some(UnsignedChange::Own {

@@ -6,7 +6,7 @@ pub mod native {
     use crate::seed_compat::Seed;
     use crate::unsigned_tx::{
         check_input_ownership, output_with_decoys, ring_len, sign_offline, UnsignedChange,
-        UnsignedTransaction,
+        UnsignedTransaction, MAX_CHANGE_ACCOUNT,
     };
     use curve25519_dalek::{
         constants::ED25519_BASEPOINT_TABLE,
@@ -70,6 +70,60 @@ pub mod native {
             .collect()
     }
 
+    fn source_account(stored_outputs: &[StoredOutputData]) -> Result<u32, String> {
+        let account = stored_outputs
+            .first()
+            .and_then(|stored| stored.subaddress)
+            .map_or(0, |(account, _)| account);
+        if account > MAX_CHANGE_ACCOUNT {
+            return Err(format!(
+                "Source account {account} exceeds signer lookahead {MAX_CHANGE_ACCOUNT}"
+            ));
+        }
+        if stored_outputs.iter().any(|stored| {
+            stored
+                .subaddress
+                .map_or(0, |(stored_account, _)| stored_account)
+                != account
+        }) {
+            return Err("Cannot combine outputs from different accounts".to_string());
+        }
+        Ok(account)
+    }
+
+    fn wallet2_change(
+        view_pair: &ViewPair,
+        network: Network,
+        source_account: u32,
+    ) -> Result<UnsignedChange, String> {
+        if source_account == 0 {
+            return Ok(UnsignedChange::Own {
+                address: view_pair.legacy_address(network),
+                subaddress: None,
+            });
+        }
+        let index = SubaddressIndex::new(source_account, 0)
+            .ok_or_else(|| format!("Invalid source account {source_account}"))?;
+        Ok(UnsignedChange::Own {
+            address: view_pair.subaddress(network, index),
+            subaddress: Some(index),
+        })
+    }
+
+    fn output_source_account(outputs: &[(WalletOutput, u64)]) -> Result<u32, String> {
+        let account = outputs
+            .first()
+            .and_then(|(output, _)| output.subaddress())
+            .map_or(0, |index| index.account());
+        if outputs
+            .iter()
+            .any(|(output, _)| output.subaddress().map_or(0, |index| index.account()) != account)
+        {
+            return Err("Cannot combine outputs from different accounts".to_string());
+        }
+        Ok(account)
+    }
+
     fn spent_output(output: &WalletOutput, global_index: u64) -> crate::decoy_select::SpentOutput {
         crate::decoy_select::SpentOutput {
             index_on_blockchain: global_index,
@@ -114,6 +168,7 @@ pub mod native {
         change: Option<UnsignedChange>,
     ) -> Result<UnsignedTransaction, String> {
         let existing_rings = vec![None; outputs.len()];
+        let source_account = output_source_account(outputs)?;
         build_unsigned_transaction_with_rings(
             rng,
             rpc,
@@ -121,6 +176,7 @@ pub mod native {
             fee_rate,
             outputs,
             &existing_rings,
+            source_account,
             payments,
             change,
         )
@@ -134,9 +190,13 @@ pub mod native {
         fee_rate: FeeRate,
         outputs: &[(WalletOutput, u64)],
         existing_rings: &[Option<Decoys>],
+        source_account: u32,
         payments: Vec<(MoneroAddress, u64)>,
         change: Option<UnsignedChange>,
     ) -> Result<UnsignedTransaction, String> {
+        if output_source_account(outputs)? != source_account {
+            return Err("Stored source account does not match the selected outputs".to_string());
+        }
         let height = rpc
             .get_height()
             .await
@@ -168,6 +228,7 @@ pub mod native {
             rct_type,
             seed,
             fee_rate,
+            source_account,
             inputs,
             payments,
             change,
@@ -674,6 +735,7 @@ pub mod native {
         if recipients.len() > 15 {
             return Err("Maximum 15 recipients allowed (16 outputs - 1 change)".to_string());
         }
+        source_account(&stored_outputs)?;
 
         let network = parse_network(network_str)?;
 
@@ -793,6 +855,8 @@ pub mod native {
             return Err("Maximum 15 recipients allowed (16 outputs - 1 change)".to_string());
         }
 
+        let source_account = source_account(&stored_outputs)?;
+
         let network = parse_network(network_str)?;
 
         let seed = resolve_seed(seed_phrase)?;
@@ -878,10 +942,9 @@ pub mod native {
             with_change,
         )?;
 
-        let change = with_change.then(|| UnsignedChange::Own {
-            address: view_pair.legacy_address(network),
-            subaddress: None,
-        });
+        let change = with_change
+            .then(|| wallet2_change(&view_pair, network, source_account))
+            .transpose()?;
 
         // Select decoys online, then sign; the signer returns the tx keys
         let mut rng = rand::rngs::OsRng;
@@ -892,6 +955,7 @@ pub mod native {
             fee,
             &spendable_outputs,
             &persisted_rings(&stored_outputs)?,
+            source_account,
             payments,
             change,
         )
@@ -921,8 +985,14 @@ pub mod native {
             account: max_account,
             subaddress: DEFAULT_LOOKAHEAD.subaddress,
         };
-        let change_outputs =
-            scan_transaction_outputs(&tx, &tx_id, view_pair, spend_key, lookahead, None);
+        let change_outputs = scan_transaction_outputs(
+            &tx,
+            &tx_id,
+            view_pair,
+            spend_key,
+            lookahead,
+            unsigned.change.and_then(|change| change.subaddress()),
+        );
 
         Ok(TransactionResult {
             tx_id,
@@ -970,6 +1040,8 @@ pub mod native {
         if stored_outputs.is_empty() {
             return Err("No outputs provided".to_string());
         }
+
+        let source_account = source_account(&stored_outputs)?;
 
         let network = parse_network(network_str)?;
 
@@ -1031,6 +1103,7 @@ pub mod native {
             fee,
             &spendable_outputs,
             &persisted_rings(&stored_outputs)?,
+            source_account,
             vec![(dest_addr, provisional_amount)],
             Some(UnsignedChange::Dummy),
         )
@@ -1545,6 +1618,7 @@ pub mod native {
             rct_type: RctType::ClsagBulletproofPlus,
             seed: wallet2_r_seed(unsigned_txset, tx_count, construction_index),
             fee_rate,
+            source_account: construction.subaddr_account,
             inputs,
             payments,
             change,
@@ -1668,6 +1742,8 @@ pub mod native {
             return Err("Maximum 15 recipients allowed (16 outputs - 1 change)".to_string());
         }
 
+        let source_account = source_account(&stored_outputs)?;
+
         let network = parse_network(network_str)?;
 
         let view_bytes =
@@ -1771,10 +1847,9 @@ pub mod native {
             with_change,
         )?;
 
-        let change = with_change.then(|| UnsignedChange::Own {
-            address: view_pair.legacy_address(network),
-            subaddress: None,
-        });
+        let change = with_change
+            .then(|| wallet2_change(&view_pair, network, source_account))
+            .transpose()?;
 
         let mut rng = rand::rngs::OsRng;
         let unsigned = build_unsigned_transaction_with_rings(
@@ -1784,6 +1859,7 @@ pub mod native {
             fee_rate,
             &spendable_outputs,
             &persisted_rings(&stored_outputs)?,
+            source_account,
             payments,
             change,
         )
@@ -1953,6 +2029,9 @@ pub mod native {
     /// One transaction boundary in the reviewed container. Amounts are piconero.
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     pub struct TransactionSummary {
+        /// The account every input was selected from; change returns to its
+        /// minor index zero.
+        pub source_account: u32,
         pub destinations: Vec<DestinationPreview>,
         /// Total of inputs whose one-time keys were verified against this wallet.
         pub input_total: u64,
@@ -2019,7 +2098,7 @@ pub mod native {
         use sha3::{Digest, Keccak256};
         parse_network(network_str)?;
         let mut digest = Keccak256::new();
-        digest.update(b"monero-rust offline transaction approval v3");
+        digest.update(b"monero-rust offline transaction approval v4");
         digest.update((network_str.len() as u64).to_le_bytes());
         digest.update(network_str.as_bytes());
         // Bind public identities, never retain secret key bytes in the review.
@@ -2195,6 +2274,7 @@ pub mod native {
         )
         .ok_or_else(|| "unsigned owned output amounts overflow".to_string())?;
         Ok(TransactionSummary {
+            source_account: unsigned.source_account,
             destinations,
             input_total,
             fee: resolved.fee,
@@ -2417,6 +2497,33 @@ pub mod native {
                 view_pair.legacy_address(Network::Stagenet),
                 expected.address
             );
+        }
+
+        #[test]
+        fn input_selection_never_crosses_account_boundaries() {
+            let output = |subaddress| StoredOutputData {
+                tx_hash: String::new(),
+                output_index: 0,
+                amount: 1,
+                key: String::new(),
+                key_offset: String::new(),
+                commitment_mask: String::new(),
+                subaddress,
+                payment_id: None,
+                received_output_bytes: String::new(),
+                global_index: None,
+                key_image: String::new(),
+                ring: None,
+            };
+
+            assert_eq!(source_account(&[output(None), output(Some((0, 7)))]), Ok(0));
+            assert_eq!(
+                source_account(&[output(Some((3, 2))), output(Some((3, 9)))]),
+                Ok(3)
+            );
+            let error = source_account(&[output(Some((3, 2))), output(Some((4, 0)))])
+                .expect_err("wallet2 does not combine accounts");
+            assert!(error.contains("different accounts"), "{error}");
         }
 
         #[test]
