@@ -482,15 +482,17 @@ pub mod native {
         pub outputs: usize,
     }
 
-    /// Prepared transaction state, ready for signing.
+    /// Validated inputs and recipients with pre-decoy fee and change bounds.
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct PreparedTransaction {
         pub node_url: String,
         pub network: String,
         pub recipients: Vec<(String, u64)>, // (address, amount) pairs
-        pub fee: u64,
+        #[serde(alias = "fee")]
+        pub fee_upper_bound: u64,
         pub total_input: u64,
-        pub change: u64,
+        #[serde(alias = "change")]
+        pub change_lower_bound: u64,
         pub stored_outputs: Vec<StoredOutputData>,
     }
 
@@ -713,8 +715,8 @@ pub mod native {
         })
     }
 
-    /// Prepare a transaction: validate inputs, calculate fee, check balance.
-    /// Returns a PreparedTransaction that can be inspected before signing.
+    /// Check recipients and balance against a fee upper bound, before decoy
+    /// selection.
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn prepare_transaction(
         node_url: &str,
@@ -770,14 +772,14 @@ pub mod native {
             node_url: node_url.to_string(),
             network: network_str.to_string(),
             recipients: recipients.to_vec(),
-            fee: fee_est.fee,
+            fee_upper_bound: fee_est.fee,
             total_input,
-            change: total_input - total_out,
+            change_lower_bound: total_input - total_out,
             stored_outputs,
         })
     }
 
-    /// Sign a prepared transaction.
+    /// Sign a prepared transaction, rebuilding it with decoys and its exact fee.
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn sign_prepared_transaction(
         prepared: PreparedTransaction,
@@ -2661,6 +2663,37 @@ pub mod native {
             assert_eq!(estimate.inputs, 2);
             assert_eq!(estimate.outputs, 2);
             assert!(estimate.fee > 0);
+        }
+
+        #[test]
+        fn prepared_transaction_labels_pre_decoy_values_as_bounds() {
+            let prepared = PreparedTransaction {
+                node_url: "http://127.0.0.1:18081".to_string(),
+                network: "mainnet".to_string(),
+                recipients: vec![],
+                fee_upper_bound: 20,
+                total_input: 100,
+                change_lower_bound: 80,
+                stored_outputs: vec![],
+            };
+            let json = serde_json::to_value(&prepared).unwrap();
+            assert_eq!(json["fee_upper_bound"], 20);
+            assert_eq!(json["change_lower_bound"], 80);
+            assert!(json.get("fee").is_none());
+            assert!(json.get("change").is_none());
+
+            let old = serde_json::json!({
+                "node_url": "http://127.0.0.1:18081",
+                "network": "mainnet",
+                "recipients": [],
+                "fee": 20,
+                "total_input": 100,
+                "change": 80,
+                "stored_outputs": []
+            });
+            let restored: PreparedTransaction = serde_json::from_value(old).unwrap();
+            assert_eq!(restored.fee_upper_bound, 20);
+            assert_eq!(restored.change_lower_bound, 80);
         }
 
         // -- decide_change tests --
