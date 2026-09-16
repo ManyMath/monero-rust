@@ -501,7 +501,7 @@ pub mod native {
         spend_key: Zeroizing<Scalar>,
         lookahead: Lookahead,
         change_subaddress: Option<SubaddressIndex>,
-    ) -> Vec<ChangeOutputInfo> {
+    ) -> Result<Vec<ChangeOutputInfo>, String> {
         let mut scanner = monero_wallet::Scanner::new(view_pair);
         crate::scanner::register_subaddresses(&mut scanner, lookahead);
         // Change may go to a subaddress outside the lookahead.
@@ -509,15 +509,12 @@ pub mod native {
             scanner.register_subaddress(index);
         }
 
-        let Ok(tx_hash) = hex::decode(tx_id) else {
-            return vec![];
-        };
-        let Ok(tx_hash) = <[u8; 32]>::try_from(tx_hash) else {
-            return vec![];
-        };
+        let tx_hash: [u8; 32] = hex::decode(tx_id)
+            .map_err(|e| format!("Signed transaction ID is not hex: {e}"))?
+            .try_into()
+            .map_err(|_| "Signed transaction ID is not 32 bytes".to_string())?;
         let pruned = Transaction::<Pruned>::from(tx.clone());
-        let our_outputs = crate::scanner::scan_single_transaction(&mut scanner, tx_hash, &pruned)
-            .unwrap_or_default();
+        let our_outputs = crate::scanner::scan_single_transaction(&mut scanner, tx_hash, &pruned)?;
 
         our_outputs
             .into_iter()
@@ -537,9 +534,10 @@ pub mod native {
                 let key_image_point = generate_key_image(&one_time_key_scalar);
                 let key_image = hex::encode(key_image_point.compress().to_bytes());
 
-                ChangeOutputInfo {
+                Ok(ChangeOutputInfo {
                     tx_hash: tx_id.to_string(),
-                    output_index: u8::try_from(output.index_in_transaction()).unwrap_or(u8::MAX),
+                    output_index: u8::try_from(output.index_in_transaction())
+                        .map_err(|_| "Signed transaction output index exceeds u8".to_string())?,
                     amount,
                     key,
                     key_offset,
@@ -547,7 +545,7 @@ pub mod native {
                     subaddress_index,
                     received_output_bytes,
                     key_image,
-                }
+                })
             })
             .collect()
     }
@@ -992,7 +990,7 @@ pub mod native {
             spend_key,
             lookahead,
             unsigned.change.and_then(|change| change.subaddress()),
-        );
+        )?;
 
         Ok(TransactionResult {
             tx_id,
@@ -1137,7 +1135,7 @@ pub mod native {
             subaddress: DEFAULT_LOOKAHEAD.subaddress,
         };
         let change_outputs =
-            scan_transaction_outputs(&tx, &tx_id, view_pair, spend_key, lookahead, None);
+            scan_transaction_outputs(&tx, &tx_id, view_pair, spend_key, lookahead, None)?;
 
         Ok(TransactionResult {
             tx_id,
@@ -2312,7 +2310,7 @@ pub mod native {
             spend_key,
             signer_lookahead(),
             unsigned.change.and_then(|change| change.subaddress()),
-        );
+        )?;
 
         Ok(OfflineSignedTransaction {
             tx_id,
