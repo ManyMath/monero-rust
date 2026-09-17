@@ -348,6 +348,7 @@ pub mod native {
         pub key_image: String,
     }
 
+    #[must_use = "persist input_rings in WalletState before a transaction may be rebuilt"]
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct TransactionResult {
         pub tx_id: String,
@@ -362,6 +363,16 @@ pub mod native {
         /// The ring of each input, by key image.
         #[serde(default)]
         pub input_rings: Vec<InputRing>,
+    }
+
+    impl TransactionResult {
+        /// Record every ring in `wallet_state`, all or none.
+        pub fn persist_input_rings(
+            &self,
+            wallet_state: &mut crate::wallet_state::WalletState,
+        ) -> Result<(), String> {
+            wallet_state.record_input_rings(&self.input_rings)
+        }
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -461,6 +472,15 @@ pub mod native {
     ) -> Result<Vec<InputRing>, String> {
         if stored_outputs.len() != unsigned.inputs.len() {
             return Err("selected ring count does not match stored input count".to_string());
+        }
+        if stored_outputs
+            .iter()
+            .any(|stored| stored.key_image.is_empty())
+        {
+            return Err(
+                "Cannot build a transaction until every selected output has a key image"
+                    .to_string(),
+            );
         }
         Ok(stored_outputs
             .iter()
@@ -1153,15 +1173,39 @@ pub mod native {
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn broadcast_transaction(
         node_url: &str,
+        transaction: &TransactionResult,
+        wallet_state: &mut crate::wallet_state::WalletState,
+        do_not_relay: bool,
+    ) -> Result<(), String> {
+        let rpc = HttpRpc::new(node_url.to_string())
+            .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
+        broadcast_transaction_with_rpc(&rpc, transaction, wallet_state, do_not_relay).await
+    }
+
+    /// Persist the rings selected for `transaction`, then relay it.
+    pub async fn broadcast_transaction_with_rpc<R: RpcConnection>(
+        rpc: &Rpc<R>,
+        transaction: &TransactionResult,
+        wallet_state: &mut crate::wallet_state::WalletState,
+        do_not_relay: bool,
+    ) -> Result<(), String> {
+        transaction.persist_input_rings(wallet_state)?;
+        broadcast_raw_transaction_with_rpc(rpc, &transaction.tx_blob, do_not_relay).await
+    }
+
+    /// Relay signed transaction bytes whose rings were managed elsewhere.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn broadcast_raw_transaction(
+        node_url: &str,
         tx_blob_hex: &str,
         do_not_relay: bool,
     ) -> Result<(), String> {
         let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
-        broadcast_transaction_with_rpc(&rpc, tx_blob_hex, do_not_relay).await
+        broadcast_raw_transaction_with_rpc(&rpc, tx_blob_hex, do_not_relay).await
     }
 
-    pub async fn broadcast_transaction_with_rpc<R: RpcConnection>(
+    pub async fn broadcast_raw_transaction_with_rpc<R: RpcConnection>(
         rpc: &Rpc<R>,
         tx_blob_hex: &str,
         do_not_relay: bool,
@@ -1248,6 +1292,7 @@ pub mod native {
         received_outputs_from_scan_inner(rpc, block_height, seed_phrase, passphrase).await
     }
 
+    #[must_use = "persist input_rings in WalletState before an unsigned transaction may be rebuilt"]
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct UnsignedTransactionResult {
         pub unsigned_tx_hex: String,
@@ -1256,6 +1301,24 @@ pub mod native {
         /// The ring of each input, by key image.
         #[serde(default)]
         pub input_rings: Vec<InputRing>,
+    }
+
+    impl UnsignedTransactionResult {
+        /// Record every ring in `wallet_state`, all or none.
+        pub fn persist_input_rings(
+            &self,
+            wallet_state: &mut crate::wallet_state::WalletState,
+        ) -> Result<(), String> {
+            wallet_state.record_input_rings(&self.input_rings)
+        }
+    }
+
+    fn persist_unsigned_transaction_result(
+        result: UnsignedTransactionResult,
+        wallet_state: &mut crate::wallet_state::WalletState,
+    ) -> Result<UnsignedTransactionResult, String> {
+        result.persist_input_rings(wallet_state)?;
+        Ok(result)
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1700,6 +1763,7 @@ pub mod native {
         Ok(unsigned.remove(0))
     }
 
+    /// Build an unsigned transaction, persisting its rings before returning it.
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn create_unsigned_transaction(
         node_url: &str,
@@ -1709,6 +1773,7 @@ pub mod native {
         stored_outputs: Vec<StoredOutputData>,
         recipients: &[(String, u64)],
         max_fee_per_weight: Option<u64>,
+        wallet_state: &mut crate::wallet_state::WalletState,
     ) -> Result<UnsignedTransactionResult, String> {
         let rpc = HttpRpc::new(node_url.to_string()).map_err(|e| format!("RPC error: {:?}", e))?;
         create_unsigned_transaction_with_rpc(
@@ -1719,6 +1784,7 @@ pub mod native {
             stored_outputs,
             recipients,
             max_fee_per_weight,
+            wallet_state,
         )
         .await
     }
@@ -1731,6 +1797,7 @@ pub mod native {
         stored_outputs: Vec<StoredOutputData>,
         recipients: &[(String, u64)],
         max_fee_per_weight: Option<u64>,
+        wallet_state: &mut crate::wallet_state::WalletState,
     ) -> Result<UnsignedTransactionResult, String> {
         if stored_outputs.is_empty() {
             return Err("No outputs provided".to_string());
@@ -1869,12 +1936,15 @@ pub mod native {
         let fee = unsigned.resolve(&view_pair)?.fee;
         let input_rings = selected_input_rings(&stored_outputs, &unsigned)?;
 
-        Ok(UnsignedTransactionResult {
-            unsigned_tx_hex: hex::encode(unsigned.serialize()),
-            fee,
-            recipients: recipients.to_vec(),
-            input_rings,
-        })
+        persist_unsigned_transaction_result(
+            UnsignedTransactionResult {
+                unsigned_tx_hex: hex::encode(unsigned.serialize()),
+                fee,
+                recipients: recipients.to_vec(),
+                input_rings,
+            },
+            wallet_state,
+        )
     }
 
     pub fn sign_unsigned_transaction(
@@ -2524,6 +2594,54 @@ pub mod native {
             let error = source_account(&[output(Some((3, 2))), output(Some((4, 0)))])
                 .expect_err("wallet2 does not combine accounts");
             assert!(error.contains("different accounts"), "{error}");
+        }
+
+        #[test]
+        fn unsigned_envelope_is_returned_only_after_its_ring_is_recorded() {
+            let selection = DecoySelection {
+                real_index: 0,
+                offsets: vec![1; 16],
+                ring: vec![
+                    RingMember {
+                        key: "00".repeat(32),
+                        commitment: "00".repeat(32),
+                    };
+                    16
+                ],
+            };
+            let mut state = crate::wallet_state::WalletState::new();
+            state.add_outputs(vec![crate::wallet_output::WalletOutput {
+                tx_hash: "tx".into(),
+                output_index: 0,
+                amount: 1,
+                key: String::new(),
+                key_offset: String::new(),
+                commitment_mask: String::new(),
+                subaddress_index: Some((0, 0)),
+                payment_id: None,
+                received_output_bytes: String::new(),
+                global_index: Some(1),
+                ring: None,
+                block_height: 1,
+                spent: false,
+                spent_height: None,
+                key_image: "ki".into(),
+                is_coinbase: false,
+                frozen: false,
+            }]);
+            let result = UnsignedTransactionResult {
+                unsigned_tx_hex: "envelope".into(),
+                fee: 1,
+                recipients: vec![],
+                input_rings: vec![InputRing {
+                    key_image: "ki".into(),
+                    ring: selection.clone(),
+                }],
+            };
+
+            let exported = persist_unsigned_transaction_result(result, &mut state).unwrap();
+            assert_eq!(exported.unsigned_tx_hex, "envelope");
+            assert_eq!(state.outputs()[0].ring, Some(selection));
         }
 
         #[test]

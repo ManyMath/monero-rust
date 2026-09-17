@@ -253,15 +253,46 @@ impl WalletState {
     }
 
     /// Record rings by key image, so rebuilt and conflicting spends reuse them.
-    pub fn record_input_rings(&mut self, rings: &[crate::tx_builder::native::InputRing]) -> usize {
-        let mut recorded = 0;
+    pub fn record_input_rings(
+        &mut self,
+        rings: &[crate::tx_builder::native::InputRing],
+    ) -> Result<(), String> {
+        let mut indexes = Vec::with_capacity(rings.len());
+        let mut seen = HashSet::with_capacity(rings.len());
         for input_ring in rings {
-            if let Some(&index) = self.key_image_index.get(&input_ring.key_image) {
-                self.outputs[index].ring = Some(input_ring.ring.clone());
-                recorded += 1;
+            if input_ring.key_image.is_empty() {
+                return Err("Cannot persist a ring without its key image".to_string());
             }
+            if !seen.insert(&input_ring.key_image) {
+                return Err(format!(
+                    "Transaction contains duplicate ring metadata for key image {}",
+                    input_ring.key_image
+                ));
+            }
+            let index = *self
+                .key_image_index
+                .get(&input_ring.key_image)
+                .ok_or_else(|| {
+                    format!(
+                        "Cannot persist ring: key image {} is not in wallet state",
+                        input_ring.key_image
+                    )
+                })?;
+            if let Some(existing) = &self.outputs[index].ring {
+                if existing != &input_ring.ring {
+                    return Err(format!(
+                        "Refusing to replace the persisted ring for key image {}",
+                        input_ring.key_image
+                    ));
+                }
+            }
+            indexes.push(index);
         }
-        recorded
+
+        for (index, input_ring) in indexes.into_iter().zip(rings) {
+            self.outputs[index].ring = Some(input_ring.ring.clone());
+        }
+        Ok(())
     }
 
     /// Extend outputs in blockchain scan order (transaction order within each
@@ -1381,16 +1412,56 @@ mod tests {
         };
         let mut state = WalletState::new();
         state.add_outputs(vec![make_output(1_000_000_000_000, 100, "ki1")]);
-        assert_eq!(
-            state.record_input_rings(&[InputRing {
+        state
+            .record_input_rings(&[InputRing {
                 key_image: "ki1".into(),
                 ring: ring.clone(),
-            }]),
-            1
-        );
+            }])
+            .unwrap();
         let stored: crate::tx_builder::native::StoredOutputData = state.outputs()[0].clone().into();
         assert_eq!(stored.key_image, "ki1");
         assert_eq!(stored.ring, Some(ring));
+    }
+
+    #[test]
+    fn recording_rings_is_atomic_and_never_replaces_a_ring() {
+        use crate::tx_builder::native::{DecoySelection, InputRing, RingMember};
+
+        let ring = |offset| DecoySelection {
+            real_index: 0,
+            offsets: vec![offset; 16],
+            ring: vec![
+                RingMember {
+                    key: "00".repeat(32),
+                    commitment: "00".repeat(32),
+                };
+                16
+            ],
+        };
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1, 100, "ki1"), make_output(1, 100, "ki2")]);
+        state
+            .record_input_rings(&[InputRing {
+                key_image: "ki1".into(),
+                ring: ring(1),
+            }])
+            .unwrap();
+
+        let error = state
+            .record_input_rings(&[
+                InputRing {
+                    key_image: "ki1".into(),
+                    ring: ring(2),
+                },
+                InputRing {
+                    key_image: "missing".into(),
+                    ring: ring(3),
+                },
+            ])
+            .unwrap_err();
+        assert!(error.contains("replace") || error.contains("not in wallet"));
+        assert_eq!(state.outputs()[0].ring, Some(ring(1)));
+        assert!(state.outputs()[1].ring.is_none());
     }
 
     #[test]
