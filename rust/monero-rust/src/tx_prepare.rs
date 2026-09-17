@@ -125,7 +125,8 @@ pub fn prepare_sweep_inputs_at(
         return Err("No spendable outputs available for sweep".to_string());
     }
 
-    let total_input: u64 = spendable.iter().map(|o| o.amount).sum();
+    let total_input = crate::tx_utils::checked_amount_sum(spendable.iter().map(|o| o.amount))
+        .ok_or_else(|| "sweep input amounts overflow".to_string())?;
     // Sweep has 1 output (destination, no change); padded to 2 by BP+ = base case
     let estimated_fee = estimate_fee(spendable.len(), 1);
     let spent_output_keys: Vec<String> = spendable.iter().map(|o| o.output_key()).collect();
@@ -315,6 +316,16 @@ mod tests {
         let result = prepare_sweep_inputs(&outputs, 200, None, None).unwrap();
         assert_eq!(result.stored_outputs.len(), 3);
         assert_eq!(result.total_input, 6_000_000_000_000);
+    }
+
+    #[test]
+    fn sweep_refuses_an_input_total_that_overflows() {
+        let outputs = vec![
+            make_output(u64::MAX, 100, "tx1"),
+            make_output(1, 100, "tx2"),
+        ];
+        let error = prepare_sweep_inputs(&outputs, 200, None, None).unwrap_err();
+        assert!(error.contains("overflow"), "{error}");
     }
 
     #[test]

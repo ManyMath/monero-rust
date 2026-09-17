@@ -23,21 +23,29 @@ pub const DUST_THRESHOLD: u64 = 20_000_000; // 0.00002 XMR
 /// Accounts for Bulletproofs+ output padding (outputs are padded to the next
 /// power of 2, and each doubling beyond 2 adds ~640 bytes of proof weight).
 pub fn estimate_fee(num_inputs: usize, num_outputs: usize) -> u64 {
-    let base = BASE_FEE_ESTIMATE + (num_inputs as u64 * FEE_PER_INPUT_ESTIMATE);
+    checked_estimate_fee(num_inputs, num_outputs).unwrap_or(u64::MAX)
+}
+
+fn checked_estimate_fee(num_inputs: usize, num_outputs: usize) -> Option<u64> {
+    let inputs = u64::try_from(num_inputs).ok()?;
+    let base = BASE_FEE_ESTIMATE.checked_add(inputs.checked_mul(FEE_PER_INPUT_ESTIMATE)?)?;
 
     if num_outputs <= 2 {
-        return base;
+        return Some(base);
     }
 
     // Extra output fields beyond the 2 included in BASE_FEE_ESTIMATE
-    let extra_output_fields = (num_outputs - 2) as u64 * PER_OUTPUT_FIELD_FEE_ESTIMATE;
+    let extra_outputs = u64::try_from(num_outputs - 2).ok()?;
+    let extra_output_fields = extra_outputs.checked_mul(PER_OUTPUT_FIELD_FEE_ESTIMATE)?;
 
     // BP+ pads to next power of 2; each doubling beyond 2 adds ~640 bytes
-    let padded = (num_outputs as u32).next_power_of_two();
+    let padded = u32::try_from(num_outputs)
+        .ok()?
+        .checked_next_power_of_two()?;
     let bp_doublings = padded.trailing_zeros().saturating_sub(1); // base is 2 = 2^1
-    let bp_extra = bp_doublings as u64 * BP_DOUBLING_FEE_ESTIMATE;
+    let bp_extra = u64::from(bp_doublings).checked_mul(BP_DOUBLING_FEE_ESTIMATE)?;
 
-    base + extra_output_fields + bp_extra
+    base.checked_add(extra_output_fields)?.checked_add(bp_extra)
 }
 
 /// Result of coin selection.
@@ -87,8 +95,10 @@ pub fn select_inputs(
 
     // If manual selection, use all selected outputs
     if manual_selection.is_some() {
-        let total: u64 = candidates.iter().map(|o| o.amount).sum();
-        let estimated_fee = estimate_fee(candidates.len(), num_outputs);
+        let total = crate::tx_utils::checked_amount_sum(candidates.iter().map(|o| o.amount))
+            .ok_or_else(|| "selected output amounts overflow".to_string())?;
+        let estimated_fee = checked_estimate_fee(candidates.len(), num_outputs)
+            .ok_or_else(|| "fee estimate overflows".to_string())?;
         return Ok(CoinSelectionResult {
             selected: candidates,
             total,
@@ -97,8 +107,11 @@ pub fn select_inputs(
     }
 
     // Auto-selection: try single output first
-    let single_input_fee = estimate_fee(1, num_outputs);
-    let needed_for_single = amount + single_input_fee;
+    let single_input_fee =
+        checked_estimate_fee(1, num_outputs).ok_or_else(|| "fee estimate overflows".to_string())?;
+    let needed_for_single = amount
+        .checked_add(single_input_fee)
+        .ok_or_else(|| "amount plus fee overflows".to_string())?;
 
     candidates.sort_by_key(|o| o.amount);
 
@@ -117,8 +130,11 @@ pub fn select_inputs(
     let mut best: Option<CoinSelectionResult> = None;
 
     for target_count in 2..=candidates.len() {
-        let estimated_fee = estimate_fee(target_count, num_outputs);
-        let needed_total = amount + estimated_fee;
+        let estimated_fee = checked_estimate_fee(target_count, num_outputs)
+            .ok_or_else(|| "fee estimate overflows".to_string())?;
+        let needed_total = amount
+            .checked_add(estimated_fee)
+            .ok_or_else(|| "amount plus fee overflows".to_string())?;
 
         if let Some((selection, total)) =
             find_best_combination(&candidates, needed_total, target_count)
@@ -138,8 +154,10 @@ pub fn select_inputs(
         Some(result) => Ok(result),
         None => {
             // Fall back to using all outputs
-            let total: u64 = candidates.iter().map(|o| o.amount).sum();
-            let estimated_fee = estimate_fee(candidates.len(), num_outputs);
+            let total = crate::tx_utils::checked_amount_sum(candidates.iter().map(|o| o.amount))
+                .ok_or_else(|| "selected output amounts overflow".to_string())?;
+            let estimated_fee = checked_estimate_fee(candidates.len(), num_outputs)
+                .ok_or_else(|| "fee estimate overflows".to_string())?;
             Ok(CoinSelectionResult {
                 selected: candidates,
                 total,
@@ -168,7 +186,7 @@ pub fn find_best_combination(
     if combinations_exceed(outputs.len(), target_count, MAX_COMBINATIONS) {
         // Greedy: pick the largest `target_count` outputs (already sorted descending)
         let selected: Vec<WalletOutput> = outputs.iter().take(target_count).cloned().collect();
-        let total: u64 = selected.iter().map(|o| o.amount).sum();
+        let total = crate::tx_utils::checked_amount_sum(selected.iter().map(|o| o.amount))?;
         return if total >= needed_total {
             Some((selected, total))
         } else {
@@ -209,15 +227,9 @@ pub fn find_best_combination(
             }
 
             current.push(outputs[i].clone());
-            search(
-                outputs,
-                needed,
-                target_count,
-                i + 1,
-                current,
-                current_sum + outputs[i].amount,
-                best,
-            );
+            if let Some(sum) = current_sum.checked_add(outputs[i].amount) {
+                search(outputs, needed, target_count, i + 1, current, sum, best);
+            }
             current.pop();
         }
     }
@@ -314,6 +326,14 @@ mod tests {
         let result = select_inputs(&outputs, 500_000_000_000, 1, Some(&selected_keys)).unwrap();
         assert_eq!(result.selected.len(), 2);
         assert_eq!(result.total, 4_000_000_000_000);
+    }
+
+    #[test]
+    fn manual_selection_refuses_an_amount_sum_that_overflows() {
+        let outputs = vec![make_output(u64::MAX, "tx1"), make_output(1, "tx2")];
+        let selected_keys = vec!["tx1:0".to_string(), "tx2:0".to_string()];
+        let error = select_inputs(&outputs, 1, 1, Some(&selected_keys)).unwrap_err();
+        assert!(error.contains("overflow"), "{error}");
     }
 
     #[test]
