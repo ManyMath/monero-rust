@@ -94,6 +94,49 @@ pub fn transaction_weight_upper_bound(
         + (inputs * (clsag_weight(ring_len) + 32)))
 }
 
+/// wallet2's `estimate_tx_weight`. Not a bound: only for making wallet2's
+/// selection decisions.
+pub fn wallet2_weight_estimate(
+    rct_type: RctType,
+    inputs: usize,
+    outputs: usize,
+) -> Result<usize, String> {
+    let ring = u128::from(ring_len(rct_type).ok_or_else(|| "Unsupported RingCT type".to_string())?);
+    let plus = matches!(rct_type, RctType::ClsagBulletproofPlus);
+    if inputs == 0 || outputs == 0 {
+        return Err("A transaction has at least one input and one output".to_string());
+    }
+    let inputs = u128::try_from(inputs).map_err(|_| "input count exceeds u128".to_string())?;
+    let outputs = u128::try_from(outputs).map_err(|_| "output count exceeds u128".to_string())?;
+    let mut log_padded_outputs = 0u32;
+    while (1u128 << log_padded_outputs) < outputs {
+        log_padded_outputs += 1;
+    }
+    let proof_fields: u128 = if plus { 6 } else { 4 + 5 };
+
+    let mut size = 1 + 6;
+    size += inputs * (1 + 6 + (ring * 2) + 32);
+    size += outputs * (6 + 32);
+    size += 1;
+    size += ((2 * (6 + u128::from(log_padded_outputs))) + proof_fields) * 32 + 3;
+    size += inputs * ((32 * ring) + 64);
+    if plus {
+        size += outputs;
+    }
+    size += 32 * inputs;
+    size += 8 * outputs;
+    size += 32 * outputs;
+    size += 4;
+
+    if outputs > 2 {
+        let log_padded_outputs = log_padded_outputs.max(2);
+        let base = (32 * (proof_fields + (7 * 2))) / 2;
+        let proof = 32 * (proof_fields + (2 * (6 + u128::from(log_padded_outputs))));
+        size += ((base * (1u128 << log_padded_outputs)) - proof) * 4 / 5;
+    }
+    usize::try_from(size).map_err(|_| "weight exceeds usize".to_string())
+}
+
 /// The fee `fee_rate` asks of a transaction weighing `weight`.
 pub fn fee_for_weight(fee_rate: FeeRate, weight: usize) -> Result<u64, String> {
     let weight = u64::try_from(weight).map_err(|_| "weight exceeds u64".to_string())?;
@@ -151,6 +194,31 @@ mod tests {
                 "{rct_type:?} {inputs} in, {outputs} out"
             );
         }
+    }
+
+    #[test]
+    fn wallet2_estimate_follows_wallet2() {
+        let plus = RctType::ClsagBulletproofPlus;
+        let original = RctType::ClsagBulletproof;
+        for (rct_type, inputs, outputs, weight) in [
+            (plus, 1, 2, 1492),
+            (plus, 2, 2, 2171),
+            (plus, 146, 2, 99_947),
+            (plus, 1, 3, 2095),
+            (plus, 1, 16, 6220),
+            (original, 1, 2, 1416),
+            (original, 2, 2, 1925),
+        ] {
+            assert_eq!(
+                wallet2_weight_estimate(rct_type, inputs, outputs),
+                Ok(weight),
+                "{rct_type:?} {inputs} in, {outputs} out"
+            );
+        }
+        assert!(wallet2_weight_estimate(plus, 0, 2).is_err());
+        assert!(wallet2_weight_estimate(plus, 1, 0).is_err());
+        assert!(wallet2_weight_estimate(RctType::MlsagBulletproofs, 1, 2).is_err());
+        assert!(wallet2_weight_estimate(plus, usize::MAX, usize::MAX).is_err());
     }
 
     #[test]

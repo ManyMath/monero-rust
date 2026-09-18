@@ -31,8 +31,8 @@ pub mod ur_codec;
 pub mod validation;
 pub use tx_builder::native;
 pub use tx_prepare::{
-    prepare_send_inputs, prepare_send_inputs_at, prepare_sweep_inputs, prepare_sweep_inputs_at,
-    PreparedInputs,
+    prepare_send_inputs, prepare_send_inputs_at, prepare_send_inputs_at_with_fee,
+    prepare_send_inputs_with_fee, prepare_sweep_inputs, prepare_sweep_inputs_at, PreparedInputs,
 };
 pub use tx_utils::{adjust_recipients_for_fee, classify_broadcast_error};
 
@@ -46,7 +46,9 @@ pub use wallet_state::{
 
 // -- Coin selection --
 pub use coin_selection::{
-    estimate_fee, find_best_combination, select_inputs, CoinSelectionResult, DUST_THRESHOLD,
+    estimate_fee, estimate_fee_with_rate, find_best_combination, fractional_threshold,
+    select_inputs, select_inputs_with_fee, select_inputs_with_fee_and_rng, CoinSelectionResult,
+    DUST_THRESHOLD,
 };
 
 // -- Scan coordination --

@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
-use crate::coin_selection::{estimate_fee, select_inputs, CoinSelectionResult};
+use crate::coin_selection::{
+    estimate_fee, select_inputs, select_inputs_with_fee, CoinSelectionResult,
+};
 use crate::tx_builder::native::StoredOutputData;
 use crate::wallet_output::WalletOutput;
 use crate::wallet_state::{current_time_secs, is_spendable_at};
@@ -36,6 +38,78 @@ pub fn prepare_send_inputs(
         manual_selection,
         excluded_key_images,
     )
+}
+
+/// Prepare send inputs at the fee rate transaction construction will use.
+pub fn prepare_send_inputs_with_fee(
+    wallet_outputs: &[WalletOutput],
+    daemon_height: u64,
+    total_amount: u64,
+    num_recipients: usize,
+    manual_selection: Option<&[String]>,
+    excluded_key_images: Option<&HashSet<String>>,
+    source_account: u32,
+    rct_type: monero_wallet::ringct::RctType,
+    fee_rate: monero_wallet::interface::FeeRate,
+) -> Result<PreparedInputs, String> {
+    prepare_send_inputs_at_with_fee(
+        wallet_outputs,
+        daemon_height,
+        current_time_secs(),
+        total_amount,
+        num_recipients,
+        manual_selection,
+        excluded_key_images,
+        source_account,
+        rct_type,
+        fee_rate,
+    )
+}
+
+/// Clock-injected variant of `prepare_send_inputs_with_fee`.
+pub fn prepare_send_inputs_at_with_fee(
+    wallet_outputs: &[WalletOutput],
+    daemon_height: u64,
+    now_secs: Option<u64>,
+    total_amount: u64,
+    num_recipients: usize,
+    manual_selection: Option<&[String]>,
+    excluded_key_images: Option<&HashSet<String>>,
+    source_account: u32,
+    rct_type: monero_wallet::ringct::RctType,
+    fee_rate: monero_wallet::interface::FeeRate,
+) -> Result<PreparedInputs, String> {
+    let spendable: Vec<WalletOutput> = wallet_outputs
+        .iter()
+        .filter(|o| {
+            !o.spent
+                && !o.frozen
+                && is_spendable_at(o, daemon_height, now_secs)
+                && !excluded_key_images.map_or(false, |exc| exc.contains(&o.key_image))
+        })
+        .cloned()
+        .collect();
+    let CoinSelectionResult {
+        selected,
+        total,
+        estimated_fee,
+    } = select_inputs_with_fee(
+        &spendable,
+        total_amount,
+        num_recipients,
+        manual_selection,
+        source_account,
+        rct_type,
+        fee_rate,
+    )?;
+    let spent_output_keys = selected.iter().map(WalletOutput::output_key).collect();
+    let stored_outputs = selected.into_iter().map(Into::into).collect();
+    Ok(PreparedInputs {
+        stored_outputs,
+        spent_output_keys,
+        total_input: total,
+        estimated_fee,
+    })
 }
 
 /// Prepare a send using an explicit Unix clock, such as adjusted network time.
