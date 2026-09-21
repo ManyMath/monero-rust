@@ -1305,8 +1305,10 @@ mod tests {
             more_inputs.inputs = two_inputs.clone();
             shapes.push(more_inputs);
         }
-        let mut sweep = unsigned(vec![(subaddress, 1_000_000_000), (subaddress, 0)]);
-        sweep.change = None;
+        let mut sweep = unsigned(vec![(subaddress, 1)]);
+        sweep.change = Some(UnsignedChange::Dummy);
+        let fee = sweep.resolve(&sender().view_pair()).unwrap().fee;
+        sweep.payments[0].1 = INPUT_AMOUNT - fee;
         shapes.push(sweep);
 
         for tx in shapes {

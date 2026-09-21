@@ -13,8 +13,9 @@
 mod common;
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
+use monero_oxide::transaction::{NotPruned, Pruned, Transaction};
 use monero_rust::monero_rpc::HttpRpc;
-use monero_rust::native::build_unsigned_transaction;
+use monero_rust::native::{build_unsigned_transaction, sweep_all_with_rpc, StoredOutputData};
 use monero_rust::scanner::{
     derive_address, derive_keys, scan_block_for_outputs_with_lookahead, scan_blocks_batch,
     Lookahead,
@@ -27,6 +28,10 @@ use zeroize::Zeroizing;
 const SEED: &str = "velvet lymph giddy number token physics poetry unquoted nibs useful \
     sabotage limits benches lifestyle eden nitrogen anvil fewest avoid batch vials washing \
     fences goat unquoted";
+
+const SWEEP_SEED: &str = "honked bagpipe alpine juicy faked afoot jostle claim cowl tunnel \
+    orphans negative pheasants feast jetting quote frown teeming cycling tribal womanly hills \
+    cottage daytime daytime";
 
 /// Use mainnet address encoding on regtest.
 const NETWORK: monero_rust::Network = monero_rust::Network::Mainnet;
@@ -47,6 +52,9 @@ const LOOKAHEAD: Lookahead = Lookahead {
     subaddress: 5,
 };
 
+// One daemon for all tests: serialize chain work.
+static REGTEST_CHAIN: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Mine to the test wallet, then scan for its coinbase outputs.
 /// Keep mining and scanning together because tests share the chain.
 #[tokio::test(flavor = "multi_thread")]
@@ -54,6 +62,7 @@ async fn mines_then_scans_its_own_outputs() {
     let Some(node) = common::regtest_node() else {
         return;
     };
+    let _chain = REGTEST_CHAIN.lock().await;
 
     let rpc = HttpRpc::new(node).expect("regtest RPC");
     let address = derive_address(SEED, monero_rust::Network::Mainnet, "").expect("derive address");
@@ -112,6 +121,7 @@ async fn scanned_outputs_parse_back_in_the_stored_format() {
     let Some(node) = common::regtest_node() else {
         return;
     };
+    let _chain = REGTEST_CHAIN.lock().await;
 
     let rpc = HttpRpc::new(node).expect("regtest RPC");
     let address = derive_address(SEED, monero_rust::Network::Mainnet, "").expect("derive address");
@@ -156,6 +166,7 @@ async fn builds_signs_and_broadcasts_a_transaction() {
     let Some(node) = common::regtest_node() else {
         return;
     };
+    let _chain = REGTEST_CHAIN.lock().await;
 
     let rpc = HttpRpc::new(node).expect("regtest RPC");
     let address = derive_address(SEED, monero_rust::Network::Mainnet, "").expect("derive address");
@@ -272,12 +283,102 @@ async fn builds_signs_and_broadcasts_a_transaction() {
     println!("daemon accepted transaction {}", hex::encode(tx.hash()));
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn sweep_with_dummy_output_is_accepted_by_the_daemon() {
+    let Some(node) = common::regtest_node() else {
+        return;
+    };
+    let _chain = REGTEST_CHAIN.lock().await;
+
+    let rpc = HttpRpc::new(node).expect("regtest RPC");
+    let decoy_address = derive_address(SEED, NETWORK, "").expect("derive decoy-mining address");
+    let height = rpc.get_height().await.expect("get_height");
+    if height < MIN_HEIGHT_TO_SPEND {
+        rpc.generate_blocks(&decoy_address.to_string(), MIN_HEIGHT_TO_SPEND - height)
+            .await
+            .expect("mine enough decoys");
+    }
+
+    let sweep_address = derive_address(SWEEP_SEED, NETWORK, "").expect("derive sweep wallet");
+    let start = rpc.get_height().await.expect("get_height");
+    rpc.generate_blocks(&sweep_address.to_string(), BLOCKS_TO_MINE)
+        .await
+        .expect("mine sweep wallet outputs");
+
+    let mut owned = None;
+    for height in start..(start + BLOCKS_TO_MINE - 60) {
+        let scanned = scan_block_for_outputs_with_lookahead(
+            &rpc,
+            height as u64,
+            SWEEP_SEED,
+            NETWORK,
+            LOOKAHEAD,
+            "",
+        )
+        .await
+        .expect("scan sweep output");
+        if let Some(output) = scanned.outputs.into_iter().next() {
+            owned = Some(output);
+            break;
+        }
+    }
+    let owned = owned.expect("a mature sweep output");
+    let input_amount = owned.amount;
+    let stored = StoredOutputData::from(owned);
+
+    let recipient_spend = Scalar::from(777u64);
+    let recipient_view = Scalar::from(888u64);
+    let recipient_view_pair = monero_wallet::ViewPair::new(
+        monero_wallet::ed25519::Point::from(&recipient_spend * ED25519_BASEPOINT_TABLE),
+        Zeroizing::new(monero_wallet::ed25519::Scalar::from(recipient_view)),
+    )
+    .expect("recipient view pair");
+    let recipient_index = monero_wallet::address::SubaddressIndex::new(0, 1).unwrap();
+    let recipient = recipient_view_pair.subaddress(NETWORK, recipient_index);
+
+    let result = sweep_all_with_rpc(
+        &rpc,
+        SWEEP_SEED,
+        "mainnet",
+        vec![stored],
+        &recipient.to_string(),
+        "",
+    )
+    .await
+    .expect("build and sign sweep");
+    let bytes = hex::decode(&result.tx_blob).expect("signed transaction hex");
+    let tx = Transaction::<NotPruned>::read(&mut bytes.as_slice()).expect("signed transaction");
+    assert_eq!(tx.prefix().outputs.len(), 2);
+    assert_eq!(tx.prefix().extra.len(), 44);
+    assert!(result.tx_key_additional.is_empty());
+    assert!(result.change_outputs.is_empty());
+    assert!(result.fee < input_amount);
+
+    let mut scanner = monero_wallet::Scanner::new(recipient_view_pair);
+    scanner.register_subaddress(recipient_index);
+    let received: Vec<_> = monero_rust::scanner::scan_single_transaction(
+        &mut scanner,
+        tx.hash(),
+        &Transaction::<Pruned>::from(tx.clone()),
+    )
+    .expect("scan sweep recipient")
+    .into_iter()
+    .map(|output| output.commitment().amount)
+    .collect();
+    assert_eq!(received, vec![input_amount - result.fee]);
+
+    rpc.publish_transaction(&tx)
+        .await
+        .expect("daemon must accept wallet2-style sweep");
+}
+
 /// Scan locally mined blocks through the `getblocks.bin` batch sync path.
 #[tokio::test(flavor = "multi_thread")]
 async fn batch_scans_the_chain_it_mined() {
     let Some(node) = common::regtest_node() else {
         return;
     };
+    let _chain = REGTEST_CHAIN.lock().await;
 
     let rpc = HttpRpc::new(node).expect("regtest RPC");
     let address = derive_address(SEED, monero_rust::Network::Mainnet, "").expect("derive address");
