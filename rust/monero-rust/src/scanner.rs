@@ -245,7 +245,6 @@ fn view_key_from_seed(seed: &Seed, passphrase: &str) -> Scalar {
     Scalar::from_bytes_mod_order(view)
 }
 
-#[cfg(target_arch = "wasm32")]
 fn spend_key_scalar_from_seed(seed: &Seed, passphrase: &str) -> Scalar {
     // SEC-02: Derive via Zeroizing to eliminate bare [u8; 32] intermediate.
     // Returns bare Scalar because callers use it for further arithmetic
@@ -329,8 +328,7 @@ pub struct CachedScanner {
     lookahead: Lookahead,
     fingerprint: [u8; 32],
     watermark: SubaddressWatermark,
-    #[cfg(target_arch = "wasm32")]
-    spend_scalar: Scalar,
+    spend_scalar: Option<Scalar>,
 }
 
 /// Expand the registered subaddress window if `found` is near the edge.
@@ -421,8 +419,7 @@ struct CachedScannerEntry {
     lookahead: Lookahead,
     fingerprint: [u8; 32],
     watermark: SubaddressWatermark,
-    #[cfg(target_arch = "wasm32")]
-    spend_scalar: Scalar,
+    spend_scalar: Option<Scalar>,
 }
 
 /// Resolve a mnemonic with explicit BIP39 passphrase and account index.
@@ -1180,11 +1177,13 @@ pub async fn scan_blocks_batch<R: RpcConnection>(
     prune: bool,
     passphrase: &str,
 ) -> Result<Vec<BlockScanResult>, String> {
-    // Get a known block hash so the daemon can find the fork point.
+    // The id of the block below `start_height`: monerod answers a list that
+    // starts with its top block with no blocks.
+    let anchor_height = start_height.saturating_sub(1);
     let known_hash = rpc
-        .get_block_hash(start_height as usize)
+        .get_block_hash(anchor_height as usize)
         .await
-        .map_err(|e| format!("Failed to get block hash at {}: {:?}", start_height, e))?;
+        .map_err(|e| format!("Failed to get block hash at {}: {:?}", anchor_height, e))?;
 
     // Fetch batch of blocks via binary RPC (up to ~1000 blocks per call)
     let response = rpc
@@ -1237,12 +1236,9 @@ pub async fn process_batch_response(
         .as_ref()
         .map(|(vs, _)| *vs)
         .unwrap_or_else(|| view_key_from_seed(seed_opt.as_ref().unwrap(), passphrase));
-    #[cfg(target_arch = "wasm32")]
-    let spend_scalar_val = if view_only.is_some() {
-        Scalar::ZERO
-    } else {
-        spend_key_scalar_from_seed(seed_opt.as_ref().unwrap(), passphrase)
-    };
+    let spend_scalar = view_only
+        .is_none()
+        .then(|| spend_key_scalar_from_seed(seed_opt.as_ref().unwrap(), passphrase));
     let fingerprint = spend_point.compress().to_bytes();
 
     let mut scanner = if let Some(c) = cached {
@@ -1257,8 +1253,7 @@ pub async fn process_batch_response(
                 lookahead,
                 fingerprint,
                 watermark: SubaddressWatermark::new(lookahead),
-                #[cfg(target_arch = "wasm32")]
-                spend_scalar: spend_scalar_val,
+                spend_scalar,
             }
         }
     } else {
@@ -1269,8 +1264,7 @@ pub async fn process_batch_response(
             lookahead,
             fingerprint,
             watermark: SubaddressWatermark::new(lookahead),
-            #[cfg(target_arch = "wasm32")]
-            spend_scalar: spend_scalar_val,
+            spend_scalar,
         }
     };
 
@@ -1419,14 +1413,7 @@ pub async fn process_batch_response(
                     (scanned, false)
                 };
 
-            #[cfg(target_arch = "wasm32")]
-            let key_image_scalar = if scanner.spend_scalar == Scalar::ZERO {
-                None // view-only: no spend key available
-            } else {
-                Some(&scanner.spend_scalar)
-            };
-            #[cfg(not(target_arch = "wasm32"))]
-            let key_image_scalar: Option<&Scalar> = None;
+            let key_image_scalar = scanner.spend_scalar.as_ref();
 
             let mut outputs = Vec::with_capacity(scanned.len());
             for output in &scanned {
@@ -1512,10 +1499,11 @@ pub async fn scan_blocks_batch_multi_wallet<R: RpcConnection>(
     }
 
     // Get a known block hash for the daemon to find the fork point
+    let anchor_height = start_height.saturating_sub(1);
     let known_hash = rpc
-        .get_block_hash(start_height as usize)
+        .get_block_hash(anchor_height as usize)
         .await
-        .map_err(|e| format!("Failed to get block hash at {}: {:?}", start_height, e))?;
+        .map_err(|e| format!("Failed to get block hash at {}: {:?}", anchor_height, e))?;
 
     // Fetch batch of blocks via binary RPC
     let response = rpc
@@ -1599,12 +1587,9 @@ pub async fn process_batch_multi_wallet_response(
                     addr,
                 )
             };
-            #[cfg(target_arch = "wasm32")]
-            let spend_scalar_val = if view_only.is_some() {
-                Scalar::ZERO
-            } else {
+            let spend_scalar = view_only.is_none().then(|| {
                 spend_key_scalar_from_seed(seed_opt.as_ref().unwrap(), &config.passphrase)
-            };
+            });
 
             let mut scanner = oxide_scanner_from_keys(&spend_point, &view_scalar)?;
             register_subaddresses_async(&mut scanner, config.lookahead).await;
@@ -1615,8 +1600,7 @@ pub async fn process_batch_multi_wallet_response(
                 lookahead: config.lookahead,
                 fingerprint: *fp,
                 watermark: SubaddressWatermark::new(config.lookahead),
-                #[cfg(target_arch = "wasm32")]
-                spend_scalar: spend_scalar_val,
+                spend_scalar,
             });
         }
         CachedScanners { entries }
@@ -1777,14 +1761,7 @@ pub async fn process_batch_multi_wallet_response(
                     )?
                 };
 
-                #[cfg(target_arch = "wasm32")]
-                let key_image_scalar = if entry.spend_scalar == Scalar::ZERO {
-                    None // view-only: no spend key available
-                } else {
-                    Some(&entry.spend_scalar)
-                };
-                #[cfg(not(target_arch = "wasm32"))]
-                let key_image_scalar: Option<&Scalar> = None;
+                let key_image_scalar = entry.spend_scalar.as_ref();
 
                 let mut outputs = Vec::with_capacity(scanned.len());
                 for output in &scanned {
@@ -1907,10 +1884,11 @@ pub async fn fetch_blocks_batch<R: RpcConnection>(
     start_height: u64,
     prune: bool,
 ) -> Result<FetchedBlocks, String> {
+    let anchor_height = start_height.saturating_sub(1);
     let known_hash = rpc
-        .get_block_hash(start_height as usize)
+        .get_block_hash(anchor_height as usize)
         .await
-        .map_err(|e| format!("Failed to get block hash at {}: {:?}", start_height, e))?;
+        .map_err(|e| format!("Failed to get block hash at {}: {:?}", anchor_height, e))?;
     let response = rpc
         .get_blocks_fast(&[known_hash], start_height, prune)
         .await
@@ -2058,10 +2036,11 @@ pub async fn fetch_blocks_batch_with_history<R: RpcConnection>(
         .map(|(height, hash)| Ok((*height, hex_to_hash(hash)?)))
         .collect::<Result<Vec<_>, String>>()?;
     let block_ids: Vec<[u8; 32]> = if requested_history.is_empty() {
+        let anchor_height = start_height.saturating_sub(1);
         let hash = rpc
-            .get_block_hash(start_height as usize)
+            .get_block_hash(anchor_height as usize)
             .await
-            .map_err(|e| format!("Failed to get block hash at {}: {:?}", start_height, e))?;
+            .map_err(|e| format!("Failed to get block hash at {}: {:?}", anchor_height, e))?;
         vec![hash]
     } else {
         requested_history.iter().map(|(_, hash)| *hash).collect()
