@@ -2,7 +2,7 @@
 
 pub mod native {
     use crate::fee_estimate::{fee_for_weight, transaction_weight_upper_bound};
-    use crate::monero_rpc::{Rpc, RpcConnection, DEFAULT_MAX_FEE_PER_BYTE};
+    use crate::monero_rpc::{FeePriority, Rpc, RpcConnection, DEFAULT_MAX_FEE_PER_BYTE};
     use crate::seed_compat::Seed;
     use crate::unsigned_tx::{
         check_input_ownership, output_with_decoys, ring_len, sign_offline, UnsignedChange,
@@ -297,6 +297,52 @@ pub mod native {
     fn fee_rate_of(fee: crate::monero_rpc::Fee) -> Result<FeeRate, String> {
         fee.rate()
             .ok_or_else(|| "Fee rate and quantization mask must be nonzero".to_string())
+    }
+
+    /// Fee selection policy shared by estimation and transaction construction.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct FeePolicy {
+        pub priority: FeePriority,
+        /// wallet2's `m_blockchain.size()`, the newest scanned height plus one.
+        /// `None` uses the node's height.
+        pub wallet_height: Option<u64>,
+        pub max_fee_per_weight: u64,
+    }
+
+    impl Default for FeePolicy {
+        fn default() -> Self {
+            Self {
+                priority: FeePriority::Automatic,
+                wallet_height: None,
+                max_fee_per_weight: DEFAULT_MAX_FEE_PER_BYTE,
+            }
+        }
+    }
+
+    impl FeePolicy {
+        /// The policy for a wallet whose newest scanned block is `last_scanned_block`.
+        pub fn for_scanned_wallet(priority: FeePriority, last_scanned_block: u64) -> Self {
+            Self {
+                priority,
+                wallet_height: Some(last_scanned_block.saturating_add(1)),
+                ..Self::default()
+            }
+        }
+    }
+
+    async fn fee_for_policy<R: RpcConnection>(
+        rpc: &Rpc<R>,
+        policy: FeePolicy,
+    ) -> Result<(crate::monero_rpc::Fee, FeeRate), String> {
+        let fee = rpc
+            .get_fee_checked_for_priority_at_height(
+                policy.priority,
+                policy.wallet_height,
+                policy.max_fee_per_weight,
+            )
+            .await
+            .map_err(|e| format!("Failed to get fee rate: {e:?}"))?;
+        Ok((fee, fee_rate_of(fee)?))
     }
 
     fn fee_upper_bound(
@@ -692,15 +738,34 @@ pub mod native {
         num_inputs: usize,
         num_outputs: usize,
     ) -> Result<FeeEstimate, String> {
+        estimate_fee_with_policy(node_url, num_inputs, num_outputs, FeePolicy::default()).await
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn estimate_fee_with_policy(
+        node_url: &str,
+        num_inputs: usize,
+        num_outputs: usize,
+        policy: FeePolicy,
+    ) -> Result<FeeEstimate, String> {
         crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;
         let rpc = HttpRpc::new(node_url.to_string()).map_err(|e| format!("RPC error: {:?}", e))?;
-        estimate_fee_with_rpc(&rpc, num_inputs, num_outputs).await
+        estimate_fee_with_rpc_and_policy(&rpc, num_inputs, num_outputs, policy).await
     }
 
     pub async fn estimate_fee_with_rpc<R: RpcConnection>(
         rpc: &Rpc<R>,
         num_inputs: usize,
         num_outputs: usize,
+    ) -> Result<FeeEstimate, String> {
+        estimate_fee_with_rpc_and_policy(rpc, num_inputs, num_outputs, FeePolicy::default()).await
+    }
+
+    pub async fn estimate_fee_with_rpc_and_policy<R: RpcConnection>(
+        rpc: &Rpc<R>,
+        num_inputs: usize,
+        num_outputs: usize,
+        policy: FeePolicy,
     ) -> Result<FeeEstimate, String> {
         if num_inputs == 0 {
             return Err("Must have at least one input".to_string());
@@ -716,14 +781,10 @@ pub mod native {
             .await
             .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
 
-        let node_fee = rpc
-            .get_fee_checked(DEFAULT_MAX_FEE_PER_BYTE)
-            .await
-            .map_err(|e| format!("Failed to get fee rate: {:?}", e))?;
+        let (node_fee, fee_rate) = fee_for_policy(rpc, policy).await?;
 
         // Worst-case extra: assume payment ID and additional keys
-        let (weight, fee) =
-            fee_upper_bound(rct_type, fee_rate_of(node_fee)?, num_inputs, num_outputs)?;
+        let (weight, fee) = fee_upper_bound(rct_type, fee_rate, num_inputs, num_outputs)?;
 
         Ok(FeeEstimate {
             fee,
@@ -842,16 +903,39 @@ pub mod native {
         recipients: &[(String, u64)],
         passphrase: &str,
     ) -> Result<TransactionResult, String> {
+        create_transaction_with_policy(
+            node_url,
+            seed_phrase,
+            network_str,
+            stored_outputs,
+            recipients,
+            passphrase,
+            FeePolicy::default(),
+        )
+        .await
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn create_transaction_with_policy(
+        node_url: &str,
+        seed_phrase: &str,
+        network_str: &str,
+        stored_outputs: Vec<StoredOutputData>,
+        recipients: &[(String, u64)],
+        passphrase: &str,
+        policy: FeePolicy,
+    ) -> Result<TransactionResult, String> {
         crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;
         let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
-        create_transaction_with_rpc(
+        create_transaction_with_rpc_and_policy(
             &rpc,
             seed_phrase,
             network_str,
             stored_outputs,
             recipients,
             passphrase,
+            policy,
         )
         .await
     }
@@ -863,6 +947,27 @@ pub mod native {
         stored_outputs: Vec<StoredOutputData>,
         recipients: &[(String, u64)],
         passphrase: &str,
+    ) -> Result<TransactionResult, String> {
+        create_transaction_with_rpc_and_policy(
+            rpc,
+            seed_phrase,
+            network_str,
+            stored_outputs,
+            recipients,
+            passphrase,
+            FeePolicy::default(),
+        )
+        .await
+    }
+
+    pub async fn create_transaction_with_rpc_and_policy<R: RpcConnection>(
+        rpc: &Rpc<R>,
+        seed_phrase: &str,
+        network_str: &str,
+        stored_outputs: Vec<StoredOutputData>,
+        recipients: &[(String, u64)],
+        passphrase: &str,
+        policy: FeePolicy,
     ) -> Result<TransactionResult, String> {
         crate::validation::validate_network(network_str).map_err(|e| e.to_string())?;
         if stored_outputs.is_empty() {
@@ -890,11 +995,7 @@ pub mod native {
             .await
             .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
 
-        let fee = fee_rate_of(
-            rpc.get_fee_checked(DEFAULT_MAX_FEE_PER_BYTE)
-                .await
-                .map_err(|e| format!("Failed to get fee: {:?}", e))?,
-        )?;
+        let (_, fee) = fee_for_policy(rpc, policy).await?;
 
         // Parse and validate all destination addresses
         let mut dest_addrs = Vec::with_capacity(recipients.len());
@@ -1034,16 +1135,39 @@ pub mod native {
         destination_address: &str,
         passphrase: &str,
     ) -> Result<TransactionResult, String> {
+        sweep_all_with_policy(
+            node_url,
+            seed_phrase,
+            network_str,
+            stored_outputs,
+            destination_address,
+            passphrase,
+            FeePolicy::default(),
+        )
+        .await
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn sweep_all_with_policy(
+        node_url: &str,
+        seed_phrase: &str,
+        network_str: &str,
+        stored_outputs: Vec<StoredOutputData>,
+        destination_address: &str,
+        passphrase: &str,
+        policy: FeePolicy,
+    ) -> Result<TransactionResult, String> {
         crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;
         let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
-        sweep_all_with_rpc(
+        sweep_all_with_rpc_and_policy(
             &rpc,
             seed_phrase,
             network_str,
             stored_outputs,
             destination_address,
             passphrase,
+            policy,
         )
         .await
     }
@@ -1055,6 +1179,27 @@ pub mod native {
         stored_outputs: Vec<StoredOutputData>,
         destination_address: &str,
         passphrase: &str,
+    ) -> Result<TransactionResult, String> {
+        sweep_all_with_rpc_and_policy(
+            rpc,
+            seed_phrase,
+            network_str,
+            stored_outputs,
+            destination_address,
+            passphrase,
+            FeePolicy::default(),
+        )
+        .await
+    }
+
+    pub async fn sweep_all_with_rpc_and_policy<R: RpcConnection>(
+        rpc: &Rpc<R>,
+        seed_phrase: &str,
+        network_str: &str,
+        stored_outputs: Vec<StoredOutputData>,
+        destination_address: &str,
+        passphrase: &str,
+        policy: FeePolicy,
     ) -> Result<TransactionResult, String> {
         crate::validation::validate_network(network_str).map_err(|e| e.to_string())?;
         if stored_outputs.is_empty() {
@@ -1076,11 +1221,7 @@ pub mod native {
             .await
             .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
 
-        let fee = fee_rate_of(
-            rpc.get_fee_checked(DEFAULT_MAX_FEE_PER_BYTE)
-                .await
-                .map_err(|e| format!("Failed to get fee: {:?}", e))?,
-        )?;
+        let (_, fee) = fee_for_policy(rpc, policy).await?;
 
         // Parse destination address
         let dest_addr = MoneroAddress::from_str(network, destination_address).map_err(|e| {
@@ -1775,15 +1916,43 @@ pub mod native {
         max_fee_per_weight: Option<u64>,
         wallet_state: &mut crate::wallet_state::WalletState,
     ) -> Result<UnsignedTransactionResult, String> {
+        let policy = FeePolicy {
+            max_fee_per_weight: max_fee_per_weight.unwrap_or(DEFAULT_MAX_FEE_PER_BYTE),
+            ..FeePolicy::default()
+        };
+        create_unsigned_transaction_with_policy(
+            node_url,
+            view_key_hex,
+            pub_spend_key_hex,
+            network_str,
+            stored_outputs,
+            recipients,
+            policy,
+            wallet_state,
+        )
+        .await
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn create_unsigned_transaction_with_policy(
+        node_url: &str,
+        view_key_hex: &str,
+        pub_spend_key_hex: &str,
+        network_str: &str,
+        stored_outputs: Vec<StoredOutputData>,
+        recipients: &[(String, u64)],
+        policy: FeePolicy,
+        wallet_state: &mut crate::wallet_state::WalletState,
+    ) -> Result<UnsignedTransactionResult, String> {
         let rpc = HttpRpc::new(node_url.to_string()).map_err(|e| format!("RPC error: {:?}", e))?;
-        create_unsigned_transaction_with_rpc(
+        create_unsigned_transaction_with_rpc_and_policy(
             &rpc,
             view_key_hex,
             pub_spend_key_hex,
             network_str,
             stored_outputs,
             recipients,
-            max_fee_per_weight,
+            policy,
             wallet_state,
         )
         .await
@@ -1797,6 +1966,33 @@ pub mod native {
         stored_outputs: Vec<StoredOutputData>,
         recipients: &[(String, u64)],
         max_fee_per_weight: Option<u64>,
+        wallet_state: &mut crate::wallet_state::WalletState,
+    ) -> Result<UnsignedTransactionResult, String> {
+        let policy = FeePolicy {
+            max_fee_per_weight: max_fee_per_weight.unwrap_or(DEFAULT_MAX_FEE_PER_BYTE),
+            ..FeePolicy::default()
+        };
+        create_unsigned_transaction_with_rpc_and_policy(
+            rpc,
+            view_key_hex,
+            pub_spend_key_hex,
+            network_str,
+            stored_outputs,
+            recipients,
+            policy,
+            wallet_state,
+        )
+        .await
+    }
+
+    pub async fn create_unsigned_transaction_with_rpc_and_policy<R: RpcConnection>(
+        rpc: &Rpc<R>,
+        view_key_hex: &str,
+        pub_spend_key_hex: &str,
+        network_str: &str,
+        stored_outputs: Vec<StoredOutputData>,
+        recipients: &[(String, u64)],
+        policy: FeePolicy,
         wallet_state: &mut crate::wallet_state::WalletState,
     ) -> Result<UnsignedTransactionResult, String> {
         if stored_outputs.is_empty() {
@@ -1842,11 +2038,7 @@ pub mod native {
             .get_rct_type()
             .await
             .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
-        let fee_rate = fee_rate_of(
-            rpc.get_fee_checked(max_fee_per_weight.unwrap_or(DEFAULT_MAX_FEE_PER_BYTE))
-                .await
-                .map_err(|e| format!("Failed to get fee: {:?}", e))?,
-        )?;
+        let (_, fee_rate) = fee_for_policy(rpc, policy).await?;
 
         let mut dest_addrs = Vec::with_capacity(recipients.len());
         for (addr_str, _) in recipients {
@@ -2781,6 +2973,68 @@ pub mod native {
             assert_eq!(estimate.inputs, 2);
             assert_eq!(estimate.outputs, 2);
             assert!(estimate.fee > 0);
+        }
+
+        #[test]
+        fn scanned_wallet_policy_counts_blocks_like_wallet2() {
+            let policy = FeePolicy::for_scanned_wallet(FeePriority::Automatic, 499);
+            assert_eq!(
+                policy,
+                FeePolicy {
+                    wallet_height: Some(500),
+                    ..FeePolicy::default()
+                }
+            );
+            assert_eq!(
+                FeePolicy::for_scanned_wallet(FeePriority::Low, u64::MAX).wallet_height,
+                Some(u64::MAX)
+            );
+        }
+
+        #[tokio::test]
+        async fn fee_estimate_uses_the_selected_priority() {
+            #[derive(Clone, Debug)]
+            struct Connection;
+            #[async_trait::async_trait]
+            impl RpcConnection for Connection {
+                async fn post(
+                    &self,
+                    route: &str,
+                    body: Vec<u8>,
+                ) -> Result<Vec<u8>, crate::monero_rpc::RpcError> {
+                    assert_eq!(route, "json_rpc");
+                    let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                    let result = match request["method"].as_str().unwrap() {
+                        "get_last_block_header" => serde_json::json!({
+                            "block_header": { "major_version": 16 }
+                        }),
+                        "get_fee_estimate" => serde_json::json!({
+                            "fee": 32_000,
+                            "fees": [32_000, 130_000, 510_000, 6_400_000],
+                            "quantization_mask": 10_000,
+                            "status": "OK"
+                        }),
+                        method => panic!("unexpected method {method}"),
+                    };
+                    Ok(serde_json::to_vec(&serde_json::json!({ "result": result })).unwrap())
+                }
+            }
+
+            let policy = FeePolicy {
+                priority: FeePriority::Normal,
+                wallet_height: Some(123),
+                max_fee_per_weight: DEFAULT_MAX_FEE_PER_BYTE,
+            };
+            let estimate = estimate_fee_with_rpc_and_policy(
+                &Rpc::new_with_connection(Connection),
+                1,
+                2,
+                policy,
+            )
+            .await
+            .unwrap();
+            assert_eq!(estimate.per_weight, 130_000);
+            assert_eq!(estimate.mask, 10_000);
         }
 
         #[test]

@@ -32,7 +32,8 @@ pub mod validation;
 pub use tx_builder::native;
 pub use tx_prepare::{
     prepare_send_inputs, prepare_send_inputs_at, prepare_send_inputs_at_with_fee,
-    prepare_send_inputs_with_fee, prepare_sweep_inputs, prepare_sweep_inputs_at, PreparedInputs,
+    prepare_send_inputs_with_fee, prepare_send_inputs_with_rpc, prepare_sweep_inputs,
+    prepare_sweep_inputs_at, PreparedInputs,
 };
 pub use tx_utils::{adjust_recipients_for_fee, classify_broadcast_error};
 
