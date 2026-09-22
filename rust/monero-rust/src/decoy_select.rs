@@ -33,10 +33,69 @@ const TIP_APPLICATION: f64 = (DEFAULT_LOCK_WINDOW * BLOCK_TIME) as f64;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
 
     #[test]
     fn wallet2_requests_seventy_five_candidates_for_a_sixteen_member_ring() {
         assert_eq!(requested_outputs_count(16), 75);
+    }
+
+    fn blackball_fixture() -> (
+        SpentOutput,
+        Vec<u64>,
+        Vec<Option<[curve25519_dalek::EdwardsPoint; 2]>>,
+    ) {
+        let indexes = vec![1, 2, 3, 4];
+        let fetched = (1u64..=4)
+            .map(|n| {
+                Some([
+                    Scalar::from(n) * ED25519_BASEPOINT_POINT,
+                    Scalar::from(n + 10) * ED25519_BASEPOINT_POINT,
+                ])
+            })
+            .collect::<Vec<_>>();
+        let [key, commitment] = fetched[0].unwrap();
+        (
+            SpentOutput {
+                index_on_blockchain: 1,
+                key,
+                commitment,
+            },
+            indexes,
+            fetched,
+        )
+    }
+
+    #[test]
+    fn blackballed_candidates_are_skipped_when_alternatives_exist() {
+        let (input, indexes, fetched) = blackball_fixture();
+        let ring = ring_from_candidates(
+            &input,
+            3,
+            &indexes,
+            &indexes,
+            &fetched,
+            None,
+            &HashSet::from([2]),
+        )
+        .unwrap();
+        assert_eq!(absolute_indexes(&ring).unwrap(), vec![1, 3, 4]);
+    }
+
+    #[test]
+    fn blackballed_candidates_are_a_last_resort_for_ring_size() {
+        let (input, indexes, fetched) = blackball_fixture();
+        let ring = ring_from_candidates(
+            &input,
+            3,
+            &indexes,
+            &indexes,
+            &fetched,
+            None,
+            &HashSet::from([2, 3, 4]),
+        )
+        .unwrap();
+        assert_eq!(absolute_indexes(&ring).unwrap(), vec![1, 2, 3]);
     }
 }
 
@@ -52,6 +111,7 @@ fn sample_candidates<R: RngCore + CryptoRng>(
     per_second: f64,
     initial: &[u64],
     count: usize,
+    blackballed: &HashSet<u64>,
 ) -> Result<Vec<u64>, String> {
     let mut selected = Vec::with_capacity(count);
     let mut do_not_select = HashSet::new();
@@ -64,13 +124,20 @@ fn sample_candidates<R: RngCore + CryptoRng>(
         return Err("persisted ring is larger than the candidate request".to_string());
     }
     let mut iters = 0usize;
+    let mut allow_blackballed = false;
     while selected.len() < count {
         iters += 1;
         if (iters == 10 * count)
             || (highest_output_exclusive_bound.saturating_sub(do_not_select.len() as u64)
                 < (count - selected.len()) as u64)
         {
-            return Err("hit decoy selection round limit".to_string());
+            if allow_blackballed {
+                return Err("hit decoy selection round limit".to_string());
+            }
+            allow_blackballed = true;
+            iters = 0;
+            do_not_select.clear();
+            do_not_select.extend(selected.iter().copied());
         }
 
         let mut age = Gamma::<f64>::new(19.28, 1.0 / 1.61)
@@ -100,7 +167,7 @@ fn sample_candidates<R: RngCore + CryptoRng>(
             continue;
         }
         let index = previous + (rng.next_u64() % outputs_in_block);
-        if do_not_select.insert(index) {
+        if do_not_select.insert(index) && (allow_blackballed || !blackballed.contains(&index)) {
             selected.push(index);
         }
     }
@@ -114,6 +181,7 @@ fn ring_from_candidates(
     request_order: &[u64],
     fetched: &[Option<[curve25519_dalek::EdwardsPoint; 2]>],
     existing: Option<&Decoys>,
+    blackballed: &HashSet<u64>,
 ) -> Result<Decoys, String> {
     if let Some(existing) = existing {
         let indexes = absolute_indexes(existing)?;
@@ -150,34 +218,44 @@ fn ring_from_candidates(
     }
 
     let mut ring = Vec::with_capacity(usize::from(ring_len));
-    for index in secret_order {
-        let position = request_order
-            .binary_search(index)
-            .map_err(|_| "requested decoy candidate was lost while sorting".to_string())?;
-        let output = fetched
-            .get(position)
-            .ok_or_else(|| "node returned too few ring candidates".to_string())?;
-        if *index == input.index_on_blockchain {
-            let matches = output.map_or(false, |[key, commitment]| {
-                (key == input.key) && (commitment == input.commitment)
-            });
-            if !matches {
-                return Err("node presented different view of output we're trying to spend".into());
+    for allow_blackballed in [false, true] {
+        for index in secret_order {
+            let position = request_order
+                .binary_search(index)
+                .map_err(|_| "requested decoy candidate was lost while sorting".to_string())?;
+            let output = fetched
+                .get(position)
+                .ok_or_else(|| "node returned too few ring candidates".to_string())?;
+            if *index == input.index_on_blockchain {
+                let matches = output.map_or(false, |[key, commitment]| {
+                    (key == input.key) && (commitment == input.commitment)
+                });
+                if !matches {
+                    return Err(
+                        "node presented different view of output we're trying to spend".into(),
+                    );
+                }
+                continue;
             }
-            continue;
+            if blackballed.contains(index) != allow_blackballed {
+                continue;
+            }
+            let Some([key, commitment]) = output else {
+                continue;
+            };
+            if !(key.is_torsion_free() && commitment.is_torsion_free()) || key.is_identity() {
+                continue;
+            }
+            let convert = |point: &curve25519_dalek::EdwardsPoint| {
+                CompressedPoint::from(point.compress().to_bytes())
+                    .decompress()
+                    .ok_or_else(|| "ring member failed to decompress".to_string())
+            };
+            ring.push((*index, [convert(key)?, convert(commitment)?]));
+            if ring.len() == usize::from(ring_len - 1) {
+                break;
+            }
         }
-        let Some([key, commitment]) = output else {
-            continue;
-        };
-        if !(key.is_torsion_free() && commitment.is_torsion_free()) || key.is_identity() {
-            continue;
-        }
-        let convert = |point: &curve25519_dalek::EdwardsPoint| {
-            CompressedPoint::from(point.compress().to_bytes())
-                .decompress()
-                .ok_or_else(|| "ring member failed to decompress".to_string())
-        };
-        ring.push((*index, [convert(key)?, convert(commitment)?]));
         if ring.len() == usize::from(ring_len - 1) {
             break;
         }
@@ -231,6 +309,7 @@ pub(crate) async fn select_decoys_for_outputs<R: RngCore + CryptoRng, C: RpcConn
     block_number: usize,
     inputs: &[SpentOutput],
     existing_rings: &[Option<Decoys>],
+    blackballed: &HashSet<u64>,
 ) -> Result<Vec<Decoys>, String> {
     if ring_len == 0 {
         return Err("requesting a ring of length 0".to_string());
@@ -292,6 +371,7 @@ pub(crate) async fn select_decoys_for_outputs<R: RngCore + CryptoRng, C: RpcConn
             per_second,
             &initial,
             count,
+            blackballed,
         )?;
         let mut requested = secret.clone();
         requested.sort_unstable();
@@ -317,6 +397,7 @@ pub(crate) async fn select_decoys_for_outputs<R: RngCore + CryptoRng, C: RpcConn
                 .get(start..end)
                 .ok_or_else(|| "node returned too few ring candidates".to_string())?,
             existing_rings[position].as_ref(),
+            blackballed,
         )?);
     }
     Ok(rings)

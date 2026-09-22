@@ -1,6 +1,8 @@
 //! Transaction building.
 
 pub mod native {
+    use std::collections::HashSet;
+
     use crate::fee_estimate::{fee_for_weight, transaction_weight_upper_bound};
     use crate::monero_rpc::{FeePriority, Rpc, RpcConnection, DEFAULT_MAX_FEE_PER_BYTE};
     use crate::seed_compat::Seed;
@@ -139,6 +141,7 @@ pub mod native {
         height: usize,
         outputs: &[(WalletOutput, u64)],
         existing_rings: &[Option<Decoys>],
+        blackballed: &HashSet<u64>,
     ) -> Result<Vec<Decoys>, String> {
         let ring_len = ring_len(rct_type).ok_or_else(|| "Unsupported RingCT type".to_string())?;
         let mut spent = Vec::with_capacity(outputs.len());
@@ -152,6 +155,7 @@ pub mod native {
             height,
             &spent,
             existing_rings,
+            blackballed,
         )
         .await
         .map_err(|e| format!("Decoy selection failed: {}", e))
@@ -167,6 +171,34 @@ pub mod native {
         payments: Vec<(MoneroAddress, u64)>,
         change: Option<UnsignedChange>,
     ) -> Result<UnsignedTransaction, String> {
+        build_unsigned_transaction_with_blackballs(
+            rng,
+            rpc,
+            rct_type,
+            fee_rate,
+            outputs,
+            payments,
+            change,
+            &HashSet::new(),
+        )
+        .await
+    }
+
+    /// `build_unsigned_transaction`, using blackballed outputs as decoys only
+    /// when a full ring needs them.
+    pub async fn build_unsigned_transaction_with_blackballs<
+        G: RngCore + CryptoRng,
+        R: RpcConnection,
+    >(
+        rng: &mut G,
+        rpc: &Rpc<R>,
+        rct_type: RctType,
+        fee_rate: FeeRate,
+        outputs: &[(WalletOutput, u64)],
+        payments: Vec<(MoneroAddress, u64)>,
+        change: Option<UnsignedChange>,
+        blackballed: &HashSet<u64>,
+    ) -> Result<UnsignedTransaction, String> {
         let existing_rings = vec![None; outputs.len()];
         let source_account = output_source_account(outputs)?;
         build_unsigned_transaction_with_rings(
@@ -179,6 +211,7 @@ pub mod native {
             source_account,
             payments,
             change,
+            blackballed,
         )
         .await
     }
@@ -193,6 +226,7 @@ pub mod native {
         source_account: u32,
         payments: Vec<(MoneroAddress, u64)>,
         change: Option<UnsignedChange>,
+        blackballed: &HashSet<u64>,
     ) -> Result<UnsignedTransaction, String> {
         if output_source_account(outputs)? != source_account {
             return Err("Stored source account does not match the selected outputs".to_string());
@@ -209,6 +243,7 @@ pub mod native {
             height.saturating_sub(1),
             outputs,
             existing_rings,
+            blackballed,
         )
         .await?;
         let mut inputs = Vec::with_capacity(outputs.len());
@@ -328,6 +363,13 @@ pub mod native {
                 ..Self::default()
             }
         }
+    }
+
+    /// Blackballed RingCT global output indexes from a trusted local list,
+    /// never from the node.
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    pub struct DecoyPolicy {
+        pub blackballed_outputs: HashSet<u64>,
     }
 
     async fn fee_for_policy<R: RpcConnection>(
@@ -689,9 +731,28 @@ pub mod native {
         fetch_decoys_with_rpc(&rpc, stored_outputs).await
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn fetch_decoys_with_policy(
+        node_url: &str,
+        stored_outputs: Vec<StoredOutputData>,
+        policy: &DecoyPolicy,
+    ) -> Result<DecoyResult, String> {
+        crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;
+        let rpc = HttpRpc::new(node_url.to_string()).map_err(|e| format!("RPC error: {:?}", e))?;
+        fetch_decoys_with_rpc_and_policy(&rpc, stored_outputs, policy).await
+    }
+
     pub async fn fetch_decoys_with_rpc<R: RpcConnection>(
         rpc: &Rpc<R>,
         stored_outputs: Vec<StoredOutputData>,
+    ) -> Result<DecoyResult, String> {
+        fetch_decoys_with_rpc_and_policy(rpc, stored_outputs, &DecoyPolicy::default()).await
+    }
+
+    pub async fn fetch_decoys_with_rpc_and_policy<R: RpcConnection>(
+        rpc: &Rpc<R>,
+        stored_outputs: Vec<StoredOutputData>,
+        policy: &DecoyPolicy,
     ) -> Result<DecoyResult, String> {
         if stored_outputs.is_empty() {
             return Err("No outputs provided".to_string());
@@ -720,6 +781,7 @@ pub mod native {
             height.saturating_sub(1),
             &spendable_outputs,
             &persisted_rings(&stored_outputs)?,
+            &policy.blackballed_outputs,
         )
         .await?;
 
@@ -969,6 +1031,29 @@ pub mod native {
         passphrase: &str,
         policy: FeePolicy,
     ) -> Result<TransactionResult, String> {
+        create_transaction_with_rpc_and_policies(
+            rpc,
+            seed_phrase,
+            network_str,
+            stored_outputs,
+            recipients,
+            passphrase,
+            policy,
+            &DecoyPolicy::default(),
+        )
+        .await
+    }
+
+    pub async fn create_transaction_with_rpc_and_policies<R: RpcConnection>(
+        rpc: &Rpc<R>,
+        seed_phrase: &str,
+        network_str: &str,
+        stored_outputs: Vec<StoredOutputData>,
+        recipients: &[(String, u64)],
+        passphrase: &str,
+        policy: FeePolicy,
+        decoy_policy: &DecoyPolicy,
+    ) -> Result<TransactionResult, String> {
         crate::validation::validate_network(network_str).map_err(|e| e.to_string())?;
         if stored_outputs.is_empty() {
             return Err("No outputs provided".to_string());
@@ -1079,6 +1164,7 @@ pub mod native {
             source_account,
             payments,
             change,
+            &decoy_policy.blackballed_outputs,
         )
         .await
         .map_err(|e| format!("Failed to prepare transaction: {}", e))?;
@@ -1201,6 +1287,29 @@ pub mod native {
         passphrase: &str,
         policy: FeePolicy,
     ) -> Result<TransactionResult, String> {
+        sweep_all_with_rpc_and_policies(
+            rpc,
+            seed_phrase,
+            network_str,
+            stored_outputs,
+            destination_address,
+            passphrase,
+            policy,
+            &DecoyPolicy::default(),
+        )
+        .await
+    }
+
+    pub async fn sweep_all_with_rpc_and_policies<R: RpcConnection>(
+        rpc: &Rpc<R>,
+        seed_phrase: &str,
+        network_str: &str,
+        stored_outputs: Vec<StoredOutputData>,
+        destination_address: &str,
+        passphrase: &str,
+        policy: FeePolicy,
+        decoy_policy: &DecoyPolicy,
+    ) -> Result<TransactionResult, String> {
         crate::validation::validate_network(network_str).map_err(|e| e.to_string())?;
         if stored_outputs.is_empty() {
             return Err("No outputs provided".to_string());
@@ -1267,6 +1376,7 @@ pub mod native {
             source_account,
             vec![(dest_addr, provisional_amount)],
             Some(UnsignedChange::Dummy),
+            &decoy_policy.blackballed_outputs,
         )
         .await
         .map_err(|e| format!("Failed to prepare sweep transaction: {}", e))?;
@@ -1995,6 +2105,31 @@ pub mod native {
         policy: FeePolicy,
         wallet_state: &mut crate::wallet_state::WalletState,
     ) -> Result<UnsignedTransactionResult, String> {
+        create_unsigned_transaction_with_rpc_and_policies(
+            rpc,
+            view_key_hex,
+            pub_spend_key_hex,
+            network_str,
+            stored_outputs,
+            recipients,
+            policy,
+            &DecoyPolicy::default(),
+            wallet_state,
+        )
+        .await
+    }
+
+    pub async fn create_unsigned_transaction_with_rpc_and_policies<R: RpcConnection>(
+        rpc: &Rpc<R>,
+        view_key_hex: &str,
+        pub_spend_key_hex: &str,
+        network_str: &str,
+        stored_outputs: Vec<StoredOutputData>,
+        recipients: &[(String, u64)],
+        policy: FeePolicy,
+        decoy_policy: &DecoyPolicy,
+        wallet_state: &mut crate::wallet_state::WalletState,
+    ) -> Result<UnsignedTransactionResult, String> {
         if stored_outputs.is_empty() {
             return Err("No outputs provided".to_string());
         }
@@ -2121,6 +2256,7 @@ pub mod native {
             source_account,
             payments,
             change,
+            &decoy_policy.blackballed_outputs,
         )
         .await
         .map_err(|e| format!("Failed to prepare unsigned tx: {}", e))?;
