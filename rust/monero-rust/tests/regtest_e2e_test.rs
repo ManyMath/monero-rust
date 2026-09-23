@@ -14,8 +14,10 @@ mod common;
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 use monero_oxide::transaction::{NotPruned, Pruned, Transaction};
-use monero_rust::monero_rpc::HttpRpc;
-use monero_rust::native::{build_unsigned_transaction, sweep_all_with_rpc, StoredOutputData};
+use monero_rust::monero_rpc::{HttpRpc, Rpc};
+use monero_rust::native::{
+    build_unsigned_transaction, create_transaction_with_rpc, sweep_all_with_rpc, StoredOutputData,
+};
 use monero_rust::scanner::{
     derive_address, derive_keys, scan_block_for_outputs_with_lookahead, scan_blocks_batch,
     Lookahead,
@@ -32,6 +34,8 @@ const SEED: &str = "velvet lymph giddy number token physics poetry unquoted nibs
 const SWEEP_SEED: &str = "honked bagpipe alpine juicy faked afoot jostle claim cowl tunnel \
     orphans negative pheasants feast jetting quote frown teeming cycling tribal womanly hills \
     cottage daytime daytime";
+
+const MATRIX_SEED: &str = SWEEP_SEED;
 
 /// Use mainnet address encoding on regtest.
 const NETWORK: monero_rust::Network = monero_rust::Network::Mainnet;
@@ -54,6 +58,43 @@ const LOOKAHEAD: Lookahead = Lookahead {
 
 // One daemon for all tests: serialize chain work.
 static REGTEST_CHAIN: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+async fn pool_hashes(rpc: &Rpc<HttpRpc>) -> Vec<String> {
+    let pool: serde_json::Value = rpc
+        .rpc_call::<Option<()>, serde_json::Value>("get_transaction_pool_hashes", None)
+        .await
+        .expect("get_transaction_pool_hashes");
+    pool["tx_hashes"]
+        .as_array()
+        .map(|hashes| {
+            hashes
+                .iter()
+                .map(|hash| hash.as_str().unwrap().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Mine until `tx_hash` leaves the pool (Dandelion++ may delay it); returns
+/// the block height.
+async fn mine_until_mined(rpc: &Rpc<HttpRpc>, address: &str, tx_hash: [u8; 32]) -> usize {
+    let tx_hash = hex::encode(tx_hash);
+    assert!(
+        pool_hashes(rpc).await.contains(&tx_hash),
+        "the daemon accepted {tx_hash} into its pool"
+    );
+    for _ in 0..20 {
+        let height = rpc.get_height().await.expect("get_height");
+        rpc.generate_blocks(address, 1)
+            .await
+            .expect("generateblocks");
+        if !pool_hashes(rpc).await.contains(&tx_hash) {
+            return height;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+    panic!("{tx_hash} is still in the pool after 20 blocks");
+}
 
 /// Mine to the test wallet, then scan for its coinbase outputs.
 /// Keep mining and scanning together because tests share the chain.
@@ -272,14 +313,7 @@ async fn builds_signs_and_broadcasts_a_transaction() {
         .await
         .expect("the daemon must accept the transaction we built");
 
-    let mined_into = rpc.get_height().await.expect("get_height");
-    rpc.generate_blocks(&address.to_string(), 1)
-        .await
-        .expect("mine it in");
-    assert!(
-        rpc.get_height().await.expect("get_height") > mined_into,
-        "the chain must advance once our transaction is mined"
-    );
+    mine_until_mined(&rpc, &address.to_string(), tx.hash()).await;
     println!("daemon accepted transaction {}", hex::encode(tx.hash()));
 }
 
@@ -370,6 +404,158 @@ async fn sweep_with_dummy_output_is_accepted_by_the_daemon() {
     rpc.publish_transaction(&tx)
         .await
         .expect("daemon must accept wallet2-style sweep");
+    mine_until_mined(&rpc, &decoy_address.to_string(), tx.hash()).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn daemon_accepts_multi_input_mixed_recipient_account_change() {
+    let Some(node) = common::regtest_node() else {
+        return;
+    };
+    let _chain = REGTEST_CHAIN.lock().await;
+
+    let rpc = HttpRpc::new(node).expect("regtest RPC");
+    let decoy_address = derive_address(SEED, NETWORK, "").expect("derive decoy-mining address");
+    let height = rpc.get_height().await.expect("get_height");
+    if height < MIN_HEIGHT_TO_SPEND {
+        rpc.generate_blocks(&decoy_address.to_string(), MIN_HEIGHT_TO_SPEND - height)
+            .await
+            .expect("mine enough decoys");
+    }
+
+    let keys = derive_keys(MATRIX_SEED, NETWORK, "").expect("derive matrix wallet keys");
+    let seed = Seed::from_string(Zeroizing::new(MATRIX_SEED.to_string())).expect("matrix seed");
+    let spend = Scalar::from_bytes_mod_order(*seed.entropy());
+    let view = Scalar::from_bytes_mod_order(*keys.secret_view_key);
+    let sender = monero_wallet::ViewPair::new(
+        monero_wallet::ed25519::Point::from(&spend * ED25519_BASEPOINT_TABLE),
+        Zeroizing::new(monero_wallet::ed25519::Scalar::from(view)),
+    )
+    .expect("matrix sender view pair");
+    let source_index = monero_wallet::address::SubaddressIndex::new(1, 0).unwrap();
+    let source_address = sender.subaddress(NETWORK, source_index);
+    let primary_address = sender.legacy_address(NETWORK);
+    let start = rpc.get_height().await.expect("get_height");
+    rpc.generate_blocks(&primary_address.to_string(), BLOCKS_TO_MINE)
+        .await
+        .expect("mine primary-address outputs");
+
+    let lookahead = Lookahead {
+        account: 1,
+        subaddress: 5,
+    };
+    let mut funding_input = None;
+    for height in start..(start + BLOCKS_TO_MINE - 60) {
+        let scanned = scan_block_for_outputs_with_lookahead(
+            &rpc,
+            height as u64,
+            MATRIX_SEED,
+            NETWORK,
+            lookahead,
+            "",
+        )
+        .await
+        .expect("scan matrix output");
+        if let Some(output) = scanned.outputs.into_iter().next() {
+            funding_input = Some(StoredOutputData::from(output));
+            break;
+        }
+    }
+    let funding_input = funding_input.expect("a mature primary-address output");
+
+    // `generateblocks` does not mine to subaddresses reliably, so fund by a send.
+    let funding = create_transaction_with_rpc(
+        &rpc,
+        MATRIX_SEED,
+        "mainnet",
+        vec![funding_input],
+        &[
+            (source_address.to_string(), 1_000_000_000_000),
+            (source_address.to_string(), 1_000_000_000_000),
+        ],
+        "",
+    )
+    .await
+    .expect("fund account-subaddress outputs");
+    let funding_bytes = hex::decode(&funding.tx_blob).expect("funding transaction hex");
+    let funding_tx =
+        Transaction::<NotPruned>::read(&mut funding_bytes.as_slice()).expect("funding transaction");
+    rpc.publish_transaction(&funding_tx)
+        .await
+        .expect("daemon must accept account funding");
+    let funding_height =
+        mine_until_mined(&rpc, &decoy_address.to_string(), funding_tx.hash()).await;
+    rpc.generate_blocks(
+        &decoy_address.to_string(),
+        monero_oxide::DEFAULT_LOCK_WINDOW,
+    )
+    .await
+    .expect("unlock account funding");
+    let funded = scan_block_for_outputs_with_lookahead(
+        &rpc,
+        funding_height as u64,
+        MATRIX_SEED,
+        NETWORK,
+        lookahead,
+        "",
+    )
+    .await
+    .expect("scan account funding");
+    let stored = funded
+        .outputs
+        .into_iter()
+        .filter(|output| output.subaddress_index == Some((1, 0)))
+        .map(StoredOutputData::from)
+        .collect::<Vec<_>>();
+    assert_eq!(stored.len(), 2, "funding must create two account inputs");
+    assert!(stored.iter().all(|output| !output.key_image.is_empty()));
+
+    let recipient_spend = Scalar::from(1777u64);
+    let recipient_view = Scalar::from(1888u64);
+    let recipient_pair = monero_wallet::ViewPair::new(
+        monero_wallet::ed25519::Point::from(&recipient_spend * ED25519_BASEPOINT_TABLE),
+        Zeroizing::new(monero_wallet::ed25519::Scalar::from(recipient_view)),
+    )
+    .expect("recipient view pair");
+    let standard = recipient_pair.legacy_address(NETWORK);
+    let recipient_index = monero_wallet::address::SubaddressIndex::new(0, 1).unwrap();
+    let subaddress = recipient_pair.subaddress(NETWORK, recipient_index);
+    let recipients = vec![
+        (standard.to_string(), 1_000_000_000),
+        (subaddress.to_string(), 2_000_000_000),
+    ];
+
+    let result = create_transaction_with_rpc(&rpc, MATRIX_SEED, "mainnet", stored, &recipients, "")
+        .await
+        .expect("build mixed-recipient transaction");
+    let bytes = hex::decode(&result.tx_blob).expect("signed transaction hex");
+    let tx = Transaction::<NotPruned>::read(&mut bytes.as_slice()).expect("signed transaction");
+    assert_eq!(tx.prefix().inputs.len(), 2);
+    assert_eq!(tx.prefix().outputs.len(), 3);
+    assert_eq!(result.tx_key_additional.len(), 3);
+    assert!(result
+        .change_outputs
+        .iter()
+        .any(|output| output.subaddress_index == Some((1, 0))));
+
+    let mut recipient_scanner = monero_wallet::Scanner::new(recipient_pair);
+    recipient_scanner.register_subaddress(recipient_index);
+    let mut received = monero_rust::scanner::scan_single_transaction(
+        &mut recipient_scanner,
+        tx.hash(),
+        &Transaction::<Pruned>::from(tx.clone()),
+    )
+    .expect("scan both recipients")
+    .into_iter()
+    .map(|output| output.commitment().amount)
+    .collect::<Vec<_>>();
+    received.sort_unstable();
+    assert_eq!(received, vec![1_000_000_000, 2_000_000_000]);
+
+    rpc.publish_transaction(&tx)
+        .await
+        .expect("daemon must accept mixed-recipient transaction");
+    mine_until_mined(&rpc, &decoy_address.to_string(), tx.hash()).await;
 }
 
 /// Scan locally mined blocks through the `getblocks.bin` batch sync path.
