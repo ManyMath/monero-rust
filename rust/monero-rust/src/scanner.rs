@@ -245,13 +245,9 @@ fn view_key_from_seed(seed: &Seed, passphrase: &str) -> Scalar {
     Scalar::from_bytes_mod_order(view)
 }
 
-fn spend_key_scalar_from_seed(seed: &Seed, passphrase: &str) -> Scalar {
-    // SEC-02: Derive via Zeroizing to eliminate bare [u8; 32] intermediate.
-    // Returns bare Scalar because callers use it for further arithmetic
-    // (key image calculation). The Zeroizing wrapper ensures the derivation
-    // intermediate is cleaned up.
+fn spend_key_scalar_from_seed(seed: &Seed, passphrase: &str) -> Zeroizing<Scalar> {
     let key_bytes = seed.key_bytes_with_passphrase(passphrase);
-    Scalar::from_bytes_mod_order(*key_bytes)
+    Zeroizing::new(Scalar::from_bytes_mod_order(*key_bytes))
 }
 
 /// Compute the key image `x * H_p(xG)` for an owned one-time key.
@@ -328,7 +324,7 @@ pub struct CachedScanner {
     lookahead: Lookahead,
     fingerprint: [u8; 32],
     watermark: SubaddressWatermark,
-    spend_scalar: Option<Scalar>,
+    spend_scalar: Option<Zeroizing<Scalar>>,
 }
 
 /// Expand the registered subaddress window if `found` is near the edge.
@@ -419,7 +415,7 @@ struct CachedScannerEntry {
     lookahead: Lookahead,
     fingerprint: [u8; 32],
     watermark: SubaddressWatermark,
-    spend_scalar: Option<Scalar>,
+    spend_scalar: Option<Zeroizing<Scalar>>,
 }
 
 /// Resolve a mnemonic with explicit BIP39 passphrase and account index.
@@ -1413,7 +1409,7 @@ pub async fn process_batch_response(
                     (scanned, false)
                 };
 
-            let key_image_scalar = scanner.spend_scalar.as_ref();
+            let key_image_scalar = scanner.spend_scalar.as_ref().map(|scalar| &**scalar);
 
             let mut outputs = Vec::with_capacity(scanned.len());
             for output in &scanned {
@@ -1761,7 +1757,7 @@ pub async fn process_batch_multi_wallet_response(
                     )?
                 };
 
-                let key_image_scalar = entry.spend_scalar.as_ref();
+                let key_image_scalar = entry.spend_scalar.as_ref().map(|scalar| &**scalar);
 
                 let mut outputs = Vec::with_capacity(scanned.len());
                 for output in &scanned {
@@ -2249,11 +2245,9 @@ pub async fn scan_mempool<R: RpcConnection>(
         .map(|(vs, _)| *vs)
         .unwrap_or_else(|| view_key_from_seed(seed_opt.as_ref().unwrap(), passphrase));
     #[cfg(target_arch = "wasm32")]
-    let spend_scalar = if view_only.is_some() {
-        Scalar::ZERO
-    } else {
-        spend_key_scalar_from_seed(seed_opt.as_ref().unwrap(), passphrase)
-    };
+    let spend_scalar: Option<Zeroizing<Scalar>> = seed_opt
+        .as_ref()
+        .map(|seed| spend_key_scalar_from_seed(seed, passphrase));
 
     let mut scanner = oxide_scanner_from_keys(&spend_point, &view_scalar)?;
     register_subaddresses(&mut scanner, lookahead);
@@ -2271,11 +2265,7 @@ pub async fn scan_mempool<R: RpcConnection>(
         .collect();
 
     #[cfg(target_arch = "wasm32")]
-    let key_image_scalar = if spend_scalar == Scalar::ZERO {
-        None // view-only: no spend key available
-    } else {
-        Some(&spend_scalar)
-    };
+    let key_image_scalar: Option<&Scalar> = spend_scalar.as_deref();
     #[cfg(not(target_arch = "wasm32"))]
     let key_image_scalar: Option<&Scalar> = None;
 
