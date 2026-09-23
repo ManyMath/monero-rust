@@ -97,6 +97,41 @@ mod tests {
         .unwrap();
         assert_eq!(absolute_indexes(&ring).unwrap(), vec![1, 2, 3]);
     }
+
+    fn ring_at(indexes: &[u64]) -> Decoys {
+        let mut previous = 0;
+        let offsets = indexes
+            .iter()
+            .map(|index| {
+                let offset = index - previous;
+                previous = *index;
+                offset
+            })
+            .collect::<Vec<_>>();
+        let point = CompressedPoint::from(ED25519_BASEPOINT_POINT.compress().to_bytes())
+            .decompress()
+            .unwrap();
+        Decoys::new(offsets, 0, vec![[point; 2]; indexes.len()]).unwrap()
+    }
+
+    #[test]
+    fn wallet2_sanity_rejects_excessive_ring_overlap() {
+        let ring = ring_at(&(7000..7016).collect::<Vec<_>>());
+        assert!(!rings_are_sane(&[ring.clone(), ring], 10_000).unwrap());
+    }
+
+    #[test]
+    fn wallet2_sanity_rejects_an_implausibly_old_median() {
+        let ring = ring_at(&(1..=16).collect::<Vec<_>>());
+        assert!(!rings_are_sane(&[ring], 10_000).unwrap());
+    }
+
+    #[test]
+    fn wallet2_sanity_accepts_distinct_recent_outputs() {
+        let first = ring_at(&(7000..7016).collect::<Vec<_>>());
+        let second = ring_at(&(7100..7116).collect::<Vec<_>>());
+        assert!(rings_are_sane(&[first, second], 10_000).unwrap());
+    }
 }
 
 fn requested_outputs_count(ring_len: u8) -> usize {
@@ -302,6 +337,35 @@ fn absolute_indexes(decoys: &Decoys) -> Result<Vec<u64>, String> {
     Ok(absolute)
 }
 
+fn rings_are_sane(rings: &[Decoys], rct_outputs_available: u64) -> Result<bool, String> {
+    let mut unique = std::collections::BTreeSet::new();
+    let mut total = 0usize;
+    for ring in rings {
+        let indexes = absolute_indexes(ring)?;
+        total = total
+            .checked_add(indexes.len())
+            .ok_or_else(|| "ring member count overflowed".to_string())?;
+        unique.extend(indexes);
+    }
+    if total <= 10 || rct_outputs_available < 10_000 {
+        return Ok(true);
+    }
+    if unique.len() < total.saturating_mul(8) / 10 {
+        return Ok(false);
+    }
+
+    let indexes = unique.into_iter().collect::<Vec<_>>();
+    let middle = indexes.len() / 2;
+    let median = if indexes.len() % 2 == 0 {
+        let lower = indexes[middle - 1];
+        let upper = indexes[middle];
+        (lower / 2) + (upper / 2) + ((lower % 2) + (upper % 2)) / 2
+    } else {
+        indexes[middle]
+    };
+    Ok(median >= rct_outputs_available.saturating_mul(6) / 10)
+}
+
 pub(crate) async fn select_decoys_for_outputs<R: RngCore + CryptoRng, C: RpcConnection>(
     rng: &mut R,
     rpc: &Rpc<C>,
@@ -356,49 +420,64 @@ pub(crate) async fn select_decoys_for_outputs<R: RngCore + CryptoRng, C: RpcConn
     };
 
     let count = requested_outputs_count(ring_len);
-    let mut secret_orders = Vec::with_capacity(inputs.len());
-    let mut request_orders = Vec::with_capacity(inputs.len());
-    let mut flattened = Vec::with_capacity(inputs.len() * count);
-    for (input, existing) in inputs.iter().zip(existing_rings) {
-        let initial = match existing {
-            Some(ring) => absolute_indexes(ring)?,
-            None => vec![input.index_on_blockchain],
-        };
-        let secret = sample_candidates(
-            rng,
-            &distribution,
-            highest_output_exclusive_bound,
-            per_second,
-            &initial,
-            count,
-            blackballed,
-        )?;
-        let mut requested = secret.clone();
-        requested.sort_unstable();
-        flattened.extend_from_slice(&requested);
-        secret_orders.push(secret);
-        request_orders.push(requested);
-    }
+    let rct_outputs_available = *distribution
+        .last()
+        .ok_or_else(|| "RPC returned an empty output distribution".to_string())?;
+    for _attempt in 0..3 {
+        let mut secret_orders = Vec::with_capacity(inputs.len());
+        let mut request_orders = Vec::with_capacity(inputs.len());
+        let mut flattened = Vec::with_capacity(inputs.len() * count);
+        for (input, existing) in inputs.iter().zip(existing_rings) {
+            let initial = match existing {
+                Some(ring) => absolute_indexes(ring)?,
+                None => vec![input.index_on_blockchain],
+            };
+            let secret = sample_candidates(
+                rng,
+                &distribution,
+                highest_output_exclusive_bound,
+                per_second,
+                &initial,
+                count,
+                blackballed,
+            )?;
+            let mut requested = secret.clone();
+            requested.sort_unstable();
+            flattened.extend_from_slice(&requested);
+            secret_orders.push(secret);
+            request_orders.push(requested);
+        }
 
-    let fetched = rpc
-        .get_unlocked_outputs(&flattened, block_number)
-        .await
-        .map_err(|e| format!("Failed to fetch ring members: {:?}", e))?;
-    let mut rings = Vec::with_capacity(inputs.len());
-    for (position, input) in inputs.iter().enumerate() {
-        let start = position * count;
-        let end = start + count;
-        rings.push(ring_from_candidates(
-            input,
-            ring_len,
-            &secret_orders[position],
-            &request_orders[position],
-            fetched
-                .get(start..end)
-                .ok_or_else(|| "node returned too few ring candidates".to_string())?,
-            existing_rings[position].as_ref(),
-            blackballed,
-        )?);
+        let fetched = rpc
+            .get_unlocked_outputs(&flattened, block_number)
+            .await
+            .map_err(|e| format!("Failed to fetch ring members: {:?}", e))?;
+        let mut rings = Vec::with_capacity(inputs.len());
+        for (position, input) in inputs.iter().enumerate() {
+            let start = position * count;
+            let end = start + count;
+            rings.push(ring_from_candidates(
+                input,
+                ring_len,
+                &secret_orders[position],
+                &request_orders[position],
+                fetched
+                    .get(start..end)
+                    .ok_or_else(|| "node returned too few ring candidates".to_string())?,
+                existing_rings[position].as_ref(),
+                blackballed,
+            )?);
+        }
+        if rings_are_sane(&rings, rct_outputs_available)? {
+            return Ok(rings);
+        }
     }
-    Ok(rings)
+    let detail = if existing_rings.iter().any(Option::is_some) {
+        "; persisted rings were retained while unpersisted rings were redrawn"
+    } else {
+        ""
+    };
+    Err(format!(
+        "decoy rings failed wallet2's transaction sanity check after three attempts{detail}"
+    ))
 }
