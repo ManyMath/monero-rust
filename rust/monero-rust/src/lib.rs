@@ -3,6 +3,9 @@
 //! A portable, batteries-included wallet library for Monero.
 //! Works on both native and WASM targets.
 
+// Compatibility wrappers call deprecated fixed-fee entry points internally.
+#![allow(deprecated)]
+
 mod safe_epee;
 
 // Core modules
@@ -33,7 +36,8 @@ pub use tx_builder::native;
 pub use tx_prepare::{
     prepare_send_inputs, prepare_send_inputs_at, prepare_send_inputs_at_with_fee,
     prepare_send_inputs_with_fee, prepare_send_inputs_with_rpc, prepare_sweep_inputs,
-    prepare_sweep_inputs_at, PreparedInputs,
+    prepare_sweep_inputs_at, prepare_sweep_inputs_at_with_fee, prepare_sweep_inputs_with_fee,
+    prepare_sweep_inputs_with_rpc, PreparedInputs,
 };
 pub use tx_utils::{adjust_recipients_for_fee, classify_broadcast_error};
 

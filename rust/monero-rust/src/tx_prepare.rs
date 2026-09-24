@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 
 use crate::coin_selection::{
-    estimate_fee, select_inputs, select_inputs_with_fee, CoinSelectionResult,
+    estimate_fee, estimate_fee_with_rate, fractional_threshold, select_inputs,
+    select_inputs_with_fee, CoinSelectionResult,
 };
 use crate::monero_rpc::{Rpc, RpcConnection};
 use crate::tx_builder::native::FeePolicy;
@@ -15,14 +16,12 @@ pub struct PreparedInputs {
     pub stored_outputs: Vec<StoredOutputData>,
     pub spent_output_keys: Vec<String>,
     pub total_input: u64,
+    /// Fee estimate for the selected transaction shape.
     pub estimated_fee: u64,
 }
 
-/// Prepare inputs for a regular send transaction.
-///
-/// Filters wallet outputs to spendable ones, runs coin selection for the
-/// requested amount, and converts to `StoredOutputData` ready for
-/// `create_transaction()`. Uses the current system time for timestamp locks.
+/// Prepare send inputs with a fixed tier-one fee estimate.
+#[deprecated(note = "use prepare_send_inputs_with_rpc so selection uses the construction fee tier")]
 pub fn prepare_send_inputs(
     wallet_outputs: &[WalletOutput],
     daemon_height: u64,
@@ -157,6 +156,7 @@ pub fn prepare_send_inputs_at_with_fee(
 
 /// Prepare a send using an explicit Unix clock, such as adjusted network time.
 /// With no clock, timestamp-locked outputs remain locked.
+#[deprecated(note = "use prepare_send_inputs_at_with_fee with the construction fee tier")]
 pub fn prepare_send_inputs_at(
     wallet_outputs: &[WalletOutput],
     daemon_height: u64,
@@ -194,11 +194,120 @@ pub fn prepare_send_inputs_at(
     })
 }
 
-/// Prepare inputs for a sweep-all transaction.
-///
-/// Takes all spendable outputs (optionally filtered by output keys for
-/// account-level sweeps) and converts to `StoredOutputData` ready for
-/// `sweep_all()`. Uses the current system time for timestamp locks.
+/// Prepare sweep inputs at the node's RingCT type and the fee tier `policy`
+/// selects.
+pub async fn prepare_sweep_inputs_with_rpc<R: RpcConnection>(
+    rpc: &Rpc<R>,
+    wallet_outputs: &[WalletOutput],
+    daemon_height: u64,
+    selected_output_keys: Option<&[String]>,
+    excluded_key_images: Option<&HashSet<String>>,
+    source_account: u32,
+    policy: FeePolicy,
+) -> Result<PreparedInputs, String> {
+    let rct_type = rpc
+        .get_rct_type()
+        .await
+        .map_err(|e| format!("Failed to get protocol: {e:?}"))?;
+    let fee = rpc
+        .get_fee_checked_for_priority_at_height(
+            policy.priority,
+            policy.wallet_height,
+            policy.max_fee_per_weight,
+        )
+        .await
+        .map_err(|e| format!("Failed to get fee rate: {e:?}"))?;
+    let fee_rate = fee
+        .rate()
+        .ok_or_else(|| "Fee rate and quantization mask must be nonzero".to_string())?;
+    prepare_sweep_inputs_with_fee(
+        wallet_outputs,
+        daemon_height,
+        selected_output_keys,
+        excluded_key_images,
+        source_account,
+        rct_type,
+        fee_rate,
+    )
+}
+
+/// Prepare sweep inputs at an explicit daemon fee tier.
+pub fn prepare_sweep_inputs_with_fee(
+    wallet_outputs: &[WalletOutput],
+    daemon_height: u64,
+    selected_output_keys: Option<&[String]>,
+    excluded_key_images: Option<&HashSet<String>>,
+    source_account: u32,
+    rct_type: monero_wallet::ringct::RctType,
+    fee_rate: monero_wallet::interface::FeeRate,
+) -> Result<PreparedInputs, String> {
+    prepare_sweep_inputs_at_with_fee(
+        wallet_outputs,
+        daemon_height,
+        current_time_secs(),
+        selected_output_keys,
+        excluded_key_images,
+        source_account,
+        rct_type,
+        fee_rate,
+    )
+}
+
+/// Clock-injected variant of `prepare_sweep_inputs_with_fee`.
+pub fn prepare_sweep_inputs_at_with_fee(
+    wallet_outputs: &[WalletOutput],
+    daemon_height: u64,
+    now_secs: Option<u64>,
+    selected_output_keys: Option<&[String]>,
+    excluded_key_images: Option<&HashSet<String>>,
+    source_account: u32,
+    rct_type: monero_wallet::ringct::RctType,
+    fee_rate: monero_wallet::interface::FeeRate,
+) -> Result<PreparedInputs, String> {
+    let mut spendable: Vec<WalletOutput> = wallet_outputs
+        .iter()
+        .filter(|output| {
+            !output.spent
+                && !output.frozen
+                && is_spendable_at(output, daemon_height, now_secs)
+                && output.subaddress_index.map_or(0, |index| index.0) == source_account
+                && !excluded_key_images
+                    .map_or(false, |excluded| excluded.contains(&output.key_image))
+        })
+        .cloned()
+        .collect();
+
+    if let Some(keys) = selected_output_keys {
+        spendable.retain(|output| keys.contains(&output.output_key()));
+    } else {
+        let threshold = fractional_threshold(rct_type, fee_rate)?;
+        spendable.retain(|output| output.amount >= threshold);
+    }
+    if spendable.is_empty() {
+        return Err("No spendable outputs available for sweep in the selected account".to_string());
+    }
+
+    let total_input = crate::tx_utils::checked_amount_sum(spendable.iter().map(|o| o.amount))
+        .ok_or_else(|| "sweep input amounts overflow".to_string())?;
+    // wallet2 adds a zero-amount dummy output to a sweep's destination.
+    let estimated_fee = estimate_fee_with_rate(spendable.len(), 2, rct_type, fee_rate)?;
+    if total_input <= estimated_fee {
+        return Err("Sweep inputs cannot pay the selected fee tier".to_string());
+    }
+    let spent_output_keys = spendable.iter().map(WalletOutput::output_key).collect();
+    let stored_outputs = spendable.into_iter().map(Into::into).collect();
+    Ok(PreparedInputs {
+        stored_outputs,
+        spent_output_keys,
+        total_input,
+        estimated_fee,
+    })
+}
+
+/// Prepare sweep inputs with a fixed tier-one fee estimate.
+#[deprecated(
+    note = "use prepare_sweep_inputs_with_rpc so preparation uses the construction fee tier"
+)]
 pub fn prepare_sweep_inputs(
     wallet_outputs: &[WalletOutput],
     daemon_height: u64,
@@ -216,6 +325,7 @@ pub fn prepare_sweep_inputs(
 
 /// Prepare a sweep using an explicit Unix clock, such as adjusted network time.
 /// With no clock, timestamp-locked outputs remain locked.
+#[deprecated(note = "use prepare_sweep_inputs_at_with_fee with the construction fee tier")]
 pub fn prepare_sweep_inputs_at(
     wallet_outputs: &[WalletOutput],
     daemon_height: u64,
@@ -244,8 +354,8 @@ pub fn prepare_sweep_inputs_at(
 
     let total_input = crate::tx_utils::checked_amount_sum(spendable.iter().map(|o| o.amount))
         .ok_or_else(|| "sweep input amounts overflow".to_string())?;
-    // Sweep has 1 output (destination, no change); padded to 2 by BP+ = base case
-    let estimated_fee = estimate_fee(spendable.len(), 1);
+    // wallet2 adds a zero-amount dummy output to a sweep's destination.
+    let estimated_fee = estimate_fee(spendable.len(), 2);
     let spent_output_keys: Vec<String> = spendable.iter().map(|o| o.output_key()).collect();
     let stored_outputs: Vec<StoredOutputData> = spendable.into_iter().map(Into::into).collect();
 
@@ -259,6 +369,8 @@ pub fn prepare_sweep_inputs_at(
 
 #[cfg(test)]
 mod tests {
+    #![allow(deprecated)]
+
     use super::*;
 
     fn make_output(amount: u64, height: u64, tx_hash: &str) -> WalletOutput {
@@ -526,8 +638,42 @@ mod tests {
             make_output(2_000_000_000_000, 100, "tx2"),
         ];
         let result = prepare_sweep_inputs(&outputs, 200, None, None).unwrap();
-        // Sweep has 1 output (destination), estimate_fee(2, 1) since 1 output pads to 2
-        assert_eq!(result.estimated_fee, estimate_fee(2, 1));
+        assert_eq!(result.estimated_fee, estimate_fee(2, 2));
+    }
+
+    #[test]
+    fn fee_aware_sweep_uses_two_outputs_and_one_account() {
+        let mut account_one = make_output(2_000_000_000_000, 100, "tx1");
+        account_one.subaddress_index = Some((1, 0));
+        let outputs = vec![make_output(1_000_000_000_000, 100, "tx0"), account_one];
+        let rct_type = monero_wallet::ringct::RctType::ClsagBulletproofPlus;
+        let fee_rate = monero_wallet::interface::FeeRate::new(80_000, 10_000).unwrap();
+        let result =
+            prepare_sweep_inputs_with_fee(&outputs, 200, None, None, 1, rct_type, fee_rate)
+                .unwrap();
+
+        assert_eq!(result.stored_outputs.len(), 1);
+        assert_eq!(result.stored_outputs[0].subaddress, Some((1, 0)));
+        assert_eq!(
+            result.estimated_fee,
+            estimate_fee_with_rate(1, 2, rct_type, fee_rate).unwrap()
+        );
+    }
+
+    #[test]
+    fn fee_aware_sweep_refuses_inputs_that_cannot_pay_the_fee() {
+        let outputs = vec![make_output(100_000_000, 100, "tx0")];
+        let error = prepare_sweep_inputs_with_fee(
+            &outputs,
+            200,
+            None,
+            None,
+            0,
+            monero_wallet::ringct::RctType::ClsagBulletproofPlus,
+            monero_wallet::interface::FeeRate::new(80_000, 10_000).unwrap(),
+        )
+        .unwrap_err();
+        assert!(error.contains("cannot pay"), "{error}");
     }
 
     #[test]

@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 use monero_rust::{
     compute_lookahead, filter_outputs_by_accounts, is_spendable, prepare_send_inputs,
     prepare_sweep_inputs, process_batch_with_reorg_detection, process_single_wallet_batch,
