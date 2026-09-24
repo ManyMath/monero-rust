@@ -1,0 +1,79 @@
+{
+  "artifacts": {
+    "cold_full.keys": {
+      "bytes": 1712,
+      "sha256": "d183fde129ea586665ef2dbde8ff20003e16810e6e8c15c5766e23941e87563c"
+    },
+    "hot_view_only.keys": {
+      "bytes": 1675,
+      "sha256": "6f5f30c6e691aec371af5def3bee44b97ab6f46e699a38463719fbee1059f5c5"
+    },
+    "key_images_rpc.json": {
+      "bytes": 20047,
+      "sha256": "eec2213a424c55d2612a6413da55e098267a2c1b18253be21675546d06cbc00d"
+    },
+    "outputs": {
+      "bytes": 6401,
+      "sha256": "8f5318834825b5414a6159199a2f99ec83fae5fc4b211a8185651249b3d03088"
+    },
+    "signed_monero_tx": {
+      "bytes": 46217,
+      "sha256": "03e1cc746c4f41a1c17c1d65d47c02bcd2fc6ea7cf41602d6097eef0e2e73f15"
+    },
+    "transfer_description.json": {
+      "bytes": 952,
+      "sha256": "6517a753c318f200c796d39ced3cfdb22cbf882b6d1e88e923fddcd8c53f6a13"
+    },
+    "unsigned_monero_tx": {
+      "bytes": 27250,
+      "sha256": "626fe58be79c66f359c9fcd6dd5b555b40feabf12a37dfca35c06605cffbf72e"
+    }
+  },
+  "flow": {
+    "blocks_mined": 80,
+    "chain_height_after_mining": 80,
+    "cli_submit_stdout": null,
+    "hot_refresh_blocks_fetched": 80,
+    "incoming_transfer_count": 80,
+    "key_image_count": 80,
+    "key_image_import": {
+      "height": 80,
+      "spent": 0,
+      "unspent": 2814535029460039
+    },
+    "key_image_offset": 0,
+    "monero_wallet_rpc_signed_tx_hash_list": null,
+    "multi_tx_unsigned": null,
+    "outputs_imported": 80,
+    "rebuilt_signed_txset_sha256": null,
+    "ring_size": 16,
+    "signed_tx_hash_list": [
+      "94623977b215cf14f701899335e87386856f66a17ccc743a5fb0adb9819baf52"
+    ],
+    "signed_txset_source": "monero-wallet-rpc sign_transfer",
+    "submit_method": "monero-wallet-rpc submit_transfer hex",
+    "submitted_tx_hash_list": [
+      "94623977b215cf14f701899335e87386856f66a17ccc743a5fb0adb9819baf52"
+    ],
+    "transfer_amount_atomic": 1000000000000,
+    "unsigned_tx_hash": "f5664fe4e914851384044a5d226cad06e884b88f541582b26b7ef8eb10957b4a",
+    "zero_change_sweep_all": true
+  },
+  "generated_at_utc": "2026-11-18T05:08:36+00:00",
+  "monero": {
+    "monerod_sha256": "3d95169200e1d6da1a111c8dc93f5f73fdffd4dd93465e7623cad1bb3f90e31b",
+    "monerod_version": "Monero 'Fluorine Fermi' (v0.18.4.4-release)",
+    "wallet_rpc_sha256": "b204c7b844b429f23853be32fb1f630f56aa64a2e27e5b2e1fb753ecbc28b0f7",
+    "wallet_rpc_version": "Monero 'Fluorine Fermi' (v0.18.4.4-release)"
+  },
+  "network": "regtest",
+  "schema": "monero-rust cold signing vector v1",
+  "source_flow": "monero-project/monero tests/functional_tests/cold_signing.py",
+  "wallet": {
+    "cold_restore_address": "42ey1afDFnn4886T7196doS9GPMzexD9gXpsZJDwVjeRVdFCSoHnv7KPbBeGpzJBzHRCAs9UxqeoyFQMYbqSWYTfJJQAWDm",
+    "seed": "velvet lymph giddy number token physics poetry unquoted nibs useful sabotage limits benches lifestyle eden nitrogen anvil fewest avoid batch vials washing fences goat unquoted",
+    "spend_key": "148d78d2aba7dbca5cd8f6abcfb0b3c009ffbdbea1ff373d50ed94d78286640e",
+    "standard_address": "42ey1afDFnn4886T7196doS9GPMzexD9gXpsZJDwVjeRVdFCSoHnv7KPbBeGpzJBzHRCAs9UxqeoyFQMYbqSWYTfJJQAWDm",
+    "view_key": "49774391fa5e8d249fc2c5b45dadef13534bf2483dede880dac88f061e809100"
+  }
+}

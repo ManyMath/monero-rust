@@ -23,6 +23,12 @@ fn vector_path(name: &str) -> PathBuf {
         .join(name)
 }
 
+fn zero_change_vector_path(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/vectors/cold_signing_regtest_zero_change_v0_18_4_4")
+        .join(name)
+}
+
 #[derive(Deserialize)]
 struct KeyImagesRpc {
     offset: u64,
@@ -463,6 +469,74 @@ fn cold_signing_unsigned_txset_converts_to_app_unsigned_payload() {
             "missing key image for selected output {expected_index}"
         );
     }
+}
+
+#[test]
+fn zero_change_wallet2_txset_uses_a_dummy_and_preserves_wallet2s_fee() {
+    let cold = read_keys_file(&zero_change_vector_path("cold_full.keys"), "")
+        .expect("zero-change cold wallet keys should parse");
+    let unsigned = std::fs::read(zero_change_vector_path("unsigned_monero_tx"))
+        .expect("zero-change unsigned txset should be readable");
+    let summary =
+        epee_compat::parse_unsigned_monero_txset_summary(&unsigned, &cold.view_secret_key)
+            .expect("zero-change wallet2 txset should parse");
+    let construction = summary.txes.first().expect("one wallet2 construction");
+    assert_eq!(construction.change_amount, 0);
+    assert_eq!(construction.destinations.len(), 1);
+    assert_eq!(construction.split_destinations.len(), 2);
+    let dummy = construction
+        .split_destinations
+        .iter()
+        .find(|destination| destination.amount == 0)
+        .expect("wallet2 split destinations include zero dummy change");
+    assert!(!dummy.is_subaddress);
+    assert!(!dummy.is_integrated);
+
+    let total_input = construction
+        .sources
+        .iter()
+        .map(|source| source.amount)
+        .sum::<u64>();
+    let wallet2_fee = total_input - construction.destination_total_amount;
+    let converted =
+        monero_rust::tx_builder::native::create_unsigned_transaction_from_wallet2_txset_keys(
+            cold.spend_secret_key,
+            cold.view_secret_key,
+            &unsigned,
+            "mainnet",
+        )
+        .expect("zero-change wallet2 txset should convert");
+    assert_eq!(converted.fee, wallet2_fee);
+
+    let app_bytes = hex::decode(&converted.unsigned_tx_hex).expect("converted payload hex");
+    let app = monero_rust::unsigned_tx::UnsignedTransaction::from_bytes(&app_bytes)
+        .expect("converted zero-change payload should parse");
+    assert!(matches!(
+        app.change,
+        Some(monero_rust::unsigned_tx::UnsignedChange::Dummy)
+    ));
+
+    let spend = Zeroizing::new(Scalar::from_bytes_mod_order(cold.spend_secret_key));
+    let view = Zeroizing::new(Scalar::from_bytes_mod_order(cold.view_secret_key));
+    let pair = monero_wallet::ViewPair::new(
+        monero_wallet::ed25519::Point::from(&*spend * ED25519_BASEPOINT_TABLE),
+        Zeroizing::new(monero_wallet::ed25519::Scalar::from(*view)),
+    )
+    .expect("cold wallet view pair");
+    let resolved = app
+        .resolve(&pair)
+        .expect("converted zero-change payload should resolve");
+    assert_eq!(resolved.dummy_amount, Some(0));
+    assert!(resolved.change.is_none());
+    assert_eq!(resolved.fee, wallet2_fee);
+
+    let signed =
+        monero_rust::unsigned_tx::sign_offline(&mut rand::rngs::OsRng, &spend, &view, &app)
+            .expect("converted zero-change payload should sign");
+    assert_eq!(signed.fee, wallet2_fee);
+    assert_eq!(signed.tx.prefix().outputs.len(), 2);
+    assert_eq!(signed.tx.prefix().extra.len(), WALLET2_EXTRA_LEN);
+    assert!(signed.additional_tx_keys.is_empty());
 }
 
 #[test]
