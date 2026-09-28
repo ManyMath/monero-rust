@@ -454,7 +454,6 @@ async fn a_rate_above_the_callers_limit_is_refused() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: the quantization mask is unbounded, so a node can set the fee to any amount"]
 async fn fee_cap_bounds_the_fee_a_hostile_quantization_mask_can_force() {
     let mut node = Node::new();
     node.fee_estimate["quantization_mask"] = json!(1_000_000_000_000u64);

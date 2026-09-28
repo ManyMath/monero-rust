@@ -142,6 +142,10 @@ struct CompressedOutputDistribution {
     base: u64,
 }
 
+/// The quantization mask monerod reports; a larger one is refused under any
+/// fee limit.
+pub const MAX_DAEMON_FEE_QUANTIZATION_MASK: u64 = 10_000;
+
 #[derive(Clone, PartialEq, Eq, Debug, Error)]
 pub enum RpcError {
     #[error("internal error ({0})")]
@@ -166,6 +170,8 @@ pub enum RpcError {
     ZeroFee,
     #[error("zero fee mask returned by node")]
     ZeroMask,
+    #[error("fee mask exceeds limit (mask: {mask}, limit: {limit})")]
+    MaskExceedsLimit { mask: u64, limit: u64 },
     #[error("node answered with status {0:?}")]
     NodeStatus(String),
     #[error("invalid fee estimate ({0})")]
@@ -1062,11 +1068,8 @@ impl<R: RpcConnection> Rpc<R> {
         self.get_fee_for_priority(FeePriority::Automatic).await
     }
 
-    /// Get the currently estimated fee from the node with a sanity check.
-    ///
-    /// Returns an error if the fee per weight is zero (indicating a bug) or
-    /// exceeds `max_fee_per_byte` (indicating a malicious or malfunctioning
-    /// node). Use `DEFAULT_MAX_FEE_PER_BYTE` for a reasonable default limit.
+    /// The automatic fee, refused if the rate is zero or above `max_fee_per_byte`
+    /// or its tier's bound, or the mask is zero or above its bound.
     pub async fn get_fee_checked(&self, max_fee_per_byte: u64) -> Result<Fee, RpcError> {
         self.get_fee_checked_for_priority(FeePriority::Automatic, max_fee_per_byte)
             .await
@@ -1114,6 +1117,14 @@ impl<R: RpcConnection> Rpc<R> {
             return Err(RpcError::FeeExceedsLimit {
                 per_weight: fee.per_weight,
                 limit: max_fee_per_byte,
+            });
+        }
+
+        // The node also chooses the mask; unbounded, it defeats the rate limit.
+        if fee.mask > MAX_DAEMON_FEE_QUANTIZATION_MASK {
+            return Err(RpcError::MaskExceedsLimit {
+                mask: fee.mask,
+                limit: MAX_DAEMON_FEE_QUANTIZATION_MASK,
             });
         }
 
@@ -1965,6 +1976,55 @@ mod tests {
             MAX_DAEMON_FEE_PER_BYTE
         );
         assert_eq!(DEFAULT_MAX_FEE_PER_BYTE, 240_000_000);
+    }
+
+    #[tokio::test]
+    async fn checked_fee_bounds_the_quantization_mask() {
+        #[derive(Clone, Debug)]
+        struct Connection(u64);
+        #[async_trait]
+        impl RpcConnection for Connection {
+            async fn post(&self, _: &str, _: Vec<u8>) -> Result<Vec<u8>, RpcError> {
+                Ok(serde_json::to_vec(&json!({ "result": {
+                    "fee": 32_000,
+                    "fees": [32_000, 130_000, 510_000, 6_400_000],
+                    "quantization_mask": self.0,
+                    "status": "OK"
+                } }))
+                .unwrap())
+            }
+        }
+        let checked = |mask, limit| async move {
+            Rpc::new_with_connection(Connection(mask))
+                .get_fee_checked_for_priority(FeePriority::Low, limit)
+                .await
+        };
+
+        let (display_decimal_point, quantization_decimals) = (12, 8);
+        assert_eq!(
+            MAX_DAEMON_FEE_QUANTIZATION_MASK,
+            10u64.pow(display_decimal_point - quantization_decimals)
+        );
+
+        let fee = |mask| Fee {
+            per_weight: 32_000,
+            mask,
+        };
+        let refused = |mask| {
+            Err(RpcError::MaskExceedsLimit {
+                mask,
+                limit: MAX_DAEMON_FEE_QUANTIZATION_MASK,
+            })
+        };
+        assert_eq!(checked(10_000, 32_000).await, Ok(fee(10_000)));
+        assert_eq!(checked(1, 32_000).await, Ok(fee(1)));
+        assert_eq!(checked(10_001, 32_000).await, refused(10_001));
+        for limit in [DEFAULT_MAX_FEE_PER_BYTE, u64::MAX] {
+            assert_eq!(checked(10_001, limit).await, refused(10_001));
+            assert_eq!(checked(32_000, limit).await, refused(32_000));
+            assert_eq!(checked(240_000_000, limit).await, refused(240_000_000));
+            assert_eq!(checked(u64::MAX, limit).await, refused(u64::MAX));
+        }
     }
 
     #[tokio::test]
