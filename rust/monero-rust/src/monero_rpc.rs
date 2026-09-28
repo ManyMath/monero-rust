@@ -9,6 +9,7 @@
 #![allow(dead_code)]
 
 use std::fmt::Debug;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use async_trait::async_trait;
 use thiserror::Error;
@@ -29,6 +30,8 @@ use monero_oxide::{
     transaction::{Input, NotPruned, Timelock, Transaction},
 };
 use monero_wallet::interface::FeeRate;
+
+use crate::wallet_state::current_time_secs;
 
 /// A node's fee estimate: piconero per byte of weight, and the quantization mask.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -405,7 +408,7 @@ impl HttpRpc {
             None
         };
 
-        Ok(Rpc(HttpRpc {
+        Ok(Rpc::new_with_connection(HttpRpc {
             client: Client::new(),
             userpass,
             url,
@@ -456,12 +459,80 @@ impl RpcConnection for HttpRpc {
     }
 }
 
+const NODE_CACHE_SECONDS: u64 = 30;
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+struct FeeEstimate {
+    mask: u64,
+    tiers: Vec<u64>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct NodeInfo {
+    height: u64,
+    block_weight_limit: u64,
+}
+
+#[derive(Debug, Default)]
+struct NodeCacheState {
+    fee_estimate: Option<(Option<u64>, Option<u64>, FeeEstimate)>,
+    wallet_height: Option<(u64, u64)>,
+    info: Option<(u64, NodeInfo)>,
+    fork_version: Option<(u64, usize)>,
+}
+
+fn is_recent(at: u64, now: Option<u64>) -> bool {
+    now.is_some_and(|now| now >= at && now - at < NODE_CACHE_SECONDS)
+}
+
+impl NodeCacheState {
+    fn fee_estimate(&self, wallet_height: Option<u64>, now: Option<u64>) -> Option<FeeEstimate> {
+        let (height, at, estimate) = self.fee_estimate.as_ref()?;
+        let current = *height == wallet_height
+            && (wallet_height.is_some() || at.is_some_and(|at| is_recent(at, now)));
+        current.then(|| estimate.clone())
+    }
+
+    fn wallet_height_is_current(&mut self, wallet_height: u64, now: Option<u64>) -> bool {
+        match self.wallet_height {
+            Some((height, since)) if height == wallet_height => is_recent(since, now),
+            _ => {
+                self.wallet_height = now.map(|now| (wallet_height, now));
+                now.is_some()
+            }
+        }
+    }
+
+    fn info(&self, now: Option<u64>) -> Option<NodeInfo> {
+        self.info
+            .filter(|(at, _)| is_recent(*at, now))
+            .map(|(_, info)| info)
+    }
+
+    fn fork_version(&self, now: Option<u64>) -> Option<usize> {
+        self.fork_version
+            .filter(|(at, _)| is_recent(*at, now))
+            .map(|(_, version)| version)
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct NodeCache(Arc<Mutex<NodeCacheState>>);
+
+impl NodeCache {
+    /// Never held across an await.
+    fn state(&self) -> MutexGuard<'_, NodeCacheState> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// A node connection. Clones share what the node answered recently.
 #[derive(Clone, Debug)]
-pub struct Rpc<R: RpcConnection>(R);
+pub struct Rpc<R: RpcConnection>(R, NodeCache);
 impl<R: RpcConnection> Rpc<R> {
     /// Create a new Rpc instance from any RpcConnection implementation.
     pub fn new_with_connection(connection: R) -> Self {
-        Rpc(connection)
+        Rpc(connection, NodeCache::default())
     }
 
     /// Perform a RPC call to the specified route with the provided parameters.
@@ -545,18 +616,26 @@ impl<R: RpcConnection> Rpc<R> {
             block_header: ProtocolResponse,
         }
 
-        Ok(
-            match self
-                .json_rpc_call::<LastHeaderResponse>("get_last_block_header", None)
-                .await?
-                .block_header
-                .major_version
-            {
-                13 | 14 => RctType::ClsagBulletproof,
-                15 | 16 => RctType::ClsagBulletproofPlus,
-                protocol => Err(RpcError::UnsupportedProtocol(protocol))?,
-            },
-        )
+        let recent = self.1.state().fork_version(current_time_secs());
+        let version = match recent {
+            Some(version) => version,
+            None => {
+                let version = self
+                    .json_rpc_call::<LastHeaderResponse>("get_last_block_header", None)
+                    .await?
+                    .block_header
+                    .major_version;
+                if let Some(now) = current_time_secs() {
+                    self.1.state().fork_version = Some((now, version));
+                }
+                version
+            }
+        };
+        Ok(match version {
+            13 | 14 => RctType::ClsagBulletproof,
+            15 | 16 => RctType::ClsagBulletproofPlus,
+            protocol => Err(RpcError::UnsupportedProtocol(protocol))?,
+        })
     }
 
     pub async fn get_height(&self) -> Result<usize, RpcError> {
@@ -917,16 +996,6 @@ impl<R: RpcConnection> Rpc<R> {
         wallet_height: Option<u64>,
     ) -> Result<bool, RpcError> {
         #[derive(Deserialize, Debug)]
-        struct InfoResponse {
-            height: u64,
-            #[serde(default)]
-            block_weight_limit: u64,
-            #[serde(default)]
-            block_size_limit: u64,
-            #[serde(default)]
-            status: String,
-        }
-        #[derive(Deserialize, Debug)]
         struct Header {
             #[serde(default)]
             block_weight: u64,
@@ -945,14 +1014,8 @@ impl<R: RpcConnection> Rpc<R> {
         let request = serde_json::to_vec(&json!({ "method": "get_txpool_backlog", "params": {} }))
             .map_err(|_| RpcError::InternalError("Failed to serialize JSON request"))?;
         let backlog = parse_txpool_backlog(&self.0.post("json_rpc", request).await?)?;
-        let info: InfoResponse = self.json_rpc_call("get_info", Some(json!({}))).await?;
-        require_ok_status(&info.status)?;
-        let block_weight_limit = if info.block_weight_limit == 0 {
-            info.block_size_limit
-        } else {
-            info.block_weight_limit
-        };
-        let full_reward_zone = block_weight_limit / 2;
+        let info = self.node_info().await?;
+        let full_reward_zone = info.block_weight_limit / 2;
         if full_reward_zone == 0 {
             return Err(RpcError::InvalidNode);
         }
@@ -1019,11 +1082,7 @@ impl<R: RpcConnection> Rpc<R> {
             .1)
     }
 
-    async fn fee_tier_for_priority_at_height(
-        &self,
-        priority: FeePriority,
-        wallet_height: Option<u64>,
-    ) -> Result<(usize, Fee), RpcError> {
+    async fn fetch_fee_estimate(&self) -> Result<FeeEstimate, RpcError> {
         #[allow(dead_code)]
         #[derive(Deserialize, Debug)]
         struct FeeResponse {
@@ -1049,6 +1108,87 @@ impl<R: RpcConnection> Rpc<R> {
         } else {
             res.fees
         };
+        Ok(FeeEstimate { mask, tiers })
+    }
+
+    async fn node_info(&self) -> Result<NodeInfo, RpcError> {
+        #[derive(Deserialize, Debug)]
+        struct InfoResponse {
+            height: u64,
+            #[serde(default)]
+            block_weight_limit: u64,
+            #[serde(default)]
+            block_size_limit: u64,
+            #[serde(default)]
+            status: String,
+        }
+
+        let recent = self.1.state().info(current_time_secs());
+        if let Some(info) = recent {
+            return Ok(info);
+        }
+        let info: InfoResponse = self.json_rpc_call("get_info", Some(json!({}))).await?;
+        require_ok_status(&info.status)?;
+        let info = NodeInfo {
+            height: info.height,
+            block_weight_limit: if info.block_weight_limit == 0 {
+                info.block_size_limit
+            } else {
+                info.block_weight_limit
+            },
+        };
+        if let Some(now) = current_time_secs() {
+            self.1.state().info = Some((now, info));
+        }
+        Ok(info)
+    }
+
+    async fn fee_estimate(&self, wallet_height: Option<u64>) -> Result<FeeEstimate, RpcError> {
+        let now = current_time_secs();
+        let stale = wallet_height
+            .is_some_and(|height| !self.1.state().wallet_height_is_current(height, now));
+        let height = if stale {
+            Some(self.node_info().await?.height)
+        } else {
+            wallet_height
+        };
+        let known = self.1.state().fee_estimate(height, now);
+        if let Some(estimate) = known {
+            return Ok(estimate);
+        }
+        let estimate = self.fetch_fee_estimate().await?;
+        self.1.state().fee_estimate = Some((height, now, estimate.clone()));
+        Ok(estimate)
+    }
+
+    /// wallet2's `adjust_priority`: settle `Automatic` as `Low` or `Normal`. Do it
+    /// once per transaction and pass the result to every call that builds it.
+    pub async fn adjust_priority(
+        &self,
+        priority: FeePriority,
+        wallet_height: Option<u64>,
+    ) -> Result<FeePriority, RpcError> {
+        if priority != FeePriority::Automatic {
+            return Ok(priority);
+        }
+        let low_fee = self.fee_estimate(wallet_height).await?.tiers[0];
+        let congested = self
+            .wallet2_automatic_uses_normal(low_fee, wallet_height)
+            .await
+            .unwrap_or(false);
+        Ok(if congested {
+            FeePriority::Normal
+        } else {
+            FeePriority::Low
+        })
+    }
+
+    async fn fee_tier_for_priority_at_height(
+        &self,
+        priority: FeePriority,
+        wallet_height: Option<u64>,
+    ) -> Result<(usize, Fee), RpcError> {
+        let FeeEstimate { mask, tiers } = self.fee_estimate(wallet_height).await?;
         let tier = match priority.tier() {
             Some(tier) => tier,
             None => usize::from(
@@ -1953,6 +2093,147 @@ mod tests {
         assert_eq!(fee(0, 240_000).await, 32_000);
         assert_eq!(fee(0, 243_000).await, 130_000);
         assert_eq!(fee(300_000, 0).await, 130_000);
+    }
+
+    #[test]
+    fn node_answers_are_kept_as_long_as_wallet2_keeps_them() {
+        let estimate = FeeEstimate {
+            mask: 10_000,
+            tiers: vec![32_000, 130_000, 510_000, 6_400_000],
+        };
+        let mut state = NodeCacheState::default();
+        assert_eq!(state.fee_estimate(Some(500), Some(1_000)), None);
+
+        state.fee_estimate = Some((Some(500), Some(1_000), estimate.clone()));
+        assert_eq!(
+            state.fee_estimate(Some(500), Some(1_000)),
+            Some(estimate.clone())
+        );
+        assert_eq!(
+            state.fee_estimate(Some(500), Some(9_999)),
+            Some(estimate.clone())
+        );
+        assert_eq!(state.fee_estimate(Some(500), None), Some(estimate.clone()));
+        assert_eq!(state.fee_estimate(Some(501), Some(1_000)), None);
+        assert_eq!(state.fee_estimate(None, Some(1_000)), None);
+
+        state.fee_estimate = Some((None, Some(1_000), estimate.clone()));
+        assert_eq!(
+            state.fee_estimate(None, Some(1_029)),
+            Some(estimate.clone())
+        );
+        assert_eq!(state.fee_estimate(None, Some(1_030)), None);
+        assert_eq!(
+            state.fee_estimate(None, Some(999)),
+            None,
+            "a clock that went back"
+        );
+        assert_eq!(state.fee_estimate(None, None), None, "no clock");
+        assert_eq!(state.fee_estimate(Some(500), Some(1_000)), None);
+        state.fee_estimate = Some((None, None, estimate));
+        assert_eq!(state.fee_estimate(None, Some(1_000)), None);
+
+        let info = NodeInfo {
+            height: 500,
+            block_weight_limit: 600_000,
+        };
+        state.info = Some((1_000, info));
+        assert_eq!(state.info(Some(1_029)), Some(info));
+        assert_eq!(state.info(Some(1_030)), None);
+        assert_eq!(state.info(None), None);
+
+        state.fork_version = Some((1_000, 16));
+        assert_eq!(state.fork_version(Some(1_029)), Some(16));
+        assert_eq!(state.fork_version(Some(1_030)), None);
+        assert_eq!(state.fork_version(None), None);
+
+        assert!(state.wallet_height_is_current(500, Some(1_000)));
+        assert!(state.wallet_height_is_current(500, Some(1_029)));
+        assert!(!state.wallet_height_is_current(500, Some(1_030)));
+        assert!(!state.wallet_height_is_current(500, Some(5_000)));
+        assert!(state.wallet_height_is_current(501, Some(5_000)));
+        assert!(!state.wallet_height_is_current(501, None), "no clock");
+        assert!(!state.wallet_height_is_current(502, None), "no clock");
+    }
+
+    #[tokio::test]
+    async fn a_fee_estimate_for_a_stale_wallet_height_follows_the_node() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        #[derive(Clone, Debug, Default)]
+        struct Connection {
+            height: Arc<AtomicU64>,
+            calls: Arc<Mutex<Vec<String>>>,
+        }
+        #[async_trait]
+        impl RpcConnection for Connection {
+            async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
+                assert_eq!(route, "json_rpc");
+                let request: Value = serde_json::from_slice(&body).unwrap();
+                let method = request["method"].as_str().unwrap().to_string();
+                let height = self.height.load(Ordering::SeqCst);
+                let result = match method.as_str() {
+                    "get_fee_estimate" => json!({
+                        "fee": 20_000 + height,
+                        "fees": [20_000 + height, 80_000, 320_000, 4_000_000],
+                        "quantization_mask": 10_000,
+                        "status": "OK"
+                    }),
+                    "get_info" => json!({
+                        "height": height,
+                        "block_weight_limit": 600_000,
+                        "status": "OK"
+                    }),
+                    method => panic!("unexpected method {method}"),
+                };
+                self.calls.lock().unwrap().push(method);
+                Ok(serde_json::to_vec(&json!({ "result": result })).unwrap())
+            }
+        }
+
+        let connection = Connection::default();
+        connection.height.store(100, Ordering::SeqCst);
+        let rpc = Rpc::new_with_connection(connection.clone());
+        let fee = |wallet_height| {
+            let rpc = rpc.clone();
+            async move {
+                rpc.get_fee_for_priority_at_height(FeePriority::Low, Some(wallet_height))
+                    .await
+                    .unwrap()
+                    .per_weight
+            }
+        };
+        let calls = || std::mem::take(&mut *connection.calls.lock().unwrap());
+        let age = || {
+            let mut state = rpc.1.state();
+            if let Some((_, since)) = &mut state.wallet_height {
+                *since -= 31;
+            }
+            if let Some((at, _)) = &mut state.info {
+                *at -= 31;
+            }
+        };
+
+        assert_eq!(fee(100).await, 20_100);
+        assert_eq!(fee(100).await, 20_100);
+        assert_eq!(calls(), ["get_fee_estimate"]);
+
+        age();
+        assert_eq!(fee(100).await, 20_100);
+        assert_eq!(calls(), ["get_info"]);
+
+        connection.height.store(101, Ordering::SeqCst);
+        age();
+        assert_eq!(fee(100).await, 20_101);
+        assert_eq!(calls(), ["get_info", "get_fee_estimate"]);
+        assert_eq!(fee(100).await, 20_101);
+        assert_eq!(calls(), Vec::<String>::new());
+
+        assert_eq!(fee(101).await, 20_101);
+        assert_eq!(calls(), Vec::<String>::new());
+        connection.height.store(102, Ordering::SeqCst);
+        assert_eq!(fee(102).await, 20_102);
+        assert_eq!(calls(), ["get_fee_estimate"]);
     }
 
     #[test]

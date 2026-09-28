@@ -363,6 +363,16 @@ pub mod native {
                 ..Self::default()
             }
         }
+
+        /// Settle Automatic priority once, as wallet2's `adjust_priority`; pass the
+        /// result to every step of a send.
+        pub async fn resolve<R: RpcConnection>(self, rpc: &Rpc<R>) -> Result<Self, String> {
+            let priority = rpc
+                .adjust_priority(self.priority, self.wallet_height)
+                .await
+                .map_err(|e| format!("Failed to get fee rate: {e:?}"))?;
+            Ok(Self { priority, ..self })
+        }
     }
 
     /// Blackballed RingCT global output indexes from a trusted local list,

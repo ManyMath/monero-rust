@@ -587,7 +587,6 @@ async fn fee_estimate_with_a_missing_member_is_refused_as_such() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: every fee selection repeats get_fee_estimate, which wallet2 sends once per height"]
 async fn consecutive_fee_selections_ask_for_the_estimate_once() {
     let node = Node::new();
     let rpc = node.rpc();
@@ -609,6 +608,96 @@ async fn consecutive_fee_selections_ask_for_the_estimate_once() {
     );
     assert_eq!(count("get_txpool_backlog"), 2);
     assert_eq!(count("getblockheadersrange"), 2);
+}
+
+#[tokio::test]
+async fn a_second_automatic_selection_repeats_only_what_wallet2_repeats() {
+    let node = Node::new();
+    let rpc = node.rpc();
+    let select = |height| {
+        rpc.get_fee_checked_for_priority_at_height(
+            FeePriority::Automatic,
+            Some(height),
+            DEFAULT_MAX_FEE_PER_BYTE,
+        )
+    };
+    select(HEIGHT).await.unwrap();
+    select(HEIGHT).await.unwrap();
+    assert_eq!(
+        node.calls(),
+        [
+            "get_fee_estimate",
+            "get_txpool_backlog",
+            "get_info",
+            "getblockheadersrange",
+            "get_txpool_backlog",
+            "getblockheadersrange",
+        ]
+    );
+
+    select(HEIGHT + 1).await.unwrap();
+    assert_eq!(
+        node.calls()[6..],
+        [
+            "get_fee_estimate",
+            "get_txpool_backlog",
+            "getblockheadersrange"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_settled_policy_asks_about_congestion_once() {
+    let mut node = Node::new();
+    node.backlog = vec![(FULL_REWARD_ZONE, FULL_REWARD_ZONE * FEES[0])];
+    let rpc = node.rpc();
+    let policy = FeePolicy {
+        priority: FeePriority::Automatic,
+        wallet_height: Some(HEIGHT),
+        max_fee_per_weight: DEFAULT_MAX_FEE_PER_BYTE,
+    }
+    .resolve(&rpc)
+    .await
+    .unwrap();
+    assert_eq!(policy.priority, FeePriority::Normal);
+    assert_eq!(policy.wallet_height, Some(HEIGHT));
+
+    for _ in 0..3 {
+        let estimate = estimate_fee_with_rpc_and_policy(&rpc, 1, 2, policy)
+            .await
+            .unwrap();
+        assert_eq!(estimate.per_weight, FEES[1]);
+    }
+    assert_eq!(
+        node.calls(),
+        [
+            "get_fee_estimate",
+            "get_txpool_backlog",
+            "get_info",
+            "get_last_block_header"
+        ],
+        "the fork version is asked for once as well"
+    );
+
+    let quiet = Node::new();
+    let explicit = FeePolicy {
+        priority: FeePriority::Elevated,
+        ..policy
+    };
+    assert_eq!(explicit.resolve(&quiet.rpc()).await, Ok(explicit));
+    assert_eq!(
+        quiet.rpc().adjust_priority(FeePriority::Low, None).await,
+        Ok(FeePriority::Low)
+    );
+    assert!(quiet.calls().is_empty());
+
+    assert_eq!(
+        quiet
+            .rpc()
+            .adjust_priority(FeePriority::Automatic, Some(HEIGHT))
+            .await,
+        Ok(FeePriority::Low)
+    );
 }
 
 #[test]
