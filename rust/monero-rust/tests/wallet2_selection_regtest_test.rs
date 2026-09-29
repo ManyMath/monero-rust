@@ -262,7 +262,6 @@ async fn second_input_is_the_smallest_and_large_outputs_are_kept() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "known defect: a sweep links every subaddress of the account"]
 async fn sweep_spends_one_subaddress() {
     let Some(probe) = Probe::open().await else {
         return;

@@ -439,7 +439,6 @@ fn weight_bound_refuses_counts_that_overflow() {
 }
 
 #[test]
-#[ignore = "known defect: a sweep links every subaddress of the account"]
 fn sweep_without_indices_spends_one_subaddress() {
     let outputs = [
         output(XMR, "a", 0, 100, (0, 0)),

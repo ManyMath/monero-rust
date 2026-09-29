@@ -1,5 +1,7 @@
 use std::collections::HashSet;
 
+use rand_core::{CryptoRng, RngCore};
+
 use crate::coin_selection::{
     estimate_fee, estimate_fee_with_rate, fractional_threshold, select_inputs,
     select_inputs_with_fee, CoinSelectionResult,
@@ -196,6 +198,7 @@ pub fn prepare_send_inputs_at(
 
 /// Prepare sweep inputs at the node's RingCT type and the fee tier `policy`
 /// selects.
+/// Without `selected_output_keys` it sweeps one subaddress.
 pub async fn prepare_sweep_inputs_with_rpc<R: RpcConnection>(
     rpc: &Rpc<R>,
     wallet_outputs: &[WalletOutput],
@@ -254,6 +257,8 @@ pub fn prepare_sweep_inputs_with_fee(
 }
 
 /// Clock-injected variant of `prepare_sweep_inputs_with_fee`.
+/// Without `selected_output_keys` it sweeps one subaddress
+/// ([`SweepSubaddresses::OneAtRandom`]).
 pub fn prepare_sweep_inputs_at_with_fee(
     wallet_outputs: &[WalletOutput],
     daemon_height: u64,
@@ -264,7 +269,126 @@ pub fn prepare_sweep_inputs_at_with_fee(
     rct_type: monero_wallet::ringct::RctType,
     fee_rate: monero_wallet::interface::FeeRate,
 ) -> Result<PreparedInputs, String> {
-    let mut spendable: Vec<WalletOutput> = wallet_outputs
+    let spendable = spendable_in_account(
+        wallet_outputs,
+        daemon_height,
+        now_secs,
+        excluded_key_images,
+        source_account,
+    );
+    let spendable = match selected_output_keys {
+        Some(keys) => spendable
+            .into_iter()
+            .filter(|output| keys.contains(&output.output_key()))
+            .collect(),
+        None => from_subaddresses(
+            &mut rand::rngs::OsRng,
+            spendable,
+            SweepSubaddresses::OneAtRandom,
+            rct_type,
+            fee_rate,
+        )?,
+    };
+    prepared_sweep(spendable, rct_type, fee_rate)
+}
+
+/// Which subaddresses of the source account a sweep spends from. A sweep of
+/// several links them on chain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SweepSubaddresses<'a> {
+    /// One funded subaddress at random, index 0 only when no other holds funds:
+    /// wallet2's `sweep_all` without `index=`.
+    OneAtRandom,
+    /// The subaddresses with these indexes, wallet2's `index=N1,N2`.
+    Only(&'a [u32]),
+    /// Every subaddress of the account, wallet2's `index=all`.
+    All,
+}
+
+/// Prepare a sweep of the chosen subaddresses of `source_account`.
+pub fn prepare_sweep_inputs_from_subaddresses<R: RngCore + CryptoRng>(
+    rng: &mut R,
+    wallet_outputs: &[WalletOutput],
+    daemon_height: u64,
+    now_secs: Option<u64>,
+    subaddresses: SweepSubaddresses<'_>,
+    excluded_key_images: Option<&HashSet<String>>,
+    source_account: u32,
+    rct_type: monero_wallet::ringct::RctType,
+    fee_rate: monero_wallet::interface::FeeRate,
+) -> Result<PreparedInputs, String> {
+    let spendable = spendable_in_account(
+        wallet_outputs,
+        daemon_height,
+        now_secs,
+        excluded_key_images,
+        source_account,
+    );
+    let spendable = from_subaddresses(rng, spendable, subaddresses, rct_type, fee_rate)?;
+    prepared_sweep(spendable, rct_type, fee_rate)
+}
+
+/// [`prepare_sweep_inputs_from_subaddresses`] at the node's current RingCT
+/// type and the fee tier `policy` selects, with the system clock and RNG.
+pub async fn prepare_sweep_inputs_from_subaddresses_with_rpc<R: RpcConnection>(
+    rpc: &Rpc<R>,
+    wallet_outputs: &[WalletOutput],
+    daemon_height: u64,
+    subaddresses: SweepSubaddresses<'_>,
+    excluded_key_images: Option<&HashSet<String>>,
+    source_account: u32,
+    policy: FeePolicy,
+) -> Result<PreparedInputs, String> {
+    let (rct_type, fee_rate) = construction_fee_rate(rpc, policy).await?;
+    prepare_sweep_inputs_from_subaddresses(
+        &mut rand::rngs::OsRng,
+        wallet_outputs,
+        daemon_height,
+        current_time_secs(),
+        subaddresses,
+        excluded_key_images,
+        source_account,
+        rct_type,
+        fee_rate,
+    )
+}
+
+async fn construction_fee_rate<R: RpcConnection>(
+    rpc: &Rpc<R>,
+    policy: FeePolicy,
+) -> Result<
+    (
+        monero_wallet::ringct::RctType,
+        monero_wallet::interface::FeeRate,
+    ),
+    String,
+> {
+    let rct_type = rpc
+        .get_rct_type()
+        .await
+        .map_err(|e| format!("Failed to get protocol: {e:?}"))?;
+    let fee = rpc
+        .get_fee_checked_for_priority_at_height(
+            policy.priority,
+            policy.wallet_height,
+            policy.max_fee_per_weight,
+        )
+        .await
+        .map_err(|e| format!("Failed to get fee rate: {e:?}"))?;
+    let fee_rate = fee
+        .rate()
+        .ok_or_else(|| "Fee rate and quantization mask must be nonzero".to_string())?;
+    Ok((rct_type, fee_rate))
+}
+
+fn spendable_in_account(
+    wallet_outputs: &[WalletOutput],
+    daemon_height: u64,
+    now_secs: Option<u64>,
+    excluded_key_images: Option<&HashSet<String>>,
+    source_account: u32,
+) -> Vec<WalletOutput> {
+    wallet_outputs
         .iter()
         .filter(|output| {
             !output.spent
@@ -275,14 +399,46 @@ pub fn prepare_sweep_inputs_at_with_fee(
                     .map_or(false, |excluded| excluded.contains(&output.key_image))
         })
         .cloned()
-        .collect();
+        .collect()
+}
 
-    if let Some(keys) = selected_output_keys {
-        spendable.retain(|output| keys.contains(&output.output_key()));
-    } else {
-        let threshold = fractional_threshold(rct_type, fee_rate)?;
-        spendable.retain(|output| output.amount >= threshold);
+fn from_subaddresses<R: RngCore + CryptoRng>(
+    rng: &mut R,
+    mut spendable: Vec<WalletOutput>,
+    subaddresses: SweepSubaddresses<'_>,
+    rct_type: monero_wallet::ringct::RctType,
+    fee_rate: monero_wallet::interface::FeeRate,
+) -> Result<Vec<WalletOutput>, String> {
+    let threshold = fractional_threshold(rct_type, fee_rate)?;
+    spendable.retain(|output| output.amount >= threshold);
+
+    let minor = |output: &WalletOutput| output.subaddress_index.map_or(0, |index| index.1);
+    match subaddresses {
+        SweepSubaddresses::All => {}
+        SweepSubaddresses::Only(indexes) => {
+            spendable.retain(|output| indexes.contains(&minor(output)));
+        }
+        SweepSubaddresses::OneAtRandom => {
+            let mut funded: Vec<u32> = spendable.iter().map(minor).collect();
+            funded.sort_unstable();
+            funded.dedup();
+            if funded.len() > 1 {
+                funded.retain(|index| *index != 0);
+            }
+            if !funded.is_empty() {
+                let chosen = funded[(rng.next_u64() as usize) % funded.len()];
+                spendable.retain(|output| minor(output) == chosen);
+            }
+        }
     }
+    Ok(spendable)
+}
+
+fn prepared_sweep(
+    spendable: Vec<WalletOutput>,
+    rct_type: monero_wallet::ringct::RctType,
+    fee_rate: monero_wallet::interface::FeeRate,
+) -> Result<PreparedInputs, String> {
     if spendable.is_empty() {
         return Err("No spendable outputs available for sweep in the selected account".to_string());
     }
@@ -657,6 +813,72 @@ mod tests {
         assert_eq!(
             result.estimated_fee,
             estimate_fee_with_rate(1, 2, rct_type, fee_rate).unwrap()
+        );
+    }
+
+    fn sweep_fixture() -> Vec<WalletOutput> {
+        [(0, "a"), (3, "b"), (3, "c"), (7, "d")]
+            .into_iter()
+            .map(|(minor, tx)| {
+                let mut output = make_output(1_000_000_000_000, 100, tx);
+                output.subaddress_index = Some((0, minor));
+                output
+            })
+            .collect()
+    }
+
+    fn swept_from(
+        seed: u64,
+        outputs: &[WalletOutput],
+        subaddresses: SweepSubaddresses<'_>,
+    ) -> Vec<u32> {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        let mut minors: Vec<u32> = prepare_sweep_inputs_from_subaddresses(
+            &mut rng,
+            outputs,
+            200,
+            Some(0),
+            subaddresses,
+            None,
+            0,
+            monero_wallet::ringct::RctType::ClsagBulletproofPlus,
+            monero_wallet::interface::FeeRate::new(20_000, 10_000).unwrap(),
+        )
+        .unwrap()
+        .stored_outputs
+        .iter()
+        .map(|stored| stored.subaddress.unwrap().1)
+        .collect();
+        minors.sort_unstable();
+        minors
+    }
+
+    #[test]
+    fn sweep_of_one_subaddress_at_random_leaves_the_first_address_for_last() {
+        let outputs = sweep_fixture();
+        let mut seen = std::collections::BTreeSet::new();
+        for seed in 0..64 {
+            seen.insert(swept_from(seed, &outputs, SweepSubaddresses::OneAtRandom));
+        }
+        assert_eq!(seen.into_iter().collect::<Vec<_>>(), [vec![3, 3], vec![7]]);
+
+        assert_eq!(
+            swept_from(1, &outputs[..1], SweepSubaddresses::OneAtRandom),
+            [0]
+        );
+    }
+
+    #[test]
+    fn sweep_of_named_or_all_subaddresses() {
+        let outputs = sweep_fixture();
+        assert_eq!(
+            swept_from(1, &outputs, SweepSubaddresses::Only(&[0, 7])),
+            [0, 7]
+        );
+        assert_eq!(
+            swept_from(1, &outputs, SweepSubaddresses::All),
+            [0, 3, 3, 7]
         );
     }
 
