@@ -286,6 +286,9 @@ fn wallet2_select_inputs<R: RngCore + CryptoRng>(
     preferred_fee: u64,
     fee_for: impl Fn(usize, usize) -> Result<u64, String>,
 ) -> Result<CoinSelectionResult, String> {
+    let outputs = num_recipients
+        .checked_add(1)
+        .ok_or_else(|| "too many recipients".to_string())?;
     if let Some(keys) = manual_selection {
         candidates.retain(|output| keys.contains(&output.output_key()));
         if candidates.is_empty() {
@@ -293,7 +296,7 @@ fn wallet2_select_inputs<R: RngCore + CryptoRng>(
         }
         let total = crate::tx_utils::checked_amount_sum(candidates.iter().map(|o| o.amount))
             .ok_or_else(|| "selected output amounts overflow".to_string())?;
-        let estimated_fee = fee_for(candidates.len(), num_recipients + 1)?;
+        let estimated_fee = fee_for(candidates.len(), outputs)?;
         return Ok(CoinSelectionResult {
             selected: candidates,
             total,
@@ -309,7 +312,6 @@ fn wallet2_select_inputs<R: RngCore + CryptoRng>(
     if candidates.is_empty() {
         return Err("No confirmed outputs worth their fee in the selected account".to_string());
     }
-    let outputs = num_recipients + 1;
     // wallet2 judges preferred inputs by its fee estimate for two inputs and
     // two outputs, whatever the number of destinations.
     let preferred_needed = amount
@@ -435,7 +437,10 @@ fn select_inputs_with_estimator(
         });
     }
 
-    let num_outputs = num_recipients + 1; // recipients + change
+    // recipients + change
+    let num_outputs = num_recipients
+        .checked_add(1)
+        .ok_or_else(|| "too many recipients".to_string())?;
 
     // If manual selection, use all selected outputs
     if manual_selection.is_some() {

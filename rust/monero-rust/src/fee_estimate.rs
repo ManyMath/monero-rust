@@ -5,6 +5,7 @@ use monero_wallet::{interface::FeeRate, ringct::RctType};
 use crate::unsigned_tx::ring_len;
 
 const BP_LOG_N: usize = 6;
+const MAX_OUTPUTS: usize = 16;
 const MAX_U64_VARINT_LEN: usize = 10;
 
 fn varint_len(varint: usize) -> usize {
@@ -24,15 +25,11 @@ fn output_weight() -> usize {
     1 + 1 + 32 + 1
 }
 
-fn prefix_weight(ring_len: usize, inputs: usize, outputs: usize, extra: usize) -> usize {
+fn prefix_weight(ring_len: usize, inputs: usize, outputs: usize, extra: usize) -> Option<usize> {
     // Assumes Timelock::None
-    1 + 1
-        + varint_len(inputs)
-        + (inputs * input_weight(ring_len))
-        + 1
-        + (outputs * output_weight())
-        + varint_len(extra)
-        + extra
+    inputs.checked_mul(input_weight(ring_len))?.checked_add(
+        1 + 1 + varint_len(inputs) + 1 + (outputs * output_weight()) + varint_len(extra) + extra,
+    )
 }
 
 fn clsag_weight(ring_len: usize) -> usize {
@@ -86,12 +83,17 @@ pub fn transaction_weight_upper_bound(
     if inputs == 0 || outputs == 0 {
         return Err("A transaction has at least one input and one output".to_string());
     }
+    if outputs > MAX_OUTPUTS {
+        return Err(format!("A transaction has at most {MAX_OUTPUTS} outputs"));
+    }
     let extra = extra_len_upper_bound(outputs, payment_id);
-    Ok(prefix_weight(ring_len, inputs, outputs, extra)
-        + rct_base_weight(outputs)
-        + 1
-        + bulletproofs_weight(plus, outputs)
-        + (inputs * (clsag_weight(ring_len) + 32)))
+    prefix_weight(ring_len, inputs, outputs, extra)
+        .zip(inputs.checked_mul(clsag_weight(ring_len) + 32))
+        .and_then(|(prefix, signatures)| prefix.checked_add(signatures))
+        .and_then(|weight| {
+            weight.checked_add(rct_base_weight(outputs) + 1 + bulletproofs_weight(plus, outputs))
+        })
+        .ok_or_else(|| "weight exceeds usize".to_string())
 }
 
 /// wallet2's `estimate_tx_weight`. Not a bound: only for making wallet2's
@@ -227,6 +229,10 @@ mod tests {
         assert!(transaction_weight_upper_bound(plus, 0, 2, true).is_err());
         assert!(transaction_weight_upper_bound(plus, 1, 0, true).is_err());
         assert!(transaction_weight_upper_bound(RctType::MlsagBulletproofs, 1, 2, true).is_err());
+        assert!(transaction_weight_upper_bound(plus, 1, 17, true).is_err());
+        assert!(transaction_weight_upper_bound(plus, 1, usize::MAX, true).is_err());
+        assert!(transaction_weight_upper_bound(plus, usize::MAX, 2, true).is_err());
+        assert!(transaction_weight_upper_bound(plus, usize::MAX / 800, 2, true).is_err());
     }
 
     #[test]

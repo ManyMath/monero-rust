@@ -426,7 +426,6 @@ fn sweep_of_many_outputs_is_split_like_wallet2() {
 }
 
 #[test]
-#[ignore = "known defect: the weight bound overflows on large counts"]
 fn weight_bound_refuses_counts_that_overflow() {
     let result = std::panic::catch_unwind(|| {
         monero_rust::fee_estimate::transaction_weight_upper_bound(RCT, usize::MAX / 4, 2, true)
