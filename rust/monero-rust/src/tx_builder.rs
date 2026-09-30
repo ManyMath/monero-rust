@@ -278,6 +278,9 @@ pub mod native {
         payments: &[(MoneroAddress, u64)],
         with_change: bool,
     ) -> Result<(), String> {
+        if payments.iter().any(|(_, amount)| *amount == 0) {
+            return Err("Destination amount is zero".to_string());
+        }
         let outputs = payments.len() + usize::from(with_change);
         let has_payment_id = outputs == 2
             || payments
@@ -1368,12 +1371,15 @@ pub mod native {
 
         let num_outputs = 2;
         let (_, fee_bound) = fee_upper_bound(rct_type, fee, spendable_outputs.len(), num_outputs)?;
-        let provisional_amount = total_in.checked_sub(fee_bound).ok_or_else(|| {
-            format!(
-                "Insufficient funds: have {} atomic units, need {} for fee",
-                total_in, fee_bound
-            )
-        })?;
+        let provisional_amount = total_in
+            .checked_sub(fee_bound)
+            .filter(|amount| *amount > 0)
+            .ok_or_else(|| {
+                format!(
+                    "Insufficient funds: have {} atomic units, need more than {} for fee",
+                    total_in, fee_bound
+                )
+            })?;
 
         let mut rng = rand::rngs::OsRng;
         let mut unsigned = build_unsigned_transaction_with_rings(

@@ -500,7 +500,6 @@ fn fee_subtraction_never_yields_a_zero_or_short_adjustment() {
 }
 
 #[test]
-#[ignore = "known defect: a payment of zero is accepted"]
 fn zero_amount_destination_is_refused() {
     use common::offline::{unsigned_for, Wallet};
     use curve25519_dalek::scalar::Scalar;

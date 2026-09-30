@@ -319,6 +319,10 @@ impl UnsignedTransaction {
                 .ok_or_else(|| "unsigned transaction input amounts overflow".to_string())?;
         let payment_total = checked_amount_sum(self.payments.iter().map(|payment| payment.1))
             .ok_or_else(|| "unsigned transaction payment amounts overflow".to_string())?;
+        // wallet2 refuses a zero destination amount (`error::zero_amount`).
+        if self.payments.iter().any(|payment| payment.1 == 0) {
+            return Err("unsigned transaction pays a destination an amount of zero".to_string());
+        }
 
         let (change, declared) = match &self.change {
             None => (Change::fingerprintable(None), None),

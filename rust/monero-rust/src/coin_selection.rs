@@ -152,6 +152,9 @@ pub fn select_inputs_with_fee_and_rng<R: RngCore + CryptoRng>(
     rct_type: RctType,
     fee_rate: FeeRate,
 ) -> Result<CoinSelectionResult, String> {
+    if amount == 0 {
+        return Err("Nothing to send: the amount is zero".to_string());
+    }
     let candidates = spendable
         .iter()
         .filter(|output| output.subaddress_index.map_or(0, |index| index.0) == source_account)
