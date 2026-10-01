@@ -9,9 +9,12 @@ use std::collections::BTreeSet;
 
 use monero_oxide::transaction::{NotPruned, Transaction};
 use monero_rust::monero_rpc::{HttpRpc, Rpc};
-use monero_rust::native::{create_transaction_with_rpc, FeePolicy};
+use monero_rust::native::{create_transaction_with_rpc, sweep_all_with_rpc, FeePolicy};
 use monero_rust::scanner::{scan_blocks_batch, Lookahead};
-use monero_rust::tx_prepare::{prepare_send_inputs_with_rpc, prepare_sweep_inputs_with_rpc};
+use monero_rust::tx_prepare::{
+    prepare_send_inputs_with_rpc, prepare_sweep_inputs_with_rpc,
+    prepare_sweep_transactions_with_rpc, SweepSubaddresses,
+};
 use monero_rust::WalletOutput;
 
 const XMR: u64 = 1_000_000_000_000;
@@ -307,27 +310,56 @@ async fn two_outputs_of_one_transaction_are_not_preferred() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "known defect: a sweep is never split across transactions"]
 async fn sweep_of_many_outputs_is_split() {
     let Some(probe) = Probe::open().await else {
         return;
     };
     let outputs = probe.scan_range("w_many", "many_from", "many_to").await;
     assert_eq!(outputs.len(), 165);
-    let prepared = prepare_sweep_inputs_with_rpc(
+    let height = probe.height().await;
+
+    let one = prepare_sweep_inputs_with_rpc(
         &probe.rpc,
         &outputs,
-        probe.height().await,
+        height,
         None,
+        None,
+        0,
+        FeePolicy::default(),
+    )
+    .await;
+    assert!(one.is_err());
+
+    let mut transactions = prepare_sweep_transactions_with_rpc(
+        &probe.rpc,
+        &outputs,
+        height,
+        SweepSubaddresses::OneAtRandom,
         None,
         0,
         FeePolicy::default(),
     )
     .await
     .expect("prepare sweep");
-    assert!(
-        prepared.stored_outputs.len() <= 146,
-        "one sweep transaction is prepared with {} inputs",
-        prepared.stored_outputs.len()
-    );
+    let inputs: Vec<usize> = transactions
+        .iter()
+        .map(|transaction| transaction.stored_outputs.len())
+        .collect();
+    assert_eq!(inputs, [146, 19]);
+
+    let last = transactions.pop().expect("two transactions");
+    let built = sweep_all_with_rpc(
+        &probe.rpc,
+        &probe.seed("w_many"),
+        "mainnet",
+        last.stored_outputs,
+        &probe.recipient,
+        "",
+    )
+    .await
+    .expect("build");
+    let blob = hex::decode(&built.tx_blob).expect("hex");
+    let tx = Transaction::<NotPruned>::read(&mut blob.as_slice()).expect("transaction");
+    assert_eq!(tx.prefix().inputs.len(), 19);
+    assert_eq!(tx.prefix().outputs.len(), 2);
 }

@@ -120,6 +120,7 @@ pub fn select_inputs(
 
 /// wallet2's input selection for one transaction at `fee_rate`. Outputs below
 /// [`fractional_threshold`] are left out unless `manual_selection` names them.
+/// A payment wallet2 would split is an error.
 pub fn select_inputs_with_fee(
     spendable: &[WalletOutput],
     amount: u64,
@@ -160,7 +161,7 @@ pub fn select_inputs_with_fee_and_rng<R: RngCore + CryptoRng>(
         .filter(|output| output.subaddress_index.map_or(0, |index| index.0) == source_account)
         .cloned()
         .collect::<Vec<_>>();
-    wallet2_select_inputs(
+    let selection = wallet2_select_inputs(
         rng,
         candidates,
         amount,
@@ -172,7 +173,20 @@ pub fn select_inputs_with_fee_and_rng<R: RngCore + CryptoRng>(
             crate::fee_estimate::wallet2_weight_estimate(rct_type, 2, 2)?,
         )?,
         |inputs, outputs| estimate_fee_with_rate(inputs, outputs, rct_type, fee_rate),
-    )
+    )?;
+    if crate::fee_estimate::wallet2_transaction_is_full(
+        rct_type,
+        selection.selected.len(),
+        num_recipients.saturating_add(1),
+    )? {
+        return Err(format!(
+            "This payment needs {} inputs, more than wallet2 puts in one transaction. wallet2 \
+             would split it over several transactions, which is not supported: pay in parts, \
+             or sweep the account's small outputs together first",
+            selection.selected.len()
+        ));
+    }
+    Ok(selection)
 }
 
 fn output_relatedness(a: &WalletOutput, b: &WalletOutput) -> u8 {
@@ -216,7 +230,7 @@ fn subaddress_order(candidates: &[WalletOutput]) -> Result<Vec<Option<(u32, u32)
         .collect())
 }
 
-fn least_related(
+pub(crate) fn least_related(
     candidates: &[WalletOutput],
     pool: &[usize],
     selected: &[WalletOutput],
@@ -239,7 +253,7 @@ fn least_related(
         .collect()
 }
 
-fn random_of<R: RngCore + CryptoRng>(rng: &mut R, indexes: &[usize]) -> usize {
+pub(crate) fn random_of<R: RngCore + CryptoRng>(rng: &mut R, indexes: &[usize]) -> usize {
     indexes[(rng.next_u64() as usize) % indexes.len()]
 }
 
@@ -798,6 +812,34 @@ mod tests {
             assert_eq!(heights, [600, 3600]);
             assert_eq!(selected[0].output_index, 0);
         }
+    }
+
+    #[test]
+    fn a_payment_wallet2_would_split_is_refused() {
+        const XMR: u64 = 1_000_000_000_000;
+        let outputs: Vec<WalletOutput> = (0..200u64)
+            .map(|i| {
+                let mut output = make_output(XMR, &format!("tx{i}"));
+                output.block_height = 100 + 20 * i;
+                output
+            })
+            .collect();
+        let select = |amount: u64| {
+            let mut rng = rand::rngs::StdRng::seed_from_u64(4);
+            select_inputs_with_fee_and_rng(
+                &mut rng,
+                &outputs,
+                amount,
+                1,
+                None,
+                0,
+                RctType::ClsagBulletproofPlus,
+                FeeRate::new(20_000, 10_000).unwrap(),
+            )
+        };
+        assert_eq!(select(144 * XMR).unwrap().selected.len(), 145);
+        let error = select(145 * XMR).unwrap_err();
+        assert!(error.contains("wallet2 would split"), "{error}");
     }
 
     #[test]

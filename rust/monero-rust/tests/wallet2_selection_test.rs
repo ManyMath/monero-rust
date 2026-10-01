@@ -3,7 +3,9 @@
 mod common;
 
 use monero_rust::coin_selection::{estimate_fee_with_rate, select_inputs_with_fee_and_rng};
-use monero_rust::tx_prepare::prepare_sweep_inputs_at_with_fee;
+use monero_rust::tx_prepare::{
+    prepare_sweep_inputs_at_with_fee, prepare_sweep_transactions, SweepSubaddresses,
+};
 use monero_rust::WalletOutput;
 use monero_wallet::{interface::FeeRate, ringct::RctType};
 use rand::SeedableRng;
@@ -388,7 +390,6 @@ fn fallback_uses_up_one_subaddress_before_touching_another() {
 }
 
 #[test]
-#[ignore = "known defect: selections larger than wallet2 puts in one transaction are returned"]
 fn selection_stays_under_the_wallet2_weight_target() {
     let limit = 300_000 / 2 - 600; // wallet2.cpp:12477-12486
     let target = limit * 2 / 3;
@@ -410,19 +411,107 @@ fn selection_stays_under_the_wallet2_weight_target() {
 }
 
 #[test]
-#[ignore = "known defect: a sweep is never split across transactions"]
 fn sweep_of_many_outputs_is_split_like_wallet2() {
     let outputs: Vec<WalletOutput> = (0..165u64)
         .map(|i| output(XMR / 10, &format!("t{i}"), 0, 100 + i / 15, (0, 0)))
         .collect();
-    let prepared =
-        prepare_sweep_inputs_at_with_fee(&outputs, 1_000, Some(0), None, None, 0, RCT, rate())
-            .unwrap();
-    assert!(
-        prepared.stored_outputs.len() <= 146,
-        "one sweep transaction is prepared with {} inputs",
-        prepared.stored_outputs.len()
-    );
+    let mut rng = rand::rngs::StdRng::seed_from_u64(1);
+    let transactions = prepare_sweep_transactions(
+        &mut rng,
+        &outputs,
+        1_000,
+        Some(0),
+        SweepSubaddresses::OneAtRandom,
+        None,
+        0,
+        RCT,
+        rate(),
+    )
+    .unwrap();
+    let inputs: Vec<usize> = transactions
+        .iter()
+        .map(|transaction| transaction.stored_outputs.len())
+        .collect();
+    assert_eq!(inputs, [146, 19]);
+
+    let one =
+        prepare_sweep_inputs_at_with_fee(&outputs, 1_000, Some(0), None, None, 0, RCT, rate());
+    assert!(one.is_err());
+}
+
+#[tokio::test]
+async fn construction_refuses_more_than_one_transaction_before_asking_the_node() {
+    use monero_rust::monero_rpc::{Rpc, RpcConnection, RpcError};
+    use monero_rust::native::{create_transaction_with_rpc, sweep_all_with_rpc, StoredOutputData};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    #[derive(Clone, Debug, Default)]
+    struct Node(Arc<AtomicUsize>);
+    #[async_trait::async_trait]
+    impl RpcConnection for Node {
+        async fn post(&self, _: &str, _: Vec<u8>) -> Result<Vec<u8>, RpcError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Err(RpcError::ConnectionError)
+        }
+    }
+
+    const SEED: &str = "velvet lymph giddy number token physics poetry unquoted nibs useful \
+        sabotage limits benches lifestyle eden nitrogen anvil fewest avoid batch vials washing \
+        fences goat unquoted";
+    let address = monero_rust::scanner::derive_address(SEED, monero_rust::Network::Mainnet, "")
+        .unwrap()
+        .to_string();
+    let output = StoredOutputData {
+        tx_hash: String::new(),
+        output_index: 0,
+        amount: XMR,
+        key: String::new(),
+        key_offset: String::new(),
+        commitment_mask: String::new(),
+        subaddress: None,
+        payment_id: None,
+        received_output_bytes: String::new(),
+        global_index: None,
+        key_image: String::new(),
+        ring: None,
+    };
+    let node = Node::default();
+    let rpc = Rpc::new_with_connection(node.clone());
+    let pay = |inputs: usize| {
+        let recipients = [(address.clone(), XMR)];
+        let outputs = vec![output.clone(); inputs];
+        let rpc = rpc.clone();
+        async move {
+            create_transaction_with_rpc(&rpc, SEED, "mainnet", outputs, &recipients, "")
+                .await
+                .map(|_| ())
+                .unwrap_err()
+        }
+    };
+    let sweep = |inputs: usize| {
+        let outputs = vec![output.clone(); inputs];
+        let (rpc, address) = (rpc.clone(), address.clone());
+        async move {
+            sweep_all_with_rpc(&rpc, SEED, "mainnet", outputs, &address, "")
+                .await
+                .map(|_| ())
+                .unwrap_err()
+        }
+    };
+
+    let error = pay(146).await;
+    assert!(error.contains("146 inputs"), "{error}");
+    let error = sweep(147).await;
+    assert!(error.contains("147 inputs"), "{error}");
+    let error = sweep(1_000).await;
+    assert!(error.contains("do not fit"), "{error}");
+    assert_eq!(node.0.load(Ordering::SeqCst), 0);
+
+    pay(145).await;
+    assert_eq!(node.0.load(Ordering::SeqCst), 1);
+    sweep(146).await;
+    assert_eq!(node.0.load(Ordering::SeqCst), 2);
 }
 
 #[test]

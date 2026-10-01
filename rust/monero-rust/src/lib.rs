@@ -38,8 +38,8 @@ pub use tx_prepare::{
     prepare_send_inputs_with_fee, prepare_send_inputs_with_rpc, prepare_sweep_inputs,
     prepare_sweep_inputs_at, prepare_sweep_inputs_at_with_fee,
     prepare_sweep_inputs_from_subaddresses, prepare_sweep_inputs_from_subaddresses_with_rpc,
-    prepare_sweep_inputs_with_fee, prepare_sweep_inputs_with_rpc, PreparedInputs,
-    SweepSubaddresses,
+    prepare_sweep_inputs_with_fee, prepare_sweep_inputs_with_rpc, prepare_sweep_transactions,
+    prepare_sweep_transactions_with_rpc, PreparedInputs, SweepSubaddresses,
 };
 pub use tx_utils::{
     adjust_recipients_for_fee, classify_broadcast_error, subtract_fee_from_recipients,

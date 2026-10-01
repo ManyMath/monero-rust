@@ -139,6 +139,54 @@ pub fn wallet2_weight_estimate(
     usize::try_from(size).map_err(|_| "weight exceeds usize".to_string())
 }
 
+/// `get_transaction_weight_limit` since hard fork 8.
+pub(crate) const TRANSACTION_WEIGHT_LIMIT: usize = (300_000 / 2) - 600;
+
+/// wallet2's `TX_WEIGHT_TARGET`: the estimated weight at which it closes a
+/// transaction.
+pub const WALLET2_TX_WEIGHT_TARGET: usize = TRANSACTION_WEIGHT_LIMIT * 2 / 3;
+
+/// Whether wallet2 would put no further input into a transaction of this
+/// shape, by its own weight estimate.
+pub fn wallet2_transaction_is_full(
+    rct_type: RctType,
+    inputs: usize,
+    outputs: usize,
+) -> Result<bool, String> {
+    Ok(wallet2_weight_estimate(rct_type, inputs, outputs)? >= WALLET2_TX_WEIGHT_TARGET)
+}
+
+/// Refuse inputs that cannot be one transaction, judged as CLSAG with
+/// Bulletproofs+, before any decoy is asked for.
+pub(crate) fn check_one_transaction(
+    inputs: usize,
+    outputs: usize,
+    sweep: bool,
+) -> Result<(), String> {
+    let rct_type = RctType::ClsagBulletproofPlus;
+    if transaction_weight_upper_bound(rct_type, inputs, outputs, true)? >= TRANSACTION_WEIGHT_LIMIT
+    {
+        return Err(format!(
+            "{inputs} inputs and {outputs} outputs do not fit in one transaction"
+        ));
+    }
+    let before_last = if sweep { inputs - 1 } else { inputs };
+    if before_last > 0 && wallet2_transaction_is_full(rct_type, before_last, outputs)? {
+        return Err(if sweep {
+            format!(
+                "This sweep has {inputs} inputs, more than wallet2 puts in one transaction; \
+                 prepare_sweep_transactions splits it the way wallet2 does"
+            )
+        } else {
+            format!(
+                "This payment has {inputs} inputs, more than wallet2 puts in one transaction. \
+                 wallet2 would split it over several transactions, which is not supported"
+            )
+        });
+    }
+    Ok(())
+}
+
 /// The fee `fee_rate` asks of a transaction weighing `weight`.
 pub fn fee_for_weight(fee_rate: FeeRate, weight: usize) -> Result<u64, String> {
     let weight = u64::try_from(weight).map_err(|_| "weight exceeds u64".to_string())?;
@@ -221,6 +269,35 @@ mod tests {
         assert!(wallet2_weight_estimate(plus, 1, 0).is_err());
         assert!(wallet2_weight_estimate(RctType::MlsagBulletproofs, 1, 2).is_err());
         assert!(wallet2_weight_estimate(plus, usize::MAX, usize::MAX).is_err());
+    }
+
+    #[test]
+    fn a_two_output_transaction_is_full_at_146_inputs() {
+        let plus = RctType::ClsagBulletproofPlus;
+        assert_eq!(WALLET2_TX_WEIGHT_TARGET, 99_600);
+        assert_eq!(wallet2_transaction_is_full(plus, 145, 2), Ok(false));
+        assert_eq!(wallet2_transaction_is_full(plus, 146, 2), Ok(true));
+    }
+
+    #[test]
+    fn construction_refuses_what_cannot_be_one_transaction() {
+        assert_eq!(TRANSACTION_WEIGHT_LIMIT, 149_400);
+        assert!(check_one_transaction(145, 2, false).is_ok());
+        assert!(check_one_transaction(146, 2, false).is_err());
+        assert!(check_one_transaction(146, 2, true).is_ok());
+        assert!(check_one_transaction(147, 2, true).is_err());
+        assert!(check_one_transaction(1, 16, false).is_ok());
+        assert!(check_one_transaction(usize::MAX, 2, true).is_err());
+        let plus = RctType::ClsagBulletproofPlus;
+        let first_over_limit = (1..)
+            .find(|inputs| {
+                transaction_weight_upper_bound(plus, *inputs, 2, true).unwrap()
+                    >= TRANSACTION_WEIGHT_LIMIT
+            })
+            .unwrap();
+        assert!(first_over_limit > 146);
+        let error = check_one_transaction(first_over_limit, 2, true).unwrap_err();
+        assert!(error.contains("do not fit"), "{error}");
     }
 
     #[test]

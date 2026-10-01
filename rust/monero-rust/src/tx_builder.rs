@@ -1077,6 +1077,11 @@ pub mod native {
         if recipients.len() > 15 {
             return Err("Maximum 15 recipients allowed (16 outputs - 1 change)".to_string());
         }
+        crate::fee_estimate::check_one_transaction(
+            stored_outputs.len(),
+            recipients.len() + 1,
+            false,
+        )?;
 
         let source_account = source_account(&stored_outputs)?;
 
@@ -1327,6 +1332,7 @@ pub mod native {
         if stored_outputs.is_empty() {
             return Err("No outputs provided".to_string());
         }
+        crate::fee_estimate::check_one_transaction(stored_outputs.len(), 2, true)?;
 
         let source_account = source_account(&stored_outputs)?;
 
@@ -2155,6 +2161,11 @@ pub mod native {
         if recipients.len() > 15 {
             return Err("Maximum 15 recipients allowed (16 outputs - 1 change)".to_string());
         }
+        crate::fee_estimate::check_one_transaction(
+            stored_outputs.len(),
+            recipients.len() + 1,
+            false,
+        )?;
 
         let source_account = source_account(&stored_outputs)?;
 

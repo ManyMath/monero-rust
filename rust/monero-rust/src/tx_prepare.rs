@@ -3,9 +3,10 @@ use std::collections::HashSet;
 use rand_core::{CryptoRng, RngCore};
 
 use crate::coin_selection::{
-    estimate_fee, estimate_fee_with_rate, fractional_threshold, select_inputs,
-    select_inputs_with_fee, CoinSelectionResult,
+    estimate_fee, estimate_fee_with_rate, fractional_threshold, least_related, random_of,
+    select_inputs, select_inputs_with_fee, CoinSelectionResult,
 };
+use crate::fee_estimate::wallet2_transaction_is_full;
 use crate::monero_rpc::{Rpc, RpcConnection};
 use crate::tx_builder::native::FeePolicy;
 use crate::tx_builder::native::StoredOutputData;
@@ -259,6 +260,8 @@ pub fn prepare_sweep_inputs_with_fee(
 /// Clock-injected variant of `prepare_sweep_inputs_with_fee`.
 /// Without `selected_output_keys` it sweeps one subaddress
 /// ([`SweepSubaddresses::OneAtRandom`]).
+/// A sweep too large for one transaction is an error; see
+/// [`prepare_sweep_transactions`].
 pub fn prepare_sweep_inputs_at_with_fee(
     wallet_outputs: &[WalletOutput],
     daemon_height: u64,
@@ -341,6 +344,72 @@ pub async fn prepare_sweep_inputs_from_subaddresses_with_rpc<R: RpcConnection>(
 ) -> Result<PreparedInputs, String> {
     let (rct_type, fee_rate) = construction_fee_rate(rpc, policy).await?;
     prepare_sweep_inputs_from_subaddresses(
+        &mut rand::rngs::OsRng,
+        wallet_outputs,
+        daemon_height,
+        current_time_secs(),
+        subaddresses,
+        excluded_key_images,
+        source_account,
+        rct_type,
+        fee_rate,
+    )
+}
+
+/// Prepare a sweep as the series of transactions wallet2 would make of it.
+pub fn prepare_sweep_transactions<R: RngCore + CryptoRng>(
+    rng: &mut R,
+    wallet_outputs: &[WalletOutput],
+    daemon_height: u64,
+    now_secs: Option<u64>,
+    subaddresses: SweepSubaddresses<'_>,
+    excluded_key_images: Option<&HashSet<String>>,
+    source_account: u32,
+    rct_type: monero_wallet::ringct::RctType,
+    fee_rate: monero_wallet::interface::FeeRate,
+) -> Result<Vec<PreparedInputs>, String> {
+    let spendable = spendable_in_account(
+        wallet_outputs,
+        daemon_height,
+        now_secs,
+        excluded_key_images,
+        source_account,
+    );
+    let mut remaining = from_subaddresses(rng, spendable, subaddresses, rct_type, fee_rate)?;
+    if remaining.is_empty() {
+        return Err("No spendable outputs available for sweep in the selected account".to_string());
+    }
+
+    let mut transactions = Vec::new();
+    let mut current: Vec<WalletOutput> = Vec::new();
+    while !remaining.is_empty() {
+        let pool: Vec<usize> = (0..remaining.len()).collect();
+        let ties = least_related(&remaining, &pool, &current);
+        current.push(remaining.remove(random_of(rng, &ties)));
+        if remaining.is_empty() || wallet2_transaction_is_full(rct_type, current.len(), 2)? {
+            transactions.push(prepared_sweep(
+                std::mem::take(&mut current),
+                rct_type,
+                fee_rate,
+            )?);
+        }
+    }
+    Ok(transactions)
+}
+
+/// [`prepare_sweep_transactions`] at the node's current RingCT type and the
+/// fee tier `policy` selects, with the system clock and RNG.
+pub async fn prepare_sweep_transactions_with_rpc<R: RpcConnection>(
+    rpc: &Rpc<R>,
+    wallet_outputs: &[WalletOutput],
+    daemon_height: u64,
+    subaddresses: SweepSubaddresses<'_>,
+    excluded_key_images: Option<&HashSet<String>>,
+    source_account: u32,
+    policy: FeePolicy,
+) -> Result<Vec<PreparedInputs>, String> {
+    let (rct_type, fee_rate) = construction_fee_rate(rpc, policy).await?;
+    prepare_sweep_transactions(
         &mut rand::rngs::OsRng,
         wallet_outputs,
         daemon_height,
@@ -441,6 +510,14 @@ fn prepared_sweep(
 ) -> Result<PreparedInputs, String> {
     if spendable.is_empty() {
         return Err("No spendable outputs available for sweep in the selected account".to_string());
+    }
+    // wallet2 had closed the transaction before its last input was added.
+    if spendable.len() > 1 && wallet2_transaction_is_full(rct_type, spendable.len() - 1, 2)? {
+        return Err(format!(
+            "This sweep has {} inputs, more than wallet2 puts in one transaction; \
+             prepare_sweep_transactions splits it the way wallet2 does",
+            spendable.len()
+        ));
     }
 
     let total_input = crate::tx_utils::checked_amount_sum(spendable.iter().map(|o| o.amount))
@@ -880,6 +957,56 @@ mod tests {
             swept_from(1, &outputs, SweepSubaddresses::All),
             [0, 3, 3, 7]
         );
+    }
+
+    #[test]
+    fn a_large_sweep_is_split_into_full_transactions() {
+        use rand::SeedableRng;
+        let outputs: Vec<WalletOutput> = (0..300u64)
+            .map(|i| make_output(1_000_000_000_000, 100 + i, &format!("tx{i}")))
+            .collect();
+        let rct_type = monero_wallet::ringct::RctType::ClsagBulletproofPlus;
+        let fee_rate = monero_wallet::interface::FeeRate::new(20_000, 10_000).unwrap();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(5);
+        let transactions = prepare_sweep_transactions(
+            &mut rng,
+            &outputs,
+            1_000,
+            Some(0),
+            SweepSubaddresses::All,
+            None,
+            0,
+            rct_type,
+            fee_rate,
+        )
+        .unwrap();
+        let sizes: Vec<usize> = transactions
+            .iter()
+            .map(|transaction| transaction.stored_outputs.len())
+            .collect();
+        assert_eq!(sizes, [146, 146, 8]);
+        let mut keys: Vec<&String> = transactions
+            .iter()
+            .flat_map(|transaction| &transaction.spent_output_keys)
+            .collect();
+        keys.sort();
+        keys.dedup();
+        assert_eq!(keys.len(), 300);
+
+        let one = |count: usize| {
+            prepare_sweep_inputs_at_with_fee(
+                &outputs[..count],
+                1_000,
+                Some(0),
+                None,
+                None,
+                0,
+                rct_type,
+                fee_rate,
+            )
+        };
+        assert_eq!(one(146).unwrap().stored_outputs.len(), 146);
+        assert!(one(147).unwrap_err().contains("prepare_sweep_transactions"));
     }
 
     #[test]
