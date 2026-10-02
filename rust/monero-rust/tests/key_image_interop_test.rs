@@ -768,6 +768,7 @@ fn key_image_import_preserves_transaction_order_within_a_block() {
         .collect();
     let mut pool = outputs[3].clone();
     pool.tx_hash = "pool".into();
+    pool.key = "ee".repeat(32);
     pool.block_height = 0;
     // Persistence must preserve the scanner's within-block order.
     outputs.insert(0, pool);

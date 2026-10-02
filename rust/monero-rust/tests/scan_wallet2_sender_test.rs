@@ -43,7 +43,6 @@ fn state_from(results: &[BlockScanResult]) -> WalletState {
 }
 
 #[tokio::test]
-#[ignore = "known defect: a duplicated output key keeps the first record seen, not the larger one"]
 async fn burning_bug_coinbase_dust_does_not_hide_the_real_payment() {
     let recipient = Recipient::of(SEED, 0, 0);
     let r = Scalar::from(1001u64);
@@ -86,7 +85,6 @@ async fn burning_bug_coinbase_dust_does_not_hide_the_real_payment() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: a duplicated output key keeps the first record seen, not the larger one"]
 async fn burning_bug_full_wallet_reports_the_larger_duplicate() {
     let recipient = Recipient::of(SEED, 0, 0);
     let r = Scalar::from(1002u64);
@@ -137,7 +135,6 @@ async fn burning_bug_full_wallet_ignores_a_smaller_later_duplicate() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: a view-only wallet credits every copy of a duplicated output key"]
 async fn burning_bug_view_only_wallet_credits_one_output_per_key() {
     let recipient = Recipient::of(SEED, 0, 0);
     let r = Scalar::from(1004u64);

@@ -216,3 +216,31 @@ async fn output_of_a_dropped_send_becomes_spendable_again() {
         "the output is unspent on chain but the wallet still reports it as spent"
     );
 }
+
+#[tokio::test]
+async fn rollback_credits_the_output_a_removed_duplicate_had_displaced() {
+    let recipient = Recipient::of(SEED, 0, 0);
+    let r = Scalar::from(9001u64);
+    let small = send_output(&recipient, r, 0, XMR);
+    let large = send_output(&recipient, r, 0, 5 * XMR);
+    let extra = extra_with_pubkeys(&[small.tx_pubkey]);
+
+    let mut a = FakeChain::new(100, 5000);
+    a.push_empty(1);
+    block_with(
+        &mut a,
+        vec![ringct_tx(&[small], extra.clone(), Timelock::None, 1)],
+    );
+    a.push_empty(11);
+    let mut b = a.fork_at(113);
+    block_with(&mut a, vec![ringct_tx(&[large], extra, Timelock::None, 2)]);
+    b.push_empty(3);
+
+    let mut state = WalletState::new();
+    sync_with_history(&mut state, &a, Composition::PerBlock).await;
+    assert_eq!(total_balance(&state, a.next_height()), 5 * XMR);
+
+    sync_with_history(&mut state, &b, Composition::PerBlock).await;
+    assert_eq!(summary(&state), summary(&fresh_scan(&b).await));
+    assert_eq!(total_balance(&state, b.next_height()), XMR);
+}

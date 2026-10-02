@@ -226,6 +226,10 @@ pub struct WalletState {
     key_image_index: HashMap<String, usize>,
     /// Stable identity remains available before and after key-image import.
     output_index: HashMap<String, usize>,
+    pub_key_index: HashMap<String, usize>,
+    slot_heights: HashMap<String, u64>,
+    /// Outputs set aside for a credited one with the same one-time key.
+    superseded: Vec<WalletOutput>,
     pub current_height: u64,
     pub daemon_height: u64,
     pub block_hashes: BlockHashChain,
@@ -243,6 +247,9 @@ impl WalletState {
             outputs: Vec::new(),
             key_image_index: HashMap::new(),
             output_index: HashMap::new(),
+            pub_key_index: HashMap::new(),
+            superseded: Vec::new(),
+            slot_heights: HashMap::new(),
             current_height: 0,
             daemon_height: 0,
             block_hashes: BlockHashChain::new(),
@@ -295,14 +302,10 @@ impl WalletState {
         Ok(())
     }
 
-    /// Extend outputs in blockchain scan order (transaction order within each
-    /// block, then output order within each transaction). Preserve this order
-    /// in persistence for positional Monero key-image imports.
-    ///
-    /// Merge by transaction hash and output position, including when no key
-    /// image is known. Preserve imported key images and local spent/frozen state.
-    /// Confirmations replace pool entries in scan order. Distinct outputs with
-    /// an already known key image are not counted twice.
+    /// Extend outputs in scan order, which persistence must keep for positional
+    /// key image imports. Like wallet2, credit one record per one-time key: a
+    /// later output replaces it only if larger and it is unspent, or if it is a
+    /// pool output and the later one is confirmed.
     pub fn add_outputs(&mut self, new_outputs: Vec<WalletOutput>) {
         let mut upgraded = HashSet::new();
         for mut output in new_outputs {
@@ -358,10 +361,62 @@ impl WalletState {
                         self.key_image_index
                             .insert(output.key_image.clone(), self.outputs.len());
                     }
+                    if let Some(key) = one_time_key(&output) {
+                        self.pub_key_index
+                            .insert(key.to_string(), self.outputs.len());
+                    }
                     self.outputs.push(output);
                 }
                 // Otherwise skip duplicate
             } else {
+                let held_idx = one_time_key(&output)
+                    .and_then(|key| self.pub_key_index.get(key).copied())
+                    .filter(|idx| !upgraded.contains(idx));
+                if let Some(held_idx) = held_idx {
+                    let held = &self.outputs[held_idx];
+                    let held_in_pool = held.block_height == 0;
+                    let new_in_pool = output.block_height == 0;
+                    let replace = !held.spent
+                        && if held_in_pool != new_in_pool {
+                            held_in_pool
+                        } else {
+                            output.amount > held.amount
+                        };
+                    if replace {
+                        if output.key_image.is_empty() {
+                            output.key_image = held.key_image.clone();
+                        }
+                        output.frozen |= held.frozen;
+                        self.output_index.remove(&held.output_key());
+                        if held_in_pool {
+                            upgraded.insert(held_idx);
+                            let idx = self.outputs.len();
+                            self.output_index.insert(identity, idx);
+                            if !output.key_image.is_empty() {
+                                self.key_image_index.insert(output.key_image.clone(), idx);
+                            }
+                            self.pub_key_index.insert(output.key.clone(), idx);
+                            self.slot_heights.remove(&output.key);
+                            self.outputs.push(output);
+                            continue;
+                        }
+                        self.output_index.insert(identity, held_idx);
+                        if !output.key_image.is_empty() {
+                            self.key_image_index
+                                .insert(output.key_image.clone(), held_idx);
+                        }
+                        let slot_height = self.export_height(held_idx);
+                        let key = output.key.clone();
+                        let displaced = std::mem::replace(&mut self.outputs[held_idx], output);
+                        if displaced.block_height != 0 {
+                            self.slot_heights.insert(key, slot_height);
+                        }
+                        self.set_aside(displaced);
+                    } else {
+                        self.set_aside(output);
+                    }
+                    continue;
+                }
                 if !output.key_image.is_empty()
                     && self.key_image_index.contains_key(&output.key_image)
                 {
@@ -371,6 +426,9 @@ impl WalletState {
                 self.output_index.insert(identity, idx);
                 if !output.key_image.is_empty() {
                     self.key_image_index.insert(output.key_image.clone(), idx);
+                }
+                if let Some(key) = one_time_key(&output) {
+                    self.pub_key_index.insert(key.to_string(), idx);
                 }
                 self.outputs.push(output);
             }
@@ -386,9 +444,20 @@ impl WalletState {
         }
     }
 
+    fn set_aside(&mut self, output: WalletOutput) {
+        if output.block_height == 0 {
+            return;
+        }
+        let identity = output.output_key();
+        if !self.superseded.iter().any(|o| o.output_key() == identity) {
+            self.superseded.push(output);
+        }
+    }
+
     /// Replace all outputs (used when restoring from persistence).
     /// Preserve blockchain scan order within each height for key-image imports.
     pub fn replace_outputs(&mut self, outputs: Vec<WalletOutput>) {
+        self.superseded.clear();
         self.outputs.clear();
         self.rebuild_key_image_index();
         let height = self.current_height;
@@ -671,6 +740,11 @@ impl WalletState {
         self.outputs = kept;
 
         self.rebuild_key_image_index();
+        let set_aside: Vec<WalletOutput> = std::mem::take(&mut self.superseded)
+            .into_iter()
+            .filter(|output| output.block_height < split_height)
+            .collect();
+        self.add_outputs(set_aside);
         self.block_hashes.rollback_to(split_height);
 
         // Clear pending spends and spending-tx records for removed/unspent key images
@@ -1033,12 +1107,17 @@ impl WalletState {
         self.try_import_key_images(offset, &import.key_images_hex())
     }
 
-    /// Stable sorting preserves transaction and output order supplied by the
-    /// scanner. Pool outputs are not wallet2 transfers: keep them after the
-    /// confirmed prefix and exclude them from export offsets and counts.
+    /// Confirmed outputs in wallet2's transfer order, then pool outputs; returns
+    /// how many are confirmed.
     fn sort_into_export_order(&mut self) -> usize {
-        self.outputs
-            .sort_by_key(|o| (o.block_height == 0, o.block_height));
+        let slot_heights = &self.slot_heights;
+        self.outputs.sort_by_key(|o| {
+            let height = one_time_key(o)
+                .and_then(|key| slot_heights.get(key))
+                .copied()
+                .unwrap_or(o.block_height);
+            (o.block_height == 0, height)
+        });
         self.rebuild_key_image_index();
         self.outputs.partition_point(|o| o.block_height != 0)
     }
@@ -1046,13 +1125,32 @@ impl WalletState {
     fn rebuild_key_image_index(&mut self) {
         self.key_image_index.clear();
         self.output_index.clear();
+        self.pub_key_index.clear();
         for (i, output) in self.outputs.iter().enumerate() {
             self.output_index.insert(output.output_key(), i);
+            if let Some(key) = one_time_key(output) {
+                self.pub_key_index.entry(key.to_string()).or_insert(i);
+            }
             if !output.key_image.is_empty() {
                 self.key_image_index.insert(output.key_image.clone(), i);
             }
         }
+        let held = &self.pub_key_index;
+        self.slot_heights.retain(|key, _| held.contains_key(key));
     }
+
+    fn export_height(&self, index: usize) -> u64 {
+        let output = &self.outputs[index];
+        one_time_key(output)
+            .and_then(|key| self.slot_heights.get(key))
+            .copied()
+            .unwrap_or(output.block_height)
+    }
+}
+
+fn one_time_key(output: &WalletOutput) -> Option<&str> {
+    let key = output.key.as_str();
+    (key.len() == 64 && key.bytes().all(|b| b.is_ascii_hexdigit())).then_some(key)
 }
 
 /// Read the platform clock once per balance/selection query. Keep unavailable
@@ -2924,6 +3022,107 @@ mod tests {
             .map(|o| o.block_height)
             .collect();
         assert_eq!(frozen, vec![10], "freeze must hit the output it named");
+    }
+
+    #[test]
+    fn larger_copy_of_a_one_time_key_keeps_the_export_position() {
+        let with_key = |amount, height, name: &str, key: &str| {
+            let mut output = make_output(amount, height, name);
+            output.key = key.repeat(32);
+            output.key_image.clear();
+            output
+        };
+        let mut state = WalletState::new();
+        state.add_outputs(vec![with_key(1, 10, "small", "aa")]);
+        state.add_outputs(vec![with_key(7, 11, "other", "cc")]);
+        state.add_outputs(vec![with_key(5, 12, "large", "aa")]);
+        state.add_outputs(vec![with_key(2, 13, "last", "dd")]);
+        state.add_outputs(vec![with_key(9, 14, "larger", "aa")]);
+
+        let images =
+            |names: &[&str]| -> Vec<String> { names.iter().map(|n| n.to_string()).collect() };
+        assert_eq!(
+            state
+                .assign_key_images_in_export_order(&images(&["ki_aa", "ki_cc", "ki_dd"]))
+                .unwrap(),
+            3
+        );
+        let held: Vec<(u64, u64, &str)> = state
+            .outputs()
+            .iter()
+            .map(|o| (o.block_height, o.amount, o.key_image.as_str()))
+            .collect();
+        assert_eq!(
+            held,
+            vec![(14, 9, "ki_aa"), (11, 7, "ki_cc"), (13, 2, "ki_dd")]
+        );
+
+        state.rollback_to_height(12);
+        assert_eq!(
+            state
+                .assign_key_images_in_export_order(&images(&["ki_aa", "ki_cc"]))
+                .unwrap(),
+            2
+        );
+        let held: Vec<(u64, u64, &str)> = state
+            .outputs()
+            .iter()
+            .map(|o| (o.block_height, o.amount, o.key_image.as_str()))
+            .collect();
+        assert_eq!(held, vec![(10, 1, "ki_aa"), (11, 7, "ki_cc")]);
+    }
+
+    #[test]
+    fn signed_import_pairs_a_replaced_record_at_its_wallet2_position() {
+        use crate::key_image_import::{SignedKeyImage, SignedKeyImageImport};
+        use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
+        use sha3::{Digest, Keccak256};
+        use zeroize::Zeroizing;
+
+        let signed = |tag: &str| {
+            let secret = Zeroizing::new(Scalar::from_bytes_mod_order(
+                Keccak256::digest(tag.as_bytes()).into(),
+            ));
+            let public = &*secret * ED25519_BASEPOINT_TABLE;
+            let image = crate::crypto::generate_key_image(&secret)
+                .compress()
+                .to_bytes();
+            let (c, r) = crate::key_image_signing::generate_key_image_ring_signature(
+                &image, &public, &secret,
+            );
+            let mut signature = [0u8; 64];
+            signature[..32].copy_from_slice(&c);
+            signature[32..].copy_from_slice(&r);
+            (
+                hex::encode(public.compress().to_bytes()),
+                SignedKeyImage {
+                    key_image: image,
+                    signature,
+                },
+            )
+        };
+        let (key_a, image_a) = signed("a");
+        let (key_c, image_c) = signed("c");
+        let with_key = |amount, height, name: &str, key: &str| {
+            let mut output = make_output(amount, height, name);
+            output.key = key.to_string();
+            output.key_image.clear();
+            output
+        };
+
+        let mut state = WalletState::new();
+        state.add_outputs(vec![with_key(1, 10, "small", &key_a)]);
+        state.add_outputs(vec![with_key(1, 11, "other", &key_c)]);
+        state.add_outputs(vec![with_key(5, 12, "large", &key_a)]);
+        let wallet2_export = SignedKeyImageImport {
+            offset: 0,
+            key_images: vec![image_a, image_c],
+        };
+        assert_eq!(
+            state.assign_verified_key_images_in_export_order(&wallet2_export),
+            Ok(2)
+        );
+        assert_eq!(state.outputs()[0].amount, 5);
     }
     #[test]
     fn confirmations_replace_mempool_arrival_order_with_scan_order() {
