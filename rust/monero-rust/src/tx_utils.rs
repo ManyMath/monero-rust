@@ -10,25 +10,48 @@ pub fn checked_amount_sum(amounts: impl IntoIterator<Item = u64>) -> Option<u64>
         .try_fold(0u64, |sum, amount| sum.checked_add(amount))
 }
 
-/// Adjust recipient amounts by subtracting the estimated fee proportionally.
-/// The first recipient absorbs any remainder from integer division.
+/// Take `fee` out of the recipients' amounts as wallet2's
+/// `TX::get_adjusted_dsts` does.
+pub fn subtract_fee_from_recipients(
+    recipients: &[(String, u64)],
+    fee: u64,
+) -> Result<Vec<(String, u64)>, String> {
+    let total = checked_amount_sum(recipients.iter().map(|recipient| recipient.1))
+        .ok_or_else(|| "recipient amounts overflow".to_string())?;
+    if total < fee {
+        return Err(format!(
+            "the recipients receive {total} in total, less than the fee of {fee} to subtract"
+        ));
+    }
+
+    let mut adjusted = recipients.to_vec();
+    let count = adjusted.len() as u64;
+    let mut remaining = fee;
+    let mut share = 0;
+    let mut next = 0;
+    while remaining > 0 {
+        if next == 0 {
+            share = (remaining / count).max(1);
+        }
+        let amount = &mut adjusted[next].1;
+        if *amount <= share {
+            return Err(format!(
+                "recipient {next} would be left with nothing after its share of the fee"
+            ));
+        }
+        *amount -= share;
+        remaining -= share;
+        next = (next + 1) % adjusted.len();
+    }
+    Ok(adjusted)
+}
+
+/// [`subtract_fee_from_recipients`], returning no recipients where it fails.
 pub fn adjust_recipients_for_fee(
     recipients: &[(String, u64)],
     estimated_fee: u64,
 ) -> Vec<(String, u64)> {
-    if recipients.is_empty() {
-        return vec![];
-    }
-    let fee_per = estimated_fee / recipients.len() as u64;
-    let remainder = estimated_fee % recipients.len() as u64;
-    recipients
-        .iter()
-        .enumerate()
-        .map(|(i, (addr, amt))| {
-            let deduction = fee_per + if i == 0 { remainder } else { 0 };
-            (addr.clone(), amt.saturating_sub(deduction))
-        })
-        .collect()
+    subtract_fee_from_recipients(recipients, estimated_fee).unwrap_or_default()
 }
 
 /// Classify a broadcast error string into (is_double_spend, is_retryable).
@@ -176,10 +199,63 @@ mod tests {
     }
 
     #[test]
-    fn adjust_saturating_sub() {
+    fn a_fee_larger_than_the_recipients_total_is_refused() {
         let r = vec![("a".to_string(), 10u64)];
-        let adj = adjust_recipients_for_fee(&r, 1_000_000);
-        assert_eq!(adj[0].1, 0);
+        assert!(subtract_fee_from_recipients(&r, 1_000_000).is_err());
+        assert!(adjust_recipients_for_fee(&r, 1_000_000).is_empty());
+    }
+
+    #[test]
+    fn a_recipient_left_with_nothing_is_refused() {
+        let r = vec![("a".to_string(), 500u64), ("b".to_string(), 1_000_000)];
+        assert!(subtract_fee_from_recipients(&r, 1_000).is_err());
+        assert!(adjust_recipients_for_fee(&r, 1_000).is_empty());
+        let r = vec![("a".to_string(), 501u64), ("b".to_string(), 1_000_000)];
+        assert_eq!(
+            subtract_fee_from_recipients(&r, 1_000).unwrap(),
+            [("a".to_string(), 1), ("b".to_string(), 999_500)]
+        );
+    }
+
+    #[test]
+    fn the_remainder_is_taken_one_piconero_at_a_time() {
+        let r: Vec<(String, u64)> = ["a", "b", "c"]
+            .iter()
+            .map(|name| (name.to_string(), 100))
+            .collect();
+        let amounts = |fee| -> Vec<u64> {
+            subtract_fee_from_recipients(&r, fee)
+                .unwrap()
+                .into_iter()
+                .map(|recipient| recipient.1)
+                .collect()
+        };
+        assert_eq!(amounts(11), [96, 96, 97]);
+        assert_eq!(amounts(10), [96, 97, 97]);
+        assert_eq!(amounts(2), [99, 99, 100]);
+        assert_eq!(amounts(0), [100, 100, 100]);
+    }
+
+    /// Recorded from wallet2 22578c3f7: three destinations of 1 XMR, fee 59548931.
+    #[test]
+    fn a_fee_recorded_from_wallet2_is_spread_the_same() {
+        const XMR: u64 = 1_000_000_000_000;
+        let r: Vec<(String, u64)> = ["a", "b", "c"]
+            .iter()
+            .map(|name| (name.to_string(), XMR))
+            .collect();
+        let taken: Vec<u64> = subtract_fee_from_recipients(&r, 59_548_931)
+            .unwrap()
+            .into_iter()
+            .map(|recipient| XMR - recipient.1)
+            .collect();
+        assert_eq!(taken, [19_849_644, 19_849_644, 19_849_643]);
+    }
+
+    #[test]
+    fn no_recipients_can_only_bear_no_fee() {
+        assert_eq!(subtract_fee_from_recipients(&[], 0), Ok(vec![]));
+        assert!(subtract_fee_from_recipients(&[], 1).is_err());
     }
 
     #[test]

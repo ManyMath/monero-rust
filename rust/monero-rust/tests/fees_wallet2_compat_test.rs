@@ -701,7 +701,6 @@ async fn a_settled_policy_asks_about_congestion_once() {
 }
 
 #[test]
-#[ignore = "known defect: adjust_recipients_for_fee gives the whole remainder to the first recipient"]
 fn fee_subtracted_from_recipients_is_spread_like_wallet2() {
     let recipients: Vec<(String, u64)> = ["a", "b", "c"]
         .iter()

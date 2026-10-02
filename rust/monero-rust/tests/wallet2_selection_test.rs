@@ -482,7 +482,6 @@ fn sweep_leaves_out_dust_below_the_fee_of_one_ring() {
 }
 
 #[test]
-#[ignore = "known defect: the remainder of a subtracted fee all goes to the first recipient"]
 fn fee_subtraction_spreads_the_remainder_like_wallet2() {
     let recipients = vec![
         ("a".to_string(), 100u64),
@@ -495,7 +494,6 @@ fn fee_subtraction_spreads_the_remainder_like_wallet2() {
 }
 
 #[test]
-#[ignore = "known defect: a recipient that cannot bear its share of the fee is clamped to zero"]
 fn fee_subtraction_never_yields_a_zero_or_short_adjustment() {
     let recipients = vec![("a".to_string(), 10u64), ("b".to_string(), 1_000_000)];
     assert!(monero_rust::adjust_recipients_for_fee(&recipients, 1_000).is_empty());

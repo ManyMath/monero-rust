@@ -41,7 +41,9 @@ pub use tx_prepare::{
     prepare_sweep_inputs_with_fee, prepare_sweep_inputs_with_rpc, PreparedInputs,
     SweepSubaddresses,
 };
-pub use tx_utils::{adjust_recipients_for_fee, classify_broadcast_error};
+pub use tx_utils::{
+    adjust_recipients_for_fee, classify_broadcast_error, subtract_fee_from_recipients,
+};
 
 // -- Wallet state & output types --
 pub use wallet_output::WalletOutput;
