@@ -479,7 +479,7 @@ pub mod native {
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct StoredOutputData {
         pub tx_hash: String,
-        pub output_index: u8,
+        pub output_index: u64,
         pub amount: u64,
         pub key: String,
         pub key_offset: String,

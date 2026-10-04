@@ -9,7 +9,9 @@ use crate::tx_builder::native::{DecoySelection, StoredOutputData};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletOutput {
     pub tx_hash: String,
-    pub output_index: u8,
+    /// Position of the output in its transaction. Coinbase transactions can
+    /// have far more than 255 outputs.
+    pub output_index: u64,
     pub amount: u64,
     pub key: String,
     pub key_offset: String,

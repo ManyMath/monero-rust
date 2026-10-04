@@ -45,7 +45,7 @@ fn synthetic_output_for_spend_key(
     spend_secret_key: [u8; 32],
     key_offset_byte: u8,
     block_height: u64,
-    output_index: u8,
+    output_index: u64,
 ) -> (WalletOutput, String) {
     let spend_scalar = Scalar::from_bytes_mod_order(spend_secret_key);
     let key_offset = Scalar::from_bytes_mod_order([key_offset_byte; 32]);

@@ -59,7 +59,7 @@ fn wallet2_fractional_threshold() -> u64 {
 fn output(amount: u64, tx: &str, index: u8, height: u64, subaddress: (u32, u32)) -> WalletOutput {
     WalletOutput {
         tx_hash: tx.to_string(),
-        output_index: index,
+        output_index: index.into(),
         amount,
         key: "k".into(),
         key_offset: "ko".into(),

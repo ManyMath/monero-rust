@@ -963,12 +963,7 @@ fn map_oxide_output(
     key_image_scalar: Option<&Scalar>,
     global_index_is_authoritative: bool,
 ) -> Result<WalletOutput, String> {
-    let output_index = u8::try_from(output.index_in_transaction()).map_err(|_| {
-        format!(
-            "Output index {} exceeds the supported per-transaction range",
-            output.index_in_transaction()
-        )
-    })?;
+    let output_index = output.index_in_transaction();
     let key_offset_bytes = <[u8; 32]>::from(output.key_offset());
     let commitment = output.commitment();
     let amount = commitment.amount;

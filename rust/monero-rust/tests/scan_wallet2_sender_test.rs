@@ -166,7 +166,6 @@ async fn burning_bug_view_only_wallet_credits_one_output_per_key() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: an output position above 255 fails the whole batch"]
 async fn coinbase_output_beyond_position_255_is_credited() {
     let recipient = Recipient::of(SEED, 0, 0);
     let r = Scalar::from(1005u64);
@@ -538,7 +537,7 @@ async fn stored_global_index_equals_the_daemon_index_for_that_output() {
     assert_eq!(index_of(2 * XMR), Some(5006));
 }
 
-fn fingerprint(outputs: &[WalletOutput]) -> Vec<(String, u8, u64, String, Option<u64>)> {
+fn fingerprint(outputs: &[WalletOutput]) -> Vec<(String, u64, u64, String, Option<u64>)> {
     let mut rows: Vec<_> = outputs
         .iter()
         .map(|o| {

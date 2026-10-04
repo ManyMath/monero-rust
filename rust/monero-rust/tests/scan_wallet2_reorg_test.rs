@@ -78,7 +78,7 @@ async fn sync_with_history(state: &mut WalletState, node: &FakeChain, compositio
     panic!("sync did not settle");
 }
 
-fn summary(state: &WalletState) -> Vec<(String, u8, u64, bool)> {
+fn summary(state: &WalletState) -> Vec<(String, u64, u64, bool)> {
     let mut rows: Vec<_> = state
         .outputs()
         .iter()

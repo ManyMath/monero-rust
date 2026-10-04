@@ -40,7 +40,7 @@ struct TestOutput {
     #[allow(dead_code)]
     tx_hash: String,
     #[allow(dead_code)]
-    output_index: u8,
+    output_index: u64,
     amount: u64,
     #[allow(dead_code)]
     key_image: String,
