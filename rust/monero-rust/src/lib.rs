@@ -62,9 +62,9 @@ pub use coin_selection::{
 
 // -- Scan coordination --
 pub use scan_coordinator::{
-    compute_lookahead, filter_outputs_by_accounts, process_batch_with_reorg_detection,
-    process_single_wallet_batch, sync_progress, BlockOutputSummary, ProcessedBatch, ReorgInfo,
-    ScanBatchOutcome, SyncProgress,
+    apply_processed_batch, compute_lookahead, filter_outputs_by_accounts,
+    process_batch_with_reorg_detection, process_single_wallet_batch, sync_progress,
+    BlockOutputSummary, ProcessedBatch, ReorgInfo, ScanBatchOutcome, SyncProgress,
 };
 
 // -- BIP39 conversion --

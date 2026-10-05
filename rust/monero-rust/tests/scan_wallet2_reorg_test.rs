@@ -59,16 +59,7 @@ async fn sync_with_history(state: &mut WalletState, node: &FakeChain, compositio
                 match composition {
                     Composition::PerBlock => apply_results(state, &results),
                     Composition::AggregatedBatch => {
-                        state.add_outputs(batch.outputs_to_store.clone());
-                        state.mark_spent_by_key_images_at_height(
-                            &batch.spent_key_images,
-                            batch.batch_end_height,
-                        );
-                        for (height, hash) in &batch.block_hashes {
-                            state.record_block_hash(*height, hash.clone());
-                        }
-                        state.current_height = batch.batch_end_height;
-                        state.daemon_height = batch.daemon_height;
+                        monero_rust::apply_processed_batch(state, &batch);
                     }
                 }
                 return;
@@ -148,7 +139,6 @@ async fn rollback_then_rescan_equals_a_fresh_scan() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: aggregated batches lose the height of each spend"]
 async fn rollback_keeps_a_spend_that_is_below_the_fork_when_batches_are_aggregated() {
     let (before_spend, a, b) = fork_scenario().await;
     let mut state = WalletState::new();

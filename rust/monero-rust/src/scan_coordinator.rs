@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use crate::scanner::{BlockScanResult, Lookahead, DEFAULT_LOOKAHEAD};
 use crate::wallet_output::WalletOutput;
-use crate::wallet_state::{WalletState, MAX_REORG_DEPTH};
+use crate::wallet_state::{SpentConflict, WalletState, MAX_REORG_DEPTH};
 
 /// Sync progress information.
 #[derive(Debug, Clone)]
@@ -44,6 +44,8 @@ pub struct ProcessedBatch {
     pub outputs_to_store: Vec<WalletOutput>,
     pub spent_key_images: Vec<String>,
     pub spent_key_image_tx_hashes: Vec<String>,
+    /// Height of the block each entry of `spent_key_images` was seen in.
+    pub spent_key_image_heights: Vec<u64>,
     pub should_continue: bool,
     pub blocks_with_outputs: Vec<BlockOutputSummary>,
     pub daemon_height: u64,
@@ -112,6 +114,7 @@ pub fn process_single_wallet_batch(
             outputs_to_store: Vec::new(),
             spent_key_images: Vec::new(),
             spent_key_image_tx_hashes: Vec::new(),
+            spent_key_image_heights: Vec::new(),
             should_continue: false,
             blocks_with_outputs: Vec::new(),
             daemon_height: 0,
@@ -129,6 +132,7 @@ pub fn process_single_wallet_batch(
     let mut all_outputs = Vec::new();
     let mut all_spent_key_images = Vec::new();
     let mut all_spent_key_image_tx_hashes = Vec::new();
+    let mut all_spent_key_image_heights = Vec::new();
     let mut blocks_with_outputs = Vec::new();
     let mut all_block_hashes = Vec::new();
     let mut last_daemon_height = 0u64;
@@ -139,6 +143,8 @@ pub fn process_single_wallet_batch(
 
         all_spent_key_images.extend(result.spent_key_images.iter().cloned());
         all_spent_key_image_tx_hashes.extend(result.spent_key_image_tx_hashes.iter().cloned());
+        all_spent_key_image_heights
+            .extend(std::iter::repeat(result.block_height).take(result.spent_key_images.len()));
 
         let filtered = filter_outputs_by_accounts(result.outputs.iter(), accounts_set.as_ref());
 
@@ -163,11 +169,76 @@ pub fn process_single_wallet_batch(
         outputs_to_store: all_outputs,
         spent_key_images: all_spent_key_images,
         spent_key_image_tx_hashes: all_spent_key_image_tx_hashes,
+        spent_key_image_heights: all_spent_key_image_heights,
         should_continue: batch_end_height < target_height,
         blocks_with_outputs,
         daemon_height: last_daemon_height,
         block_hashes: all_block_hashes,
     }
+}
+
+/// Apply a processed batch block by block, crediting a block's outputs before
+/// marking its spends at its own height, as wallet2 does (wallet2.cpp:3436-3466);
+/// otherwise a rollback can bring a spent output back.
+pub fn apply_processed_batch(
+    wallet_state: &mut WalletState,
+    batch: &ProcessedBatch,
+) -> Vec<SpentConflict> {
+    let spend_height = |i: usize| {
+        batch
+            .spent_key_image_heights
+            .get(i)
+            .copied()
+            .unwrap_or(batch.batch_end_height)
+    };
+    // Stable sorts keep a block's outputs and spends in transaction order.
+    let mut outputs: Vec<&WalletOutput> = batch.outputs_to_store.iter().collect();
+    outputs.sort_by_key(|output| output.block_height);
+    let mut spends: Vec<usize> = (0..batch.spent_key_images.len()).collect();
+    spends.sort_by_key(|&i| spend_height(i));
+
+    let mut conflicts = Vec::new();
+    let (mut next_output, mut next_spend) = (0, 0);
+    while next_output < outputs.len() || next_spend < spends.len() {
+        let height = match (outputs.get(next_output), spends.get(next_spend)) {
+            (Some(output), Some(&i)) => output.block_height.min(spend_height(i)),
+            (Some(output), None) => output.block_height,
+            (None, Some(&i)) => spend_height(i),
+            (None, None) => break,
+        };
+        let block_outputs: Vec<WalletOutput> = outputs[next_output..]
+            .iter()
+            .take_while(|output| output.block_height == height)
+            .map(|output| (*output).clone())
+            .collect();
+        next_output += block_outputs.len();
+        wallet_state.add_outputs(block_outputs);
+        while let Some(&i) = spends.get(next_spend) {
+            if spend_height(i) != height {
+                break;
+            }
+            next_spend += 1;
+            let tx_hash = batch
+                .spent_key_image_tx_hashes
+                .get(i)
+                .cloned()
+                .unwrap_or_default();
+            let (_, found) = wallet_state.mark_spent_detecting_conflicts(
+                std::slice::from_ref(&batch.spent_key_images[i]),
+                &[tx_hash],
+                height,
+            );
+            conflicts.extend(found);
+        }
+    }
+    if !batch.block_hashes.is_empty() {
+        for (height, hash) in &batch.block_hashes {
+            wallet_state.record_block_hash(*height, hash.clone());
+            wallet_state.current_height = wallet_state.current_height.max(*height);
+        }
+        wallet_state.daemon_height = batch.daemon_height;
+    }
+    conflicts
 }
 
 /// Outcome of a batch scan with reorg detection.
@@ -718,5 +789,57 @@ mod tests {
             other => panic!("Expected ScanBatchOutcome::Reorg, got {:?}", other),
         };
         assert_eq!(info.split_height, 100);
+    }
+
+    #[test]
+    fn spent_output_is_not_replaced_by_a_later_copy_in_the_same_batch() {
+        let one_time_key = "ab".repeat(32);
+        let mut small = make_output(1_000_000_000_000, 101, "tx_small", 0);
+        small.key = one_time_key.clone();
+        small.key_image = "ki_shared".into();
+        let mut large = make_output(5_000_000_000_000, 110, "tx_large", 0);
+        large.key = one_time_key;
+        large.key_image = "ki_shared".into();
+        let results: Vec<BlockScanResult> = (101..=110)
+            .map(|height| match height {
+                101 => make_block_result(height, vec![small.clone()], vec![]),
+                105 => make_block_result(height, vec![], vec!["ki_shared".into()]),
+                110 => make_block_result(height, vec![large.clone()], vec![]),
+                _ => make_block_result(height, vec![], vec![]),
+            })
+            .collect();
+        let batch = process_single_wallet_batch(&results, None, 1000, 101);
+
+        let mut state = WalletState::new();
+        apply_processed_batch(&mut state, &batch);
+        let held: Vec<(u64, u64, bool, Option<u64>)> = state
+            .outputs()
+            .iter()
+            .map(|o| (o.block_height, o.amount, o.spent, o.spent_height))
+            .collect();
+        assert_eq!(held, vec![(101, 1_000_000_000_000, true, Some(105))]);
+
+        state.rollback_to_height(108);
+        let held: Vec<(u64, u64, bool, Option<u64>)> = state
+            .outputs()
+            .iter()
+            .map(|o| (o.block_height, o.amount, o.spent, o.spent_height))
+            .collect();
+        assert_eq!(
+            held,
+            vec![(101, 1_000_000_000_000, true, Some(105))],
+            "the output spent at 105 must stay spent after a reorg at 108"
+        );
+    }
+
+    #[test]
+    fn output_spent_in_its_own_block_is_marked_spent() {
+        let output = make_output(1_000_000_000_000, 120, "tx_a", 0);
+        let results = vec![make_block_result(120, vec![output], vec!["ki_tx_a".into()])];
+        let batch = process_single_wallet_batch(&results, None, 1000, 120);
+        let mut state = WalletState::new();
+        apply_processed_batch(&mut state, &batch);
+        assert!(state.outputs()[0].spent);
+        assert_eq!(state.outputs()[0].spent_height, Some(120));
     }
 }

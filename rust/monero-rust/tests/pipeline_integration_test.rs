@@ -506,14 +506,7 @@ fn apply_normal_batch(
     .unwrap();
     match outcome {
         ScanBatchOutcome::Normal(batch) => {
-            state.add_outputs(batch.outputs_to_store.clone());
-            state.mark_spent_by_key_images_at_height(
-                &batch.spent_key_images,
-                batch.batch_end_height,
-            );
-            for (h, hash) in &batch.block_hashes {
-                state.record_block_hash(*h, hash.clone());
-            }
+            monero_rust::apply_processed_batch(state, &batch);
             batch
         }
         ScanBatchOutcome::Reorg(_) => panic!("Expected Normal, got Reorg"),
@@ -647,7 +640,7 @@ fn reorg_unspends_outputs_spent_in_fork_zone() {
     apply_normal_batch(&mut state, &batch2, None, 5000, 100);
 
     assert!(state.outputs()[0].spent);
-    assert_eq!(state.outputs()[0].spent_height, Some(102)); // batch_end_height
+    assert_eq!(state.outputs()[0].spent_height, Some(100));
 
     // Balance: 0 confirmed (output is spent)
     let bal = state.balance_at_height(5000);
