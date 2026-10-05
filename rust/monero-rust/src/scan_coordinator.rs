@@ -188,11 +188,10 @@ pub struct ReorgInfo {
     pub unspent_key_images: Vec<String>,
 }
 
-/// Process a batch with reorg detection.
-///
-/// Compares block hashes in the batch against known hashes in wallet state.
-/// If a mismatch is found, rolls back the wallet state and returns `Reorg`.
-/// Otherwise delegates to `process_single_wallet_batch` and returns `Normal`.
+/// Process a batch with reorg detection: roll back and return `Reorg` when a
+/// block id differs from the wallet's, else return the batch as `Normal`. A
+/// batch that does not build on the block the wallet holds below it is refused;
+/// fetch again with the wallet's history and start height zero.
 pub fn process_batch_with_reorg_detection(
     batch_results: &[BlockScanResult],
     wallet_state: &mut WalletState,
@@ -200,6 +199,24 @@ pub fn process_batch_with_reorg_detection(
     target_height: u64,
     batch_start_height: u64,
 ) -> Result<ScanBatchOutcome, String> {
+    for (i, result) in batch_results.iter().enumerate() {
+        let parent_in_batch = i > 0 && batch_results[i - 1].block_height + 1 == result.block_height;
+        if parent_in_batch || result.block_height == 0 || result.previous_block_hash.is_empty() {
+            continue;
+        }
+        let parent_height = result.block_height - 1;
+        if let Some(known_parent) = wallet_state.block_hashes.get_hash(parent_height) {
+            if known_parent != result.previous_block_hash {
+                return Err(format!(
+                    "Block {} builds on {} but the wallet holds {} at height {}: the chain was \
+                     reorganised below this batch. Fetch again with the wallet's block history \
+                     and start height 0",
+                    result.block_height, result.previous_block_hash, known_parent, parent_height
+                ));
+            }
+        }
+    }
+
     // Check for reorg: compare batch block hashes against known hashes
     for result in batch_results {
         if let Some(known_hash) = wallet_state.block_hashes.get_hash(result.block_height) {
@@ -268,6 +285,7 @@ mod tests {
     ) -> BlockScanResult {
         let tx_hashes_len = spent_key_images.len();
         BlockScanResult {
+            previous_block_hash: String::new(),
             block_height: height,
             block_hash: format!("hash_{}", height),
             block_timestamp: height * 120,

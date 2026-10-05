@@ -34,6 +34,7 @@ fn make_block_result(
 ) -> BlockScanResult {
     let tx_hashes_len = spent_key_images.len();
     BlockScanResult {
+        previous_block_hash: String::new(),
         block_height: height,
         block_hash: format!("hash_{}", height),
         block_timestamp: height * 120,
@@ -153,6 +154,7 @@ fn test_reorg_recovery_full_cycle() {
     // Phase 4: Re-scan from fork point with new chain
     let new_chain_results = vec![
         BlockScanResult {
+            previous_block_hash: String::new(),
             block_height: 102,
             block_hash: "new_chain_hash_102".to_string(),
             block_timestamp: 102 * 120,
@@ -163,6 +165,7 @@ fn test_reorg_recovery_full_cycle() {
             spent_key_image_tx_hashes: vec![],
         },
         BlockScanResult {
+            previous_block_hash: String::new(),
             block_height: 103,
             block_hash: "new_chain_hash_103".to_string(),
             block_timestamp: 103 * 120,
@@ -220,6 +223,7 @@ fn test_reorg_at_first_block_recovers() {
     state.record_block_hash(100, "old_hash_100".to_string());
 
     let results = vec![BlockScanResult {
+        previous_block_hash: String::new(),
         block_height: 100,
         block_hash: "new_hash_100".to_string(), // different!
         block_timestamp: 12000,

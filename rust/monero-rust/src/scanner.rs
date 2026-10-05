@@ -128,6 +128,9 @@ pub fn extract_key_images_from_raw_tx(tx_blob: &[u8]) -> Vec<String> {
 pub struct BlockScanResult {
     pub block_height: u64,
     pub block_hash: String,
+    /// Hash of the block this one builds on, or empty when unknown.
+    #[serde(default)]
+    pub previous_block_hash: String,
     pub block_timestamp: u64,
     pub tx_count: usize,
     pub outputs: Vec<WalletOutput>,
@@ -1281,6 +1284,7 @@ pub async fn process_batch_response(
             previous_block_hash = None;
             let block_hash = hex::encode(Keccak256::digest(&block_entry.block));
             results.push(BlockScanResult {
+                previous_block_hash: String::new(),
                 block_height,
                 block_hash,
                 block_timestamp: 0,
@@ -1343,6 +1347,7 @@ pub async fn process_batch_response(
             }
 
             results.push(BlockScanResult {
+                previous_block_hash: hex::encode(block.header.previous),
                 block_height,
                 block_hash,
                 block_timestamp,
@@ -1424,6 +1429,7 @@ pub async fn process_batch_response(
             }
 
             results.push(BlockScanResult {
+                previous_block_hash: hex::encode(block.header.previous),
                 block_height,
                 block_hash,
                 block_timestamp,
@@ -2631,6 +2637,7 @@ mod tests {
     #[test]
     fn test_block_scan_result_serialization() {
         let result = BlockScanResult {
+            previous_block_hash: String::new(),
             block_height: 12345,
             block_hash: "abc123".to_string(),
             block_timestamp: 1234567890,

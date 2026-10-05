@@ -72,6 +72,7 @@ fn make_sample_wallet_output(index: u64) -> WalletOutput {
 
 fn make_sample_block_scan_result(num_outputs: usize, num_key_images: usize) -> BlockScanResult {
     BlockScanResult {
+        previous_block_hash: String::new(),
         block_height: 500_000,
         block_hash: "f".repeat(64),
         block_timestamp: 1700000000,

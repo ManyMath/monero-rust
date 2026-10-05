@@ -41,6 +41,7 @@ fn make_block_result(
     spent_key_images: Vec<String>,
 ) -> BlockScanResult {
     BlockScanResult {
+        previous_block_hash: String::new(),
         block_height: height,
         block_hash: format!("hash_{}", height),
         block_timestamp: height * 120,

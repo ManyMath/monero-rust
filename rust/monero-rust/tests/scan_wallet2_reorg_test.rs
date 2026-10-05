@@ -167,7 +167,6 @@ async fn rollback_keeps_a_spend_that_is_below_the_fork_when_batches_are_aggregat
 
 /// monerod ignores `block_ids` when `start_height > 0`.
 #[tokio::test]
-#[ignore = "known defect: a batch that does not connect to the wallet chain is accepted"]
 async fn fork_below_the_requested_height_is_noticed() {
     let (_, a, mut b) = fork_scenario().await;
     b.push_empty(3);
@@ -176,11 +175,9 @@ async fn fork_below_the_requested_height_is_noticed() {
 
     let next = a.next_height();
     let results = scan_response(b.response_from(next)).await;
-    match process_batch_with_reorg_detection(&results, &mut state, None, b.next_height(), next)
-        .unwrap()
-    {
-        ScanBatchOutcome::Normal(_) => apply_results(&mut state, &results),
-        ScanBatchOutcome::Reorg(_) => {
+    match process_batch_with_reorg_detection(&results, &mut state, None, b.next_height(), next) {
+        Ok(ScanBatchOutcome::Normal(_)) => apply_results(&mut state, &results),
+        Ok(ScanBatchOutcome::Reorg(_)) | Err(_) => {
             sync_with_history(&mut state, &b, Composition::PerBlock).await
         }
     }
