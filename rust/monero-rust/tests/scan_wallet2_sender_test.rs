@@ -369,7 +369,6 @@ async fn lookahead_expansion_works_while_the_scanner_cache_is_kept() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: zero-amount outputs are recorded"]
 async fn zero_amount_output_is_not_recorded() {
     let recipient = Recipient::of(SEED, 0, 0);
     let zero = send_output(&recipient, Scalar::from(4001u64), 0, 0);

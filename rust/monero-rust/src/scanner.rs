@@ -909,6 +909,12 @@ fn first_ringct_index_from_tx_entries(
     None
 }
 
+/// Drop zero-amount outputs, which wallet2 does not record (wallet2.cpp:2272-2277).
+fn without_zero_amounts(mut outputs: Vec<OxideWalletOutput>) -> Vec<OxideWalletOutput> {
+    outputs.retain(|output| output.commitment().amount != 0);
+    outputs
+}
+
 /// Scan one fully parsed block for the scanner's outputs.
 fn scan_parsed_block(
     scanner: &mut Scanner,
@@ -922,7 +928,7 @@ fn scan_parsed_block(
             transactions: txs.to_vec(),
             output_index_for_first_ringct_output: Some(first_ringct_index),
         })
-        .map(|timelocked| timelocked.ignore_additional_timelock())
+        .map(|timelocked| without_zero_amounts(timelocked.ignore_additional_timelock()))
         .map_err(|e| format!("Failed to scan block {}: {}", block.number(), e))
 }
 
@@ -986,7 +992,7 @@ pub fn scan_single_transaction(
             transactions: vec![tx.clone()],
             output_index_for_first_ringct_output: Some(0),
         })
-        .map(|timelocked| timelocked.ignore_additional_timelock())
+        .map(|timelocked| without_zero_amounts(timelocked.ignore_additional_timelock()))
         .map_err(|e| format!("Failed to scan transaction {}: {}", hex::encode(tx_hash), e))
 }
 
