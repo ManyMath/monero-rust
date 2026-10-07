@@ -230,6 +230,8 @@ pub struct WalletState {
     slot_heights: HashMap<String, u64>,
     /// Outputs set aside for a credited one with the same one-time key.
     superseded: Vec<WalletOutput>,
+    /// Top scanned height; the chain length is one more. Advance it for blocks
+    /// without outputs too.
     pub current_height: u64,
     pub daemon_height: u64,
     pub block_hashes: BlockHashChain,
@@ -498,9 +500,9 @@ impl WalletState {
         count
     }
 
-    /// Calculate balance using current_height for confirmation depth.
+    /// Calculate balance at the wallet's own chain length, `current_height + 1`.
     pub fn balance(&self) -> Balance {
-        self.balance_at_height(self.current_height)
+        self.balance_at_height(self.current_height.saturating_add(1))
     }
 
     /// Calculate balance at a specific height using the current system time.

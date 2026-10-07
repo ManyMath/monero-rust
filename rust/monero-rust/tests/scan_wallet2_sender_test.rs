@@ -664,7 +664,6 @@ async fn frozen_output_is_not_part_of_the_balance() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: balance() measures age from the top block height, one block late"]
 async fn default_balance_unlocks_at_the_same_block_as_wallet2() {
     let recipient = Recipient::of(SEED, 0, 0);
     let mut chain = FakeChain::new(100, 5000);
