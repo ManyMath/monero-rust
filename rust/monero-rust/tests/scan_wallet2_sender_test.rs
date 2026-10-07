@@ -652,7 +652,6 @@ async fn single_multi_and_split_batch_scans_agree_without_cross_credit() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: frozen outputs are counted in the balance"]
 async fn frozen_output_is_not_part_of_the_balance() {
     let (mut state, output, chain_length) = locked_output(Timelock::None).await;
     assert!(state.freeze_output(&output.key_image));

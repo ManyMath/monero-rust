@@ -508,12 +508,11 @@ impl WalletState {
         self.balance_at(height, current_time_secs())
     }
 
-    /// Calculate balance with an explicit Unix clock (for example, adjusted
-    /// network time). With no clock, timestamp-locked outputs remain locked.
+    /// Balance at `height` with an explicit clock (`None` keeps time locks); frozen excluded.
     pub fn balance_at(&self, height: u64, now_secs: Option<u64>) -> Balance {
         let mut bal = Balance::default();
         for output in &self.outputs {
-            if output.spent {
+            if output.spent || output.frozen {
                 continue;
             }
             if self.pending_spends.contains_key(&output.key_image) {
@@ -1744,13 +1743,18 @@ mod tests {
         assert!(state.outputs()[0].frozen);
         assert_eq!(state.outputs()[0].key_image, "known-first");
         assert_eq!(state.outputs()[1].spent_height, Some(115));
+        assert_eq!(state.balance_at(200, None).confirmed, 0);
+        assert!(state.thaw_output("known-first"));
         assert_eq!(state.balance_at(200, None).confirmed, first.amount);
+        assert!(state.freeze_output("known-first"));
 
         // Restoring a cache merges duplicate records without losing local state.
         let mut persisted = state.outputs().to_vec();
         persisted.extend([first, second]);
         state.replace_outputs(persisted);
         assert_eq!(state.outputs().len(), 2);
+        assert_eq!(state.balance_at(200, None).confirmed, 0);
+        assert!(state.thaw_output("known-first"));
         assert_eq!(state.balance_at(200, None).confirmed, 1_000_000_000_000);
     }
 
@@ -1796,8 +1800,10 @@ mod tests {
         second.frozen = true;
         state.add_outputs(vec![first.clone(), second.clone()]);
         assert_eq!(state.outputs().len(), 1);
-        assert_eq!(state.balance_at(200, None).confirmed, first.amount);
         assert!(state.outputs()[0].frozen);
+        assert_eq!(state.balance_at(200, None).confirmed, 0);
+        assert!(state.thaw_output("shared"));
+        assert_eq!(state.balance_at(200, None).confirmed, first.amount);
         state.mark_spent_by_key_images_at_height(&["shared".into()], 150);
         assert_eq!(state.balance_at(200, None).confirmed, 0);
         state.add_outputs(vec![first, second]);
@@ -2292,15 +2298,18 @@ mod tests {
     }
 
     #[test]
-    fn test_frozen_output_still_in_balance() {
+    fn test_frozen_output_excluded_from_balance() {
         let mut state = WalletState::new();
         state.add_outputs(vec![make_output(1_000_000_000_000, 80, "ki1")]);
         state.current_height = 100;
 
         state.freeze_output("ki1");
         let bal = state.balance();
-        // Frozen outputs still count in balance, just not spendable
-        assert_eq!(bal.confirmed, 1_000_000_000_000);
+        assert_eq!(bal.confirmed, 0);
+        assert_eq!(bal.unconfirmed, 0);
+
+        state.thaw_output("ki1");
+        assert_eq!(state.balance().confirmed, 1_000_000_000_000);
     }
 
     #[test]
