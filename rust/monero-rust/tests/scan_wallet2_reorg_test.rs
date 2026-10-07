@@ -181,7 +181,6 @@ async fn fork_below_the_requested_height_is_noticed() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: an output marked spent at send time is never released"]
 async fn output_of_a_dropped_send_becomes_spendable_again() {
     let mut a = FakeChain::new(100, 5000);
     block_with(&mut a, vec![pay(5 * XMR, 1)]);
@@ -190,12 +189,16 @@ async fn output_of_a_dropped_send_becomes_spendable_again() {
     sync_with_history(&mut state, &a, Composition::PerBlock).await;
     let identity = state.outputs()[0].output_key();
 
-    assert_eq!(state.mark_spent_by_output_keys(&[identity]), 1);
+    assert_eq!(state.mark_spent_by_output_keys(&[identity.clone()]), 1);
     assert_eq!(total_balance(&state, a.next_height()), 0);
 
     a.push_empty(30);
     sync_with_history(&mut state, &a, Composition::PerBlock).await;
     state.cleanup_expired_pending_spends(u64::MAX);
+    assert_eq!(total_balance(&state, a.next_height()), 0);
+
+    assert_eq!(state.release_unmined_spends(&[identity.clone()]), 1);
+    assert_eq!(state.release_unmined_spends(&[identity]), 0);
 
     assert_eq!(
         total_balance(&state, a.next_height()),

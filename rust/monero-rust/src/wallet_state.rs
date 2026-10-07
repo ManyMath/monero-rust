@@ -483,8 +483,8 @@ impl WalletState {
         count
     }
 
-    /// Mark outputs as spent by output keys ("txHash:outputIndex" format).
-    /// Returns the number of outputs newly marked as spent.
+    /// Mark outputs spent by "txHash:outputIndex"; returns how many. No rollback
+    /// reverts this: `release_unmined_spends` does.
     pub fn mark_spent_by_output_keys(&mut self, output_keys: &[String]) -> usize {
         let key_set: HashSet<&str> = output_keys.iter().map(|s| s.as_str()).collect();
         let mut count = 0;
@@ -498,6 +498,27 @@ impl WalletState {
             }
         }
         count
+    }
+
+    /// Unmark outputs ("txHash:outputIndex") spent by a never-mined transaction;
+    /// a spend seen in a block stays. Returns how many.
+    pub fn release_unmined_spends(&mut self, output_keys: &[String]) -> usize {
+        let key_set: HashSet<&str> = output_keys.iter().map(|s| s.as_str()).collect();
+        let mut released = Vec::new();
+        for output in &mut self.outputs {
+            if key_set.contains(output.output_key().as_str())
+                && output.spent
+                && output.spent_height.is_none()
+            {
+                output.spent = false;
+                released.push(output.key_image.clone());
+            }
+        }
+        for key_image in &released {
+            self.pending_spends.remove(key_image);
+            self.spent_by_tx.remove(key_image);
+        }
+        released.len()
     }
 
     /// Calculate balance at the wallet's own chain length, `current_height + 1`.
