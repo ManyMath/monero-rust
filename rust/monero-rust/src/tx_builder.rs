@@ -1683,12 +1683,43 @@ pub mod native {
         hash_to_scalar(&bytes)
     }
 
+    struct SourceSubaddresses {
+        account: u32,
+        by_spend_key: std::collections::HashMap<[u8; 32], (u32, Scalar)>,
+    }
+
+    impl SourceSubaddresses {
+        fn new(
+            spend_secret: &Scalar,
+            view_secret: [u8; 32],
+            account: u32,
+            subaddr_indices: &[u32],
+        ) -> Self {
+            let spend_public = spend_secret * ED25519_BASEPOINT_TABLE;
+            let mut by_spend_key = std::collections::HashMap::new();
+            let mut seen = HashSet::new();
+            for minor in std::iter::once(0).chain(subaddr_indices.iter().copied()) {
+                if !seen.insert(minor) {
+                    continue;
+                }
+                let offset = subaddress_key_offset(view_secret, account, minor);
+                let key = (spend_public + &offset * ED25519_BASEPOINT_TABLE)
+                    .compress()
+                    .to_bytes();
+                by_spend_key.insert(key, (minor, offset));
+            }
+            Self {
+                account,
+                by_spend_key,
+            }
+        }
+    }
+
     fn derive_source_key_offset(
         source: &crate::epee_compat::TxSourceEntrySummary,
         spend_secret: Scalar,
         view_secret: [u8; 32],
-        subaddr_account: u32,
-        subaddr_indices: &[u32],
+        subaddresses: &SourceSubaddresses,
     ) -> Result<(Scalar, [u8; 32], Option<(u32, u32)>), String> {
         let real_output_index: usize = source
             .real_output
@@ -1698,37 +1729,36 @@ pub mod native {
             .ring
             .get(real_output_index)
             .ok_or_else(|| "Wallet2 source real output index is out of range".to_string())?;
+        let output_public_key = CompressedEdwardsY(real.output_public_key)
+            .decompress()
+            .ok_or_else(|| "Invalid wallet2 source output public key".to_string())?;
 
-        let mut tx_public_keys = Vec::with_capacity(source.real_out_additional_tx_keys.len() + 1);
-        tx_public_keys.push(source.real_out_tx_key);
-        tx_public_keys.extend(source.real_out_additional_tx_keys.iter().copied());
-
-        let mut candidate_subaddresses = vec![0u32];
-        for index in subaddr_indices {
-            if !candidate_subaddresses.contains(index) {
-                candidate_subaddresses.push(*index);
+        let additional = usize::try_from(source.real_output_in_tx_index)
+            .ok()
+            .and_then(|index| source.real_out_additional_tx_keys.get(index));
+        for tx_public_key in std::iter::once(&source.real_out_tx_key).chain(additional) {
+            let Ok(base_offset) =
+                output_key_offset(view_secret, *tx_public_key, source.real_output_in_tx_index)
+            else {
+                continue;
+            };
+            let subaddress_spend_key = (output_public_key - &base_offset * ED25519_BASEPOINT_TABLE)
+                .compress()
+                .to_bytes();
+            let Some((minor, subaddress_offset)) =
+                subaddresses.by_spend_key.get(&subaddress_spend_key)
+            else {
+                continue;
+            };
+            let key_offset = base_offset + subaddress_offset;
+            if &(spend_secret + key_offset) * ED25519_BASEPOINT_TABLE != output_public_key {
+                continue;
             }
-        }
-
-        for tx_public_key in tx_public_keys {
-            let base_offset =
-                output_key_offset(view_secret, tx_public_key, source.real_output_in_tx_index)?;
-            for minor in &candidate_subaddresses {
-                let subaddress_offset = subaddress_key_offset(view_secret, subaddr_account, *minor);
-                let key_offset = base_offset + subaddress_offset;
-                let output_secret = spend_secret + key_offset;
-                let output_public_key = (&output_secret * ED25519_BASEPOINT_TABLE)
-                    .compress()
-                    .to_bytes();
-                if output_public_key == real.output_public_key {
-                    let subaddress_index = if subaddr_account == 0 && *minor == 0 {
-                        Some((0, 0))
-                    } else {
-                        Some((subaddr_account, *minor))
-                    };
-                    return Ok((key_offset, tx_public_key, subaddress_index));
-                }
-            }
+            return Ok((
+                key_offset,
+                *tx_public_key,
+                Some((subaddresses.account, *minor)),
+            ));
         }
 
         Err("Wallet2 source does not belong to the supplied seed".to_string())
@@ -1746,6 +1776,12 @@ pub mod native {
         )?;
         let mut source_key_offsets = Vec::new();
         for (construction_index, construction) in summary.txes.iter().enumerate() {
+            let subaddresses = SourceSubaddresses::new(
+                &spend_secret,
+                view_secret_key,
+                construction.subaddr_account,
+                &construction.subaddr_indices,
+            );
             for (source_index, source) in construction.sources.iter().enumerate() {
                 let real_output_index: usize = source
                     .real_output
@@ -1754,13 +1790,8 @@ pub mod native {
                 let real = source.ring.get(real_output_index).ok_or_else(|| {
                     "Wallet2 source real output index is out of range".to_string()
                 })?;
-                let (key_offset, tx_public_key, subaddress_index) = derive_source_key_offset(
-                    source,
-                    spend_secret,
-                    view_secret_key,
-                    construction.subaddr_account,
-                    &construction.subaddr_indices,
-                )?;
+                let (key_offset, tx_public_key, subaddress_index) =
+                    derive_source_key_offset(source, spend_secret, view_secret_key, &subaddresses)?;
                 let output_secret = Zeroizing::new(spend_secret + key_offset);
                 let key_image = generate_key_image(&output_secret).compress().to_bytes();
                 source_key_offsets.push(Wallet2SourceKeyOffset {
@@ -1903,15 +1934,16 @@ pub mod native {
         construction: &crate::epee_compat::TxConstructionDataSummary,
         network: Network,
     ) -> Result<UnsignedTransactionResult, String> {
+        let subaddresses = SourceSubaddresses::new(
+            &spend_secret,
+            view_secret_key,
+            construction.subaddr_account,
+            &construction.subaddr_indices,
+        );
         let mut inputs = Vec::with_capacity(construction.sources.len());
         for source in &construction.sources {
-            let (key_offset, _, _) = derive_source_key_offset(
-                source,
-                spend_secret,
-                view_secret_key,
-                construction.subaddr_account,
-                &construction.subaddr_indices,
-            )?;
+            let (key_offset, _, _) =
+                derive_source_key_offset(source, spend_secret, view_secret_key, &subaddresses)?;
             inputs.push(wallet2_input(source, key_offset)?);
         }
 

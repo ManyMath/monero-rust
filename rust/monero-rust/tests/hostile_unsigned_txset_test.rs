@@ -365,7 +365,6 @@ fn construction_without_view_tags_is_refused_like_wallet2() {
 }
 
 #[test]
-#[ignore = "known defect: previewing a wallet2 txset does work quadratic in its size"]
 fn preview_work_is_bounded_by_txset_size() {
     let mut set = parse_vector_unsigned();
     let tx = &mut set.txes[0];
@@ -408,4 +407,64 @@ fn preview_work_is_bounded_by_txset_size() {
         }
         Err(_) => panic!("previewing a 71 KiB txset did not finish within 20 s"),
     }
+}
+
+#[test]
+fn subaddress_indices_beyond_the_inputs_are_refused_before_any_work() {
+    let mut set = parse_vector_unsigned();
+    set.txes[0].subaddr_indices = (1..=1_300_000u32).collect();
+    let encoded = sealed_hex(&set);
+    assert!(encoded.len() > 7_000_000, "{} hex digits", encoded.len());
+
+    let cold = cold_keys();
+    let (done, finished) = mpsc::channel();
+    let started = Instant::now();
+    std::thread::spawn(move || {
+        let outcome = preview_unsigned_transaction(
+            cold.spend_secret_key,
+            cold.view_secret_key,
+            &encoded,
+            "mainnet",
+        );
+        let _ = done.send(outcome.map(|p| p.fee));
+    });
+    match finished.recv_timeout(Duration::from_secs(20)) {
+        Ok(outcome) => {
+            eprintln!("preview finished in {:?}: {outcome:?}", started.elapsed());
+            let err = outcome.expect_err("1.3 million subaddress indices for two inputs");
+            assert!(
+                err.contains("more subaddress indices (1300000) than inputs (2)"),
+                "{err}"
+            );
+        }
+        Err(_) => panic!("previewing a 3.9 MB txset did not finish within 20 s"),
+    }
+}
+
+#[test]
+fn additional_key_at_the_outputs_index_is_found_among_many() {
+    let mut set = parse_vector_unsigned();
+    let tx = &mut set.txes[0];
+    let decoy_key = tx.sources[1].real_out_tx_key;
+    let real_key = tx.sources[0].real_out_tx_key;
+    let source = &mut tx.sources[0];
+    assert_eq!(source.real_output_in_tx_index, 0);
+    source.real_out_tx_key = decoy_key;
+    source.real_out_additional_tx_keys = vec![decoy_key; 2_001];
+    source.real_out_additional_tx_keys[0] = real_key;
+
+    let started = Instant::now();
+    let reviewed = preview(&set).expect("the source is still this wallet's");
+    assert_eq!(reviewed.fee, 2_599_200_000);
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "preview took {:?}",
+        started.elapsed()
+    );
+
+    set.txes[0].sources[0]
+        .real_out_additional_tx_keys
+        .swap(0, 2_000);
+    let err = preview(&set).expect_err("only the key at the output's index is tried");
+    assert!(err.contains("does not belong"), "{err}");
 }

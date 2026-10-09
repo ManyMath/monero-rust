@@ -81,6 +81,14 @@ pub(crate) fn check_construction_data(tx: &TxConstructionDataSummary) -> Result<
     if tx.sources.is_empty() {
         return Err("transaction has no inputs".into());
     }
+    // This signer derives a key per entry, so refuse more entries than sources first.
+    if tx.subaddr_indices.len() > tx.sources.len() {
+        return Err(format!(
+            "more subaddress indices ({}) than inputs ({})",
+            tx.subaddr_indices.len(),
+            tx.sources.len()
+        ));
+    }
     if tx.unlock_time != 0 {
         return Err("transaction cannot have non-zero unlock time".into());
     }
