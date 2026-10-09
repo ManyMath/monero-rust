@@ -137,10 +137,27 @@ fn fuzz_wallet2_signed_txset_archive() {
     let vector = std::fs::read(vector_path("monero_wallet_rpc_signed_monero_tx")).unwrap();
     epee_compat::extract_signed_monero_txset_transactions(&vector, &hot.view_secret_key)
         .expect("wallet2's signed txset is accepted as it is");
+    let unsigned = std::fs::read(vector_path("unsigned_monero_tx")).unwrap();
+    epee_compat::extract_signed_monero_txset_transactions_for_unsigned(
+        &vector,
+        &hot.view_secret_key,
+        &unsigned,
+    )
+    .expect("and it answers the unsigned txset");
     let base = open(epee_compat::SIGNED_TX_MAGIC, &vector, &hot.view_secret_key);
     fuzz("wallet2 signed txset", 0x5eed_0003, 20_000, &base, |data| {
         let sealed = seal(epee_compat::SIGNED_TX_MAGIC, data, &hot.view_secret_key);
-        epee_compat::extract_signed_monero_txset_transactions(&sealed, &hot.view_secret_key).is_ok()
+        if epee_compat::extract_signed_monero_txset_transactions(&sealed, &hot.view_secret_key)
+            .is_err()
+        {
+            return false;
+        }
+        epee_compat::extract_signed_monero_txset_transactions_for_unsigned(
+            &sealed,
+            &hot.view_secret_key,
+            &unsigned,
+        )
+        .is_ok()
     });
 }
 

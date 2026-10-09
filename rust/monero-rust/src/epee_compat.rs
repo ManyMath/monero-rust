@@ -83,6 +83,8 @@ pub struct PendingTxSummary {
     pub fee: u64,
     pub dust_added_to_fee: bool,
     pub change_amount: u64,
+    /// The pending entry's own copy of the change destination.
+    pub change: TxDestinationEntrySummary,
     pub selected_transfer_count: u64,
     pub selected_transfer_indices: Vec<u64>,
     pub key_images_len: usize,
@@ -320,11 +322,87 @@ pub fn parse_signed_monero_txset_summary(
     BinaryArchiveReader::new(&decrypted).read_signed_txset_summary()
 }
 
+/// The transactions of a signed txset, after `txset_checks::check_signed_monero_txset`.
+/// Without the unsigned txset the construction data is the signer's word; prefer
+/// `extract_signed_monero_txset_transactions_for_unsigned`.
 pub fn extract_signed_monero_txset_transactions(
     data: &[u8],
     view_secret_key: &[u8; 32],
 ) -> Result<Vec<ExtractedSignedTx>, String> {
     let summary = parse_signed_monero_txset_summary(data, view_secret_key)?;
+    crate::txset_checks::check_signed_monero_txset(&summary)?;
+    Ok(summary
+        .ptxes
+        .into_iter()
+        .map(|ptx| ExtractedSignedTx {
+            tx_hash: ptx.tx_hash,
+            tx_blob: ptx.tx_blob,
+        })
+        .collect())
+}
+
+/// Same transaction, with sources and split destinations in any order.
+fn same_construction(a: &TxConstructionDataSummary, b: &TxConstructionDataSummary) -> bool {
+    fn in_canonical_order(construction: &TxConstructionDataSummary) -> TxConstructionDataSummary {
+        let mut sorted = construction.clone();
+        sorted.sources.sort_by(|x, y| {
+            let key = |source: &TxSourceEntrySummary| {
+                source
+                    .ring
+                    .iter()
+                    .map(|member| (member.global_output_index, member.output_public_key))
+                    .collect::<Vec<_>>()
+            };
+            key(x).cmp(&key(y)).then(x.real_output.cmp(&y.real_output))
+        });
+        sorted.source_ring_sizes = sorted
+            .sources
+            .iter()
+            .map(|source| source.ring.len() as u64)
+            .collect();
+        sorted.split_destinations.sort_by(|x, y| {
+            let key = |destination: &TxDestinationEntrySummary| {
+                (
+                    destination.spend_public_key,
+                    destination.view_public_key,
+                    destination.amount,
+                    destination.original.clone(),
+                    destination.is_subaddress,
+                    destination.is_integrated,
+                )
+            };
+            key(x).cmp(&key(y))
+        });
+        sorted
+    }
+    in_canonical_order(a) == in_canonical_order(b)
+}
+
+/// The transactions of a signed txset, refused unless each carries exactly the
+/// construction data of the matching transaction in `unsigned_txset`.
+pub fn extract_signed_monero_txset_transactions_for_unsigned(
+    data: &[u8],
+    view_secret_key: &[u8; 32],
+    unsigned_txset: &[u8],
+) -> Result<Vec<ExtractedSignedTx>, String> {
+    let requested = parse_unsigned_monero_txset_summary(unsigned_txset, view_secret_key)?;
+    let summary = parse_signed_monero_txset_summary(data, view_secret_key)?;
+    if summary.ptxes.len() != requested.txes.len() {
+        return Err(format!(
+            "the signed txset holds {} transactions, the unsigned txset asked for {}",
+            summary.ptxes.len(),
+            requested.txes.len()
+        ));
+    }
+    for (index, (ptx, construction)) in summary.ptxes.iter().zip(&requested.txes).enumerate() {
+        if !same_construction(&ptx.construction, construction) {
+            return Err(format!(
+                "signed transaction #{index} was not built from the construction data that was \
+                 sent for signing"
+            ));
+        }
+    }
+    crate::txset_checks::check_signed_monero_txset(&summary)?;
     Ok(summary
         .ptxes
         .into_iter()
@@ -979,6 +1057,7 @@ impl<'a> BinaryArchiveReader<'a> {
             fee,
             dust_added_to_fee,
             change_amount,
+            change,
             selected_transfer_count,
             selected_transfer_indices,
             key_images_len,

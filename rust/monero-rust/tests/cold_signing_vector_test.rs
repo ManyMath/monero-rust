@@ -600,12 +600,30 @@ fn cold_signing_signed_txset_parses_wallet2_pending_summary() {
     assert!(tx_blob_cursor.is_empty());
     assert_eq!(hex::encode(reparsed_tx.hash()), expected_tx_hash);
     assert_eq!(reparsed_tx.serialize(), ptx.tx_blob);
-    let extracted =
+    let stale =
         epee_compat::extract_signed_monero_txset_transactions(&signed, &hot.view_secret_key)
-            .expect("signed txset should extract raw transactions");
+            .expect_err("a signed txset with bare hex key image text must be refused");
+    assert!(
+        stale.contains("failed reconstructing key_images field"),
+        "{stale}"
+    );
+    let wallet2_signed = std::fs::read(vector_path("monero_wallet_rpc_signed_monero_tx"))
+        .expect("wallet2 signed txset should be readable");
+    let unsigned = std::fs::read(vector_path("unsigned_monero_tx"))
+        .expect("unsigned txset should be readable");
+    let extracted = epee_compat::extract_signed_monero_txset_transactions_for_unsigned(
+        &wallet2_signed,
+        &hot.view_secret_key,
+        &unsigned,
+    )
+    .expect("wallet2's signed txset should pass wallet2's own checks");
     assert_eq!(extracted.len(), 1);
-    assert_eq!(hex::encode(extracted[0].tx_hash), expected_tx_hash);
-    assert_eq!(extracted[0].tx_blob, ptx.tx_blob);
+    assert_eq!(
+        hex::encode(extracted[0].tx_hash),
+        metadata["flow"]["monero_wallet_rpc_signed_tx_hash_list"][0]
+            .as_str()
+            .expect("wallet2 signed tx hash should be present")
+    );
     assert_eq!(ptx.tx_version, 2);
     assert_eq!(ptx.tx_unlock_time, 0);
     assert_eq!(ptx.tx_input_count, 2);

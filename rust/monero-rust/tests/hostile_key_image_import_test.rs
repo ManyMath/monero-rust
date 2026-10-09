@@ -278,7 +278,6 @@ fn signed_txset_key_images_text_matches_wallet2() {
 }
 
 #[test]
-#[ignore = "known defect: a signed txset is handed out for relay without being checked"]
 fn signed_txset_reader_checks_the_transaction_against_its_construction_data() {
     use monero_rust::native::{
         preview_unsigned_transaction, sign_unsigned_transaction_with_private_keys,
@@ -338,4 +337,54 @@ fn signed_txset_reader_checks_the_transaction_against_its_construction_data() {
         "a signed txset whose transaction pays a different fee than its construction data \
          was handed out for relay"
     );
+}
+
+#[test]
+fn signed_txset_is_tied_to_the_unsigned_txset_it_answers() {
+    let hot = hot_keys();
+    let wallet2_signed = std::fs::read(vector_path("monero_wallet_rpc_signed_monero_tx")).unwrap();
+    let answered = epee_compat::extract_signed_monero_txset_transactions_for_unsigned(
+        &wallet2_signed,
+        &hot.view_secret_key,
+        &vector_unsigned_txset(),
+    )
+    .expect("wallet2's signed txset answers the vector's unsigned txset");
+    assert_eq!(answered.len(), 1);
+
+    let mut other = parse_vector_unsigned();
+    other.txes[0].change.amount -= 1;
+    other.txes[0].change_amount -= 1;
+    other.txes[0].split_destinations[0].amount -= 1;
+    let err = epee_compat::extract_signed_monero_txset_transactions_for_unsigned(
+        &wallet2_signed,
+        &hot.view_secret_key,
+        &seal_unsigned_txset(&other, &hot.view_secret_key),
+    )
+    .expect_err("a signed txset for another request must be refused");
+    assert!(
+        err.contains("not built from the construction data"),
+        "{err}"
+    );
+}
+
+#[test]
+fn signed_txset_with_foreign_key_images_is_refused() {
+    let hot = hot_keys();
+    let wallet2_signed = std::fs::read(vector_path("monero_wallet_rpc_signed_monero_tx")).unwrap();
+    let wallet2 =
+        epee_compat::parse_signed_monero_txset_summary(&wallet2_signed, &hot.view_secret_key)
+            .unwrap();
+    monero_rust::txset_checks::check_signed_monero_txset(&wallet2)
+        .expect("wallet2's signed txset passes");
+
+    let mut swapped = wallet2.clone();
+    let selected = swapped.ptxes[0].selected_transfer_indices[0] as usize;
+    swapped.key_images[selected] = swapped.key_images[selected + 1];
+    let err = monero_rust::txset_checks::check_signed_monero_txset(&swapped).unwrap_err();
+    assert!(err.contains("ki mismatch"), "{err}");
+
+    let mut other_ring = wallet2.clone();
+    other_ring.ptxes[0].construction.sources[0].ring[3].global_output_index += 1;
+    let err = monero_rust::txset_checks::check_signed_monero_txset(&other_ring).unwrap_err();
+    assert!(err.contains("key offsets mismatch"), "{err}");
 }

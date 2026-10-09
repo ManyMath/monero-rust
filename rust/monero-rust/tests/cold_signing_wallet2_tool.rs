@@ -333,15 +333,18 @@ fn cmd_sign() {
 fn cmd_parse_signed() {
     let data = std::fs::read(env("COLD_SIGNING_SIGNED")).unwrap();
     let view = env_key("COLD_SIGNING_VIEW");
-    match epee_compat::parse_signed_monero_txset_summary(&data, &view) {
-        Ok(summary) => emit(json!({
+    let extracted = match std::env::var("COLD_SIGNING_UNSIGNED") {
+        Ok(unsigned) => epee_compat::extract_signed_monero_txset_transactions_for_unsigned(
+            &data,
+            &view,
+            &std::fs::read(unsigned).unwrap(),
+        ),
+        Err(_) => epee_compat::extract_signed_monero_txset_transactions(&data, &view),
+    };
+    match extracted {
+        Ok(transactions) => emit(json!({
             "ok": true,
-            "tx_hashes": summary.ptxes.iter().map(|p| hex::encode(p.tx_hash)).collect::<Vec<_>>(),
-            "fees": summary.ptxes.iter().map(|p| p.fee).collect::<Vec<_>>(),
-            "rct_fees": summary.ptxes.iter().map(|p| p.rct_fee).collect::<Vec<_>>(),
-            "key_images": summary.key_images.len(),
-            "tx_key_images": summary.tx_key_images.len(),
-            "tx_key_hidden": summary.ptxes.iter().map(|p| hex::encode(p.tx_key)).collect::<Vec<_>>(),
+            "tx_hashes": transactions.iter().map(|t| hex::encode(t.tx_hash)).collect::<Vec<_>>(),
         })),
         Err(error) => emit(json!({"ok": false, "error": error})),
     }

@@ -29,6 +29,7 @@ pub mod key_image_signing;
 pub mod tx_builder;
 pub mod tx_prepare;
 pub mod tx_utils;
+pub mod txset_checks;
 pub mod unsigned_tx;
 pub mod ur_codec;
 pub mod validation;
