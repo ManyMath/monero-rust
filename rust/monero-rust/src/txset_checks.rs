@@ -9,8 +9,8 @@ use monero_wallet::address::{AddressType, MoneroAddress};
 use monero_wallet::ed25519::{Commitment, Scalar as OxideScalar};
 
 use crate::epee_compat::{
-    wallet2_key_images_text, ParsedSignedTxSetSummary, PendingTxSummary, TxConstructionDataSummary,
-    TxDestinationEntrySummary,
+    wallet2_key_images_text, ParsedSignedTxSetSummary, ParsedUnsignedTxSetSummary,
+    PendingTxSummary, TxConstructionDataSummary, TxDestinationEntrySummary,
 };
 
 /// The Bulletproofs+ version wallet2 writes for the current protocol.
@@ -215,6 +215,16 @@ pub(crate) fn check_construction_set<'a>(
     }
     if total_input > u128::from(u64::MAX) {
         return Err("tx set input amount > 2^64 - 1".into());
+    }
+    Ok(())
+}
+
+/// Check an unsigned txset as wallet2's signer does. The change address is not
+/// checked: that needs the signer's keys.
+pub fn check_unsigned_monero_txset(set: &ParsedUnsignedTxSetSummary) -> Result<(), String> {
+    check_construction_set(&set.txes).map_err(|e| format!("check_consistent_ins_outs: {e}"))?;
+    for (index, tx) in set.txes.iter().enumerate() {
+        check_construction_data(tx).map_err(|e| format!("unsigned transaction #{index}: {e}"))?;
     }
     Ok(())
 }

@@ -302,7 +302,6 @@ fn every_transaction_is_reviewed_and_signed_amounts_match_the_review() {
 }
 
 #[test]
-#[ignore = "known defect: the signer ignores a nonzero unlock_time that wallet2 refuses"]
 fn nonzero_unlock_time_is_refused_like_wallet2() {
     let mut set = parse_vector_unsigned();
     set.txes[0].unlock_time = 1_000_000;
@@ -315,7 +314,6 @@ fn nonzero_unlock_time_is_refused_like_wallet2() {
 }
 
 #[test]
-#[ignore = "known defect: the signer pays a destination string without comparing it with the destination keys"]
 fn destination_original_must_agree_with_destination_keys() {
     let mut set = parse_vector_unsigned();
     let tx = &mut set.txes[0];
@@ -331,7 +329,6 @@ fn destination_original_must_agree_with_destination_keys() {
 }
 
 #[test]
-#[ignore = "known defect: the signer never compares the split destinations with the destinations"]
 fn split_destinations_must_agree_with_destinations() {
     let mut set = parse_vector_unsigned();
     let tx = &mut set.txes[0];
@@ -345,7 +342,6 @@ fn split_destinations_must_agree_with_destinations() {
 }
 
 #[test]
-#[ignore = "known defect: the signer signs a set that spends one output twice"]
 fn one_output_spent_by_two_transactions_of_a_set_is_refused() {
     let mut set = parse_vector_unsigned();
     let duplicate = set.txes[0].clone();
@@ -359,7 +355,6 @@ fn one_output_spent_by_two_transactions_of_a_set_is_refused() {
 }
 
 #[test]
-#[ignore = "known defect: the signer ignores the construction flags of a wallet2 txset"]
 fn construction_without_view_tags_is_refused_like_wallet2() {
     let mut set = parse_vector_unsigned();
     set.txes[0].construction_flags = 0x01;

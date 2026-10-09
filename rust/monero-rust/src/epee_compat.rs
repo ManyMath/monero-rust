@@ -304,13 +304,17 @@ pub fn inspect_monero_txset(
     })
 }
 
+/// Read a wallet2 unsigned txset, refusing one that fails wallet2's signer
+/// checks (`txset_checks::check_unsigned_monero_txset`).
 pub fn parse_unsigned_monero_txset_summary(
     data: &[u8],
     view_secret_key: &[u8; 32],
 ) -> Result<ParsedUnsignedTxSetSummary, String> {
     let encrypted = strip_magic(UNSIGNED_TX_MAGIC, data)?;
     let decrypted = crate::key_image_signing::decrypt_with_view_key(encrypted, view_secret_key)?;
-    BinaryArchiveReader::new(&decrypted).read_unsigned_txset_summary()
+    let summary = BinaryArchiveReader::new(&decrypted).read_unsigned_txset_summary()?;
+    crate::txset_checks::check_unsigned_monero_txset(&summary)?;
+    Ok(summary)
 }
 
 pub fn parse_signed_monero_txset_summary(
