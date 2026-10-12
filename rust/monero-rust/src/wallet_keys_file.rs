@@ -398,9 +398,30 @@ fn parse_language(lang: &str) -> Option<Language> {
     }
 }
 
+/// wallet2's `crypto::generate_chacha_key` with `kdf_rounds`.
+fn password_key(password: &str, kdf_rounds: u64) -> Result<Zeroizing<[u8; 32]>, String> {
+    if kdf_rounds == 0 {
+        return Err("kdf_rounds must be at least 1".into());
+    }
+    let mut key = Zeroizing::new(cryptonight_hash_v0(password.as_bytes()));
+    for _ in 1..kdf_rounds {
+        *key = cryptonight_hash_v0(&*key);
+    }
+    Ok(key)
+}
+
 pub fn decrypt_keys_data(
     file_bytes: &[u8],
     password: &str,
+) -> Result<(Vec<u8>, [u8; 32], [u8; 8]), String> {
+    decrypt_keys_data_with_kdf_rounds(file_bytes, password, 1)
+}
+
+/// `decrypt_keys_data` for a wallet created with `--kdf-rounds <kdf_rounds>`.
+pub fn decrypt_keys_data_with_kdf_rounds(
+    file_bytes: &[u8],
+    password: &str,
+    kdf_rounds: u64,
 ) -> Result<(Vec<u8>, [u8; 32], [u8; 8]), String> {
     if file_bytes.len() < 9 {
         return Err("file too small to be a valid .keys file".into());
@@ -418,22 +439,33 @@ pub fn decrypt_keys_data(
         .ok_or("ciphertext length exceeds file size")?;
 
     let mut buf = file_bytes[offset..end].to_vec();
-    let key: [u8; 32] = cryptonight_hash_v0(password.as_bytes());
-    let mut cipher = ChaCha20Legacy::new((&key).into(), (&outer_iv).into());
+    let key = password_key(password, kdf_rounds)?;
+    let mut cipher = ChaCha20Legacy::new((&*key).into(), (&outer_iv).into());
     cipher.apply_keystream(&mut buf);
 
     if buf.len() < 2 || buf[0] != b'{' || buf[1] != b'"' {
         return Err("decryption produced garbage (wrong password?)".into());
     }
 
-    Ok((buf, key, outer_iv))
+    Ok((buf, *key, outer_iv))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_keys_file(path: &std::path::Path, password: &str) -> Result<ImportedKeysFile, String> {
+    read_keys_file_with_kdf_rounds(path, password, 1)
+}
+
+/// `read_keys_file` for a wallet created with `--kdf-rounds <kdf_rounds>`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_keys_file_with_kdf_rounds(
+    path: &std::path::Path,
+    password: &str,
+    kdf_rounds: u64,
+) -> Result<ImportedKeysFile, String> {
     let file_data =
         std::fs::read(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
-    let (plaintext, key, outer_iv) = decrypt_keys_data(&file_data, password)?;
+    let (plaintext, key, outer_iv) =
+        decrypt_keys_data_with_kdf_rounds(&file_data, password, kdf_rounds)?;
     parse_decrypted_keys(&plaintext, &key, outer_iv)
 }
 
@@ -446,7 +478,16 @@ pub fn decrypt_keys_file(path: &std::path::Path, password: &str) -> Result<Vec<u
 }
 
 pub fn encrypt_keys_data(password: &str, wallet: &ImportedKeysFile) -> Result<Vec<u8>, String> {
-    let key: [u8; 32] = cryptonight_hash_v0(password.as_bytes());
+    encrypt_keys_data_with_kdf_rounds(password, wallet, 1)
+}
+
+/// `encrypt_keys_data` for a wallet opened with `--kdf-rounds <kdf_rounds>`.
+pub fn encrypt_keys_data_with_kdf_rounds(
+    password: &str,
+    wallet: &ImportedKeysFile,
+    kdf_rounds: u64,
+) -> Result<Vec<u8>, String> {
+    let key = password_key(password, kdf_rounds)?;
 
     let (encrypted_spend, encrypted_view) = inner_encrypt_keys(
         &wallet.spend_secret_key,
@@ -473,7 +514,7 @@ pub fn encrypt_keys_data(password: &str, wallet: &ImportedKeysFile) -> Result<Ve
     let plaintext = build_plaintext_json(&epee_bytes, wallet);
 
     let mut ciphertext = plaintext;
-    let mut cipher = ChaCha20Legacy::new((&key).into(), (&wallet.outer_iv).into());
+    let mut cipher = ChaCha20Legacy::new((&*key).into(), (&wallet.outer_iv).into());
     cipher.apply_keystream(&mut ciphertext);
 
     let len_bytes = write_leb128(ciphertext.len() as u64);
@@ -491,7 +532,18 @@ pub fn write_keys_file(
     password: &str,
     wallet: &ImportedKeysFile,
 ) -> Result<(), String> {
-    let file_data = encrypt_keys_data(password, wallet)?;
+    write_keys_file_with_kdf_rounds(path, password, wallet, 1)
+}
+
+/// `write_keys_file` for a wallet opened with `--kdf-rounds <kdf_rounds>`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn write_keys_file_with_kdf_rounds(
+    path: &std::path::Path,
+    password: &str,
+    wallet: &ImportedKeysFile,
+    kdf_rounds: u64,
+) -> Result<(), String> {
+    let file_data = encrypt_keys_data_with_kdf_rounds(password, wallet, kdf_rounds)?;
     std::fs::write(path, &file_data).map_err(|e| format!("failed to write {}: {e}", path.display()))
 }
 
@@ -733,6 +785,35 @@ mod tests {
         }
         deep.push(0);
         assert!(parse(&deep).unwrap_err().contains("nesting"));
+    }
+
+    #[test]
+    fn keys_data_round_trips_under_more_kdf_rounds() {
+        let secret = [7u8; 32];
+        let scalar = Scalar::from_bytes_mod_order(secret);
+        let public = (&scalar * ED25519_BASEPOINT_TABLE).compress().to_bytes();
+        let wallet = ImportedKeysFile {
+            spend_secret_key: scalar.to_bytes(),
+            view_secret_key: scalar.to_bytes(),
+            spend_public_key: public,
+            view_public_key: public,
+            creation_timestamp: 1,
+            watch_only: false,
+            seed_language: None,
+            mnemonic: None,
+            encryption_iv: [1; 8],
+            outer_iv: [2; 8],
+            nettype: 0,
+        };
+        let three = encrypt_keys_data_with_kdf_rounds("pw", &wallet, 3).unwrap();
+        let (plaintext, key, iv) = decrypt_keys_data_with_kdf_rounds(&three, "pw", 3).unwrap();
+        let read = parse_decrypted_keys(&plaintext, &key, iv).unwrap();
+        assert_eq!(read.spend_secret_key, wallet.spend_secret_key);
+        assert!(decrypt_keys_data(&three, "pw").is_err());
+        assert!(decrypt_keys_data_with_kdf_rounds(&three, "pw", 2).is_err());
+        assert!(decrypt_keys_data_with_kdf_rounds(&three, "pw", 0).is_err());
+        let one = encrypt_keys_data("pw", &wallet).unwrap();
+        assert!(decrypt_keys_data_with_kdf_rounds(&one, "pw", 1).is_ok());
     }
 
     #[test]

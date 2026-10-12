@@ -383,7 +383,12 @@ fn cmd_parse_unsigned() {
 fn cmd_read_keys() {
     let path = std::path::PathBuf::from(env("COLD_SIGNING_KEYS_FILE"));
     let password = std::env::var("COLD_SIGNING_PASSWORD").unwrap_or_default();
-    match monero_rust::wallet_keys_file::read_keys_file(&path, &password) {
+    let kdf_rounds = std::env::var("COLD_SIGNING_KDF_ROUNDS")
+        .ok()
+        .map_or(1, |rounds| rounds.parse().unwrap());
+    match monero_rust::wallet_keys_file::read_keys_file_with_kdf_rounds(
+        &path, &password, kdf_rounds,
+    ) {
         Ok(keys) => emit(json!({
             "ok": true,
             "spend_public": hex::encode(keys.spend_public_key),
