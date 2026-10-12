@@ -468,3 +468,44 @@ fn additional_key_at_the_outputs_index_is_found_among_many() {
     let err = preview(&set).expect_err("only the key at the output's index is tried");
     assert!(err.contains("does not belong"), "{err}");
 }
+
+#[test]
+fn destination_strings_are_read_as_wallet2_reads_them() {
+    let with_original = |original: &str, mutate: fn(&mut TxDestinationEntrySummary)| {
+        let mut set = parse_vector_unsigned();
+        let tx = &mut set.txes[0];
+        tx.destinations[0].original = original.as_bytes().to_vec();
+        tx.destinations[0].original_len = original.len();
+        mutate(&mut tx.destinations[0]);
+        tx.split_destinations[1] = tx.destinations[0].clone();
+        preview(&set)
+    };
+    let shown =
+        |reviewed: TransactionPreview| reviewed.transactions[0].destinations[0].address.clone();
+
+    let uri = format!("monero:{OWN_STANDARD}?tx_amount=1.0&recipient_name=me");
+    assert_eq!(shown(with_original(&uri, |_| {}).unwrap()), OWN_STANDARD);
+    assert_eq!(
+        shown(with_original(&format!("monero:{OWN_STANDARD}"), |_| {}).unwrap()),
+        OWN_STANDARD
+    );
+
+    let err =
+        with_original(&format!("monero:{FOREIGN_STANDARD}?tx_amount=1.0"), |_| {}).unwrap_err();
+    assert!(err.contains("destination addr string mismatch"), "{err}");
+
+    let err = with_original(
+        &format!("monero:{OWN_STANDARD}?tx_payment_id={}", "ab".repeat(32)),
+        |_| {},
+    )
+    .unwrap_err();
+    assert!(err.contains("separate payment id"), "{err}");
+
+    assert_eq!(
+        shown(with_original("donate.example.org", |_| {}).unwrap()),
+        OWN_STANDARD
+    );
+
+    let err = with_original("donate.example.org", |d| d.is_integrated = true).unwrap_err();
+    assert!(err.contains("integrated destination"), "{err}");
+}

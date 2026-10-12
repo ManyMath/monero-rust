@@ -1833,15 +1833,12 @@ pub mod native {
         destination: &crate::epee_compat::TxDestinationEntrySummary,
         network: Network,
     ) -> Result<MoneroAddress, String> {
-        if !destination.original.is_empty() {
-            let address = std::str::from_utf8(&destination.original)
-                .map_err(|e| format!("Wallet2 destination original address is not UTF-8: {e}"))?;
-            return MoneroAddress::from_str_with_unchecked_network(address)
-                .map_err(|e| format!("Invalid wallet2 destination address: {e:?}"));
+        if let Some(address) = crate::txset_checks::original_as_address(&destination.original)? {
+            return Ok(address);
         }
         if destination.is_integrated {
             return Err(
-                "Wallet2 integrated destination without original address is unsupported"
+                "Wallet2 integrated destination without a readable address string is unsupported"
                     .to_string(),
             );
         }

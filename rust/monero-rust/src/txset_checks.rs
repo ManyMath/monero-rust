@@ -34,12 +34,26 @@ fn same_address(a: &TxDestinationEntrySummary, b: &TxDestinationEntrySummary) ->
     a.spend_public_key == b.spend_public_key && a.view_public_key == b.view_public_key
 }
 
-/// A destination's `original` string as an address; `None` when it is not one.
+/// A destination's `original` string (an address, or a `monero:` URI around one)
+/// as an address; `None` for anything else. A `tx_payment_id` URI is refused.
 pub(crate) fn original_as_address(original: &[u8]) -> Result<Option<MoneroAddress>, String> {
-    let Some(address) = std::str::from_utf8(original)
-        .ok()
-        .and_then(|text| MoneroAddress::from_str_with_unchecked_network(text).ok())
-    else {
+    let Ok(text) = std::str::from_utf8(original) else {
+        return Ok(None);
+    };
+    let text = match text.strip_prefix("monero:") {
+        Some(uri) => {
+            let (address, parameters) = uri.split_once('?').unwrap_or((uri, ""));
+            if parameters
+                .split('&')
+                .any(|parameter| parameter.split('=').next() == Some("tx_payment_id"))
+            {
+                return Err("destination URI carries a separate payment id".into());
+            }
+            address
+        }
+        None => text,
+    };
+    let Ok(address) = MoneroAddress::from_str_with_unchecked_network(text) else {
         return Ok(None);
     };
     match address.kind() {
