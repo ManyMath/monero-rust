@@ -31,6 +31,13 @@ fn env_key(name: &str) -> [u8; 32] {
         .expect("32-byte key")
 }
 
+fn read_wallet2(name: &str) -> Vec<u8> {
+    let data = std::fs::read(env(name)).unwrap();
+    epee_compat::read_wallet2_file(&data)
+        .expect("wallet2 file")
+        .into_owned()
+}
+
 fn emit(value: serde_json::Value) {
     println!("COLD_SIGNING_JSON {value}");
 }
@@ -178,7 +185,7 @@ fn cmd_craft() {
 }
 
 fn cmd_parse_outputs() {
-    let data = std::fs::read(env("COLD_SIGNING_OUTPUTS")).unwrap();
+    let data = read_wallet2("COLD_SIGNING_OUTPUTS");
     let view = env_key("COLD_SIGNING_VIEW");
     match epee_compat::parse_output_export(&data, &view) {
         Ok(parsed) => emit(json!({
@@ -197,7 +204,7 @@ fn cmd_parse_outputs() {
 }
 
 fn cmd_export_key_images() {
-    let data = std::fs::read(env("COLD_SIGNING_OUTPUTS")).unwrap();
+    let data = read_wallet2("COLD_SIGNING_OUTPUTS");
     let view = env_key("COLD_SIGNING_VIEW");
     let spend = Scalar::from_bytes_mod_order(env_key("COLD_SIGNING_SPEND"));
     let parsed = epee_compat::parse_output_export(&data, &view).expect("output export");
@@ -214,7 +221,12 @@ fn cmd_export_key_images() {
         offset,
     )
     .expect("export");
-    std::fs::write(env("COLD_SIGNING_OUT"), &exported).unwrap();
+    if std::env::var("COLD_SIGNING_ASCII").is_ok() {
+        let armoured = epee_compat::write_wallet2_ascii_file(&exported);
+        std::fs::write(env("COLD_SIGNING_OUT"), armoured).unwrap();
+    } else {
+        std::fs::write(env("COLD_SIGNING_OUT"), &exported).unwrap();
+    }
     emit(json!({
         "ok": true,
         "count": entries.len() - offset as usize,
@@ -224,10 +236,10 @@ fn cmd_export_key_images() {
 }
 
 fn cmd_import_key_images() {
-    let outputs = std::fs::read(env("COLD_SIGNING_OUTPUTS")).unwrap();
+    let outputs = read_wallet2("COLD_SIGNING_OUTPUTS");
     let view = env_key("COLD_SIGNING_VIEW");
     let parsed = epee_compat::parse_output_export(&outputs, &view).expect("output export");
-    let data = std::fs::read(env("COLD_SIGNING_KEY_IMAGES")).unwrap();
+    let data = read_wallet2("COLD_SIGNING_KEY_IMAGES");
     let import = match epee_compat::import_signed_key_images_for_account(
         &data,
         Some(&view),
@@ -250,7 +262,7 @@ fn cmd_import_key_images() {
 }
 
 fn cmd_preview() {
-    let unsigned = std::fs::read(env("COLD_SIGNING_UNSIGNED")).unwrap();
+    let unsigned = read_wallet2("COLD_SIGNING_UNSIGNED");
     let outcome = preview_unsigned_transaction(
         env_key("COLD_SIGNING_SPEND"),
         env_key("COLD_SIGNING_VIEW"),
@@ -264,7 +276,7 @@ fn cmd_preview() {
 }
 
 fn cmd_sign() {
-    let unsigned = std::fs::read(env("COLD_SIGNING_UNSIGNED")).unwrap();
+    let unsigned = read_wallet2("COLD_SIGNING_UNSIGNED");
     let spend_bytes = env_key("COLD_SIGNING_SPEND");
     let view = env_key("COLD_SIGNING_VIEW");
     let network = env("COLD_SIGNING_NETWORK");
@@ -287,7 +299,7 @@ fn cmd_sign() {
         }
     };
 
-    let outputs = std::fs::read(env("COLD_SIGNING_OUTPUTS")).unwrap();
+    let outputs = read_wallet2("COLD_SIGNING_OUTPUTS");
     let parsed = epee_compat::parse_output_export(&outputs, &view).expect("output export");
     let spend = Scalar::from_bytes_mod_order(spend_bytes);
     let key_images: Vec<[u8; 32]> = key_image_entries(&parsed.outputs, &spend, &view)
@@ -331,13 +343,13 @@ fn cmd_sign() {
 }
 
 fn cmd_parse_signed() {
-    let data = std::fs::read(env("COLD_SIGNING_SIGNED")).unwrap();
+    let data = read_wallet2("COLD_SIGNING_SIGNED");
     let view = env_key("COLD_SIGNING_VIEW");
     let extracted = match std::env::var("COLD_SIGNING_UNSIGNED") {
         Ok(unsigned) => epee_compat::extract_signed_monero_txset_transactions_for_unsigned(
             &data,
             &view,
-            &std::fs::read(unsigned).unwrap(),
+            &epee_compat::read_wallet2_file(&std::fs::read(unsigned).unwrap()).unwrap(),
         ),
         Err(_) => epee_compat::extract_signed_monero_txset_transactions(&data, &view),
     };
@@ -351,7 +363,7 @@ fn cmd_parse_signed() {
 }
 
 fn cmd_parse_unsigned() {
-    let data = std::fs::read(env("COLD_SIGNING_UNSIGNED")).unwrap();
+    let data = read_wallet2("COLD_SIGNING_UNSIGNED");
     let view = env_key("COLD_SIGNING_VIEW");
     match epee_compat::parse_unsigned_monero_txset_summary(&data, &view) {
         Ok(summary) => emit(json!({

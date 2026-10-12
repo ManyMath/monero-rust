@@ -578,6 +578,48 @@ pub(crate) fn wallet2_key_images_text(key_images: &[[u8; 32]]) -> String {
         .collect()
 }
 
+/// The PEM label wallet2 uses for files written with `set export-format ascii`.
+const ASCII_ARMOR_LABEL: &str = "MoneroAsciiDataV1";
+
+/// A wallet2 file with its ASCII armour removed; as in wallet2, a file without
+/// the label is returned unchanged.
+pub fn read_wallet2_file(data: &[u8]) -> Result<std::borrow::Cow<'_, [u8]>, String> {
+    use base64::Engine as _;
+
+    let label = ASCII_ARMOR_LABEL.as_bytes();
+    if !data.windows(label.len()).any(|window| window == label) {
+        return Ok(std::borrow::Cow::Borrowed(data));
+    }
+    let text = std::str::from_utf8(data).map_err(|_| "ASCII armoured file is not text")?;
+    let begin = format!("-----BEGIN {ASCII_ARMOR_LABEL}-----");
+    let end = format!("-----END {ASCII_ARMOR_LABEL}-----");
+    let body = text
+        .split_once(&begin)
+        .and_then(|(_, rest)| rest.split_once(&end))
+        .map(|(body, _)| body)
+        .ok_or("ASCII armoured file has no complete BEGIN/END block")?;
+    let encoded: String = body.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+    base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map(std::borrow::Cow::Owned)
+        .map_err(|e| format!("ASCII armoured file is not valid base64: {e}"))
+}
+
+/// Armour a wallet2 file the way `set export-format ascii` writes it
+/// (wallet2.cpp:16357): base64 in lines of 64 characters.
+pub fn write_wallet2_ascii_file(data: &[u8]) -> String {
+    use base64::Engine as _;
+
+    let encoded = base64::engine::general_purpose::STANDARD.encode(data);
+    let mut out = format!("-----BEGIN {ASCII_ARMOR_LABEL}-----\n");
+    for line in encoded.as_bytes().chunks(64) {
+        out.push_str(std::str::from_utf8(line).expect("base64 is ASCII"));
+        out.push('\n');
+    }
+    out.push_str(&format!("-----END {ASCII_ARMOR_LABEL}-----\n"));
+    out
+}
+
 pub fn wrap_with_magic(magic: &[u8], data: &[u8]) -> Vec<u8> {
     let mut result = Vec::with_capacity(magic.len() + data.len());
     result.extend_from_slice(magic);
@@ -1926,6 +1968,29 @@ mod tests {
             wallet2_key_images_text(&[[0x11; 32], [0xab; 32]]),
             format!("<{}> <{}> ", "11".repeat(32), "ab".repeat(32))
         );
+    }
+
+    #[test]
+    fn ascii_armour_matches_wallet2s_pem_layout() {
+        let mut data = OUTPUT_EXPORT_MAGIC.to_vec();
+        data.extend(0u8..60);
+        let armoured = "-----BEGIN MoneroAsciiDataV1-----\n\
+            TW9uZXJvIG91dHB1dCBleHBvcnQEAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBka\n\
+            GxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7\n\
+            -----END MoneroAsciiDataV1-----\n";
+        assert_eq!(write_wallet2_ascii_file(&data), armoured);
+        assert_eq!(&*read_wallet2_file(armoured.as_bytes()).unwrap(), &data[..]);
+        let noisy = format!("note\r\n{}", armoured.replace('\n', "\r\n"));
+        assert_eq!(&*read_wallet2_file(noisy.as_bytes()).unwrap(), &data[..]);
+        assert!(matches!(
+            read_wallet2_file(&data).unwrap(),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        assert!(read_wallet2_file(b"-----BEGIN MoneroAsciiDataV1-----\nTW9u").is_err());
+        assert!(read_wallet2_file(
+            b"-----BEGIN MoneroAsciiDataV1-----\n*\n-----END MoneroAsciiDataV1-----\n"
+        )
+        .is_err());
     }
 
     #[test]

@@ -436,6 +436,12 @@ def part_live(ctx: Ctx):
     ctx.check("live.ascii_output_export_read_by_crate",
               armoured.startswith(b"-----BEGIN MoneroAsciiDataV1") and bool(parsed.get("ok")),
               count=parsed.get("count"), error=parsed.get("error"))
+    ctx.tool("export-key-images", outputs=outputs_path, view=view, spend=spend,
+             out=art / "crate_key_images_ascii", ascii=1)
+    imported = with_closed(hot, "hot", lambda: ctx.cli(
+        wallets / "hot" / "hot", "", False, ["import_key_images", str(art / "crate_key_images_ascii")]))
+    ctx.check("live.crate_ascii_key_image_file_imported_by_wallet2_cli",
+              "Signed key images imported" in imported["stdout"], tail=imported["stdout"][-200:])
 
     keys = ctx.tool("read-keys", keys_file=wallets / "cold" / "cold.keys")
     ctx.check("live.wallet2_keys_file_read_by_crate",
