@@ -16,7 +16,7 @@ use cuprate_cryptonight::cryptonight_hash_v0;
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 /// Derive a public key only from a canonical scalar, matching Monero's
 /// `crypto::secret_key_to_public_key` and its `sc_check`.
@@ -54,7 +54,7 @@ fn verify_secret_keys_match_public_keys(
 }
 
 /// The keys and settings read from a `.keys` file. `Debug` leaves out the
-/// secret keys and the mnemonic.
+/// secret keys and the mnemonic, and they are wiped on drop.
 #[derive(Clone)]
 pub struct ImportedKeysFile {
     pub spend_secret_key: [u8; 32],
@@ -85,6 +85,16 @@ impl std::fmt::Debug for ImportedKeysFile {
             .field("mnemonic", &self.mnemonic.as_ref().map(|_| "<redacted>"))
             .field("nettype", &self.nettype)
             .finish_non_exhaustive()
+    }
+}
+
+impl Drop for ImportedKeysFile {
+    fn drop(&mut self) {
+        self.spend_secret_key.zeroize();
+        self.view_secret_key.zeroize();
+        if let Some(mnemonic) = &mut self.mnemonic {
+            mnemonic.zeroize();
+        }
     }
 }
 
@@ -428,10 +438,12 @@ fn password_key(password: &str, kdf_rounds: u64) -> Result<Zeroizing<[u8; 32]>, 
     Ok(key)
 }
 
+/// Decrypt a `.keys` file to its JSON plaintext, the password's ChaCha key and
+/// the file's IV.
 pub fn decrypt_keys_data(
     file_bytes: &[u8],
     password: &str,
-) -> Result<(Vec<u8>, [u8; 32], [u8; 8]), String> {
+) -> Result<(Zeroizing<Vec<u8>>, Zeroizing<[u8; 32]>, [u8; 8]), String> {
     decrypt_keys_data_with_kdf_rounds(file_bytes, password, 1)
 }
 
@@ -440,7 +452,7 @@ pub fn decrypt_keys_data_with_kdf_rounds(
     file_bytes: &[u8],
     password: &str,
     kdf_rounds: u64,
-) -> Result<(Vec<u8>, [u8; 32], [u8; 8]), String> {
+) -> Result<(Zeroizing<Vec<u8>>, Zeroizing<[u8; 32]>, [u8; 8]), String> {
     if file_bytes.len() < 9 {
         return Err("file too small to be a valid .keys file".into());
     }
@@ -456,7 +468,7 @@ pub fn decrypt_keys_data_with_kdf_rounds(
         .filter(|end| *end <= file_bytes.len())
         .ok_or("ciphertext length exceeds file size")?;
 
-    let mut buf = file_bytes[offset..end].to_vec();
+    let mut buf = Zeroizing::new(file_bytes[offset..end].to_vec());
     let key = password_key(password, kdf_rounds)?;
     let mut cipher = ChaCha20Legacy::new((&*key).into(), (&outer_iv).into());
     cipher.apply_keystream(&mut buf);
@@ -465,7 +477,7 @@ pub fn decrypt_keys_data_with_kdf_rounds(
         return Err("decryption produced garbage (wrong password?)".into());
     }
 
-    Ok((buf, *key, outer_iv))
+    Ok((buf, key, outer_iv))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -488,7 +500,10 @@ pub fn read_keys_file_with_kdf_rounds(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn decrypt_keys_file(path: &std::path::Path, password: &str) -> Result<Vec<u8>, String> {
+pub fn decrypt_keys_file(
+    path: &std::path::Path,
+    password: &str,
+) -> Result<Zeroizing<Vec<u8>>, String> {
     let file_data =
         std::fs::read(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
     let (plaintext, _key, _iv) = decrypt_keys_data(&file_data, password)?;
@@ -565,20 +580,27 @@ pub fn write_keys_file_with_kdf_rounds(
     std::fs::write(path, &file_data).map_err(|e| format!("failed to write {}: {e}", path.display()))
 }
 
+/// The key stream wallet2 XORs over the spend and view secret keys
+/// (`account_keys::xor_with_key_stream`, account.cpp:62-100).
+fn secret_key_stream(chacha_key: &[u8; 32], encryption_iv: &[u8; 8]) -> Zeroizing<[u8; 64]> {
+    let mut derive_input = Zeroizing::new([0u8; 33]);
+    derive_input[..32].copy_from_slice(chacha_key);
+    derive_input[32] = 0x6b; // HASH_KEY_MEMORY
+    let derived_key = Zeroizing::new(cryptonight_hash_v0(&*derive_input));
+
+    let mut keystream = Zeroizing::new([0u8; 64]);
+    let mut cipher = ChaCha20Legacy::new((&*derived_key).into(), (encryption_iv).into());
+    cipher.apply_keystream(&mut *keystream);
+    keystream
+}
+
 fn inner_encrypt_keys(
     spend: &[u8; 32],
     view: &[u8; 32],
     chacha_key: &[u8; 32],
     encryption_iv: &[u8; 8],
 ) -> ([u8; 32], [u8; 32]) {
-    let mut derive_input = [0u8; 33];
-    derive_input[..32].copy_from_slice(chacha_key);
-    derive_input[32] = 0x6b; // HASH_KEY_MEMORY
-    let derived_key: [u8; 32] = cryptonight_hash_v0(&derive_input);
-
-    let mut keystream = [0u8; 64];
-    let mut cipher = ChaCha20Legacy::new((&derived_key).into(), (encryption_iv).into());
-    cipher.apply_keystream(&mut keystream);
+    let keystream = secret_key_stream(chacha_key, encryption_iv);
 
     let mut enc_spend = *spend;
     let mut enc_view = *view;
@@ -684,15 +706,19 @@ pub fn parse_decrypted_keys(
     let members = parse_top_level_object(plaintext)?;
 
     let key_data_raw = string_member(&members, "key_data").ok_or("key_data field not found")?;
-    let key_data_bytes =
-        if !key_data_raw.is_empty() && key_data_raw.iter().all(|b| b.is_ascii_hexdigit()) {
-            hex::decode(std::str::from_utf8(key_data_raw).unwrap())
-                .map_err(|e| format!("hex decode: {e}"))?
-        } else {
-            unescape_json_bytes(key_data_raw)?
-        };
+    // Decode into a buffer of the final size: hex::decode grows its output and
+    // would leave unwiped copies of the secret keys behind.
+    let key_data_bytes = if !key_data_raw.is_empty()
+        && key_data_raw.iter().all(|b| b.is_ascii_hexdigit())
+    {
+        let mut decoded = Zeroizing::new(vec![0u8; key_data_raw.len() / 2]);
+        hex::decode_to_slice(key_data_raw, &mut decoded).map_err(|e| format!("hex decode: {e}"))?;
+        decoded
+    } else {
+        Zeroizing::new(unescape_json_bytes(key_data_raw)?)
+    };
 
-    let acct: EpeeAccountBase = crate::safe_epee::from_bytes(&key_data_bytes)
+    let mut acct: EpeeAccountBase = crate::safe_epee::from_bytes(&*key_data_bytes)
         .map_err(|e| format!("epee deserialize: {e}"))?;
 
     let spend_public_key = to_key(
@@ -703,8 +729,12 @@ pub fn parse_decrypted_keys(
         &acct.m_keys.m_account_address.m_view_public_key,
         "m_view_public_key",
     )?;
-    let mut spend_secret_key = to_key(&acct.m_keys.m_spend_secret_key, "m_spend_secret_key")?;
-    let mut view_secret_key = to_key(&acct.m_keys.m_view_secret_key, "m_view_secret_key")?;
+    let spend_secret_key = to_key(&acct.m_keys.m_spend_secret_key, "m_spend_secret_key");
+    let view_secret_key = to_key(&acct.m_keys.m_view_secret_key, "m_view_secret_key");
+    acct.m_keys.m_spend_secret_key.zeroize();
+    acct.m_keys.m_view_secret_key.zeroize();
+    let mut spend_secret_key = Zeroizing::new(spend_secret_key?);
+    let mut view_secret_key = Zeroizing::new(view_secret_key?);
     let creation_timestamp = acct.m_creation_timestamp;
 
     let encryption_iv: [u8; 8] =
@@ -723,14 +753,7 @@ pub fn parse_decrypted_keys(
     let encrypted_secret_keys = int_member(&members, "encrypted_secret_keys").unwrap_or(0) != 0;
 
     if encrypted_secret_keys {
-        let mut derive_input = [0u8; 33];
-        derive_input[..32].copy_from_slice(chacha_key);
-        derive_input[32] = 0x6b;
-        let derived_key: [u8; 32] = cryptonight_hash_v0(&derive_input);
-
-        let mut keystream = [0u8; 64];
-        let mut cipher = ChaCha20Legacy::new((&derived_key).into(), (&encryption_iv).into());
-        cipher.apply_keystream(&mut keystream);
+        let keystream = secret_key_stream(chacha_key, &encryption_iv);
 
         for i in 0..32 {
             spend_secret_key[i] ^= keystream[i];
@@ -755,22 +778,22 @@ pub fn parse_decrypted_keys(
         .and_then(|value| std::str::from_utf8(value).ok().map(|s| s.to_string()));
 
     let derived_view = Zeroizing::new(Scalar::from_bytes_mod_order(
-        Keccak256::digest(spend_secret_key).into(),
+        Keccak256::digest(*spend_secret_key).into(),
     ));
-    let mnemonic = if !watch_only && derived_view.to_bytes() == view_secret_key {
+    let mnemonic = if !watch_only && derived_view.to_bytes() == *view_secret_key {
         let lang = seed_language
             .as_deref()
             .and_then(parse_language)
             .unwrap_or(Language::English);
-        Seed::from_entropy(lang, Zeroizing::new(spend_secret_key))
+        Seed::from_entropy(lang, Zeroizing::new(*spend_secret_key))
             .map(|seed| seed.to_string().to_string())
     } else {
         None
     };
 
     Ok(ImportedKeysFile {
-        spend_secret_key,
-        view_secret_key,
+        spend_secret_key: *spend_secret_key,
+        view_secret_key: *view_secret_key,
         spend_public_key,
         view_public_key,
         creation_timestamp,

@@ -44,9 +44,9 @@ pub fn generate_key_image_ring_signature(
     sec_key: &Scalar,
 ) -> ([u8; 32], [u8; 32]) {
     // Random scalar k
-    let mut k_bytes = [0u8; 32];
-    getrandom(&mut k_bytes).expect("RNG failed");
-    let k = Zeroizing::new(Scalar::from_bytes_mod_order(k_bytes));
+    let mut k_bytes = Zeroizing::new([0u8; 32]);
+    getrandom(&mut *k_bytes).expect("RNG failed");
+    let k = Zeroizing::new(Scalar::from_bytes_mod_order(*k_bytes));
 
     // a = k * G
     let a = (&*k * ED25519_BASEPOINT_TABLE).compress().to_bytes();
@@ -107,9 +107,9 @@ fn generate_schnorr_signature(
     pub_key_bytes: &[u8; 32],
     sec_key: &Scalar,
 ) -> ([u8; 32], [u8; 32]) {
-    let mut k_bytes = [0u8; 32];
-    getrandom(&mut k_bytes).expect("RNG failed");
-    let k = Zeroizing::new(Scalar::from_bytes_mod_order(k_bytes));
+    let mut k_bytes = Zeroizing::new([0u8; 32]);
+    getrandom(&mut *k_bytes).expect("RNG failed");
+    let k = Zeroizing::new(Scalar::from_bytes_mod_order(*k_bytes));
 
     let tmp = (&*k * ED25519_BASEPOINT_TABLE).compress().to_bytes();
 
@@ -159,7 +159,7 @@ fn verify_schnorr_signature(
 /// Output: `[iv: 8][ciphertext][sig_c: 32][sig_r: 32]`
 pub fn encrypt_with_view_key(plaintext: &[u8], view_secret_key: &[u8; 32]) -> Vec<u8> {
     // Derive ChaCha key via CryptoNight
-    let chacha_key: [u8; 32] = cryptonight_hash_v0(view_secret_key);
+    let chacha_key = Zeroizing::new(cryptonight_hash_v0(view_secret_key));
 
     // Random 8-byte IV
     let mut iv = [0u8; 8];
@@ -167,7 +167,7 @@ pub fn encrypt_with_view_key(plaintext: &[u8], view_secret_key: &[u8; 32]) -> Ve
 
     // Encrypt
     let mut ciphertext = plaintext.to_vec();
-    let mut cipher = ChaCha20Legacy::new((&chacha_key).into(), (&iv).into());
+    let mut cipher = ChaCha20Legacy::new((&*chacha_key).into(), (&iv).into());
     cipher.apply_keystream(&mut ciphertext);
 
     // Assemble: [iv: 8][ciphertext]
@@ -180,8 +180,8 @@ pub fn encrypt_with_view_key(plaintext: &[u8], view_secret_key: &[u8; 32]) -> Ve
     let hash: [u8; 32] = Keccak256::digest(&iv_and_ciphertext).into();
 
     // Ed25519 Schnorr signature over hash using view key
-    let view_scalar = Scalar::from_bytes_mod_order(*view_secret_key);
-    let view_pub = (&view_scalar * ED25519_BASEPOINT_TABLE)
+    let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(*view_secret_key));
+    let view_pub = (&*view_scalar * ED25519_BASEPOINT_TABLE)
         .compress()
         .to_bytes();
     let (sig_c, sig_r) = generate_schnorr_signature(&hash, &view_pub, &view_scalar);
@@ -219,8 +219,8 @@ pub fn decrypt_with_view_key(
     // Verify auth signature
     let iv_and_ciphertext = &encrypted[..sig_start];
     let hash: [u8; 32] = Keccak256::digest(iv_and_ciphertext).into();
-    let view_scalar = Scalar::from_bytes_mod_order(*view_secret_key);
-    let view_pub_point = &view_scalar * ED25519_BASEPOINT_TABLE;
+    let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(*view_secret_key));
+    let view_pub_point = &*view_scalar * ED25519_BASEPOINT_TABLE;
     let view_pub_bytes = view_pub_point.compress().to_bytes();
 
     if !verify_schnorr_signature(&hash, &view_pub_point, &view_pub_bytes, &sig_c, &sig_r) {
@@ -228,11 +228,11 @@ pub fn decrypt_with_view_key(
     }
 
     // Decrypt
-    let chacha_key: [u8; 32] = cryptonight_hash_v0(view_secret_key);
+    let chacha_key = Zeroizing::new(cryptonight_hash_v0(view_secret_key));
     let mut iv_arr = [0u8; 8];
     iv_arr.copy_from_slice(iv);
     let mut plaintext = ciphertext_data.to_vec();
-    let mut cipher = ChaCha20Legacy::new((&chacha_key).into(), (&iv_arr).into());
+    let mut cipher = ChaCha20Legacy::new((&*chacha_key).into(), (&iv_arr).into());
     cipher.apply_keystream(&mut plaintext);
 
     Ok(plaintext)
@@ -378,7 +378,7 @@ pub fn export_key_images_from_outputs(
     let pub_view_key = (&*view_scalar * ED25519_BASEPOINT_TABLE)
         .compress()
         .to_bytes();
-    let view_secret_key = view_scalar.to_bytes();
+    let view_secret_key = Zeroizing::new(view_scalar.to_bytes());
 
     // Build KeyImageExportEntry list from sorted outputs
     let entries: Result<Vec<KeyImageExportEntry>, String> = sorted_outputs
@@ -454,10 +454,10 @@ pub fn import_signed_key_images_from_seed(
 fn import_account_keys(
     seed_phrase: &str,
     passphrase: &str,
-) -> Result<([u8; 32], [u8; 32], [u8; 32]), String> {
+) -> Result<(Zeroizing<[u8; 32]>, [u8; 32], [u8; 32]), String> {
     if let Some((view_scalar, spend_point)) = crate::scanner::parse_view_only_keys(seed_phrase) {
         return Ok((
-            view_scalar.to_bytes(),
+            Zeroizing::new(view_scalar.to_bytes()),
             spend_point.compress().to_bytes(),
             (&view_scalar * ED25519_BASEPOINT_TABLE)
                 .compress()
@@ -471,7 +471,7 @@ fn import_account_keys(
     let view_bytes: [u8; 32] = Keccak256::digest(spend_scalar.to_bytes()).into();
     let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(view_bytes));
     Ok((
-        view_scalar.to_bytes(),
+        Zeroizing::new(view_scalar.to_bytes()),
         (&*spend_scalar * ED25519_BASEPOINT_TABLE)
             .compress()
             .to_bytes(),

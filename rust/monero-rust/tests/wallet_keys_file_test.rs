@@ -153,9 +153,10 @@ fn rejects_a_keys_file_whose_length_overflows() {
 /// to modify the JSON after decryption.
 fn decrypt_vector(name: &str) -> (Vec<u8>, [u8; 32], [u8; 8]) {
     let bytes = std::fs::read(vector_path(name)).expect("failed to read vector");
-    monero_rust::wallet_keys_file::decrypt_keys_data(&bytes, "")
+    let (plaintext, key, iv) = monero_rust::wallet_keys_file::decrypt_keys_data(&bytes, "")
         .or_else(|_| monero_rust::wallet_keys_file::decrypt_keys_data(&bytes, "1"))
-        .expect("failed to decrypt vector")
+        .expect("failed to decrypt vector");
+    (plaintext.to_vec(), *key, iv)
 }
 
 /// Change one ASCII digit without changing the plaintext length.

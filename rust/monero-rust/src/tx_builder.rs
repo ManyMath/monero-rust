@@ -738,14 +738,13 @@ pub mod native {
     fn private_keys_from_seed(
         seed_phrase: &str,
         passphrase: &str,
-    ) -> Result<([u8; 32], [u8; 32]), String> {
+    ) -> Result<(Zeroizing<[u8; 32]>, Zeroizing<[u8; 32]>), String> {
         let seed = resolve_seed(seed_phrase)?;
-        let spend_secret_key = spend_key_from_seed(&seed, passphrase).to_bytes();
-        let view_secret_key: [u8; 32] = Keccak256::digest(spend_secret_key).into();
-        Ok((
-            spend_secret_key,
-            Scalar::from_bytes_mod_order(view_secret_key).to_bytes(),
-        ))
+        let spend_secret_key = Zeroizing::new(spend_key_from_seed(&seed, passphrase).to_bytes());
+        let view_secret_key = view_key_from_spend_key(&Zeroizing::new(
+            Scalar::from_bytes_mod_order(*spend_secret_key),
+        ));
+        Ok((spend_secret_key, Zeroizing::new(view_secret_key.to_bytes())))
     }
 
     /// Fetch decoys for a set of outputs to be spent.
@@ -1705,12 +1704,15 @@ pub mod native {
         tx_public_key: [u8; 32],
         output_index: u64,
     ) -> Result<Scalar, String> {
-        let view_scalar = Scalar::from_bytes_mod_order(view_secret);
+        let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(view_secret));
         let tx_public_point = CompressedEdwardsY(tx_public_key)
             .decompress()
             .ok_or_else(|| "Invalid source tx public key point".to_string())?;
-        let derivation = (view_scalar * tx_public_point).mul_by_cofactor();
-        let mut bytes = derivation.compress().to_bytes().to_vec();
+        // Room for the varint, so appending does not reallocate and leave a copy of the secret.
+        let derivation = Zeroizing::new((*view_scalar * tx_public_point).mul_by_cofactor());
+        let compressed = Zeroizing::new(derivation.compress());
+        let mut bytes = Zeroizing::new(Vec::with_capacity(32 + 10));
+        bytes.extend_from_slice(compressed.as_bytes());
         write_varint_u64(output_index, &mut bytes);
         Ok(hash_to_scalar(&bytes))
     }
@@ -1720,7 +1722,7 @@ pub mod native {
             return Scalar::ZERO;
         }
 
-        let mut bytes = Vec::with_capacity(8 + 32 + 4 + 4);
+        let mut bytes = Zeroizing::new(Vec::with_capacity(8 + 32 + 4 + 4));
         bytes.extend_from_slice(b"SubAddr\0");
         bytes.extend_from_slice(&view_secret);
         bytes.extend_from_slice(&account.to_le_bytes());
@@ -1762,7 +1764,7 @@ pub mod native {
 
     fn derive_source_key_offset(
         source: &crate::epee_compat::TxSourceEntrySummary,
-        spend_secret: Scalar,
+        spend_secret: &Scalar,
         view_secret: [u8; 32],
         subaddresses: &SourceSubaddresses,
     ) -> Result<(Scalar, [u8; 32], Option<(u32, u32)>), String> {
@@ -1796,7 +1798,8 @@ pub mod native {
                 continue;
             };
             let key_offset = base_offset + subaddress_offset;
-            if &(spend_secret + key_offset) * ED25519_BASEPOINT_TABLE != output_public_key {
+            let output_secret = Zeroizing::new(spend_secret + key_offset);
+            if &*output_secret * ED25519_BASEPOINT_TABLE != output_public_key {
                 continue;
             }
             return Ok((
@@ -1814,7 +1817,7 @@ pub mod native {
         view_secret_key: [u8; 32],
         unsigned_txset: &[u8],
     ) -> Result<Wallet2SourceKeyOffsetsResult, String> {
-        let spend_secret = Scalar::from_bytes_mod_order(spend_secret_key);
+        let spend_secret = Zeroizing::new(Scalar::from_bytes_mod_order(spend_secret_key));
         let summary = crate::epee_compat::parse_unsigned_monero_txset_summary(
             unsigned_txset,
             &view_secret_key,
@@ -1835,9 +1838,13 @@ pub mod native {
                 let real = source.ring.get(real_output_index).ok_or_else(|| {
                     "Wallet2 source real output index is out of range".to_string()
                 })?;
-                let (key_offset, tx_public_key, subaddress_index) =
-                    derive_source_key_offset(source, spend_secret, view_secret_key, &subaddresses)?;
-                let output_secret = Zeroizing::new(spend_secret + key_offset);
+                let (key_offset, tx_public_key, subaddress_index) = derive_source_key_offset(
+                    source,
+                    &spend_secret,
+                    view_secret_key,
+                    &subaddresses,
+                )?;
+                let output_secret = Zeroizing::new(*spend_secret + key_offset);
                 let key_image = generate_key_image(&output_secret).compress().to_bytes();
                 source_key_offsets.push(Wallet2SourceKeyOffset {
                     construction_index,
@@ -1868,8 +1875,8 @@ pub mod native {
     ) -> Result<Wallet2SourceKeyOffsetsResult, String> {
         let (spend_secret_key, view_secret_key) = private_keys_from_seed(seed_phrase, passphrase)?;
         derive_wallet2_unsigned_source_key_offsets_from_keys(
-            spend_secret_key,
-            view_secret_key,
+            *spend_secret_key,
+            *view_secret_key,
             unsigned_txset,
         )
     }
@@ -1968,7 +1975,7 @@ pub mod native {
     }
 
     fn create_unsigned_transaction_from_wallet2_construction(
-        spend_secret: Scalar,
+        spend_secret: &Zeroizing<Scalar>,
         view_secret_key: [u8; 32],
         unsigned_txset: &[u8],
         tx_count: usize,
@@ -1977,7 +1984,7 @@ pub mod native {
         network: Network,
     ) -> Result<UnsignedTransactionResult, String> {
         let subaddresses = SourceSubaddresses::new(
-            &spend_secret,
+            spend_secret,
             view_secret_key,
             construction.subaddr_account,
             &construction.subaddr_indices,
@@ -2035,7 +2042,7 @@ pub mod native {
         };
 
         let view_pair = signer_view_pair(
-            &Zeroizing::new(spend_secret),
+            spend_secret,
             &Zeroizing::new(Scalar::from_bytes_mod_order(view_secret_key)),
         )?;
         let resolved = unsigned.resolve(&view_pair)?;
@@ -2065,7 +2072,7 @@ pub mod native {
         network_str: &str,
     ) -> Result<Vec<UnsignedTransactionResult>, String> {
         let network = parse_network(network_str)?;
-        let spend_secret = Scalar::from_bytes_mod_order(spend_secret_key);
+        let spend_secret = Zeroizing::new(Scalar::from_bytes_mod_order(spend_secret_key));
         let summary = crate::epee_compat::parse_unsigned_monero_txset_summary(
             unsigned_txset,
             &view_secret_key,
@@ -2077,7 +2084,7 @@ pub mod native {
             .enumerate()
             .map(|(construction_index, construction)| {
                 create_unsigned_transaction_from_wallet2_construction(
-                    spend_secret,
+                    &spend_secret,
                     view_secret_key,
                     unsigned_txset,
                     tx_count,
@@ -2385,8 +2392,8 @@ pub mod native {
     ) -> Result<OfflineSignResult, String> {
         let (spend_secret_key, view_secret_key) = private_keys_from_seed(seed_phrase, passphrase)?;
         sign_unsigned_transaction_with_private_keys(
-            spend_secret_key,
-            view_secret_key,
+            *spend_secret_key,
+            *view_secret_key,
             unsigned_tx_hex,
             network_str,
             approval,
@@ -2601,12 +2608,9 @@ pub mod native {
         digest.update((network_str.len() as u64).to_le_bytes());
         digest.update(network_str.as_bytes());
         // Bind public identities, never retain secret key bytes in the review.
-        for secret in [spend_secret_key, view_secret_key] {
-            digest.update(
-                (&Scalar::from_bytes_mod_order(secret) * ED25519_BASEPOINT_TABLE)
-                    .compress()
-                    .to_bytes(),
-            );
+        for secret in [&spend_secret_key, &view_secret_key] {
+            let secret = Zeroizing::new(Scalar::from_bytes_mod_order(*secret));
+            digest.update((&*secret * ED25519_BASEPOINT_TABLE).compress().to_bytes());
         }
         digest.update(unsigned_bytes);
         let sum = |values: Vec<u64>| {
@@ -2635,8 +2639,8 @@ pub mod native {
     ) -> Result<TransactionPreview, String> {
         let (spend_secret_key, view_secret_key) = private_keys_from_seed(seed_phrase, passphrase)?;
         preview_unsigned_transaction(
-            spend_secret_key,
-            view_secret_key,
+            *spend_secret_key,
+            *view_secret_key,
             unsigned_tx_hex,
             network_str,
         )
@@ -2927,12 +2931,12 @@ pub mod native {
                 .expect("the signer must accept the same passphrase");
 
             assert_eq!(
-                spend_secret_key,
+                *spend_secret_key,
                 **expected.secret_spend_key.as_ref().unwrap(),
                 "signer's spend key must be the wallet's spend key"
             );
             assert_eq!(
-                view_secret_key, *expected.secret_view_key,
+                *view_secret_key, *expected.secret_view_key,
                 "signer's view key must be the wallet's view key"
             );
         }
