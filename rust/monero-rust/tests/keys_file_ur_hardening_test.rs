@@ -12,7 +12,6 @@ use monero_rust::wallet_keys_file::{
 };
 
 #[test]
-#[ignore = "known defect: Debug output of an imported keys file prints the seed"]
 fn imported_keys_debug_output_hides_the_seed() {
     let keys = cold_keys();
     let mnemonic = keys.mnemonic.clone().expect("full wallet");
@@ -25,7 +24,6 @@ fn imported_keys_debug_output_hides_the_seed() {
 }
 
 #[test]
-#[ignore = "known defect: Debug output of a signing result prints the transaction private key"]
 fn offline_sign_result_debug_output_hides_the_transaction_key() {
     let cold = cold_keys();
     let encoded = hex::encode(vector_unsigned_txset());
@@ -161,4 +159,55 @@ fn ur_decoder_survives_interleaved_transfers_of_one_type() {
     let done = done.expect("the transfer whose frames kept arriving completes");
     assert!(done.message == first || done.message == second);
     eprintln!("refused {refused} frames of the other transfer");
+}
+
+#[test]
+fn build_signed_txset_request_debug_output_hides_the_view_key() {
+    let hot = hot_keys();
+    let request = monero_rust::epee_compat::BuildSignedTxSetRequest {
+        unsigned_txset: &[],
+        view_secret_key: &hot.view_secret_key,
+        tx_blobs: Vec::new(),
+        key_images: &[],
+        tx_key_images: &[],
+    };
+    let debug = format!("{request:?}");
+    let decimal = format!("{:?}", hot.view_secret_key);
+    assert!(
+        !debug.contains(decimal.trim_matches(|c| c == '[' || c == ']')),
+        "{debug}"
+    );
+    assert!(
+        !debug.contains(&hex::encode(hot.view_secret_key)),
+        "{debug}"
+    );
+}
+
+#[test]
+fn scan_config_and_derived_keys_debug_output_hides_secrets() {
+    let mnemonic = cold_keys().mnemonic.clone().expect("full wallet");
+    let config = monero_rust::WalletScanConfig {
+        mnemonic: mnemonic.clone(),
+        network: monero_rust::Network::Mainnet,
+        lookahead: monero_rust::DEFAULT_LOOKAHEAD,
+        passphrase: "a passphrase nobody should read".to_string(),
+    };
+    let debug = format!("{config:?}");
+    assert!(
+        !debug.contains(mnemonic.split(' ').next().unwrap()),
+        "{debug}"
+    );
+    assert!(!debug.contains("nobody should read"), "{debug}");
+
+    let keys = monero_rust::derive_keys(&mnemonic, monero_rust::Network::Mainnet, "").unwrap();
+    let debug = format!("{keys:?}");
+    for secret in [
+        &**keys.secret_spend_key.as_ref().unwrap(),
+        &*keys.secret_view_key,
+    ] {
+        assert!(!debug.contains(&hex::encode(secret)));
+        let decimal = format!("{secret:?}");
+        assert!(!debug.contains(decimal.trim_matches(|c| c == '[' || c == ']')));
+    }
+    assert!(debug.contains(&hex::encode(keys.public_spend_key)));
 }

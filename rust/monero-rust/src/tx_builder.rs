@@ -450,7 +450,7 @@ pub mod native {
     }
 
     #[must_use = "persist input_rings in WalletState before a transaction may be rebuilt"]
-    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[derive(Clone, Serialize, Deserialize)]
     pub struct TransactionResult {
         pub tx_id: String,
         pub fee: u64,
@@ -464,6 +464,22 @@ pub mod native {
         /// The ring of each input, by key image.
         #[serde(default)]
         pub input_rings: Vec<InputRing>,
+    }
+
+    const REDACTED: &str = "<redacted>";
+
+    impl std::fmt::Debug for TransactionResult {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("TransactionResult")
+                .field("tx_id", &self.tx_id)
+                .field("fee", &self.fee)
+                .field("tx_blob", &self.tx_blob)
+                .field("tx_key", &REDACTED)
+                .field("tx_key_additional", &self.tx_key_additional.len())
+                .field("change_outputs", &self.change_outputs)
+                .field("input_rings", &self.input_rings)
+                .finish()
+        }
     }
 
     impl TransactionResult {
@@ -1594,7 +1610,7 @@ pub mod native {
         Ok(result)
     }
 
-    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[derive(Clone, Serialize, Deserialize)]
     pub struct OfflineSignedTransaction {
         pub tx_id: String,
         pub fee: u64,
@@ -1605,7 +1621,21 @@ pub mod native {
         pub change_outputs: Vec<ChangeOutputInfo>,
     }
 
-    #[derive(Debug, Clone, Serialize, Deserialize)]
+    impl std::fmt::Debug for OfflineSignedTransaction {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("OfflineSignedTransaction")
+                .field("tx_id", &self.tx_id)
+                .field("fee", &self.fee)
+                .field("tx_blob", &self.tx_blob)
+                .field("tx_key", &REDACTED)
+                .field("tx_key_additional", &self.tx_key_additional.len())
+                .field("spent_key_images", &self.spent_key_images)
+                .field("change_outputs", &self.change_outputs)
+                .finish()
+        }
+    }
+
+    #[derive(Clone, Serialize, Deserialize)]
     pub struct OfflineSignResult {
         pub tx_id: String,
         pub fee: u64,
@@ -1615,6 +1645,21 @@ pub mod native {
         pub spent_key_images: Vec<String>,
         pub change_outputs: Vec<ChangeOutputInfo>,
         pub transactions: Vec<OfflineSignedTransaction>,
+    }
+
+    impl std::fmt::Debug for OfflineSignResult {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("OfflineSignResult")
+                .field("tx_id", &self.tx_id)
+                .field("fee", &self.fee)
+                .field("tx_blob", &self.tx_blob)
+                .field("tx_key", &REDACTED)
+                .field("tx_key_additional", &self.tx_key_additional.len())
+                .field("spent_key_images", &self.spent_key_images)
+                .field("change_outputs", &self.change_outputs)
+                .field("transactions", &self.transactions)
+                .finish()
+        }
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -58,13 +58,25 @@ pub struct SignedTxSetKeyImagePair {
     pub key_image: [u8; 32],
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct BuildSignedTxSetRequest<'a> {
     pub unsigned_txset: &'a [u8],
     pub view_secret_key: &'a [u8; 32],
     pub tx_blobs: Vec<&'a [u8]>,
     pub key_images: &'a [[u8; 32]],
     pub tx_key_images: &'a [SignedTxSetKeyImagePair],
+}
+
+impl std::fmt::Debug for BuildSignedTxSetRequest<'_> {
+    // The view secret key is left out.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BuildSignedTxSetRequest")
+            .field("unsigned_txset", &self.unsigned_txset.len())
+            .field("tx_blobs", &self.tx_blobs.len())
+            .field("key_images", &self.key_images)
+            .field("tx_key_images", &self.tx_key_images)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

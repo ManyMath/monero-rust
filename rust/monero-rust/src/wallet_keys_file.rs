@@ -53,7 +53,9 @@ fn verify_secret_keys_match_public_keys(
     Ok(())
 }
 
-#[derive(Debug, Clone)]
+/// The keys and settings read from a `.keys` file. `Debug` leaves out the
+/// secret keys and the mnemonic.
+#[derive(Clone)]
 pub struct ImportedKeysFile {
     pub spend_secret_key: [u8; 32],
     pub view_secret_key: [u8; 32],
@@ -68,6 +70,22 @@ pub struct ImportedKeysFile {
     pub encryption_iv: [u8; 8],
     pub outer_iv: [u8; 8],
     pub nettype: u8,
+}
+
+impl std::fmt::Debug for ImportedKeysFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ImportedKeysFile")
+            .field("spend_secret_key", &"<redacted>")
+            .field("view_secret_key", &"<redacted>")
+            .field("spend_public_key", &hex::encode(self.spend_public_key))
+            .field("view_public_key", &hex::encode(self.view_public_key))
+            .field("creation_timestamp", &self.creation_timestamp)
+            .field("watch_only", &self.watch_only)
+            .field("seed_language", &self.seed_language)
+            .field("mnemonic", &self.mnemonic.as_ref().map(|_| "<redacted>"))
+            .field("nettype", &self.nettype)
+            .finish_non_exhaustive()
+    }
 }
 
 // Field order must be alphabetical to match Monero C++ epee (std::map).

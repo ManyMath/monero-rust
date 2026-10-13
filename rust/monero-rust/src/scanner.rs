@@ -169,7 +169,7 @@ pub struct WalletScanData {
 }
 
 /// Configuration for a single wallet in multi-wallet scanning
-#[derive(Debug, Clone, Zeroize, ZeroizeOnDrop)]
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct WalletScanConfig {
     pub mnemonic: String,
     #[zeroize(skip)]
@@ -178,7 +178,17 @@ pub struct WalletScanConfig {
     pub passphrase: String,
 }
 
-#[derive(Debug, Clone)]
+impl std::fmt::Debug for WalletScanConfig {
+    // The mnemonic and the passphrase are the wallet: never print them.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WalletScanConfig")
+            .field("network", &self.network)
+            .field("lookahead", &self.lookahead)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone)]
 pub struct DerivedKeys {
     /// `None` for view-only wallets.
     pub secret_spend_key: Option<Zeroizing<[u8; 32]>>,
@@ -186,6 +196,17 @@ pub struct DerivedKeys {
     pub public_spend_key: [u8; 32],
     pub public_view_key: [u8; 32],
     pub address: MoneroAddress,
+}
+
+impl std::fmt::Debug for DerivedKeys {
+    // `Zeroizing` prints what it holds, so the secret keys are left out.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DerivedKeys")
+            .field("public_spend_key", &hex::encode(self.public_spend_key))
+            .field("public_view_key", &hex::encode(self.public_view_key))
+            .field("address", &self.address)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Zeroize)]
