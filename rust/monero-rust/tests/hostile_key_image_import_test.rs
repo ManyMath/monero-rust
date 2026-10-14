@@ -151,7 +151,6 @@ fn signed_import_refuses_the_unsigned_legacy_list() {
 }
 
 #[test]
-#[ignore = "known defect: non-canonical signature scalars verify"]
 fn key_image_signature_scalars_must_be_canonical() {
     let (public, mut entry) = signed("canonical");
     let image = CompressedEdwardsY(entry.key_image).decompress().unwrap();

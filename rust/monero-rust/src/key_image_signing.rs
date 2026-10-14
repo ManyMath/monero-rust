@@ -135,8 +135,16 @@ fn verify_schnorr_signature(
     c: &[u8; 32],
     r: &[u8; 32],
 ) -> bool {
-    let c_scalar = Scalar::from_bytes_mod_order(*c);
-    let r_scalar = Scalar::from_bytes_mod_order(*r);
+    // As `crypto::check_signature`: both scalars reduced, and `c` not zero.
+    let (Some(c_scalar), Some(r_scalar)) = (
+        Option::<Scalar>::from(Scalar::from_canonical_bytes(*c)),
+        Option::<Scalar>::from(Scalar::from_canonical_bytes(*r)),
+    ) else {
+        return false;
+    };
+    if c_scalar == Scalar::ZERO {
+        return false;
+    }
 
     // tmp' = r * G + c * pub_key
     let tmp_prime =
@@ -639,6 +647,27 @@ mod tests {
             decrypt_with_view_key(&encrypted, &view_bytes).expect("Decryption should succeed");
 
         assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn decrypt_rejects_a_non_canonical_authentication_signature() {
+        let view_bytes = Scalar::from_bytes_mod_order(Keccak256::digest(b"view").into()).to_bytes();
+        let mut encrypted = encrypt_with_view_key(b"payload", &view_bytes);
+        assert!(decrypt_with_view_key(&encrypted, &view_bytes).is_ok());
+
+        let l: [u8; 32] = [
+            0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9,
+            0xde, 0x14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10,
+        ];
+        let r_start = encrypted.len() - 32;
+        let mut carry = 0u16;
+        for i in 0..32 {
+            let sum = u16::from(encrypted[r_start + i]) + u16::from(l[i]) + carry;
+            encrypted[r_start + i] = sum as u8;
+            carry = sum >> 8;
+        }
+        assert_eq!(carry, 0);
+        assert!(decrypt_with_view_key(&encrypted, &view_bytes).is_err());
     }
 
     #[test]

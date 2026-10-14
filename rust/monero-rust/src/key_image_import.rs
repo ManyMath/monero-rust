@@ -120,18 +120,8 @@ pub fn parse_rpc_export(json: &str) -> Result<(usize, Vec<SignedKeyImage>), Stri
     Ok((result.offset, out))
 }
 
-/// Verify a key image export signature.
-///
-/// The signature proves that `key_image == x * Hp(P)` for the secret key `x`
-/// corresponding to the one-time public key `P` of the output.
-///
-/// Algorithm (ring size 1 Schnorr-like):
-///   signature = c || r  (each 32 bytes, little-endian scalars)
-///   L = c*P + r*G
-///   R = r*Hp(P) + c*I
-///   verify: c == Keccak256(I || L || R)  (reduced mod l)
-///
-/// Also performs a subgroup check: `l * I == identity`.
+/// Verify a key image export signature (ring size 1). Refuses a key image that
+/// is the identity or has torsion, and non-canonical `c` or `r`.
 pub fn verify_key_image_signature(
     output_key: &EdwardsPoint,
     key_image: &EdwardsPoint,
@@ -150,8 +140,12 @@ pub fn verify_key_image_signature(
     let mut r_bytes = [0u8; 32];
     c_bytes.copy_from_slice(&signature[..32]);
     r_bytes.copy_from_slice(&signature[32..]);
-    let c = Scalar::from_bytes_mod_order(c_bytes);
-    let r = Scalar::from_bytes_mod_order(r_bytes);
+    let (Some(c), Some(r)) = (
+        Option::<Scalar>::from(Scalar::from_canonical_bytes(c_bytes)),
+        Option::<Scalar>::from(Scalar::from_canonical_bytes(r_bytes)),
+    ) else {
+        return false;
+    };
 
     // L = c*P + r*G
     let l_point = (c * output_key) + (&r * ED25519_BASEPOINT_TABLE);
