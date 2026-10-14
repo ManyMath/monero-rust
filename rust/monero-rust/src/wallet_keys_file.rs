@@ -318,6 +318,33 @@ fn int_member(members: &[JsonMember<'_>], name: &str) -> Option<u64> {
     std::str::from_utf8(digits).ok()?.parse().ok()
 }
 
+/// `nettype` as wallet2 reads it (wallet2.cpp:5253): a JSON integer up to
+/// 2^32 - 1, low byte kept; anything else refused; mainnet when absent.
+fn nettype_member(members: &[JsonMember<'_>]) -> Result<u8, String> {
+    let Some(member) = member(members, "nettype") else {
+        return Ok(0);
+    };
+    let refused = || "keys file nettype is not an unsigned 32-bit integer".to_string();
+    let (negative, digits) = match member.value.strip_prefix(b"-") {
+        Some(digits) => (true, digits),
+        None => (false, member.value),
+    };
+    if digits.is_empty()
+        || !digits.iter().all(u8::is_ascii_digit)
+        || (digits.len() > 1 && digits[0] == b'0')
+    {
+        return Err(refused());
+    }
+    let value: u32 = std::str::from_utf8(digits)
+        .ok()
+        .and_then(|digits| digits.parse().ok())
+        .ok_or_else(refused)?;
+    if negative && value != 0 {
+        return Err(refused());
+    }
+    Ok(value as u8)
+}
+
 fn unescape_json_bytes(data: &[u8]) -> Result<Vec<u8>, String> {
     let mut out = Vec::with_capacity(data.len());
     let mut i = 0;
@@ -469,6 +496,13 @@ pub fn decrypt_keys_data_with_kdf_rounds(
         .and_then(|len| offset.checked_add(len))
         .filter(|end| *end <= file_bytes.len())
         .ok_or("ciphertext length exceeds file size")?;
+    // wallet2 reads the file as one archive and refuses leftover bytes.
+    if end != file_bytes.len() {
+        return Err(format!(
+            "{} bytes follow the keys-file ciphertext",
+            file_bytes.len() - end
+        ));
+    }
 
     let mut buf = Zeroizing::new(file_bytes[offset..end].to_vec());
     let key = password_key(password, kdf_rounds)?;
@@ -807,7 +841,7 @@ pub fn parse_decrypted_keys(
         watch_only,
     )?;
 
-    let nettype = int_member(&members, "nettype").unwrap_or(0) as u8;
+    let nettype = nettype_member(&members)?;
     let seed_language = string_member(&members, "seed_language")
         .and_then(|value| std::str::from_utf8(value).ok().map(|s| s.to_string()));
 

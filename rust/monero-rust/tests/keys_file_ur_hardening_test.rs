@@ -68,7 +68,6 @@ fn transaction_preview_carries_no_secret_bytes() {
 }
 
 #[test]
-#[ignore = "known defect: bytes after the keys-file ciphertext are accepted"]
 fn keys_file_with_trailing_bytes_is_rejected_like_wallet2() {
     let mut file = std::fs::read(vector_path("cold_full.keys")).unwrap();
     file.extend_from_slice(b"\x00trailing");
@@ -209,4 +208,44 @@ fn scan_config_and_derived_keys_debug_output_hides_secrets() {
         assert!(!debug.contains(decimal.trim_matches(|c| c == '[' || c == ']')));
     }
     assert!(debug.contains(&hex::encode(keys.public_spend_key)));
+}
+
+#[test]
+fn keys_file_nettype_is_read_as_wallet2_reads_it() {
+    let file = std::fs::read(vector_path("cold_full.keys")).unwrap();
+    let (plaintext, key, iv) = decrypt_keys_data(&file, "").unwrap();
+    let needle = b"\"nettype\":0,";
+    let at = plaintext
+        .windows(needle.len())
+        .position(|window| window == needle)
+        .expect("vector is a mainnet-type wallet");
+    let with_nettype = |value: &str| {
+        let mut edited = plaintext[..at].to_vec();
+        edited.extend_from_slice(format!("\"nettype\":{value},").as_bytes());
+        edited.extend_from_slice(&plaintext[at + needle.len()..]);
+        parse_decrypted_keys(&edited, &key, iv).map(|keys| keys.nettype)
+    };
+    for (value, expected) in [
+        ("0", Some(0)),
+        ("1", Some(1)),
+        ("2", Some(2)),
+        ("256", Some(0)),
+        ("257", Some(1)),
+        ("4294967295", Some(255)),
+        ("-0", Some(0)),
+        ("4294967296", None),
+        ("-1", None),
+        ("\"1\"", None),
+        ("1.0", None),
+        ("1e0", None),
+        ("01", None),
+        ("true", None),
+        ("null", None),
+    ] {
+        let read = with_nettype(value);
+        match expected {
+            Some(nettype) => assert_eq!(read, Ok(nettype), "nettype {value}"),
+            None => assert!(read.unwrap_err().contains("nettype"), "nettype {value}"),
+        }
+    }
 }
