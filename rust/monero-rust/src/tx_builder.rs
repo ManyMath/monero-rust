@@ -1634,15 +1634,25 @@ pub mod native {
         }
     }
 
+    /// What signing an unsigned transaction or a wallet2 unsigned txset gives.
+    /// Every one of `transactions` has to be relayed.
     #[derive(Clone, Serialize, Deserialize)]
     pub struct OfflineSignResult {
+        /// ID of the first transaction.
         pub tx_id: String,
+        /// Total fee of all transactions.
         pub fee: u64,
+        /// The first transaction.
         pub tx_blob: String,
+        /// Private key of the first transaction.
         pub tx_key: String,
+        /// Additional private keys of the first transaction.
         pub tx_key_additional: Vec<String>,
+        /// Key images spent by all transactions.
         pub spent_key_images: Vec<String>,
+        /// Outputs of all transactions that return to the wallet.
         pub change_outputs: Vec<ChangeOutputInfo>,
+        /// Every signed transaction, in the order of the unsigned set.
         pub transactions: Vec<OfflineSignedTransaction>,
     }
 
