@@ -79,7 +79,6 @@ fn keys_file_with_trailing_bytes_is_rejected_like_wallet2() {
 }
 
 #[test]
-#[ignore = "known defect: the keys-file writer reuses the IVs it is given"]
 fn keys_file_writer_draws_fresh_ivs() {
     let keys = cold_keys();
     let first = encrypt_keys_data("password", &keys).unwrap();

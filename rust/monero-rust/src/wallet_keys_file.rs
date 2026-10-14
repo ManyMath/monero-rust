@@ -67,7 +67,9 @@ pub struct ImportedKeysFile {
     /// Complete mnemonic backup, available only for deterministic full wallets.
     /// Other wallets require both secret keys or the original `.keys` file.
     pub mnemonic: Option<String>,
+    /// The IV the file's secret keys were encrypted with.
     pub encryption_iv: [u8; 8],
+    /// The IV of the file this was read from. Writing draws new IVs.
     pub outer_iv: [u8; 8],
     pub nettype: u8,
 }
@@ -510,6 +512,8 @@ pub fn decrypt_keys_file(
     Ok(plaintext)
 }
 
+/// Encrypt a wallet's keys as a `.keys` file under fresh IVs, as wallet2 does:
+/// reusing an IV would repeat a ChaCha20 key stream.
 pub fn encrypt_keys_data(password: &str, wallet: &ImportedKeysFile) -> Result<Vec<u8>, String> {
     encrypt_keys_data_with_kdf_rounds(password, wallet, 1)
 }
@@ -520,13 +524,43 @@ pub fn encrypt_keys_data_with_kdf_rounds(
     wallet: &ImportedKeysFile,
     kdf_rounds: u64,
 ) -> Result<Vec<u8>, String> {
+    let mut outer_iv = [0u8; 8];
+    let mut encryption_iv = [0u8; 8];
+    getrandom::getrandom(&mut outer_iv).map_err(|e| format!("RNG failed: {e}"))?;
+    getrandom::getrandom(&mut encryption_iv).map_err(|e| format!("RNG failed: {e}"))?;
+    encrypt_keys_data_with_ivs(password, wallet, kdf_rounds, &outer_iv, &encryption_iv)
+}
+
+/// Encrypt with the IVs recorded in `wallet`, only to reproduce the file it was
+/// read from: anything else under them reuses its key stream.
+pub fn encrypt_keys_data_with_file_ivs(
+    password: &str,
+    wallet: &ImportedKeysFile,
+    kdf_rounds: u64,
+) -> Result<Vec<u8>, String> {
+    encrypt_keys_data_with_ivs(
+        password,
+        wallet,
+        kdf_rounds,
+        &wallet.outer_iv,
+        &wallet.encryption_iv,
+    )
+}
+
+fn encrypt_keys_data_with_ivs(
+    password: &str,
+    wallet: &ImportedKeysFile,
+    kdf_rounds: u64,
+    outer_iv: &[u8; 8],
+    encryption_iv: &[u8; 8],
+) -> Result<Vec<u8>, String> {
     let key = password_key(password, kdf_rounds)?;
 
     let (encrypted_spend, encrypted_view) = inner_encrypt_keys(
         &wallet.spend_secret_key,
         &wallet.view_secret_key,
         &key,
-        &wallet.encryption_iv,
+        encryption_iv,
     );
 
     let acct = EpeeAccountBase {
@@ -536,7 +570,7 @@ pub fn encrypt_keys_data_with_kdf_rounds(
                 m_spend_public_key: wallet.spend_public_key.to_vec(),
                 m_view_public_key: wallet.view_public_key.to_vec(),
             },
-            m_encryption_iv: wallet.encryption_iv.to_vec(),
+            m_encryption_iv: encryption_iv.to_vec(),
             m_spend_secret_key: encrypted_spend.to_vec(),
             m_view_secret_key: encrypted_view.to_vec(),
         },
@@ -547,12 +581,12 @@ pub fn encrypt_keys_data_with_kdf_rounds(
     let plaintext = build_plaintext_json(&epee_bytes, wallet);
 
     let mut ciphertext = plaintext;
-    let mut cipher = ChaCha20Legacy::new((&*key).into(), (&wallet.outer_iv).into());
+    let mut cipher = ChaCha20Legacy::new((&*key).into(), outer_iv.into());
     cipher.apply_keystream(&mut ciphertext);
 
     let len_bytes = write_leb128(ciphertext.len() as u64);
     let mut file_data = Vec::with_capacity(8 + len_bytes.len() + ciphertext.len());
-    file_data.extend_from_slice(&wallet.outer_iv);
+    file_data.extend_from_slice(outer_iv);
     file_data.extend_from_slice(&len_bytes);
     file_data.extend_from_slice(&ciphertext);
 

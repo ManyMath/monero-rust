@@ -109,14 +109,24 @@ fn assert_bit_exact(name: &str) {
 
     let imported = read_keys_file(&original_path, "").unwrap();
 
-    let tmp = tempfile::NamedTempFile::new().unwrap();
-    write_keys_file(tmp.path(), "", &imported).unwrap();
-
-    let written_bytes = std::fs::read(tmp.path()).unwrap();
+    let written_bytes =
+        monero_rust::wallet_keys_file::encrypt_keys_data_with_file_ivs("", &imported, 1).unwrap();
     assert_eq!(
         original_bytes, written_bytes,
         "{name}: written file differs from original"
     );
+
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    write_keys_file(tmp.path(), "", &imported).unwrap();
+    let fresh = std::fs::read(tmp.path()).unwrap();
+    assert_ne!(fresh[..8], original_bytes[..8], "{name}: outer IV reused");
+    let reread = read_keys_file(tmp.path(), "").unwrap();
+    assert_ne!(
+        reread.encryption_iv, imported.encryption_iv,
+        "{name}: inner IV reused"
+    );
+    assert_eq!(reread.spend_secret_key, imported.spend_secret_key);
+    assert_eq!(reread.view_secret_key, imported.view_secret_key);
 }
 
 #[test]
