@@ -111,7 +111,6 @@ fn keys_file_with_swapped_public_spend_key_is_refused() {
 }
 
 #[test]
-#[ignore = "known defect: upper-case UR frames are refused"]
 fn uppercase_ur_frames_are_accepted() {
     let payload = b"a payload long enough to need more than one fountain fragment".to_vec();
     let mut encoder = UrEncoder::new(&payload, UR_TYPE_UNSIGNED_TX, 20).unwrap();

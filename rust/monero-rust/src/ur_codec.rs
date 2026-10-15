@@ -169,6 +169,16 @@ fn read_cbor_u32(rest: &mut &[u8]) -> Option<u32> {
     Some(value)
 }
 
+/// A UR in lower case. UR text is case-insensitive (BCR-2020-005), but the `ur`
+/// crate matches lower case only.
+fn lower_case(uri: &str) -> std::borrow::Cow<'_, str> {
+    if uri.bytes().any(|byte| byte.is_ascii_uppercase()) {
+        std::borrow::Cow::Owned(uri.to_ascii_lowercase())
+    } else {
+        std::borrow::Cow::Borrowed(uri)
+    }
+}
+
 /// A transfer completed by the current frame.
 ///
 /// Keep the decoded bytes with their UR type so callers cannot accidentally
@@ -219,6 +229,8 @@ impl UrDecoder {
     /// Return a completed transfer with this frame and clear the accumulator
     /// before accepting another frame.
     pub fn receive(&mut self, uri: &str) -> Result<DecodeProgress, String> {
+        let uri = lower_case(uri);
+        let uri = uri.as_ref();
         // Bound allocations before the fountain decoder receives the frame.
         check_declared_fragment_count(uri)?;
 
@@ -305,7 +317,8 @@ impl Default for UrDecoder {
 
 /// Decode a single-part UR string directly (no fountain coding).
 pub fn decode_single(uri: &str) -> Result<Vec<u8>, String> {
-    let (_kind, data) = ur::decode(uri).map_err(|e| format!("UR decode error: {:?}", e))?;
+    let (_kind, data) =
+        ur::decode(&lower_case(uri)).map_err(|e| format!("UR decode error: {:?}", e))?;
     Ok(data)
 }
 
@@ -657,6 +670,17 @@ mod tests {
         }
         assert_eq!(done.expect("transfer never completed").message, data);
         assert!(frames >= encoder.fragment_count());
+    }
+
+    #[test]
+    fn upper_case_single_part_decodes() {
+        let data = b"short payload";
+        let uri = ur::encode(data, &ur::Type::Bytes).to_uppercase();
+        assert!(uri.starts_with("UR:BYTES/"));
+        assert_eq!(decode_single(&uri).unwrap(), data);
+        let done = UrDecoder::new().receive(&uri).unwrap().completed.unwrap();
+        assert_eq!(done.message, data);
+        assert_eq!(done.ur_type, "bytes");
     }
 
     #[test]
