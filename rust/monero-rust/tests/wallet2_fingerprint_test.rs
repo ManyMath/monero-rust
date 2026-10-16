@@ -78,7 +78,6 @@ fn destination_shapes_follow_wallet2_key_rules() {
         name: &'static str,
         destinations: Vec<MoneroAddress>,
         wallet2_additional_keys: usize,
-        repeated_subaddress_difference: bool,
         single_subaddress: Option<MoneroAddress>,
     }
 
@@ -91,14 +90,12 @@ fn destination_shapes_follow_wallet2_key_rules() {
             name: "one standard address",
             destinations: vec![standard],
             wallet2_additional_keys: 0,
-            repeated_subaddress_difference: false,
             single_subaddress: None,
         },
         Shape {
             name: "one subaddress",
             destinations: vec![subaddress],
             wallet2_additional_keys: 0,
-            repeated_subaddress_difference: false,
             single_subaddress: Some(subaddress),
         },
         Shape {
@@ -108,21 +105,18 @@ fn destination_shapes_follow_wallet2_key_rules() {
                 Wallet::from_spend(Scalar::from(778u64)).address(Network::Stagenet),
             ],
             wallet2_additional_keys: 0,
-            repeated_subaddress_difference: false,
             single_subaddress: None,
         },
         Shape {
             name: "one standard address and one subaddress",
             destinations: vec![standard, subaddress],
             wallet2_additional_keys: usize::MAX,
-            repeated_subaddress_difference: false,
             single_subaddress: None,
         },
         Shape {
             name: "the same subaddress twice",
             destinations: vec![subaddress, subaddress],
             wallet2_additional_keys: 0,
-            repeated_subaddress_difference: true,
             single_subaddress: Some(subaddress),
         },
     ];
@@ -191,30 +185,23 @@ fn destination_shapes_follow_wallet2_key_rules() {
             } else {
                 shape.wallet2_additional_keys
             };
-            if shape.repeated_subaddress_difference {
-                assert_eq!(additional_keys, output_count);
-                assert_ne!(additional_keys, wallet2_additional);
-            } else {
-                assert_eq!(
-                    additional_keys, wallet2_additional,
-                    "{} with_change={with_change}",
-                    shape.name
-                );
-            }
+            assert_eq!(
+                additional_keys, wallet2_additional,
+                "{} with_change={with_change}",
+                shape.name
+            );
 
             if let Some(subaddress) = shape.single_subaddress {
-                if !shape.repeated_subaddress_difference {
-                    let extra = Extra::read(&mut signed.tx.prefix().extra.as_slice()).unwrap();
-                    let (keys, _) = extra.keys().unwrap();
-                    let spend: EdwardsPoint = subaddress.spend().into();
-                    let expected = &*signed.tx_key * spend;
-                    let actual: EdwardsPoint = keys[0].into();
-                    assert_eq!(
-                        actual, expected,
-                        "{} with_change={with_change} must use R = r*D",
-                        shape.name
-                    );
-                }
+                let extra = Extra::read(&mut signed.tx.prefix().extra.as_slice()).unwrap();
+                let (keys, _) = extra.keys().unwrap();
+                let spend: EdwardsPoint = subaddress.spend().into();
+                let expected = &*signed.tx_key * spend;
+                let actual: EdwardsPoint = keys[0].into();
+                assert_eq!(
+                    actual, expected,
+                    "{} with_change={with_change} must use R = r*D",
+                    shape.name
+                );
             }
         }
     }

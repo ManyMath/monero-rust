@@ -15,6 +15,7 @@ use crate::{
   ed25519::*,
   primitives::keccak256,
   ringct::EncryptedAmount,
+  address::MoneroAddress,
   SharedKeyDerivations,
   send::{ChangeEnum, InternalPayment, SignableTransaction, key_image_sort},
 };
@@ -103,44 +104,60 @@ impl SignableTransaction {
     seeded_rng(dst, &self.outgoing_view_key, self.input_keys_and_commitments())
   }
 
-  fn has_payments_to_subaddresses(&self) -> bool {
-    self.payments.iter().any(|payment| match payment {
-      InternalPayment::Payment(addr, _) => addr.is_subaddress(),
-      InternalPayment::Change(change) => match change {
-        ChangeEnum::AddressOnly(addr) => addr.is_subaddress(),
-        // These aren't considered payments to subaddresses as we don't need to send to them as
-        // subaddresses
-        // We can calculate the shared key using the view key, as if we were receiving, instead
-        ChangeEnum::Standard { .. } | ChangeEnum::Guaranteed { .. } => false,
-      },
-    })
+  // If this output goes to the change address whose view key this transaction holds. wallet2
+  // derives every such output with its view key (cryptonote_tx_utils.cpp:83-84,
+  // device_default.cpp:330-334).
+  fn is_to_change_address(&self, payment: &InternalPayment) -> bool {
+    match payment {
+      InternalPayment::Change(ChangeEnum::Standard { .. } | ChangeEnum::Guaranteed { .. }) => true,
+      InternalPayment::Change(ChangeEnum::AddressOnly(_)) => false,
+      InternalPayment::Payment(addr, _) => self.payments.iter().any(|other| match other {
+        InternalPayment::Change(
+          change @ (ChangeEnum::Standard { .. } | ChangeEnum::Guaranteed { .. }),
+        ) => {
+          let change = change.address();
+          (addr.spend() == change.spend()) && (addr.view() == change.view())
+        }
+        InternalPayment::Change(ChangeEnum::AddressOnly(_)) | InternalPayment::Payment(_, _) => {
+          false
+        }
+      }),
+    }
+  }
+
+  fn classify_destinations(&self) -> (usize, Vec<MoneroAddress>) {
+    let mut unique: Vec<MoneroAddress> = Vec::with_capacity(self.payments.len());
+    for payment in &self.payments {
+      if self.is_to_change_address(payment) {
+        continue;
+      }
+      let addr = payment.address();
+      if unique.iter().any(|seen| (seen.spend() == addr.spend()) && (seen.view() == addr.view())) {
+        continue;
+      }
+      unique.push(addr);
+    }
+    let subaddresses =
+      unique.iter().copied().filter(MoneroAddress::is_subaddress).collect::<Vec<_>>();
+    (unique.len() - subaddresses.len(), subaddresses)
+  }
+
+  // The subaddress which is this transaction's only destination, if any. The transaction key
+  // is then `rD` and no additional keys are needed (cryptonote_tx_utils.cpp:413-421).
+  fn sole_subaddress_destination(&self) -> Option<MoneroAddress> {
+    let (standard, subaddresses) = self.classify_destinations();
+    if standard != 0 {
+      return None;
+    }
+    match subaddresses.as_slice() {
+      [subaddress] => Some(*subaddress),
+      _ => None,
+    }
   }
 
   fn should_use_additional_keys(&self) -> bool {
-    let has_payments_to_subaddresses = self.has_payments_to_subaddresses();
-    if !has_payments_to_subaddresses {
-      return false;
-    }
-
-    let has_change_view = self.payments.iter().any(|payment| match payment {
-      InternalPayment::Payment(_, _) => false,
-      InternalPayment::Change(change) => match change {
-        ChangeEnum::AddressOnly(_) => false,
-        ChangeEnum::Standard { .. } | ChangeEnum::Guaranteed { .. } => true,
-      },
-    });
-
-    /*
-      If sending to a subaddress, the shared key is not `rG` yet `rB`. Because of this, a
-      per-subaddress shared key is necessary, causing the usage of additional keys.
-
-      The one exception is if we're sending to a subaddress in a 2-output transaction. The second
-      output, the change output, will attempt scanning the singular key `rB` with `v rB`. While we
-      cannot calculate `r vB` with just `r` (as that'd require `vB` when we presumably only have
-      `vG` when sending), since we do in fact have `v` (due to it being our own view key for our
-      change output), we can still calculate the shared secret.
-    */
-    has_payments_to_subaddresses && !((self.payments.len() == 2) && has_change_view)
+    let (standard, subaddresses) = self.classify_destinations();
+    (!subaddresses.is_empty()) && ((standard != 0) || (subaddresses.len() > 1))
   }
 
   // Calculate the transaction keys used as randomness.
@@ -165,25 +182,30 @@ impl SignableTransaction {
     let (tx_key_pub, additional_keys_pub) = self.transaction_keys_pub();
     debug_assert_eq!(additional_keys_pub.len(), additional_keys.len());
 
+    // With the change address's view key, every output to it uses `a R`
+    let change_ecdh = self.payments.iter().find_map(|payment| match payment {
+      InternalPayment::Change(ChangeEnum::Standard { view_pair, .. }) => Some(Zeroizing::new(
+        Zeroizing::new((*view_pair.view).into()).deref() * tx_key_pub.into(),
+      )),
+      InternalPayment::Change(ChangeEnum::Guaranteed { view_pair, .. }) => Some(Zeroizing::new(
+        Zeroizing::new((*view_pair.0.view).into()).deref() * tx_key_pub.into(),
+      )),
+      InternalPayment::Payment(_, _) | InternalPayment::Change(ChangeEnum::AddressOnly { .. }) => {
+        None
+      }
+    });
+
     let mut res = Vec::with_capacity(self.payments.len());
     for (i, payment) in self.payments.iter().enumerate() {
-      let addr = payment.address();
-      let key_to_use =
-        if addr.is_subaddress() { additional_keys.get(i).unwrap_or(&tx_key) } else { &tx_key };
-      let key_to_use = Zeroizing::new((**key_to_use).into());
-
-      let ecdh = match payment {
+      let ecdh = match &change_ecdh {
+        Some(change_ecdh) if self.is_to_change_address(payment) => change_ecdh.clone(),
         // If we don't have the view key, use the key dedicated for this address (r A)
-        InternalPayment::Payment(_, _) |
-        InternalPayment::Change(ChangeEnum::AddressOnly { .. }) => {
+        Some(_) | None => {
+          let addr = payment.address();
+          let key_to_use =
+            if addr.is_subaddress() { additional_keys.get(i).unwrap_or(&tx_key) } else { &tx_key };
+          let key_to_use = Zeroizing::new((**key_to_use).into());
           Zeroizing::new(key_to_use.deref() * addr.view().into())
-        }
-        // If we do have the view key, use the commitment to the key (a R)
-        InternalPayment::Change(ChangeEnum::Standard { view_pair, .. }) => {
-          Zeroizing::new(Zeroizing::new((*view_pair.view).into()).deref() * tx_key_pub.into())
-        }
-        InternalPayment::Change(ChangeEnum::Guaranteed { view_pair, .. }) => {
-          Zeroizing::new(Zeroizing::new((*view_pair.0.view).into()).deref() * tx_key_pub.into())
         }
       };
 
@@ -232,24 +254,12 @@ impl SignableTransaction {
     debug_assert!(additional_keys.is_empty() || (additional_keys.len() == self.payments.len()));
 
     // The single transaction key uses the subaddress's spend key as its generator
-    let has_payments_to_subaddresses = self.has_payments_to_subaddresses();
-    let should_use_additional_keys = self.should_use_additional_keys();
-    if has_payments_to_subaddresses && (!should_use_additional_keys) {
+    if let Some(subaddress) = self.sole_subaddress_destination() {
       debug_assert_eq!(additional_keys.len(), 0);
-
-      let InternalPayment::Payment(addr, _) = self
-        .payments
-        .iter()
-        .find(|payment| matches!(payment, InternalPayment::Payment(_, _)))
-        .expect("payment to subaddress yet no payment")
-      else {
-        panic!("filtered payment wasn't a payment")
-      };
-
-      return (Point::from(tx_key.deref() * addr.spend().into()), vec![]);
+      return (Point::from(tx_key.deref() * subaddress.spend().into()), vec![]);
     }
 
-    if should_use_additional_keys {
+    if self.should_use_additional_keys() {
       let mut additional_keys_pub = vec![];
       for (additional_key, payment) in additional_keys.into_iter().zip(&self.payments) {
         let additional_key = Zeroizing::new((*additional_key).into());
@@ -267,8 +277,7 @@ impl SignableTransaction {
       return (Point::from(tx_key.deref() * ED25519_BASEPOINT_TABLE), additional_keys_pub);
     }
 
-    debug_assert!(!has_payments_to_subaddresses);
-    debug_assert!(!should_use_additional_keys);
+    debug_assert!(self.classify_destinations().1.is_empty());
     (Point::from(tx_key.deref() * ED25519_BASEPOINT_TABLE), vec![])
   }
 

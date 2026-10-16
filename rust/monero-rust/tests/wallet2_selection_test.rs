@@ -627,7 +627,6 @@ fn sign_shape(
 }
 
 #[test]
-#[ignore = "known defect: additional transaction keys are written where wallet2 writes none"]
 fn paying_the_change_subaddress_and_a_standard_address_uses_no_additional_keys() {
     use common::offline::{unsigned_for, Wallet, PAYMENT_AMOUNT};
     use curve25519_dalek::scalar::Scalar;

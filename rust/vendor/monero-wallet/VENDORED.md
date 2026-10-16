@@ -13,4 +13,4 @@ Packaging differences from the published crate:
 
 Source changes, oldest first:
 
-(none)
+- `src/send/tx_keys.rs`: transaction keys follow wallet2's `classify_addresses`.
