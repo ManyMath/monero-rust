@@ -40,7 +40,8 @@ lazy_static = "1"
 # needed for wallet and RPC data. Those fixes are absent from crates.io 1.0.1.
 monero-epee-bin-serde = { git = "https://github.com/comit-network/monero-epee-bin-serde", rev = "fae7a23f8e57f19553c341c0878b4f0fa5a6994d" }
 monero-oxide = { version = "0.1.0", default-features = false, features = ["std"] }
-monero-wallet = { version = "0.2.0", default-features = false, features = ["std"] }
+# Vendored 0.2.0; changes are listed in ../vendor/monero-wallet/VENDORED.md.
+monero-wallet = { version = "0.2.0", path = "../vendor/monero-wallet", default-features = false, features = ["std"] }
 
 # BIP39/BIP32
 bip39 = { version = "2", features = ["rand"] }

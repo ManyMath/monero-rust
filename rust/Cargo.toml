@@ -3,6 +3,9 @@ members = [
     "monero-rust",
     "monero-utils/polyseed",
 ]
+exclude = [
+    "vendor",
+]
 resolver = "2"
 
 # Optimized dependencies keep the scanning and signing tests fast.
