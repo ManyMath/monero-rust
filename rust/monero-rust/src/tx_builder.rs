@@ -7,8 +7,8 @@ pub mod native {
     use crate::monero_rpc::{FeePriority, Rpc, RpcConnection, DEFAULT_MAX_FEE_PER_BYTE};
     use crate::seed_compat::Seed;
     use crate::unsigned_tx::{
-        check_input_ownership, output_with_decoys, ring_len, sign_offline, UnsignedChange,
-        UnsignedTransaction, MAX_CHANGE_ACCOUNT,
+        check_input_ownership, check_payment_id_recipient, output_with_decoys, ring_len,
+        sign_offline, UnsignedChange, UnsignedTransaction, MAX_CHANGE_ACCOUNT,
     };
     use curve25519_dalek::{
         constants::ED25519_BASEPOINT_TABLE,
@@ -268,6 +268,17 @@ pub mod native {
             payments,
             change,
         })
+    }
+
+    fn check_payment_id_destinations(
+        payments: &[(MoneroAddress, u64)],
+        change: Option<&UnsignedChange>,
+    ) -> Result<(), String> {
+        let change = match change {
+            Some(UnsignedChange::Own { address, .. }) => Some(address),
+            Some(UnsignedChange::Dummy) | None => None,
+        };
+        check_payment_id_recipient(payments, change)
     }
 
     fn check_funds(
@@ -1184,6 +1195,7 @@ pub mod native {
         let change = with_change
             .then(|| wallet2_change(&view_pair, network, source_account))
             .transpose()?;
+        check_payment_id_destinations(&payments, change.as_ref())?;
 
         // Select decoys online, then sign; the signer returns the tx keys
         let mut rng = rand::rngs::OsRng;
@@ -2362,6 +2374,7 @@ pub mod native {
         let change = with_change
             .then(|| wallet2_change(&view_pair, network, source_account))
             .transpose()?;
+        check_payment_id_destinations(&payments, change.as_ref())?;
 
         let mut rng = rand::rngs::OsRng;
         let unsigned = build_unsigned_transaction_with_rings(

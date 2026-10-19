@@ -101,7 +101,6 @@ fn amounts(
 }
 
 #[test]
-#[ignore = "known defect: an integrated address is accepted together with other destinations, which wallet2 refuses to build"]
 fn integrated_address_with_another_destination_is_refused() {
     let sender = sender();
     for second in [other().address(NETWORK), other().subaddress(NETWORK, 0, 1)] {

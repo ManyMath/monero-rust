@@ -324,6 +324,14 @@ impl UnsignedTransaction {
             return Err("unsigned transaction pays a destination an amount of zero".to_string());
         }
 
+        let own_change = match &self.change {
+            Some(UnsignedChange::Own { subaddress, .. }) => {
+                Some(change_address(view_pair, *subaddress))
+            }
+            Some(UnsignedChange::Dummy) | None => None,
+        };
+        check_payment_id_recipient(&self.payments, own_change.as_ref())?;
+
         let (change, declared) = match &self.change {
             None => (Change::fingerprintable(None), None),
             Some(UnsignedChange::Own {
@@ -446,6 +454,41 @@ fn change_index_allowed(source_account: u32, subaddress: Option<SubaddressIndex>
 /// Whether two addresses have the same keys and kind. The network is ignored.
 fn same_destination(a: &MoneroAddress, b: &MoneroAddress) -> bool {
     a.spend() == b.spend() && a.view() == b.view() && a.kind() == b.kind()
+}
+
+/// Refuse a payment ID that more than one destination would read, as wallet2's
+/// `get_destination_view_key_pub` does (cryptonote_tx_utils.cpp:208-228).
+pub(crate) fn check_payment_id_recipient(
+    payments: &[(MoneroAddress, u64)],
+    change: Option<&MoneroAddress>,
+) -> Result<(), String> {
+    if !payments
+        .iter()
+        .any(|(address, _)| address.payment_id().is_some())
+    {
+        return Ok(());
+    }
+    let same_keys =
+        |a: &MoneroAddress, b: &MoneroAddress| a.spend() == b.spend() && a.view() == b.view();
+    let mut recipient: Option<&MoneroAddress> = None;
+    for (address, amount) in payments {
+        if *amount == 0 || change.is_some_and(|change| same_keys(address, change)) {
+            continue;
+        }
+        match recipient {
+            None => recipient = Some(address),
+            Some(first) if same_keys(first, address) => {}
+            Some(_) => {
+                return Err(
+                    "An integrated address cannot be paid together with other destinations: a \
+                     transaction carries one payment ID, and the other recipients would be shown \
+                     a random one. Pay the integrated address in a transaction of its own."
+                        .to_string(),
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Pair an output's spending data with its decoys, checking both survive
