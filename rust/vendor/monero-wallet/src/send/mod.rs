@@ -139,15 +139,8 @@ impl Change {
   /// Monero wallet protocol expects it can (due to presumably having the view key for the change
   /// output). If a transaction should be optimized, and isn't, it will be fingerprintable.
   ///
-  /// If the change address is None, there are two fingerprints:
-  ///
-  /// 1) The change in the TX is shunted to the fee (making it fingerprintable).
-  ///
-  /// 2) In two-output transactions, where the payment address doesn't have a payment ID, wallet2
-  ///    includes an encrypted dummy payment ID for the non-change output in order to not allow
-  ///    differentiating if transactions send to addresses with payment IDs or not. monero-wallet
-  ///    includes a dummy payment ID which at least one recipient will identify as not the expected
-  ///    dummy payment ID, revealing to the recipient(s) the sender is using non-wallet2 software.
+  /// If the change address is None, the change in the TX is shunted to the fee (making it
+  /// fingerprintable).
   ///
   pub fn fingerprintable(address: Option<MoneroAddress>) -> Change {
     Change(address.map(ChangeEnum::AddressOnly))

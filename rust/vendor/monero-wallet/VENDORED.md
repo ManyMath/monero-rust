@@ -14,3 +14,5 @@ Packaging differences from the published crate:
 Source changes, oldest first:
 
 - `src/send/tx_keys.rs`: transaction keys follow wallet2's `classify_addresses`.
+- `src/send/tx.rs`, `src/send/tx_keys.rs`, `src/send/mod.rs`: the payment ID is
+  encrypted to the output wallet2's `get_destination_view_key_pub` chooses.

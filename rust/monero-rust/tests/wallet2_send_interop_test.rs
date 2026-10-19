@@ -302,7 +302,6 @@ fn payment_to_the_change_subaddress_is_not_a_subaddress_destination() {
 }
 
 #[test]
-#[ignore = "known defect: two different destinations without change get a dummy payment ID, where wallet2 writes none"]
 fn dummy_payment_id_needs_a_single_destination() {
     let sender = sender();
     let (first, second) = (merchant(), other());

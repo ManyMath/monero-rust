@@ -160,6 +160,32 @@ impl SignableTransaction {
     (!subaddresses.is_empty()) && ((standard != 0) || (subaddresses.len() > 1))
   }
 
+  // The output whose shared secret encrypts the payment ID, as wallet2's
+  // `get_destination_view_key_pub` chooses it: `None` for several destinations.
+  pub(crate) fn payment_id_recipient(&self) -> Option<usize> {
+    let mut recipient: Option<(usize, MoneroAddress)> = None;
+    let mut to_change = None;
+    for (i, payment) in self.payments.iter().enumerate() {
+      let InternalPayment::Payment(addr, amount) = payment else { continue };
+      if *amount == 0 {
+        continue;
+      }
+      if self.is_to_change_address(payment) {
+        to_change = to_change.or(Some(i));
+        continue;
+      }
+      match recipient {
+        None => recipient = Some((i, *addr)),
+        Some((_, first)) => {
+          if (first.spend() != addr.spend()) || (first.view() != addr.view()) {
+            return None;
+          }
+        }
+      }
+    }
+    recipient.map(|(i, _)| i).or(to_change)
+  }
+
   // Calculate the transaction keys used as randomness.
   fn transaction_keys(&self) -> (Zeroizing<Scalar>, Vec<Zeroizing<Scalar>>) {
     let mut tx_keys =

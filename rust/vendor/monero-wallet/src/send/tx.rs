@@ -69,39 +69,31 @@ impl SignableTransaction {
     let amount_of_keys = 1 + additional_keys.len();
     let mut extra = Extra::new(tx_key.compress(), additional_keys);
 
-    if let Some((id, id_xor)) =
-      self.payments.iter().zip(&payment_id_xors).find_map(|(payment, payment_id_xor)| {
-        payment.address().payment_id().map(|id| (id, payment_id_xor))
-      })
+    let recipient = self.payment_id_recipient();
+    if let Some((id, own_index)) = self
+      .payments
+      .iter()
+      .enumerate()
+      .find_map(|(i, payment)| payment.address().payment_id().map(|id| (id, i)))
     {
+      // wallet2 refuses a payment ID with several destinations; encrypt it to its own address
+      let id_xor = &payment_id_xors[recipient.unwrap_or(own_index)];
       let id = (u64::from_le_bytes(id) ^ u64::from_le_bytes(*id_xor)).to_le_bytes();
       let mut id_vec = Vec::with_capacity(1 + 8);
       PaymentId::Encrypted(id)
         .write(&mut id_vec)
         .expect("write failed but <Vec as io::Write> doesn't fail");
       extra.push_nonce(id_vec);
-    } else {
+    } else if self.payments.len() == 2 {
       /*
-        If there's no payment ID, we push a dummy (as wallet2 does) to the first payment.
-
-        This does cause a random payment ID for the other recipient (a documented fingerprint).
-        Functionally, random payment IDs should be fine as wallet2 will trigger this same behavior
-        (a random payment ID being seen by the recipient) with a batch send if one of the recipient
-        addresses has a payment ID.
-
-        The alternative would be to not include any payment ID, fingerprinting to the entire
-        blockchain this is non-standard wallet software (instead of just a single recipient).
+        If there's no payment ID, we push a dummy (as wallet2 does) for the sole destination of a
+        two-output transaction, and none for two distinct destinations
+        (cryptonote_tx_utils.cpp:300-325).
       */
-      if self.payments.len() == 2 {
-        let (_, payment_id_xor) = self
-          .payments
-          .iter()
-          .zip(&payment_id_xors)
-          .find(|(payment, _)| matches!(payment, InternalPayment::Payment(_, _)))
-          .expect("multiple change outputs?");
+      if let Some(recipient) = recipient {
         let mut id_vec = Vec::with_capacity(1 + 8);
         // The dummy payment ID is [0; 8], which when xor'd with the mask, is just the mask
-        PaymentId::Encrypted(*payment_id_xor)
+        PaymentId::Encrypted(payment_id_xors[recipient])
           .write(&mut id_vec)
           .expect("write failed but <Vec as io::Write> doesn't fail");
         extra.push_nonce(id_vec);

@@ -655,7 +655,6 @@ fn paying_the_change_subaddress_and_a_standard_address_uses_no_additional_keys()
 }
 
 #[test]
-#[ignore = "known defect: a dummy payment ID is written where wallet2 writes none"]
 fn two_destinations_without_change_carry_no_dummy_payment_id() {
     use common::offline::{unsigned_for, Wallet, FEE, INPUT_AMOUNT};
     use curve25519_dalek::scalar::Scalar;
