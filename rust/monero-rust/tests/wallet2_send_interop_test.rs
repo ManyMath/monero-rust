@@ -5,6 +5,7 @@ mod common;
 use common::offline::{unsigned_for, Wallet, FEE, INPUT_AMOUNT, PAYMENT_AMOUNT};
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, edwards::EdwardsPoint, scalar::Scalar};
 use monero_oxide::transaction::{NotPruned, Pruned, Transaction};
+use monero_rust::native::settle_change;
 use monero_rust::scanner::scan_single_transaction;
 use monero_rust::unsigned_tx::{
     sign_offline, SignedTransaction, UnsignedChange, UnsignedTransaction,
@@ -348,6 +349,62 @@ fn dummy_payment_id_needs_a_single_destination() {
     assert_eq!(received(&first, &[], &signed.tx), expected);
 }
 
+#[test]
+fn change_is_settled_the_way_wallet2_settles_it() {
+    let sender = sender();
+    let view_pair = sender.view_pair();
+    let (first, second) = (merchant(), other());
+    let all = INPUT_AMOUNT - FEE;
+    let settled = |payments| {
+        let mut unsigned = unsigned_for(&sender, NETWORK, payments);
+        settle_change(&mut unsigned, &view_pair).map(|()| unsigned)
+    };
+
+    let unsigned = settled(vec![(first.address(NETWORK), all - 1)]).expect("change of one");
+    assert!(matches!(unsigned.change, Some(UnsignedChange::Own { .. })));
+    let resolved = unsigned.resolve(&view_pair).unwrap();
+    assert_eq!((resolved.fee, resolved.change.unwrap().amount), (FEE, 1));
+
+    let unsigned = settled(vec![(first.address(NETWORK), all)]).expect("exact, one destination");
+    assert_eq!(unsigned.change, Some(UnsignedChange::Dummy));
+    let resolved = unsigned.resolve(&view_pair).unwrap();
+    assert_eq!((resolved.fee, resolved.dummy_amount), (FEE, Some(0)));
+    let signed = sign(&sender, &unsigned).expect("sign with a dummy output");
+    assert_eq!(signed.tx.prefix().outputs.len(), 2);
+    assert_eq!(signed.tx.prefix().extra.len(), 44);
+    assert_eq!(
+        amounts(&received(&first, &[], &signed.tx)),
+        vec![(None, all)]
+    );
+    assert!(received(&sender, &[], &signed.tx).is_empty());
+
+    let half = all / 2;
+    let unsigned = settled(vec![
+        (first.address(NETWORK), half),
+        (second.address(NETWORK), all - half),
+    ])
+    .expect("exact, two destinations");
+    assert_eq!(unsigned.change, None);
+    let signed = sign(&sender, &unsigned).expect("sign without change");
+    assert_eq!(signed.fee, FEE);
+    assert_eq!(signed.tx.prefix().outputs.len(), 2);
+    assert_eq!(signed.tx.prefix().extra.len(), 33);
+    assert_eq!(
+        amounts(&received(&second, &[], &signed.tx)),
+        vec![(None, all - half)]
+    );
+
+    let short = settled(vec![(first.address(NETWORK), all + 1)]).expect_err("cannot pay the fee");
+    assert_eq!(
+        short,
+        format!(
+            "Insufficient funds: have {INPUT_AMOUNT} piconero, need {} (amount {} + fee {FEE})",
+            INPUT_AMOUNT + 1,
+            all + 1
+        )
+    );
+}
+
 mod regtest {
     use super::common;
 
@@ -437,7 +494,6 @@ mod regtest {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    #[ignore = "known defect: a transfer is refused unless its inputs also cover an upper bound on the fee, so it cannot use them exactly as wallet2 can"]
     async fn transfer_can_use_its_inputs_exactly() {
         let Some(node) = common::regtest_node() else {
             return;

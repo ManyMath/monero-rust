@@ -281,35 +281,72 @@ pub mod native {
         check_payment_id_recipient(payments, change)
     }
 
+    /// Refuse a zero amount, or inputs short of the payments plus wallet2's fee
+    /// estimate, before decoys are requested (wallet2.cpp:11764-11776).
     fn check_funds(
         rct_type: RctType,
         fee_rate: FeeRate,
         total_input: u64,
         input_count: usize,
         payments: &[(MoneroAddress, u64)],
-        with_change: bool,
     ) -> Result<(), String> {
         if payments.iter().any(|(_, amount)| *amount == 0) {
             return Err("Destination amount is zero".to_string());
         }
-        let outputs = payments.len() + usize::from(with_change);
-        let has_payment_id = outputs == 2
-            || payments
-                .iter()
-                .any(|(address, _)| address.payment_id().is_some());
-        let fee = fee_for_weight(
-            fee_rate,
-            transaction_weight_upper_bound(rct_type, input_count, outputs, has_payment_id)?,
-        )?;
         let total_send = crate::tx_utils::checked_amount_sum(payments.iter().map(|p| p.1))
             .ok_or_else(|| "requested amounts overflow".to_string())?;
+        // Tag, length, and the encrypted ID with its type byte.
+        let extra = if payments
+            .iter()
+            .any(|(address, _)| address.payment_id().is_some())
+        {
+            1 + 1 + 1 + 8
+        } else {
+            0
+        };
+        let weight = crate::fee_estimate::wallet2_weight_estimate(
+            rct_type,
+            input_count,
+            payments.len() + 1,
+        )?
+        .checked_add(extra)
+        .ok_or_else(|| "weight exceeds usize".to_string())?;
+        let fee = fee_for_weight(fee_rate, weight)?;
         let needed = total_send
             .checked_add(fee)
             .ok_or_else(|| "requested amount plus fee overflows".to_string())?;
         if total_input < needed {
             return Err(format!(
-                "Insufficient funds: have {} piconero, need {} (amount {} + fee up to {})",
+                "Insufficient funds: have {} piconero, need at least {} (amount {} + estimated \
+                 fee {})",
                 total_input, needed, total_send, fee
+            ));
+        }
+        Ok(())
+    }
+
+    /// Settle a zero change as wallet2 does: a zero dummy output for one
+    /// destination, none for several, at the same fee (wallet2.cpp:10444-10466).
+    pub fn settle_change(
+        unsigned: &mut UnsignedTransaction,
+        view_pair: &ViewPair,
+    ) -> Result<(), String> {
+        let with_change = unsigned.resolve(view_pair)?;
+        match with_change.change {
+            Some(change) if change.amount == 0 => {}
+            _ => return Ok(()),
+        }
+        unsigned.change = (unsigned.payments.len() == 1).then_some(UnsignedChange::Dummy);
+
+        let settled = unsigned.resolve(view_pair)?;
+        if settled.fee != with_change.fee
+            || settled.change.is_some()
+            || settled.dummy_amount.is_some_and(|amount| amount != 0)
+        {
+            return Err(format!(
+                "the fee moved from {} to {} without a change output, leaving {:?} for the dummy \
+                 output",
+                with_change.fee, settled.fee, settled.dummy_amount
             ));
         }
         Ok(())
@@ -1189,7 +1226,6 @@ pub mod native {
             total_input,
             spendable_outputs.len(),
             &payments,
-            with_change,
         )?;
 
         let change = with_change
@@ -1199,7 +1235,7 @@ pub mod native {
 
         // Select decoys online, then sign; the signer returns the tx keys
         let mut rng = rand::rngs::OsRng;
-        let unsigned = build_unsigned_transaction_with_rings(
+        let mut unsigned = build_unsigned_transaction_with_rings(
             &mut rng,
             rpc,
             rct_type,
@@ -1213,6 +1249,7 @@ pub mod native {
         )
         .await
         .map_err(|e| format!("Failed to prepare transaction: {}", e))?;
+        settle_change(&mut unsigned, &view_pair)?;
         let input_rings = selected_input_rings(&stored_outputs, &unsigned)?;
         let signed = sign_offline(&mut rng, &spend_key, &view_key, &unsigned)
             .map_err(|e| format!("Failed to sign transaction: {}", e))?;
@@ -2368,7 +2405,6 @@ pub mod native {
             total_input,
             spendable_outputs.len(),
             &payments,
-            with_change,
         )?;
 
         let change = with_change
@@ -2377,7 +2413,7 @@ pub mod native {
         check_payment_id_destinations(&payments, change.as_ref())?;
 
         let mut rng = rand::rngs::OsRng;
-        let unsigned = build_unsigned_transaction_with_rings(
+        let mut unsigned = build_unsigned_transaction_with_rings(
             &mut rng,
             rpc,
             rct_type,
@@ -2391,6 +2427,7 @@ pub mod native {
         )
         .await
         .map_err(|e| format!("Failed to prepare unsigned tx: {}", e))?;
+        settle_change(&mut unsigned, &view_pair)?;
 
         let fee = unsigned.resolve(&view_pair)?.fee;
         let input_rings = selected_input_rings(&stored_outputs, &unsigned)?;
@@ -3299,6 +3336,113 @@ pub mod native {
             .unwrap();
             assert_eq!(estimate.per_weight, 130_000);
             assert_eq!(estimate.mask, 10_000);
+        }
+
+        #[tokio::test]
+        async fn a_send_short_of_wallet2s_fee_estimate_asks_for_no_decoys() {
+            use std::sync::{Arc, Mutex};
+
+            #[derive(Clone, Debug, Default)]
+            struct Connection(Arc<Mutex<Vec<String>>>);
+            #[async_trait::async_trait]
+            impl RpcConnection for Connection {
+                async fn post(
+                    &self,
+                    route: &str,
+                    body: Vec<u8>,
+                ) -> Result<Vec<u8>, crate::monero_rpc::RpcError> {
+                    let method = if route == "json_rpc" {
+                        let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                        request["method"].as_str().unwrap().to_string()
+                    } else {
+                        route.to_string()
+                    };
+                    self.0.lock().unwrap().push(method.clone());
+                    let result = match method.as_str() {
+                        "get_last_block_header" => serde_json::json!({
+                            "block_header": { "major_version": 16 }
+                        }),
+                        "get_fee_estimate" => serde_json::json!({
+                            "fee": 32_000,
+                            "fees": [32_000, 130_000, 510_000, 6_400_000],
+                            "quantization_mask": 10_000,
+                            "status": "OK"
+                        }),
+                        _ => return Err(crate::monero_rpc::RpcError::ConnectionError),
+                    };
+                    Ok(serde_json::to_vec(&serde_json::json!({ "result": result })).unwrap())
+                }
+            }
+
+            const SEED: &str = "hemlock jubilee eden hacksaw boil superior inroads epoxy exhale orders cavernous second brunt saved richly lower upgrade hitched launching deepest mostly playful layout lower eden";
+            const INPUT: u64 = 1_000_000_000_000;
+            let mut bytes = Vec::new();
+            bytes.extend_from_slice(&[0x11; 32]); // transaction hash
+            bytes.extend_from_slice(&1u64.to_le_bytes()); // index in transaction
+            bytes.extend_from_slice(&0u64.to_le_bytes()); // index on blockchain
+            bytes.extend_from_slice(
+                (&Scalar::from(9u64) * ED25519_BASEPOINT_TABLE)
+                    .compress()
+                    .as_bytes(),
+            );
+            bytes.extend_from_slice(&Scalar::from(5u64).to_bytes()); // key offset
+            bytes.extend_from_slice(&Scalar::from(3u64).to_bytes()); // commitment mask
+            bytes.extend_from_slice(&INPUT.to_le_bytes());
+            bytes.extend_from_slice(&[0, 0, 0, 0]); // timelock, subaddress, payment ID, data
+            let stored = StoredOutputData {
+                tx_hash: "11".repeat(32),
+                output_index: 1,
+                amount: INPUT,
+                key: String::new(),
+                key_offset: String::new(),
+                commitment_mask: String::new(),
+                subaddress: None,
+                payment_id: None,
+                received_output_bytes: hex::encode(bytes),
+                global_index: Some(424_242),
+                key_image: String::new(),
+                ring: None,
+            };
+            let address = crate::scanner::derive_address(SEED, Network::Mainnet, "")
+                .unwrap()
+                .to_string();
+            let policy = FeePolicy {
+                priority: FeePriority::Low,
+                wallet_height: None,
+                max_fee_per_weight: DEFAULT_MAX_FEE_PER_BYTE,
+            };
+            let estimated_fee = (1_492u64 * 32_000).div_ceil(10_000) * 10_000;
+            let send = |amount: u64| {
+                let connection = Connection::default();
+                let log = connection.0.clone();
+                let stored = stored.clone();
+                let recipients = vec![(address.clone(), amount)];
+                async move {
+                    let result = create_transaction_with_rpc_and_policy(
+                        &Rpc::new_with_connection(connection),
+                        SEED,
+                        "mainnet",
+                        vec![stored],
+                        &recipients,
+                        "",
+                        policy,
+                    )
+                    .await;
+                    let log = log.lock().unwrap().clone();
+                    (result.map(|_| ()).unwrap_err(), log)
+                }
+            };
+
+            let (error, log) = send(INPUT - estimated_fee + 1).await;
+            assert!(error.starts_with("Insufficient funds"), "{error}");
+            assert_eq!(log, ["get_last_block_header", "get_fee_estimate"]);
+
+            let (error, log) = send(INPUT - estimated_fee).await;
+            assert!(
+                error.starts_with("Failed to prepare transaction"),
+                "{error}"
+            );
+            assert_eq!(log[2..], ["get_height"]);
         }
 
         #[test]

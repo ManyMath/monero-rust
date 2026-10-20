@@ -15,7 +15,7 @@ use monero_wallet::{
     interface::FeeRate,
     io::{read_byte, read_bytes, read_u32, read_u64, read_vec, write_vec},
     ringct::{clsag::Decoys, RctType},
-    send::{Change, SignableTransaction, TransactionKeys},
+    send::{Change, SendError, SignableTransaction, TransactionKeys},
     transaction::Transaction,
     OutputWithDecoys, ViewPair,
 };
@@ -368,7 +368,17 @@ impl UnsignedTransaction {
             vec![],
             self.fee_rate,
         )
-        .map_err(|e| format!("Failed to build signable transaction: {e}"))?;
+        .map_err(|e| match e {
+            SendError::NotEnoughFunds {
+                inputs,
+                outputs,
+                necessary_fee: Some(fee),
+            } => format!(
+                "Insufficient funds: have {inputs} piconero, need {} (amount {outputs} + fee {fee})",
+                u128::from(outputs) + u128::from(fee)
+            ),
+            e => format!("Failed to build signable transaction: {e}"),
+        })?;
 
         let left_over = input_total
             .checked_sub(payment_total)
