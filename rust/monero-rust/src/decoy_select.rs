@@ -410,6 +410,17 @@ pub(crate) async fn select_decoys_for_outputs<R: RngCore + CryptoRng, C: RpcConn
     {
         return Err("not enough decoy candidates".to_string());
     }
+    // wallet2 checks against the total. The unlocked bound also keeps outputs
+    // parked in the locked tip from satisfying the check.
+    if inputs
+        .iter()
+        .any(|input| input.index_on_blockchain >= highest_output_exclusive_bound)
+    {
+        return Err(
+            "node reports fewer unlocked RingCT outputs than the index of an output being spent"
+                .to_string(),
+        );
+    }
 
     // Determine the outputs per second
     let per_second = {

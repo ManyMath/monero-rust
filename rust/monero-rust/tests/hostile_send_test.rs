@@ -154,7 +154,6 @@ async fn distribution_with_a_count_near_u64_max_fails_without_panicking() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: a distribution that ends below the output being spent is accepted"]
 async fn distribution_claiming_fewer_outputs_than_the_real_index_is_refused() {
     let wallet = hostile::synced_wallet().await;
     let real = coinbase_at(&wallet, 780);
