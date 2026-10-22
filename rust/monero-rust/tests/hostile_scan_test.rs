@@ -75,7 +75,6 @@ async fn fresh_sync(chain: Chain) -> Wallet {
 }
 
 #[tokio::test]
-#[ignore = "known defect: a reply marked pruned is not scanned for outputs although unpruned blocks were requested"]
 async fn pruned_flag_set_by_the_node_never_hides_received_outputs() {
     let honest = honest_block(701).await;
     assert_eq!(honest.outputs.len(), 1);

@@ -1418,6 +1418,11 @@ impl<R: RpcConnection> Rpc<R> {
         if res.status != "OK" {
             return Err(RpcError::InvalidNode);
         }
+        // A pruned reply to an unpruned request would skip the check that each
+        // transaction is the one its block lists.
+        if !prune && res.blocks.iter().any(|block| block.pruned) {
+            return Err(RpcError::InvalidNode);
+        }
 
         Ok(res)
     }
