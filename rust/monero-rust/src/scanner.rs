@@ -978,12 +978,8 @@ fn scan_parsed_block_expanding(
     }
 }
 
-/// Scan a single transaction outside its block context (mempool, or blocks
-/// where a sibling transaction blob couldn't be parsed).
-///
-/// `monero-wallet` only scans whole blocks, so the transaction is wrapped in
-/// a synthetic single-transaction block. The RingCT indices embedded in the
-/// returned outputs are relative to the transaction, not the chain.
+/// Scan a single transaction outside its block context (mempool). The RingCT
+/// indices of the returned outputs are relative to the transaction, not the chain.
 pub fn scan_single_transaction(
     scanner: &mut Scanner,
     tx_hash: [u8; 32],
@@ -1015,32 +1011,6 @@ pub fn scan_single_transaction(
         })
         .map(|timelocked| without_zero_amounts(timelocked.ignore_additional_timelock()))
         .map_err(|e| format!("Failed to scan transaction {}: {}", hex::encode(tx_hash), e))
-}
-
-/// Scan already-parsed transactions one at a time, expanding the subaddress
-/// window like `scan_parsed_block_expanding`. Used when a block contains a
-/// transaction blob the parser rejected, so the whole block can't be scanned.
-fn scan_parsed_txs_individually(
-    scanner: &mut Scanner,
-    watermark: &mut SubaddressWatermark,
-    lookahead: Lookahead,
-    txs_with_hashes: &[([u8; 32], OxideTransaction<Pruned>)],
-) -> Result<Vec<OxideWalletOutput>, String> {
-    loop {
-        let mut outputs = Vec::new();
-        for (hash, tx) in txs_with_hashes {
-            outputs.extend(scan_single_transaction(scanner, *hash, tx)?);
-        }
-        let mut expanded = false;
-        for output in &outputs {
-            if let Some(found) = output.subaddress() {
-                expanded |= expand_subaddresses_if_needed(scanner, watermark, lookahead, found);
-            }
-        }
-        if !expanded {
-            return Ok(outputs);
-        }
-    }
 }
 
 /// Map a `monero-wallet` payment ID into the hex representation the previous
@@ -1205,23 +1175,14 @@ fn check_block_transaction_count(
 }
 
 /// Parse transaction blobs and check each hash against its position in the block.
-///
-/// `/getblocks.bin` supplies blobs separately from the block. Matching the counts
-/// does not prevent substitution: each parsed transaction must hash to the value
-/// committed by the block before its outputs can be credited.
-///
-/// Return parsed transactions and key images extracted from unparseable blobs.
-/// The latter cannot be hash-checked and can only mark outputs spent; they never
-/// credit outputs. A hostile node can therefore still cause false spent reports
-/// through this fallback.
+/// A blob that does not parse fails the batch, so a node cannot hide one.
 fn parse_block_transaction_blobs(
     block: &OxideBlock,
     blobs: &[Vec<u8>],
     pruned: bool,
     block_height: u64,
-) -> Result<(Vec<([u8; 32], OxideTransaction<Pruned>)>, Vec<String>), String> {
+) -> Result<Vec<([u8; 32], OxideTransaction<Pruned>)>, String> {
     let mut parsed = Vec::with_capacity(blobs.len());
-    let mut skipped_key_images = Vec::new();
 
     for (index, blob) in blobs.iter().enumerate() {
         let parsed_blob = if pruned {
@@ -1250,11 +1211,17 @@ fn parse_block_transaction_blobs(
                 }
                 parsed.push((hash, tx));
             }
-            None => skipped_key_images.extend(extract_key_images_from_raw_tx(blob)),
+            None => {
+                return Err(format!(
+                    "Block at height {} carries a transaction blob at position {} that does \
+                     not parse",
+                    block_height, index
+                ));
+            }
         }
     }
 
-    Ok((parsed, skipped_key_images))
+    Ok(parsed)
 }
 
 /// Scan a batch of blocks fetched via `/getblocks.bin` for outputs belonging to the wallet.
@@ -1395,16 +1362,15 @@ pub async fn process_batch_response(
         let tx_count = 1 + block_entry.txs.len();
 
         {
-            let (parsed_txs, skipped_key_images) = parse_block_transaction_blobs(
+            let parsed_txs = parse_block_transaction_blobs(
                 &block,
                 &block_entry.txs,
                 block_entry.pruned,
                 block_height,
             )?;
 
-            let skipped_count = skipped_key_images.len();
-            let mut spent_key_images = skipped_key_images;
-            let mut spent_key_image_tx_hashes: Vec<String> = vec![String::new(); skipped_count];
+            let mut spent_key_images = Vec::new();
+            let mut spent_key_image_tx_hashes: Vec<String> = Vec::new();
             for (tx_hash, tx) in std::iter::once((miner_tx_hash, &miner_tx))
                 .chain(parsed_txs.iter().map(|(hash, tx)| (*hash, tx)))
             {
@@ -1417,38 +1383,22 @@ pub async fn process_batch_response(
                 }
             }
 
-            let (scanned, global_index_is_authoritative) =
-                if parsed_txs.len() == block.transactions.len() {
-                    let scan_txs: Vec<OxideTransaction<Pruned>> =
-                        parsed_txs.iter().map(|(_, tx)| tx.clone()).collect();
-                    let first_ringct_index = first_ringct_index_from_rpc(
-                        &block,
-                        &scan_txs,
-                        response.output_indices.get(block_idx),
-                    );
-                    let scanned = scan_parsed_block_expanding(
-                        &mut scanner.scanner,
-                        &mut scanner.watermark,
-                        scanner.lookahead,
-                        &block,
-                        &scan_txs,
-                        first_ringct_index.unwrap_or(0),
-                    )?;
-                    (scanned, first_ringct_index.is_some())
-                } else {
-                    // A transaction blob was rejected by the parser: the whole
-                    // block can't be scanned, so scan the parseable transactions
-                    // individually.
-                    let mut txs_with_hashes = vec![(miner_tx_hash, miner_tx.clone())];
-                    txs_with_hashes.extend(parsed_txs.iter().cloned());
-                    let scanned = scan_parsed_txs_individually(
-                        &mut scanner.scanner,
-                        &mut scanner.watermark,
-                        scanner.lookahead,
-                        &txs_with_hashes,
-                    )?;
-                    (scanned, false)
-                };
+            let scan_txs: Vec<OxideTransaction<Pruned>> =
+                parsed_txs.iter().map(|(_, tx)| tx.clone()).collect();
+            let first_ringct_index = first_ringct_index_from_rpc(
+                &block,
+                &scan_txs,
+                response.output_indices.get(block_idx),
+            );
+            let scanned = scan_parsed_block_expanding(
+                &mut scanner.scanner,
+                &mut scanner.watermark,
+                scanner.lookahead,
+                &block,
+                &scan_txs,
+                first_ringct_index.unwrap_or(0),
+            )?;
+            let global_index_is_authoritative = first_ringct_index.is_some();
 
             let key_image_scalar = scanner.spend_scalar.as_ref().map(|scalar| &**scalar);
 
@@ -1675,16 +1625,15 @@ pub async fn process_batch_multi_wallet_response(
         let tx_count = 1 + block_entry.txs.len();
 
         {
-            let (parsed_txs, skipped_key_images) = parse_block_transaction_blobs(
+            let parsed_txs = parse_block_transaction_blobs(
                 &block,
                 &block_entry.txs,
                 block_entry.pruned,
                 block_height,
             )?;
 
-            let skipped_count = skipped_key_images.len();
-            let mut spent_key_images = skipped_key_images;
-            let mut spent_key_image_tx_hashes: Vec<String> = vec![String::new(); skipped_count];
+            let mut spent_key_images = Vec::new();
+            let mut spent_key_image_tx_hashes: Vec<String> = Vec::new();
             for (tx_hash, tx) in std::iter::once((miner_tx_hash, &miner_tx))
                 .chain(parsed_txs.iter().map(|(hash, tx)| (*hash, tx)))
             {
@@ -1697,7 +1646,6 @@ pub async fn process_batch_multi_wallet_response(
                 }
             }
 
-            let whole_block = parsed_txs.len() == block.transactions.len();
             let scan_txs: Vec<OxideTransaction<Pruned>> =
                 parsed_txs.iter().map(|(_, tx)| tx.clone()).collect();
             let first_ringct_index = first_ringct_index_from_rpc(
@@ -1708,28 +1656,14 @@ pub async fn process_batch_multi_wallet_response(
 
             let mut wallet_results = HashMap::new();
             for entry in &mut cached_scanners.entries {
-                let scanned = if whole_block {
-                    scan_parsed_block_expanding(
-                        &mut entry.scanner,
-                        &mut entry.watermark,
-                        entry.lookahead,
-                        &block,
-                        &scan_txs,
-                        first_ringct_index.unwrap_or(0),
-                    )?
-                } else {
-                    // A transaction blob was rejected by the parser: the whole
-                    // block can't be scanned, so scan the parseable
-                    // transactions individually.
-                    let mut txs_with_hashes = vec![(miner_tx_hash, miner_tx.clone())];
-                    txs_with_hashes.extend(parsed_txs.iter().cloned());
-                    scan_parsed_txs_individually(
-                        &mut entry.scanner,
-                        &mut entry.watermark,
-                        entry.lookahead,
-                        &txs_with_hashes,
-                    )?
-                };
+                let scanned = scan_parsed_block_expanding(
+                    &mut entry.scanner,
+                    &mut entry.watermark,
+                    entry.lookahead,
+                    &block,
+                    &scan_txs,
+                    first_ringct_index.unwrap_or(0),
+                )?;
 
                 let key_image_scalar = entry.spend_scalar.as_ref().map(|scalar| &**scalar);
 
@@ -1740,7 +1674,7 @@ pub async fn process_batch_multi_wallet_response(
                         block_height,
                         miner_tx_hash,
                         key_image_scalar,
-                        whole_block && first_ringct_index.is_some(),
+                        first_ringct_index.is_some(),
                     )?);
                 }
                 if outputs.iter().any(|output| output.global_index.is_none()) {

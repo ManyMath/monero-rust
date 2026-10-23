@@ -126,7 +126,6 @@ async fn block_with_a_low_version_byte_is_never_skipped_unvalidated() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: a transaction blob that does not parse is dropped and the block still counts as scanned"]
 async fn unparseable_transaction_blob_is_never_dropped_silently() {
     let honest = honest_block(701).await;
     assert_eq!(honest.outputs.len(), 1);
