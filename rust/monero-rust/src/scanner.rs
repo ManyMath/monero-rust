@@ -1167,10 +1167,6 @@ fn check_batch_start_height(
     Ok(())
 }
 
-/// Check that consecutive parsed blocks link through their parent hashes.
-///
-/// Height checks alone do not prevent blocks from different chains being combined
-/// in one batch. Pre-RingCT entries are not parsed, so they interrupt this check.
 fn check_block_follows_parent(
     block: &OxideBlock,
     block_height: u64,
@@ -1369,8 +1365,6 @@ pub async fn process_batch_response(
 
     let daemon_height = response.current_height;
     let mut results = Vec::with_capacity(response.blocks.len());
-    // Track the previous parsed block's hash. Clear it after a pre-RingCT entry,
-    // which cannot participate in the parent-hash check.
     let mut previous_block_hash: Option<[u8; 32]> = None;
 
     #[cfg(target_arch = "wasm32")]
@@ -1378,29 +1372,6 @@ pub async fn process_batch_response(
 
     for (block_idx, block_entry) in response.blocks.iter().enumerate() {
         let block_height = response.start_height + block_idx as u64;
-
-        // Pre-RingCT blocks can't be parsed by monero-serai
-        let major_version = block_entry.block.first().copied().unwrap_or(0);
-        if major_version < 4 {
-            // Pre-RingCT block: monero-serai can't parse it, so we can't
-            // compute the proper block ID. Use raw blob hash as a
-            // placeholder; these blocks are deep in history and won't
-            // appear in reorg detection.
-            previous_block_hash = None;
-            let block_hash = hex::encode(Keccak256::digest(&block_entry.block));
-            results.push(BlockScanResult {
-                previous_block_hash: String::new(),
-                block_height,
-                block_hash,
-                block_timestamp: 0,
-                daemon_height,
-                outputs: vec![],
-                spent_key_images: vec![],
-                spent_key_image_tx_hashes: vec![],
-                tx_count: 0,
-            });
-            continue;
-        }
 
         let block = OxideBlock::read::<&[u8]>(&mut block_entry.block.as_ref())
             .map_err(|e| format!("Failed to parse block at height {}: {:?}", block_height, e))?;
@@ -1681,38 +1652,6 @@ pub async fn process_batch_multi_wallet_response(
 
     for (block_idx, block_entry) in response.blocks.iter().enumerate() {
         let block_height = response.start_height + block_idx as u64;
-
-        // Pre-RingCT blocks can't be parsed by monero-serai
-        let major_version = block_entry.block.first().copied().unwrap_or(0);
-        if major_version < 4 {
-            // Pre-RingCT block: monero-serai can't parse it, so we can't
-            // compute the proper block ID. Use raw blob hash as a
-            // placeholder; these blocks are deep in history and won't
-            // appear in reorg detection.
-            previous_block_hash = None;
-            let block_hash = hex::encode(Keccak256::digest(&block_entry.block));
-            let mut wallet_results = HashMap::new();
-            for entry in &cached_scanners.entries {
-                wallet_results.insert(
-                    entry.address.clone(),
-                    WalletScanData {
-                        address: entry.address.clone(),
-                        outputs: vec![],
-                    },
-                );
-            }
-            results.push(MultiWalletScanResult {
-                block_height,
-                block_hash,
-                block_timestamp: 0,
-                tx_count: 0,
-                daemon_height: response.current_height,
-                spent_key_images: vec![],
-                spent_key_image_tx_hashes: vec![],
-                wallet_results,
-            });
-            continue;
-        }
 
         let block = OxideBlock::read::<&[u8]>(&mut block_entry.block.as_ref())
             .map_err(|e| format!("Failed to parse block at height {}: {:?}", block_height, e))?;

@@ -92,7 +92,6 @@ async fn pruned_flag_set_by_the_node_never_hides_received_outputs() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: a block blob with a version byte below 4 is recorded as scanned without being parsed"]
 async fn block_with_a_low_version_byte_is_never_skipped_unvalidated() {
     let honest = honest_block(701).await;
     for (name, blob) in [
@@ -151,6 +150,18 @@ async fn unparseable_transaction_blob_is_never_dropped_silently() {
             );
         }
     }
+}
+
+#[tokio::test]
+async fn pre_ringct_blocks_are_parsed_and_keep_their_real_hash() {
+    let node = Node::honest(SnapshotNode::new());
+    let scanned = scan_blocks_batch(&node.rpc(), 0, SEED_W, NETWORK, LOOKAHEAD, false, "")
+        .await
+        .unwrap();
+    assert_eq!(scanned[0].block_height, 0);
+    assert_eq!(scanned[0].block_hash, hostile::snapshot().chain[0].hash);
+    assert_eq!(scanned[0].tx_count, 1);
+    assert!(scanned[0].outputs.is_empty());
 }
 
 #[tokio::test]

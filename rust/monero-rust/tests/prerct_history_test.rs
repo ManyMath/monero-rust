@@ -412,7 +412,6 @@ async fn change_outputs_carry_no_payment_id() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: blocks of version 1 to 3, the genesis block among them, are recorded under a hash of the raw blob"]
 async fn old_blocks_are_recorded_under_their_block_id() {
     let Some(fx) = fixture().await else { return };
     let scan = scan(&fx.url, &fx.seed("alice"), 0, 12).await.unwrap();
@@ -434,7 +433,6 @@ async fn old_blocks_are_recorded_under_their_block_id() {
 
 /// One request only: the daemon blocks an address after four refusals.
 #[tokio::test]
-#[ignore = "known defect: the history of old blocks holds hashes the daemon does not know, the genesis hash among them, so it refuses the request"]
 async fn history_resume_with_tip_in_old_blocks() {
     let Some(fx) = fixture().await else { return };
     let seed = fx.seed("alice");
@@ -462,7 +460,6 @@ async fn history_resume_with_tip_in_old_blocks() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: block 0 arrives under a placeholder hash and is taken for a reorganisation at height 0"]
 async fn history_resume_with_known_genesis_is_not_a_reorg() {
     let Some(fx) = fixture().await else { return };
     let seed = fx.seed("alice");

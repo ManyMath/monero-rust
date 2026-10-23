@@ -762,15 +762,12 @@ impl Wallet {
             )
             .await;
             batches += 1;
-            let (mut results, actual_start) = match scanned {
+            let (results, actual_start) = match scanned {
                 Ok(scanned) => scanned,
                 // A client at monerod's tip gets an empty OK reply.
                 Err(e) if !history.is_empty() && e.contains(AT_TIP) => return Ok(batches),
                 Err(e) => return Err(e),
             };
-            for result in results.iter_mut().filter(|r| r.block_height == 0) {
-                result.block_hash = self.genesis.clone();
-            }
             let fresh = results
                 .iter()
                 .any(|r| self.state.block_hashes.get_hash(r.block_height) != Some(&r.block_hash));
