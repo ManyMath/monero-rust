@@ -233,6 +233,7 @@ pub struct WalletState {
     /// Top scanned height; the chain length is one more. Advance it for blocks
     /// without outputs too.
     pub current_height: u64,
+    /// The node's claimed height, unverified: for sync progress, never unlocks.
     pub daemon_height: u64,
     pub block_hashes: BlockHashChain,
     /// Outputs used in broadcast-but-unconfirmed transactions (key_image -> PendingSpend).
@@ -553,9 +554,14 @@ impl WalletState {
         bal
     }
 
-    /// Get all spendable (confirmed, unspent) outputs.
+    /// `current_height + 1`, the height unlocks are measured at: never the node's.
+    pub fn chain_height(&self) -> u64 {
+        self.current_height.saturating_add(1)
+    }
+
+    /// Get all spendable (confirmed, unspent) outputs at the wallet's own chain height.
     pub fn spendable_outputs(&self) -> Vec<&WalletOutput> {
-        self.spendable_outputs_at_height(self.daemon_height)
+        self.spendable_outputs_at_height(self.chain_height())
     }
 
     /// Get spendable outputs at a specific height using the current system time.
@@ -577,9 +583,9 @@ impl WalletState {
             .collect()
     }
 
-    /// Get spendable outputs filtered to specific accounts.
+    /// Get spendable outputs filtered to specific accounts, at the wallet's own chain height.
     pub fn spendable_outputs_for_accounts(&self, accounts: &[u32]) -> Vec<&WalletOutput> {
-        self.spendable_outputs_for_accounts_at(accounts, self.daemon_height, current_time_secs())
+        self.spendable_outputs_for_accounts_at(accounts, self.chain_height(), current_time_secs())
     }
 
     /// Get spendable outputs for specific accounts using an explicit height and
@@ -1670,7 +1676,7 @@ mod tests {
             make_output(1_000_000_000_000, 80, "ki1"), // spendable at height 100
             make_output(2_000_000_000_000, 95, "ki2"), // not spendable (5 confs)
         ]);
-        state.daemon_height = 100;
+        state.current_height = 99;
 
         let spendable = state.spendable_outputs();
         assert_eq!(spendable.len(), 1);
@@ -1684,7 +1690,7 @@ mod tests {
             make_output(1_000_000_000_000, 80, "ki1"),
             make_output(2_000_000_000_000, 80, "ki2"),
         ]);
-        state.daemon_height = 100;
+        state.current_height = 99;
         state.mark_spent_by_key_images(&["ki1".to_string()]);
 
         let spendable = state.spendable_outputs();
@@ -1700,7 +1706,7 @@ mod tests {
             make_account_output(2_000_000_000_000, 80, "ki2", 1),
             make_account_output(3_000_000_000_000, 80, "ki3", 2),
         ]);
-        state.daemon_height = 100;
+        state.current_height = 99;
 
         let spendable = state.spendable_outputs_for_accounts(&[0, 2]);
         assert_eq!(spendable.len(), 2);
@@ -2291,7 +2297,7 @@ mod tests {
             make_output(1_000_000_000_000, 80, "ki1"),
             make_output(2_000_000_000_000, 80, "ki2"),
         ]);
-        state.daemon_height = 100;
+        state.current_height = 99;
 
         state.freeze_output("ki1");
         let spendable = state.spendable_outputs();
@@ -2303,7 +2309,7 @@ mod tests {
     fn test_thaw_output_restores_spendability() {
         let mut state = WalletState::new();
         state.add_outputs(vec![make_output(1_000_000_000_000, 80, "ki1")]);
-        state.daemon_height = 100;
+        state.current_height = 99;
 
         state.freeze_output("ki1");
         assert_eq!(state.spendable_outputs().len(), 0);
@@ -2339,7 +2345,7 @@ mod tests {
     fn test_freeze_idempotent() {
         let mut state = WalletState::new();
         state.add_outputs(vec![make_output(1_000_000_000_000, 80, "ki1")]);
-        state.daemon_height = 100;
+        state.current_height = 99;
 
         assert!(state.freeze_output("ki1"));
         assert!(state.freeze_output("ki1")); // second freeze is fine
@@ -2351,7 +2357,7 @@ mod tests {
     fn test_thaw_idempotent() {
         let mut state = WalletState::new();
         state.add_outputs(vec![make_output(1_000_000_000_000, 80, "ki1")]);
-        state.daemon_height = 100;
+        state.current_height = 99;
 
         // Thaw an already-thawed output
         assert!(state.thaw_output("ki1"));
@@ -2366,11 +2372,10 @@ mod tests {
             make_output(1_000_000_000_000, 80, "ki1"),
             make_output(2_000_000_000_000, 90, "ki2"),
         ]);
-        state.daemon_height = 100;
+        state.current_height = 119;
 
         state.freeze_output("ki1");
-        // Rollback to 95: output at height 80 remains, output at 90 remains
-        state.rollback_to_height(95);
+        state.rollback_to_height(105);
         // ki1 should still be frozen after rollback
         assert!(
             state
@@ -2392,7 +2397,7 @@ mod tests {
         let mut o2 = make_output(2_000_000_000_000, 80, "ki2");
         o2.subaddress_index = Some((1, 1));
         state.add_outputs(vec![o1, o2]);
-        state.daemon_height = 100;
+        state.current_height = 99;
 
         state.freeze_output("ki1");
         let acct1 = state.spendable_outputs_for_accounts(&[1]);
@@ -2568,7 +2573,7 @@ mod tests {
             make_output(1_000_000_000_000, 80, "ki1"),
             make_output(2_000_000_000_000, 80, "ki2"),
         ]);
-        state.daemon_height = 200;
+        state.current_height = 199;
 
         state.add_pending_spends(
             "tx_abc",
@@ -3345,7 +3350,7 @@ mod tests {
             make_timelocked_output(amount, 100, "future", Timelock::Time(now + 86400)),
         ]);
         state.current_height = 200;
-        state.daemon_height = 200;
+        state.current_height = 199;
         assert!(is_spendable(&state.outputs()[0], 200));
         assert!(!is_spendable(&state.outputs()[1], 200));
         assert_eq!(state.balance().confirmed, amount);

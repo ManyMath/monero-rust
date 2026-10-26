@@ -508,7 +508,6 @@ async fn real_reorg_below_the_restore_height_leaves_a_consistent_wallet() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: spendable_outputs() measures confirmations against the height the node claims"]
 async fn node_reported_height_never_unlocks_immature_outputs() {
     let node = Node::with(
         SnapshotNode::new(),
@@ -566,7 +565,6 @@ async fn batch_that_starts_after_the_requested_height_is_refused() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: spendable_outputs() and input preparation count confirmations against the height the node claims"]
 async fn selection_spends_only_outputs_unlocked_on_the_wallets_chain() {
     use monero_rust::native::FeePolicy;
 
@@ -591,7 +589,8 @@ async fn selection_spends_only_outputs_unlocked_on_the_wallets_chain() {
     wallet.restore_height = 760;
     wallet.refresh(&node.rpc(), 8).await.unwrap();
     assert_eq!(wallet.state.daemon_height, 4_000_000_000);
-    let height = wallet.state.current_height + 1;
+    let height = wallet.state.chain_height();
+    assert_eq!(height, wallet.state.current_height + 1);
     assert!(wallet.outputs().iter().all(|o| o.is_coinbase && !o.spent));
     let mature = |o: &&monero_rust::WalletOutput| o.block_height + 60 <= height;
     let (old, young): (Vec<_>, Vec<_>) = wallet.outputs().iter().partition(mature);

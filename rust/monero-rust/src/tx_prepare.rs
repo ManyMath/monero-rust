@@ -27,7 +27,7 @@ pub struct PreparedInputs {
 #[deprecated(note = "use prepare_send_inputs_with_rpc so selection uses the construction fee tier")]
 pub fn prepare_send_inputs(
     wallet_outputs: &[WalletOutput],
-    daemon_height: u64,
+    wallet_height: u64,
     total_amount: u64,
     num_recipients: usize,
     manual_selection: Option<&[String]>,
@@ -35,7 +35,7 @@ pub fn prepare_send_inputs(
 ) -> Result<PreparedInputs, String> {
     prepare_send_inputs_at(
         wallet_outputs,
-        daemon_height,
+        wallet_height,
         current_time_secs(),
         total_amount,
         num_recipients,
@@ -47,7 +47,7 @@ pub fn prepare_send_inputs(
 /// Prepare send inputs at the fee rate transaction construction will use.
 pub fn prepare_send_inputs_with_fee(
     wallet_outputs: &[WalletOutput],
-    daemon_height: u64,
+    wallet_height: u64,
     total_amount: u64,
     num_recipients: usize,
     manual_selection: Option<&[String]>,
@@ -58,7 +58,7 @@ pub fn prepare_send_inputs_with_fee(
 ) -> Result<PreparedInputs, String> {
     prepare_send_inputs_at_with_fee(
         wallet_outputs,
-        daemon_height,
+        wallet_height,
         current_time_secs(),
         total_amount,
         num_recipients,
@@ -72,10 +72,12 @@ pub fn prepare_send_inputs_with_fee(
 
 /// Prepare send inputs at the node's RingCT type and the fee tier `policy`
 /// selects.
+/// `wallet_height` must be the wallet's own chain height
+/// (`WalletState::chain_height()`), never the node's.
 pub async fn prepare_send_inputs_with_rpc<R: RpcConnection>(
     rpc: &Rpc<R>,
     wallet_outputs: &[WalletOutput],
-    daemon_height: u64,
+    wallet_height: u64,
     total_amount: u64,
     num_recipients: usize,
     manual_selection: Option<&[String]>,
@@ -100,7 +102,7 @@ pub async fn prepare_send_inputs_with_rpc<R: RpcConnection>(
         .ok_or_else(|| "Fee rate and quantization mask must be nonzero".to_string())?;
     prepare_send_inputs_with_fee(
         wallet_outputs,
-        daemon_height,
+        wallet_height,
         total_amount,
         num_recipients,
         manual_selection,
@@ -114,7 +116,7 @@ pub async fn prepare_send_inputs_with_rpc<R: RpcConnection>(
 /// Clock-injected variant of `prepare_send_inputs_with_fee`.
 pub fn prepare_send_inputs_at_with_fee(
     wallet_outputs: &[WalletOutput],
-    daemon_height: u64,
+    wallet_height: u64,
     now_secs: Option<u64>,
     total_amount: u64,
     num_recipients: usize,
@@ -129,7 +131,7 @@ pub fn prepare_send_inputs_at_with_fee(
         .filter(|o| {
             !o.spent
                 && !o.frozen
-                && is_spendable_at(o, daemon_height, now_secs)
+                && is_spendable_at(o, wallet_height, now_secs)
                 && !excluded_key_images.map_or(false, |exc| exc.contains(&o.key_image))
         })
         .cloned()
@@ -162,7 +164,7 @@ pub fn prepare_send_inputs_at_with_fee(
 #[deprecated(note = "use prepare_send_inputs_at_with_fee with the construction fee tier")]
 pub fn prepare_send_inputs_at(
     wallet_outputs: &[WalletOutput],
-    daemon_height: u64,
+    wallet_height: u64,
     now_secs: Option<u64>,
     total_amount: u64,
     num_recipients: usize,
@@ -174,7 +176,7 @@ pub fn prepare_send_inputs_at(
         .filter(|o| {
             !o.spent
                 && !o.frozen
-                && is_spendable_at(o, daemon_height, now_secs)
+                && is_spendable_at(o, wallet_height, now_secs)
                 && !excluded_key_images.map_or(false, |exc| exc.contains(&o.key_image))
         })
         .cloned()
@@ -203,7 +205,7 @@ pub fn prepare_send_inputs_at(
 pub async fn prepare_sweep_inputs_with_rpc<R: RpcConnection>(
     rpc: &Rpc<R>,
     wallet_outputs: &[WalletOutput],
-    daemon_height: u64,
+    wallet_height: u64,
     selected_output_keys: Option<&[String]>,
     excluded_key_images: Option<&HashSet<String>>,
     source_account: u32,
@@ -226,7 +228,7 @@ pub async fn prepare_sweep_inputs_with_rpc<R: RpcConnection>(
         .ok_or_else(|| "Fee rate and quantization mask must be nonzero".to_string())?;
     prepare_sweep_inputs_with_fee(
         wallet_outputs,
-        daemon_height,
+        wallet_height,
         selected_output_keys,
         excluded_key_images,
         source_account,
@@ -238,7 +240,7 @@ pub async fn prepare_sweep_inputs_with_rpc<R: RpcConnection>(
 /// Prepare sweep inputs at an explicit daemon fee tier.
 pub fn prepare_sweep_inputs_with_fee(
     wallet_outputs: &[WalletOutput],
-    daemon_height: u64,
+    wallet_height: u64,
     selected_output_keys: Option<&[String]>,
     excluded_key_images: Option<&HashSet<String>>,
     source_account: u32,
@@ -247,7 +249,7 @@ pub fn prepare_sweep_inputs_with_fee(
 ) -> Result<PreparedInputs, String> {
     prepare_sweep_inputs_at_with_fee(
         wallet_outputs,
-        daemon_height,
+        wallet_height,
         current_time_secs(),
         selected_output_keys,
         excluded_key_images,
@@ -264,7 +266,7 @@ pub fn prepare_sweep_inputs_with_fee(
 /// [`prepare_sweep_transactions`].
 pub fn prepare_sweep_inputs_at_with_fee(
     wallet_outputs: &[WalletOutput],
-    daemon_height: u64,
+    wallet_height: u64,
     now_secs: Option<u64>,
     selected_output_keys: Option<&[String]>,
     excluded_key_images: Option<&HashSet<String>>,
@@ -274,7 +276,7 @@ pub fn prepare_sweep_inputs_at_with_fee(
 ) -> Result<PreparedInputs, String> {
     let spendable = spendable_in_account(
         wallet_outputs,
-        daemon_height,
+        wallet_height,
         now_secs,
         excluded_key_images,
         source_account,
@@ -312,7 +314,7 @@ pub enum SweepSubaddresses<'a> {
 pub fn prepare_sweep_inputs_from_subaddresses<R: RngCore + CryptoRng>(
     rng: &mut R,
     wallet_outputs: &[WalletOutput],
-    daemon_height: u64,
+    wallet_height: u64,
     now_secs: Option<u64>,
     subaddresses: SweepSubaddresses<'_>,
     excluded_key_images: Option<&HashSet<String>>,
@@ -322,7 +324,7 @@ pub fn prepare_sweep_inputs_from_subaddresses<R: RngCore + CryptoRng>(
 ) -> Result<PreparedInputs, String> {
     let spendable = spendable_in_account(
         wallet_outputs,
-        daemon_height,
+        wallet_height,
         now_secs,
         excluded_key_images,
         source_account,
@@ -336,7 +338,7 @@ pub fn prepare_sweep_inputs_from_subaddresses<R: RngCore + CryptoRng>(
 pub async fn prepare_sweep_inputs_from_subaddresses_with_rpc<R: RpcConnection>(
     rpc: &Rpc<R>,
     wallet_outputs: &[WalletOutput],
-    daemon_height: u64,
+    wallet_height: u64,
     subaddresses: SweepSubaddresses<'_>,
     excluded_key_images: Option<&HashSet<String>>,
     source_account: u32,
@@ -346,7 +348,7 @@ pub async fn prepare_sweep_inputs_from_subaddresses_with_rpc<R: RpcConnection>(
     prepare_sweep_inputs_from_subaddresses(
         &mut rand::rngs::OsRng,
         wallet_outputs,
-        daemon_height,
+        wallet_height,
         current_time_secs(),
         subaddresses,
         excluded_key_images,
@@ -360,7 +362,7 @@ pub async fn prepare_sweep_inputs_from_subaddresses_with_rpc<R: RpcConnection>(
 pub fn prepare_sweep_transactions<R: RngCore + CryptoRng>(
     rng: &mut R,
     wallet_outputs: &[WalletOutput],
-    daemon_height: u64,
+    wallet_height: u64,
     now_secs: Option<u64>,
     subaddresses: SweepSubaddresses<'_>,
     excluded_key_images: Option<&HashSet<String>>,
@@ -370,7 +372,7 @@ pub fn prepare_sweep_transactions<R: RngCore + CryptoRng>(
 ) -> Result<Vec<PreparedInputs>, String> {
     let spendable = spendable_in_account(
         wallet_outputs,
-        daemon_height,
+        wallet_height,
         now_secs,
         excluded_key_images,
         source_account,
@@ -402,7 +404,7 @@ pub fn prepare_sweep_transactions<R: RngCore + CryptoRng>(
 pub async fn prepare_sweep_transactions_with_rpc<R: RpcConnection>(
     rpc: &Rpc<R>,
     wallet_outputs: &[WalletOutput],
-    daemon_height: u64,
+    wallet_height: u64,
     subaddresses: SweepSubaddresses<'_>,
     excluded_key_images: Option<&HashSet<String>>,
     source_account: u32,
@@ -412,7 +414,7 @@ pub async fn prepare_sweep_transactions_with_rpc<R: RpcConnection>(
     prepare_sweep_transactions(
         &mut rand::rngs::OsRng,
         wallet_outputs,
-        daemon_height,
+        wallet_height,
         current_time_secs(),
         subaddresses,
         excluded_key_images,
@@ -452,7 +454,7 @@ async fn construction_fee_rate<R: RpcConnection>(
 
 fn spendable_in_account(
     wallet_outputs: &[WalletOutput],
-    daemon_height: u64,
+    wallet_height: u64,
     now_secs: Option<u64>,
     excluded_key_images: Option<&HashSet<String>>,
     source_account: u32,
@@ -462,7 +464,7 @@ fn spendable_in_account(
         .filter(|output| {
             !output.spent
                 && !output.frozen
-                && is_spendable_at(output, daemon_height, now_secs)
+                && is_spendable_at(output, wallet_height, now_secs)
                 && output.subaddress_index.map_or(0, |index| index.0) == source_account
                 && !excluded_key_images
                     .map_or(false, |excluded| excluded.contains(&output.key_image))
@@ -543,13 +545,13 @@ fn prepared_sweep(
 )]
 pub fn prepare_sweep_inputs(
     wallet_outputs: &[WalletOutput],
-    daemon_height: u64,
+    wallet_height: u64,
     selected_output_keys: Option<&[String]>,
     excluded_key_images: Option<&HashSet<String>>,
 ) -> Result<PreparedInputs, String> {
     prepare_sweep_inputs_at(
         wallet_outputs,
-        daemon_height,
+        wallet_height,
         current_time_secs(),
         selected_output_keys,
         excluded_key_images,
@@ -561,7 +563,7 @@ pub fn prepare_sweep_inputs(
 #[deprecated(note = "use prepare_sweep_inputs_at_with_fee with the construction fee tier")]
 pub fn prepare_sweep_inputs_at(
     wallet_outputs: &[WalletOutput],
-    daemon_height: u64,
+    wallet_height: u64,
     now_secs: Option<u64>,
     selected_output_keys: Option<&[String]>,
     excluded_key_images: Option<&HashSet<String>>,
@@ -571,7 +573,7 @@ pub fn prepare_sweep_inputs_at(
         .filter(|o| {
             !o.spent
                 && !o.frozen
-                && is_spendable_at(o, daemon_height, now_secs)
+                && is_spendable_at(o, wallet_height, now_secs)
                 && !excluded_key_images.map_or(false, |exc| exc.contains(&o.key_image))
         })
         .cloned()

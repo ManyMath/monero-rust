@@ -463,7 +463,7 @@ fn lifecycle_manual_coin_control() {
 #[test]
 fn lifecycle_spendable_output_queries() {
     let mut state = WalletState::new();
-    state.daemon_height = 1000;
+    state.current_height = 999;
 
     state.add_outputs(vec![
         make_output(1_000_000_000_000, 800, "tx1", 0), // account 0, spendable
@@ -741,7 +741,7 @@ fn reorg_then_rescan_new_chain() {
 #[test]
 fn reorg_multi_account_balance_recalculation() {
     let mut state = WalletState::new();
-    state.daemon_height = 200;
+    state.current_height = 199;
 
     // Multi-account outputs
     let batch = vec![
@@ -784,7 +784,7 @@ fn reorg_multi_account_balance_recalculation() {
     assert_eq!(bal.confirmed, 3_000_000_000_000); // tx_a0 + tx_a1
 
     // Per-account balance via spendable queries
-    state.daemon_height = 200;
+    state.current_height = 199;
     let a0 = state.spendable_outputs_for_accounts(&[0]);
     assert_eq!(a0.len(), 1);
     assert_eq!(a0[0].amount, 1_000_000_000_000);
