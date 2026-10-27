@@ -3,7 +3,9 @@
 mod common;
 
 use monero_oxide::block::Block;
-use monero_rust::monero_rpc::{BlockCompleteEntry, GetBlocksFastResponse};
+use monero_rust::monero_rpc::{
+    BlockCompleteEntry, BlockOutputIndices, GetBlocksFastResponse, TxOutputIndices,
+};
 use monero_rust::scanner::{
     process_batch_multi_wallet_response, process_batch_response, Lookahead, WalletScanConfig,
 };
@@ -45,14 +47,34 @@ fn make_coinbase_block(height: u64, previous: [u8; 32]) -> Block {
     .expect("synthetic coinbase block should be valid")
 }
 
-/// Build a batch whose blocks link through their parent hashes, so tests reach
-/// scanning after the chain-consistency checks.
+/// Output indices as a daemon sends them, from `first`.
+fn output_indices(block: &Block, blobs: &[Vec<u8>], first: u64) -> BlockOutputIndices {
+    let mut next = first;
+    let mut entry = |outputs: usize| {
+        let indices = (next..next + outputs as u64).collect();
+        next += outputs as u64;
+        TxOutputIndices { indices }
+    };
+    let mut indices = vec![entry(block.miner_transaction().prefix().outputs.len())];
+    for blob in blobs {
+        let outputs =
+            monero_oxide::transaction::Transaction::<monero_oxide::transaction::NotPruned>::read(
+                &mut blob.as_slice(),
+            )
+            .map_or(0, |tx| tx.prefix().outputs.len());
+        indices.push(entry(outputs));
+    }
+    BlockOutputIndices { indices }
+}
+
 fn make_response(start_height: u64, count: usize, daemon_height: u64) -> GetBlocksFastResponse {
     let mut blocks = Vec::with_capacity(count);
+    let mut output_indices_per_block = Vec::with_capacity(count);
     let mut previous = [0u8; 32];
     for i in 0..count {
         let block = make_coinbase_block(start_height + i as u64, previous);
         previous = block.hash();
+        output_indices_per_block.push(output_indices(&block, &[], start_height + i as u64));
         blocks.push(BlockCompleteEntry {
             block: block.serialize(),
             txs: vec![],
@@ -66,7 +88,7 @@ fn make_response(start_height: u64, count: usize, daemon_height: u64) -> GetBloc
         blocks,
         start_height,
         current_height: daemon_height,
-        output_indices: vec![],
+        output_indices: output_indices_per_block,
         untrusted: false,
         credits: 0,
         top_hash: String::new(),
@@ -379,6 +401,7 @@ fn make_block_listing(height: u64, previous: [u8; 32], listed: Vec<[u8; 32]>) ->
 }
 
 fn response_with(block: Block, blobs: Vec<Vec<u8>>, start_height: u64) -> GetBlocksFastResponse {
+    let indices = output_indices(&block, &blobs, start_height);
     GetBlocksFastResponse {
         status: "OK".to_string(),
         blocks: vec![BlockCompleteEntry {
@@ -389,7 +412,7 @@ fn response_with(block: Block, blobs: Vec<Vec<u8>>, start_height: u64) -> GetBlo
         }],
         start_height,
         current_height: start_height + 1,
-        output_indices: vec![],
+        output_indices: vec![indices],
         untrusted: false,
         credits: 0,
         top_hash: String::new(),
@@ -517,11 +540,20 @@ fn history_node(response: GetBlocksFastResponse) -> monero_rust::monero_rpc::Rpc
         block: Vec<u8>,
     }
     #[derive(serde::Serialize)]
+    struct TxIndices {
+        indices: Vec<u64>,
+    }
+    #[derive(serde::Serialize)]
+    struct BlockIndices {
+        indices: Vec<TxIndices>,
+    }
+    #[derive(serde::Serialize)]
     struct Response {
         status: String,
         blocks: Vec<Entry>,
         start_height: u64,
         current_height: u64,
+        output_indices: Vec<BlockIndices>,
     }
     let response = Response {
         status: response.status,
@@ -532,6 +564,19 @@ fn history_node(response: GetBlocksFastResponse) -> monero_rust::monero_rpc::Rpc
             .collect(),
         start_height: response.start_height,
         current_height: response.current_height,
+        output_indices: response
+            .output_indices
+            .into_iter()
+            .map(|block| BlockIndices {
+                indices: block
+                    .indices
+                    .into_iter()
+                    .map(|tx| TxIndices {
+                        indices: tx.indices,
+                    })
+                    .collect(),
+            })
+            .collect(),
     };
     monero_rust::monero_rpc::Rpc::new_with_connection(HistoryNode {
         response: monero_epee_bin_serde::to_bytes(&response).unwrap(),

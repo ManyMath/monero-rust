@@ -273,7 +273,6 @@ async fn per_transaction_arrays_cannot_redirect_the_stored_index() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: missing output index arrays are refused only when the block pays the wallet"]
 async fn missing_index_arrays_are_refused_whether_or_not_the_block_pays_the_wallet() {
     let strip = |name| {
         Node::with(SnapshotNode::new(), name, |call, reply| {
@@ -309,7 +308,6 @@ async fn missing_index_arrays_are_refused_whether_or_not_the_block_pays_the_wall
 }
 
 #[tokio::test]
-#[ignore = "known defect: an empty miner index entry shifts every stored global index in the block"]
 async fn emptied_miner_index_entry_never_shifts_the_stored_index() {
     let honest = honest_block(701).await;
     let node = first_block_node("indices-miner-entry-empty", |_, indices| {

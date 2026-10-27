@@ -872,62 +872,103 @@ pub(crate) fn parse_pruned_tx_blob(
     Some((Some(Keccak256::digest(&hashes).into()), tx))
 }
 
-/// The global index of a block's first RingCT output, from its `/getblocks.bin`
-/// output indices; `None` when they give none.
+/// Check a block's `/getblocks.bin` output indices and return the global index
+/// of its first RingCT output. The checks must not depend on whether the block
+/// pays the wallet, or the outcome tells the node which blocks do.
 fn first_ringct_index_from_rpc(
     block: &OxideBlock,
     txs: &[OxideTransaction<Pruned>],
     indices: Option<&BlockOutputIndices>,
-) -> Option<u64> {
-    let Some(block_indices) = indices else {
-        return None;
-    };
-    let entries = block_indices.indices.as_slice();
+) -> Result<Option<u64>, String> {
+    let height = block.number();
     let miner = block.miner_transaction();
-    let miner_is_v2 = miner.version() == 2;
-
-    // Layout A: the miner transaction is the first entry.
-    if entries.len() == 1 + block.transactions.len() {
-        if miner_is_v2 {
-            if let Some(&first) = entries[0].indices.first() {
-                return Some(first);
-            }
-        }
-        return first_ringct_index_from_tx_entries(&entries[1..], txs, 0);
+    let miner_outputs = if miner.version() == 2 {
+        miner.prefix().outputs.len() as u64
+    } else {
+        0
+    };
+    let is_ringct = |tx: &&OxideTransaction<Pruned>| matches!(tx, OxideTransaction::V2 { .. });
+    if miner_outputs == 0
+        && txs
+            .iter()
+            .filter(is_ringct)
+            .all(|tx| tx.prefix().outputs.is_empty())
+    {
+        return Ok(None);
     }
 
-    // Layout B: entries parallel the non-miner transactions only.
-    if entries.len() == block.transactions.len() {
-        let miner_outputs = if miner_is_v2 {
-            miner.prefix().outputs.len() as u64
-        } else {
-            0
-        };
-        return first_ringct_index_from_tx_entries(entries, txs, miner_outputs);
-    }
+    let entries = indices
+        .ok_or_else(|| format!("Node sent no output indices for block {height}"))?
+        .indices
+        .as_slice();
+    let (miner_entry, tx_entries) = if entries.len() == 1 + txs.len() {
+        (Some(&entries[0]), &entries[1..])
+    } else if entries.len() == txs.len() {
+        (None, entries)
+    } else {
+        return Err(format!(
+            "Block {height} has {} transactions but the node sent output indices for {}",
+            1 + txs.len(),
+            entries.len()
+        ));
+    };
 
-    None
-}
+    let miner_indices = miner_entry
+        .filter(|_| miner.version() == 2)
+        .map(|entry| entry.indices.as_slice())
+        .filter(|indices| !indices.is_empty());
+    let ringct = std::iter::once((miner_outputs, miner_indices)).chain(
+        txs.iter()
+            .zip(tx_entries)
+            .filter(|(tx, _)| is_ringct(tx))
+            .map(|(tx, entry)| {
+                (
+                    tx.prefix().outputs.len() as u64,
+                    Some(entry.indices.as_slice()),
+                )
+            }),
+    );
 
-/// Walk non-miner transactions until one carries daemon output indices and
-/// derive the block's first RingCT index from it.
-fn first_ringct_index_from_tx_entries(
-    entries: &[crate::monero_rpc::TxOutputIndices],
-    txs: &[OxideTransaction<Pruned>],
-    mut ringct_outputs_before: u64,
-) -> Option<u64> {
-    for (entry, tx) in entries.iter().zip(txs) {
-        if !matches!(tx, OxideTransaction::V2 { .. }) {
-            // v1 outputs don't occupy RingCT indices and their daemon indices
-            // are per-amount, not global.
+    let mut first = None;
+    let mut next: Option<u64> = None;
+    let mut unindexed = 0u64;
+    for (outputs, sent) in ringct {
+        let Some(sent) = sent else {
+            unindexed += outputs;
             continue;
+        };
+        if sent.len() as u64 != outputs {
+            return Err(format!(
+                "Block {height}: the node sent {} output indices for a transaction with {} \
+                 outputs",
+                sent.len(),
+                outputs
+            ));
         }
-        if let Some(&first) = entry.indices.first() {
-            return Some(first.saturating_sub(ringct_outputs_before));
+        for index in sent {
+            match next {
+                Some(expected) if *index != expected => {
+                    return Err(format!(
+                        "Block {height}: output index {index} does not follow {}",
+                        expected.wrapping_sub(1)
+                    ));
+                }
+                Some(_) => {}
+                None => {
+                    first = Some(index.checked_sub(unindexed).ok_or_else(|| {
+                        format!("Block {height}: output index {index} is too low for its position")
+                    })?);
+                }
+            }
+            next = Some(index.checked_add(1).ok_or_else(|| {
+                format!("Block {height}: output index {index} leaves no room for the next")
+            })?);
         }
-        ringct_outputs_before += tx.prefix().outputs.len() as u64;
     }
-    None
+
+    first.map(Some).ok_or_else(|| {
+        format!("Block {height}: the output indices sent do not fix its first RingCT index")
+    })
 }
 
 /// Drop zero-amount outputs, which wallet2 does not record (wallet2.cpp:2272-2277).
@@ -1389,7 +1430,7 @@ pub async fn process_batch_response(
                 &block,
                 &scan_txs,
                 response.output_indices.get(block_idx),
-            );
+            )?;
             let scanned = scan_parsed_block_expanding(
                 &mut scanner.scanner,
                 &mut scanner.watermark,
@@ -1652,7 +1693,7 @@ pub async fn process_batch_multi_wallet_response(
                 &block,
                 &scan_txs,
                 response.output_indices.get(block_idx),
-            );
+            )?;
 
             let mut wallet_results = HashMap::new();
             for entry in &mut cached_scanners.entries {
@@ -2852,6 +2893,73 @@ mod tests {
         let expanded = expand_subaddresses_if_needed(&mut scanner, &mut wm, la, found);
         // needed_account = 1+2 = 3 > 2 -> account expansion
         assert!(expanded);
+    }
+
+    #[test]
+    fn output_indices_are_checked_against_the_block() {
+        use crate::monero_rpc::TxOutputIndices;
+        use monero_oxide::ed25519::CompressedPoint;
+        use monero_oxide::transaction::Output;
+
+        let basepoint = curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
+        let output = |amount| Output {
+            amount,
+            key: CompressedPoint::from(basepoint.compress().to_bytes()),
+            view_tag: None,
+        };
+        let prefix = |inputs, outputs| OxideTransactionPrefix {
+            additional_timelock: OxideTimelock::None,
+            inputs,
+            outputs,
+            extra: vec![],
+        };
+        let header = OxideBlockHeader {
+            hardfork_version: 5,
+            hardfork_signal: 0,
+            timestamp: 0,
+            previous: [0; 32],
+            nonce: 0,
+        };
+        let tx = OxideTransaction::<Pruned>::V2 {
+            prefix: prefix(vec![], vec![output(None), output(None)]),
+            proofs: None,
+        };
+        let ringct_miner = OxideTransaction::<NotPruned>::V2 {
+            prefix: prefix(vec![OxideInput::Gen(9)], vec![output(Some(1))]),
+            proofs: None,
+        };
+        let old_miner = OxideTransaction::<NotPruned>::V1 {
+            prefix: prefix(vec![OxideInput::Gen(9)], vec![output(Some(1))]),
+            signatures: vec![],
+        };
+        let block = |miner| OxideBlock::new(header.clone(), miner, vec![[7; 32]]).unwrap();
+        let indices = |entries: &[&[u64]]| BlockOutputIndices {
+            indices: entries
+                .iter()
+                .map(|entry| TxOutputIndices {
+                    indices: entry.to_vec(),
+                })
+                .collect(),
+        };
+        let first = |block: &OxideBlock, entries: &[&[u64]]| {
+            first_ringct_index_from_rpc(block, std::slice::from_ref(&tx), Some(&indices(entries)))
+        };
+
+        let ringct = block(ringct_miner);
+        assert_eq!(first(&ringct, &[&[39], &[40, 41]]), Ok(Some(39)));
+        assert_eq!(first(&ringct, &[&[], &[40, 41]]), Ok(Some(39)));
+        assert_eq!(first(&ringct, &[&[40, 41]]), Ok(Some(39)));
+        assert!(first(&ringct, &[&[39], &[41, 42]]).is_err());
+        assert!(first(&ringct, &[&[39], &[40]]).is_err());
+        assert!(first(&ringct, &[&[39], &[40, 40]]).is_err());
+        assert!(first(&ringct, &[&[39], &[40, 41], &[42]]).is_err());
+        assert!(first(&ringct, &[&[39], &[]]).is_err());
+        assert!(first_ringct_index_from_rpc(&ringct, std::slice::from_ref(&tx), None).is_err());
+
+        let old = block(old_miner);
+        assert_eq!(first(&old, &[&[5], &[40, 41]]), Ok(Some(40)));
+        assert_eq!(first(&old, &[&[40, 41]]), Ok(Some(40)));
+        assert_eq!(first_ringct_index_from_rpc(&old, &[], None), Ok(None));
     }
 
     #[test]
