@@ -1,9 +1,6 @@
-//! Structural guard for the pinned Epee deserializer.
-//!
-//! Its varint reader assumes a nonempty buffer and unknown fields recurse without
-//! a depth bound. Validate the entire wire tree before passing it to serde. This
-//! also prevents declared blob lengths from allocating before their bytes exist.
-//! Keep all untrusted Epee entry points behind this module, including on wasm.
+//! Structural guard for the pinned Epee deserializer, whose varint reader
+//! assumes a nonempty buffer and whose unknown fields recurse without a depth
+//! bound. Keep all untrusted Epee entry points behind this module, including on wasm.
 
 use serde::de::DeserializeOwned;
 
@@ -11,11 +8,16 @@ const HEADER: &[u8] = b"\x01\x11\x01\x01\x01\x01\x02\x01\x01";
 // RPC responses and account exports use only a handful of object levels. Leave
 // ample room for extensions while bounding both this walk and serde's stack.
 const MAX_DEPTH: usize = 64;
+// String and object array elements decode to at least 24 bytes each from as
+// little as one byte on the wire, so their number is bounded by the input size.
+const ARRAY_ELEMENTS_FLOOR: usize = 1024;
+const BYTES_PER_ARRAY_ELEMENT: usize = 32;
 
 pub(crate) fn from_bytes<T: DeserializeOwned, B: AsRef<[u8]>>(bytes: B) -> Result<T, String> {
     let bytes = bytes.as_ref();
     let mut reader = Reader {
         bytes: bytes.strip_prefix(HEADER).ok_or("Invalid Epee header")?,
+        array_elements_left: ARRAY_ELEMENTS_FLOOR + bytes.len() / BYTES_PER_ARRAY_ELEMENT,
     };
     reader.object(0)?;
     if !reader.bytes.is_empty() {
@@ -26,6 +28,7 @@ pub(crate) fn from_bytes<T: DeserializeOwned, B: AsRef<[u8]>>(bytes: B) -> Resul
 
 struct Reader<'a> {
     bytes: &'a [u8],
+    array_elements_left: usize,
 }
 
 impl Reader<'_> {
@@ -76,6 +79,12 @@ impl Reader<'_> {
                 // empty strings/objects. This also bounds work on bogus counts.
                 if count > self.bytes.len() {
                     return Err("Truncated Epee array".into());
+                }
+                if matches!(element, 10 | 12) {
+                    self.array_elements_left = self
+                        .array_elements_left
+                        .checked_sub(count)
+                        .ok_or("Too many Epee array elements for the size of the input")?;
                 }
                 for _ in 0..count {
                     self.value(element, depth + 1)?;
@@ -199,6 +208,36 @@ mod tests {
         bytes.push(0);
         assert!(from_bytes::<Empty, _>(bytes).is_err());
     }
+    #[test]
+    fn rejects_arrays_of_more_small_elements_than_the_input_pays_for() {
+        let array = |element: u8, count: u32, encoded: &[u8]| {
+            let mut bytes = HEADER.to_vec();
+            bytes.extend_from_slice(&[4, 1, b'x', 0x80 | element]);
+            bytes.extend_from_slice(&((u64::from(count) << 2) | 3).to_le_bytes());
+            for _ in 0..count {
+                bytes.extend_from_slice(encoded);
+            }
+            bytes
+        };
+        for element in [10u8, 12] {
+            for width_tag in 0..4 {
+                let zero = &[width_tag, 0, 0, 0, 0, 0, 0, 0][..1 << width_tag];
+                from_bytes::<Empty, _>(array(element, 1000, zero)).unwrap();
+                let error = from_bytes::<Empty, _>(array(element, 100_000, zero)).unwrap_err();
+                assert!(error.contains("array elements"), "{error}");
+            }
+        }
+        let error = from_bytes::<Empty, _>(array(10, 100_000, &[4, b'a'])).unwrap_err();
+        assert!(error.contains("array elements"), "{error}");
+        let one_field = [4, 1, b'a', 5, 0, 0, 0, 0, 0, 0, 0, 0];
+        let error = from_bytes::<Empty, _>(array(12, 100_000, &one_field)).unwrap_err();
+        assert!(error.contains("array elements"), "{error}");
+        let mut string = vec![31 << 2];
+        string.extend_from_slice(&[7; 31]);
+        from_bytes::<Empty, _>(array(10, 100_000, &string)).unwrap();
+        from_bytes::<Empty, _>(array(8, 100_000, &[1])).unwrap();
+    }
+
     #[test]
     fn valid_wire_types_mismatched_with_rust_types_return_without_panicking() {
         #[derive(Deserialize)]

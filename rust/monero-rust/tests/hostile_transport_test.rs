@@ -146,7 +146,6 @@ async fn epee_length_bombs_and_deep_nesting_are_refused_without_allocating() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: a reply padded with empty array elements costs many times its size in memory"]
 async fn padded_arrays_cost_at_most_eight_times_the_reply_size() {
     let _serial = SERIAL.lock().await;
     let count = 4usize << 20;
