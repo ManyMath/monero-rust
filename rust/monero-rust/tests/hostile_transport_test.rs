@@ -251,8 +251,20 @@ fn stall_budget() -> Duration {
     )
 }
 
+fn short_timeouts() -> monero_rust::monero_rpc::HttpTimeouts {
+    let defaults = monero_rust::monero_rpc::HttpTimeouts::default();
+    assert_eq!(defaults.idle, Duration::from_secs(210));
+    assert_eq!(defaults.total, Duration::from_secs(210));
+    assert_eq!(defaults.connect, Duration::from_secs(30));
+    monero_rust::monero_rpc::HttpTimeouts {
+        connect: Duration::from_secs(2),
+        idle: Duration::from_secs(2),
+        total: Duration::from_secs(4),
+        min_bytes_per_sec: u64::MAX,
+    }
+}
+
 #[tokio::test]
-#[ignore = "known defect: the built-in HTTP transport has no timeout"]
 async fn silent_node_is_ended_by_the_idle_timeout() {
     let _serial = SERIAL.lock().await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -265,18 +277,22 @@ async fn silent_node_is_ended_by_the_idle_timeout() {
             held.push(stream);
         }
     });
+    let rpc = monero_rust::monero_rpc::HttpRpc::with_timeouts(url, short_timeouts()).unwrap();
     let budget = stall_budget();
     let started = Instant::now();
-    let outcome = tokio::time::timeout(budget, monero_rust::get_daemon_height(&url)).await;
+    let outcome = tokio::time::timeout(budget, rpc.get_height()).await;
     assert!(
-        outcome.is_ok(),
-        "get_daemon_height was still waiting after {:?} on a node that never answers",
+        matches!(outcome, Ok(Err(_))),
+        "get_height was still waiting after {:?} on a node that never answers",
         started.elapsed()
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(4),
+        "ended by the idle timeout"
     );
 }
 
 #[tokio::test]
-#[ignore = "known defect: the built-in HTTP transport has no timeout"]
 async fn slow_drip_reply_is_ended_by_the_call_deadline() {
     let _serial = SERIAL.lock().await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -300,18 +316,74 @@ async fn slow_drip_reply_is_ended_by_the_call_deadline() {
             });
         }
     });
+    let rpc = monero_rust::monero_rpc::HttpRpc::with_timeouts(url, short_timeouts()).unwrap();
     let budget = stall_budget();
     let started = Instant::now();
-    let outcome = tokio::time::timeout(budget, monero_rust::get_daemon_height(&url)).await;
+    let outcome = tokio::time::timeout(budget, rpc.get_height()).await;
     assert!(
-        outcome.is_ok(),
-        "get_daemon_height was still reading after {:?} from a node sending 5 bytes a second",
+        matches!(outcome, Ok(Err(_))),
+        "get_height was still reading after {:?} from a node sending 5 bytes a second",
         started.elapsed()
+    );
+    assert!(
+        started.elapsed() >= Duration::from_secs(4),
+        "ended by the call deadline"
     );
 }
 
 #[tokio::test]
-#[ignore = "known defect: the built-in HTTP transport buffers replies of any size"]
+async fn dropped_connections_are_retried_for_read_only_calls_only() {
+    let _serial = SERIAL.lock().await;
+    async fn node(failures: usize) -> (String, Arc<AtomicUsize>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let counter = accepted.clone();
+        tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                if counter.fetch_add(1, Ordering::SeqCst) < failures {
+                    continue;
+                }
+                tokio::spawn(async move {
+                    read_request(&mut stream).await;
+                    let body = "{\"height\":7,\"status\":\"OK\"}";
+                    let reply = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(reply.as_bytes()).await;
+                });
+            }
+        });
+        (url, accepted)
+    }
+    let client = |url: String| monero_rust::monero_rpc::HttpRpc::new(url).unwrap();
+
+    let (url, accepted) = node(2).await;
+    assert_eq!(client(url).get_height().await.unwrap(), 7);
+    assert_eq!(accepted.load(Ordering::SeqCst), 3);
+
+    let (url, accepted) = node(3).await;
+    assert!(client(url).get_height().await.is_err());
+    assert_eq!(
+        accepted.load(Ordering::SeqCst),
+        3,
+        "two retries, then give up"
+    );
+
+    let (url, accepted) = node(1).await;
+    let relay: Result<serde_json::Value, _> = client(url)
+        .rpc_call(
+            "send_raw_transaction",
+            Some(serde_json::json!({ "tx_as_hex": "00", "do_not_relay": false })),
+        )
+        .await;
+    assert!(relay.is_err());
+    assert_eq!(accepted.load(Ordering::SeqCst), 1, "a relay is sent once");
+}
+
+#[tokio::test]
 async fn reply_body_is_cut_off_at_the_size_limit() {
     let _serial = SERIAL.lock().await;
     const BODY: usize = 256 << 20;

@@ -10,6 +10,8 @@
 
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Duration;
 
 use async_trait::async_trait;
 use thiserror::Error;
@@ -179,6 +181,8 @@ pub enum RpcError {
     NodeStatus(String),
     #[error("invalid fee estimate ({0})")]
     InvalidFeeEstimate(&'static str),
+    #[error("reply exceeds the {limit} bytes allowed for this call")]
+    ResponseTooLarge { limit: usize },
 }
 
 /// The highest fee per byte a correct daemon can report for each tier; a rate
@@ -353,6 +357,21 @@ pub trait RpcConnection: Clone + Debug + Send + Sync {
     ///
     /// The implementor is left to handle anything such as authentication.
     async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError>;
+
+    /// POST whose reply must fit in `limit` bytes. Override to stop reading
+    /// early; the default reads the whole reply and then checks its size.
+    async fn post_limited(
+        &self,
+        route: &str,
+        body: Vec<u8>,
+        limit: usize,
+    ) -> Result<Vec<u8>, RpcError> {
+        let reply = self.post(route, body).await?;
+        if reply.len() > limit {
+            return Err(RpcError::ResponseTooLarge { limit });
+        }
+        Ok(reply)
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -362,6 +381,56 @@ pub trait RpcConnection: Clone + Debug {
     ///
     /// The implementor is left to handle anything such as authentication.
     async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError>;
+
+    /// POST whose reply must fit in `limit` bytes. Override to stop reading
+    /// early; the default reads the whole reply and then checks its size.
+    async fn post_limited(
+        &self,
+        route: &str,
+        body: Vec<u8>,
+        limit: usize,
+    ) -> Result<Vec<u8>, RpcError> {
+        let reply = self.post(route, body).await?;
+        if reply.len() > limit {
+            return Err(RpcError::ResponseTooLarge { limit });
+        }
+        Ok(reply)
+    }
+}
+
+/// Time limits of the built-in HTTP transport.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct HttpTimeouts {
+    /// Time allowed to establish a connection.
+    pub connect: Duration,
+    /// Longest silence tolerated while waiting for or receiving a reply.
+    pub idle: Duration,
+    /// Time allowed for a whole call, before the allowance for its size.
+    pub total: Duration,
+    /// Slowest average transfer rate tolerated: a call may also take as long
+    /// as its reply limit needs at this rate.
+    pub min_bytes_per_sec: u64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Default for HttpTimeouts {
+    fn default() -> Self {
+        HttpTimeouts {
+            connect: Duration::from_secs(30),
+            idle: Duration::from_secs(210),
+            total: Duration::from_secs(210),
+            min_bytes_per_sec: 16 * 1024,
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl HttpTimeouts {
+    fn deadline(&self, limit: usize) -> Duration {
+        let transfer = (limit as u64) / self.min_bytes_per_sec.max(1);
+        self.total.saturating_add(Duration::from_secs(transfer))
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -370,15 +439,22 @@ pub struct HttpRpc {
     client: Client,
     userpass: Option<(String, String)>,
     url: String,
+    timeouts: HttpTimeouts,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl HttpRpc {
-    /// Create a new HTTP(S) RPC connection.
-    ///
-    /// A daemon requiring authentication can be used via including the
-    /// username and password in the URL.
-    pub fn new(mut url: String) -> Result<Rpc<HttpRpc>, RpcError> {
+    /// Create a new HTTP(S) RPC connection, with credentials in the URL if the
+    /// daemon requires them.
+    pub fn new(url: String) -> Result<Rpc<HttpRpc>, RpcError> {
+        Self::with_timeouts(url, HttpTimeouts::default())
+    }
+
+    /// Create a new HTTP(S) RPC connection with explicit time limits.
+    pub fn with_timeouts(
+        mut url: String,
+        timeouts: HttpTimeouts,
+    ) -> Result<Rpc<HttpRpc>, RpcError> {
         // Parse out the username and password
         let userpass = if url.contains('@') {
             let url_clone = url;
@@ -408,10 +484,16 @@ impl HttpRpc {
             None
         };
 
+        let client = Client::builder()
+            .connect_timeout(timeouts.connect)
+            .read_timeout(timeouts.idle)
+            .build()
+            .map_err(|_| RpcError::InternalError("Failed to build the HTTP client"))?;
         Ok(Rpc::new_with_connection(HttpRpc {
-            client: Client::new(),
+            client,
             userpass,
             url,
+            timeouts,
         }))
     }
 }
@@ -420,42 +502,168 @@ impl HttpRpc {
 #[async_trait]
 impl RpcConnection for HttpRpc {
     async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
-        let mut builder = self.client.post(self.url.clone() + "/" + route).body(body);
+        self.post_limited(route, body, MAX_RESPONSE_BYTES).await
+    }
+
+    async fn post_limited(
+        &self,
+        route: &str,
+        body: Vec<u8>,
+        limit: usize,
+    ) -> Result<Vec<u8>, RpcError> {
+        let attempts = if is_read_only(route, &body) {
+            1 + CONNECTION_RETRIES
+        } else {
+            1
+        };
+        let mut attempt = 1;
+        loop {
+            match self.attempt(route, body.clone(), limit).await {
+                Err(Failure::Connection) if attempt < attempts => attempt += 1,
+                Err(Failure::Connection) => return Err(RpcError::ConnectionError),
+                Err(Failure::Final(error)) => return Err(error),
+                Ok(reply) => return Ok(reply),
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+const CONNECTION_RETRIES: usize = 2;
+
+#[cfg(not(target_arch = "wasm32"))]
+enum Failure {
+    Connection,
+    Final(RpcError),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl From<reqwest::Error> for Failure {
+    fn from(error: reqwest::Error) -> Self {
+        if error.is_timeout() {
+            Failure::Final(RpcError::ConnectionError)
+        } else {
+            Failure::Connection
+        }
+    }
+}
+
+/// Whether sending the request again is harmless.
+#[cfg(not(target_arch = "wasm32"))]
+fn is_read_only(route: &str, body: &[u8]) -> bool {
+    match route {
+        "get_height"
+        | "getblocks.bin"
+        | "get_outs.bin"
+        | "get_output_distribution.bin"
+        | "get_o_indexes.bin"
+        | "get_transactions"
+        | "get_transaction_pool"
+        | "is_key_image_spent" => true,
+        "json_rpc" => serde_json::from_slice::<Value>(body)
+            .ok()
+            .and_then(|request| {
+                request.get("method").and_then(Value::as_str).map(|method| {
+                    matches!(
+                        method,
+                        "get_info"
+                            | "get_fee_estimate"
+                            | "get_txpool_backlog"
+                            | "getblockheadersrange"
+                            | "get_last_block_header"
+                            | "get_block_header_by_height"
+                            | "get_block"
+                            | "hard_fork_info"
+                    )
+                })
+            })
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl HttpRpc {
+    async fn attempt(&self, route: &str, body: Vec<u8>, limit: usize) -> Result<Vec<u8>, Failure> {
+        fn invalid<E>(_: E) -> Failure {
+            Failure::Final(RpcError::InvalidNode)
+        }
+        let mut builder = self
+            .client
+            .post(self.url.clone() + "/" + route)
+            .timeout(self.timeouts.deadline(limit))
+            .body(body);
 
         if let Some((user, pass)) = &self.userpass {
             let req = self
                 .client
                 .post(&self.url)
+                .timeout(self.timeouts.total)
                 .send()
                 .await
-                .map_err(|_| RpcError::InvalidNode)?;
+                .map_err(invalid)?;
             // Only provide authentication if this daemon actually expects it
             if let Some(header) = req.headers().get("www-authenticate") {
                 builder = builder.header(
                     "Authorization",
-                    digest_auth::parse(header.to_str().map_err(|_| RpcError::InvalidNode)?)
-                        .map_err(|_| RpcError::InvalidNode)?
+                    digest_auth::parse(header.to_str().map_err(invalid)?)
+                        .map_err(invalid)?
                         .respond(&AuthContext::new_post::<_, _, _, &[u8]>(
                             user,
                             pass,
                             "/".to_string() + route,
                             None,
                         ))
-                        .map_err(|_| RpcError::InvalidNode)?
+                        .map_err(invalid)?
                         .to_header_string(),
                 );
             }
         }
 
-        Ok(builder
-            .send()
-            .await
-            .map_err(|_| RpcError::ConnectionError)?
-            .bytes()
-            .await
-            .map_err(|_| RpcError::ConnectionError)?
-            .slice(..)
-            .to_vec())
+        let mut response = builder.send().await?;
+        let too_large = Failure::Final(RpcError::ResponseTooLarge { limit });
+        if response
+            .content_length()
+            .is_some_and(|length| length > limit as u64)
+        {
+            return Err(too_large);
+        }
+        let mut reply = Vec::new();
+        while let Some(chunk) = response.chunk().await? {
+            if reply.len() + chunk.len() > limit {
+                return Err(too_large);
+            }
+            reply.extend_from_slice(&chunk);
+        }
+        Ok(reply)
+    }
+}
+
+const MIB: usize = 1 << 20;
+
+/// The largest reply of any call that carries no pool data.
+pub const MAX_RESPONSE_BYTES: usize = 256 * MIB;
+
+fn response_limit(route: &str, method: Option<&str>) -> usize {
+    match (route, method) {
+        ("getblocks.bin", _) | ("get_transaction_pool", _) | ("get_transactions", _) => {
+            MAX_RESPONSE_BYTES
+        }
+        ("get_output_distribution.bin", _) | ("json_rpc", Some("get_txpool_backlog")) => 64 * MIB,
+        ("get_height", _)
+        | ("send_raw_transaction", _)
+        | ("get_o_indexes.bin", _)
+        | (
+            "json_rpc",
+            Some(
+                "get_last_block_header"
+                | "get_block_header_by_height"
+                | "get_fee_estimate"
+                | "get_info"
+                | "getblockheadersrange",
+            ),
+        ) => MIB,
+        _ => 16 * MIB,
     }
 }
 
@@ -545,10 +753,20 @@ impl<R: RpcConnection> Rpc<R> {
         route: &str,
         params: Option<Params>,
     ) -> Result<Response, RpcError> {
+        self.rpc_call_limited(route, params, response_limit(route, None))
+            .await
+    }
+
+    async fn rpc_call_limited<Params: Serialize + Debug, Response: DeserializeOwned + Debug>(
+        &self,
+        route: &str,
+        params: Option<Params>,
+        limit: usize,
+    ) -> Result<Response, RpcError> {
         self.call_tail(
             route,
             self.0
-                .post(
+                .post_limited(
                     route,
                     if let Some(params) = params {
                         serde_json::to_vec(&params).map_err(|_| {
@@ -557,6 +775,7 @@ impl<R: RpcConnection> Rpc<R> {
                     } else {
                         vec![]
                     },
+                    limit,
                 )
                 .await?,
         )
@@ -575,8 +794,9 @@ impl<R: RpcConnection> Rpc<R> {
                 .ok_or(RpcError::InternalError("Failed to build JSON-RPC request"))?
                 .insert("params".into(), params);
         }
+        let limit = response_limit("json_rpc", Some(method));
         Ok(self
-            .rpc_call::<_, JsonRpcResponse<Response>>("json_rpc", Some(req))
+            .rpc_call_limited::<_, JsonRpcResponse<Response>>("json_rpc", Some(req), limit)
             .await?
             .result)
     }
@@ -587,7 +807,17 @@ impl<R: RpcConnection> Rpc<R> {
         route: &str,
         params: Vec<u8>,
     ) -> Result<Response, RpcError> {
-        self.call_tail(route, self.0.post(route, params).await?)
+        self.bin_call_limited(route, params, response_limit(route, None))
+            .await
+    }
+
+    async fn bin_call_limited<Response: DeserializeOwned + Debug>(
+        &self,
+        route: &str,
+        params: Vec<u8>,
+        limit: usize,
+    ) -> Result<Response, RpcError> {
+        self.call_tail(route, self.0.post_limited(route, params, limit).await?)
             .await
     }
 
@@ -659,11 +889,12 @@ impl<R: RpcConnection> Rpc<R> {
         }
 
         let txs: TransactionsResponse = self
-            .rpc_call(
+            .rpc_call_limited(
                 "get_transactions",
                 Some(json!({
                   "txs_hashes": hashes.iter().map(hex::encode).collect::<Vec<_>>()
                 })),
+                transactions_limit(hashes.len()),
             )
             .await?;
 
@@ -736,11 +967,12 @@ impl<R: RpcConnection> Rpc<R> {
         }
 
         let txs: TransactionsResponse = self
-            .rpc_call(
+            .rpc_call_limited(
                 "get_transactions",
                 Some(json!({
                   "txs_hashes": hashes.iter().map(hex::encode).collect::<Vec<_>>()
                 })),
+                transactions_limit(hashes.len()),
             )
             .await?;
 
@@ -968,11 +1200,12 @@ impl<R: RpcConnection> Rpc<R> {
                     .collect(),
             };
             let outs: GetOutputsResponse = self
-                .bin_call(
+                .bin_call_limited(
                     "get_outs.bin",
                     monero_epee_bin_serde::to_bytes(&request).map_err(|_| {
                         RpcError::InternalError("epee serialization failed for get_outs request")
                     })?,
+                    MIB + indexes.len() * 256,
                 )
                 .await?;
 
@@ -1026,7 +1259,9 @@ impl<R: RpcConnection> Rpc<R> {
 
         let request = serde_json::to_vec(&json!({ "method": "get_txpool_backlog", "params": {} }))
             .map_err(|_| RpcError::InternalError("Failed to serialize JSON request"))?;
-        let backlog = parse_txpool_backlog(&self.0.post("json_rpc", request).await?)?;
+        let limit = response_limit("json_rpc", Some("get_txpool_backlog"));
+        let backlog =
+            parse_txpool_backlog(&self.0.post_limited("json_rpc", request, limit).await?)?;
         let info = self.node_info().await?;
         let full_reward_zone = info.block_weight_limit / 2;
         if full_reward_zone == 0 {
@@ -1441,6 +1676,13 @@ impl<R: RpcConnection> Rpc<R> {
     }
 }
 
+fn transactions_limit(count: usize) -> usize {
+    count
+        .saturating_add(1)
+        .saturating_mul(MIB)
+        .min(MAX_RESPONSE_BYTES)
+}
+
 /// Parse the additional timelock out of a transaction prefix: the version
 /// varint followed by the timelock varint.
 fn prefix_timelock(data: &[u8]) -> Result<Timelock, RpcError> {
@@ -1836,6 +2078,47 @@ mod tests {
             .call_tail::<EmptyResponse>("getblocks.bin", deep)
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn replies_larger_than_the_call_allows_are_refused() {
+        #[derive(Clone, Debug)]
+        struct Connection(usize);
+        #[async_trait]
+        impl RpcConnection for Connection {
+            async fn post(&self, _: &str, _: Vec<u8>) -> Result<Vec<u8>, RpcError> {
+                let mut reply = b"{\"height\":7".to_vec();
+                reply.resize(self.0 - 1, b' ');
+                reply.push(b'}');
+                Ok(reply)
+            }
+        }
+
+        assert_eq!(response_limit("get_height", None), MIB);
+        let rpc = Rpc::new_with_connection(Connection(MIB));
+        assert_eq!(rpc.get_height().await.unwrap(), 7);
+        let rpc = Rpc::new_with_connection(Connection(MIB + 1));
+        assert_eq!(
+            rpc.get_height().await,
+            Err(RpcError::ResponseTooLarge { limit: MIB })
+        );
+
+        assert_eq!(response_limit("getblocks.bin", None), MAX_RESPONSE_BYTES);
+        assert_eq!(response_limit("json_rpc", Some("get_fee_estimate")), MIB);
+        assert!(response_limit("json_rpc", Some("get_txpool_backlog")) > MIB);
+        assert_eq!(transactions_limit(3), 4 * MIB);
+        assert_eq!(transactions_limit(usize::MAX), MAX_RESPONSE_BYTES);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn call_deadline_grows_with_the_reply_allowance() {
+        let timeouts = HttpTimeouts::default();
+        assert_eq!(timeouts.deadline(0), Duration::from_secs(210));
+        assert_eq!(
+            timeouts.deadline(MAX_RESPONSE_BYTES),
+            Duration::from_secs(210 + 16 * 1024)
+        );
     }
 
     #[test]
