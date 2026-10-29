@@ -150,7 +150,11 @@ fn wallet_holding(outputs: Vec<WalletOutput>) -> WalletState {
 
 fn restart(state: &WalletState) -> WalletState {
     let outputs = serde_json::to_string(state.outputs()).unwrap();
+    let rings = serde_json::to_string(state.ring_database()).unwrap();
     let mut state = WalletState::new();
+    state
+        .restore_ring_database(serde_json::from_str(&rings).unwrap())
+        .unwrap();
     state.replace_outputs(serde_json::from_str(&outputs).unwrap());
     state
 }
@@ -302,7 +306,6 @@ async fn regtest_respend_after_pool_drop_reuses_the_ring_and_the_daemon_accepts_
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "known defect: a reorg of the receiving block removes the output record, and the ring is stored on that record"]
 async fn regtest_reorg_of_the_receiving_block_keeps_the_ring() {
     let Some(node) = common::regtest_node() else {
         return;

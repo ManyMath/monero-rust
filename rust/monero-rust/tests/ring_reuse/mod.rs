@@ -451,11 +451,14 @@ pub struct Disk(Arc<Mutex<Stored>>);
 #[derive(Default)]
 struct Stored {
     outputs: String,
+    rings: String,
 }
 
 impl Disk {
     pub fn save(&self, state: &WalletState) {
-        self.0.lock().unwrap().outputs = serde_json::to_string(state.outputs()).unwrap();
+        let mut stored = self.0.lock().unwrap();
+        stored.outputs = serde_json::to_string(state.outputs()).unwrap();
+        stored.rings = serde_json::to_string(state.ring_database()).unwrap();
     }
 }
 
@@ -490,9 +493,12 @@ pub fn second_instance(owned: &[Owned]) -> (WalletState, Disk) {
 }
 
 pub fn crash_and_reload(disk: &Disk) -> WalletState {
-    let outputs = disk.0.lock().unwrap().outputs.clone();
+    let stored = disk.0.lock().unwrap();
     let mut state = WalletState::new();
-    state.replace_outputs(serde_json::from_str(&outputs).unwrap());
+    state
+        .restore_ring_database(serde_json::from_str(&stored.rings).unwrap())
+        .unwrap();
+    state.replace_outputs(serde_json::from_str(&stored.outputs).unwrap());
     state
 }
 

@@ -2,6 +2,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::ring_db::RingDatabase;
+use crate::tx_builder::native::DecoySelection;
 use crate::wallet_output::WalletOutput;
 
 const CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE: u64 = 10;
@@ -257,6 +259,12 @@ pub struct WalletState {
     tracked_transactions: HashMap<String, TrackedTransaction>,
     /// Maps key_image -> tx_hash of the transaction that spent it, for conflict dedup.
     spent_by_tx: HashMap<String, String>,
+    rings_restored: bool,
+    /// Key images whose ring the stored ring database overrides once it is loaded.
+    adopted_rings: HashSet<String>,
+    /// Rings by key image. Independent of `outputs`, so a ring outlives the
+    /// output record it was chosen for.
+    rings: RingDatabase,
 }
 
 impl WalletState {
@@ -274,15 +282,26 @@ impl WalletState {
             pending_spends: HashMap::new(),
             tracked_transactions: HashMap::new(),
             spent_by_tx: HashMap::new(),
+            rings_restored: false,
+            adopted_rings: HashSet::new(),
+            rings: RingDatabase::default(),
         }
     }
 
     /// Record rings by key image, so rebuilt and conflicting spends reuse them.
+    /// All or none; a ring that differs from the recorded one is refused.
     pub fn record_input_rings(
         &mut self,
         rings: &[crate::tx_builder::native::InputRing],
     ) -> Result<(), String> {
-        let mut indexes = Vec::with_capacity(rings.len());
+        let rings: Vec<crate::tx_builder::native::InputRing> = rings
+            .iter()
+            .map(|input_ring| crate::tx_builder::native::InputRing {
+                key_image: crate::ring_db::canonical_key_image(&input_ring.key_image),
+                ring: input_ring.ring.clone(),
+            })
+            .collect();
+        let rings = rings.as_slice();
         let mut seen = HashSet::with_capacity(rings.len());
         for input_ring in rings {
             if input_ring.key_image.is_empty() {
@@ -294,30 +313,103 @@ impl WalletState {
                     input_ring.key_image
                 ));
             }
-            let index = *self
-                .key_image_index
-                .get(&input_ring.key_image)
-                .ok_or_else(|| {
-                    format!(
-                        "Cannot persist ring: key image {} is not in wallet state",
-                        input_ring.key_image
-                    )
-                })?;
-            if let Some(existing) = &self.outputs[index].ring {
-                if existing != &input_ring.ring {
+            match self.rings.ring(&input_ring.key_image) {
+                Some(existing) if existing != &input_ring.ring => {
                     return Err(format!(
                         "Refusing to replace the persisted ring for key image {}",
                         input_ring.key_image
                     ));
                 }
+                Some(_) => {}
+                None if !self.key_image_index.contains_key(&input_ring.key_image) => {
+                    return Err(format!(
+                        "Cannot persist ring: key image {} is not in wallet state",
+                        input_ring.key_image
+                    ));
+                }
+                None => {}
             }
-            indexes.push(index);
         }
 
-        for (index, input_ring) in indexes.into_iter().zip(rings) {
-            self.outputs[index].ring = Some(input_ring.ring.clone());
+        for input_ring in rings {
+            self.rings
+                .set_ring(&input_ring.key_image, input_ring.ring.clone());
+        }
+        self.attach_rings();
+        for input_ring in rings {
+            self.adopted_rings.remove(&input_ring.key_image);
         }
         Ok(())
+    }
+
+    /// Every recorded ring by key image, to be stored durably. Rollbacks and
+    /// rescans leave it alone.
+    pub fn ring_database(&self) -> &RingDatabase {
+        &self.rings
+    }
+
+    /// Load a stored ring database; on a conflict with recorded rings nothing is
+    /// loaded. Rings from output records give way to it.
+    pub fn restore_ring_database(&mut self, stored: RingDatabase) -> Result<(), String> {
+        let mut spellings: HashMap<String, &DecoySelection> = HashMap::new();
+        for (key_image, ring) in stored.rings() {
+            let key_image = crate::ring_db::canonical_key_image(key_image);
+            if spellings
+                .insert(key_image.clone(), ring)
+                .is_some_and(|other| other != ring)
+            {
+                return Err(format!(
+                    "Stored ring database holds two rings for key image {key_image}"
+                ));
+            }
+            if !self.adopted_rings.contains(&key_image)
+                && self
+                    .rings
+                    .ring(&key_image)
+                    .is_some_and(|existing| existing != ring)
+            {
+                return Err(format!(
+                    "Stored ring database holds a different ring for key image {key_image}"
+                ));
+            }
+        }
+        for (key_image, ring) in stored.rings() {
+            let key_image = crate::ring_db::canonical_key_image(key_image);
+            self.adopted_rings.remove(&key_image);
+            self.rings.set_ring(&key_image, ring.clone());
+        }
+        self.adopted_rings.clear();
+        self.rings_restored = true;
+        self.attach_rings();
+        Ok(())
+    }
+
+    fn attach_rings(&mut self) {
+        let mut adopted: Vec<(String, DecoySelection)> = Vec::new();
+        for output in &mut self.outputs {
+            if output.key_image.is_empty() {
+                continue;
+            }
+            match self.rings.ring(&output.key_image) {
+                Some(ring) => {
+                    if output.ring.as_ref() != Some(ring) {
+                        output.ring = Some(ring.clone());
+                    }
+                }
+                None if self.rings.holds(&output.key_image) => output.ring = None,
+                None => {
+                    if let Some(ring) = &output.ring {
+                        adopted.push((output.key_image.clone(), ring.clone()));
+                    }
+                }
+            }
+        }
+        for (key_image, ring) in adopted {
+            if !self.rings_restored {
+                self.adopted_rings.insert(key_image.clone());
+            }
+            self.rings.set_ring(&key_image, ring);
+        }
     }
 
     /// Extend outputs in scan order, which persistence must keep for positional
@@ -327,6 +419,7 @@ impl WalletState {
     pub fn add_outputs(&mut self, new_outputs: Vec<WalletOutput>) {
         let mut upgraded = HashSet::new();
         for mut output in new_outputs {
+            output.key_image = crate::ring_db::canonical_key_image(&output.key_image);
             if output.block_height > self.current_height {
                 self.current_height = output.block_height;
             }
@@ -460,9 +553,11 @@ impl WalletState {
             });
             self.rebuild_key_image_index();
         }
+        self.attach_rings();
     }
 
-    fn set_aside(&mut self, output: WalletOutput) {
+    fn set_aside(&mut self, mut output: WalletOutput) {
+        output.key_image = crate::ring_db::canonical_key_image(&output.key_image);
         if output.block_height == 0 {
             return;
         }
@@ -472,8 +567,7 @@ impl WalletState {
         }
     }
 
-    /// Replace all outputs (used when restoring from persistence).
-    /// Preserve blockchain scan order within each height for key-image imports.
+    /// Replace all outputs, as when restoring from persistence; the ring database is kept.
     pub fn replace_outputs(&mut self, outputs: Vec<WalletOutput>) {
         self.superseded.clear();
         self.outputs.clear();
@@ -489,7 +583,10 @@ impl WalletState {
     pub fn mark_spent_by_key_images(&mut self, key_images: &[String]) -> usize {
         let mut count = 0;
         for ki in key_images {
-            if let Some(&idx) = self.key_image_index.get(ki) {
+            if let Some(&idx) = self
+                .key_image_index
+                .get(&crate::ring_db::canonical_key_image(ki))
+            {
                 if !self.outputs[idx].spent {
                     self.outputs[idx].spent = true;
                     count += 1;
@@ -637,13 +734,12 @@ impl WalletState {
         &self.outputs
     }
 
-    /// Modify outputs and rebuild `key_image_index` afterwards.
-    ///
-    /// Reordering outputs or changing a key image invalidates the index. Rebuild
-    /// it before freeze, spend, or confirmation operations can use stale entries.
+    /// Modify outputs; indexes are rebuilt and each `ring` reset from the ring
+    /// database afterwards.
     pub fn with_outputs_mut<R>(&mut self, f: impl FnOnce(&mut Vec<WalletOutput>) -> R) -> R {
         let result = f(&mut self.outputs);
         self.rebuild_key_image_index();
+        self.attach_rings();
         result
     }
 
@@ -656,7 +752,10 @@ impl WalletState {
     ) -> usize {
         let mut count = 0;
         for ki in key_images {
-            if let Some(&idx) = self.key_image_index.get(ki) {
+            if let Some(&idx) = self
+                .key_image_index
+                .get(&crate::ring_db::canonical_key_image(ki))
+            {
                 if !self.outputs[idx].spent {
                     self.outputs[idx].spent = true;
                     self.outputs[idx].spent_height = Some(height);
@@ -689,7 +788,10 @@ impl WalletState {
         let mut conflicts = Vec::new();
         for (i, ki) in key_images.iter().enumerate() {
             let tx_hash = tx_hashes.get(i).map(|s| s.as_str()).unwrap_or("");
-            if let Some(&idx) = self.key_image_index.get(ki) {
+            if let Some(&idx) = self
+                .key_image_index
+                .get(&crate::ring_db::canonical_key_image(ki))
+            {
                 let output = &mut self.outputs[idx];
                 if !output.spent {
                     output.spent = true;
@@ -738,7 +840,10 @@ impl WalletState {
     pub fn check_spent_conflicts(&self, key_images: &[String]) -> Vec<SpentConflict> {
         let mut conflicts = Vec::new();
         for ki in key_images {
-            if let Some(&idx) = self.key_image_index.get(ki) {
+            if let Some(&idx) = self
+                .key_image_index
+                .get(&crate::ring_db::canonical_key_image(ki))
+            {
                 let output = &self.outputs[idx];
                 if output.spent {
                     if let Some(prev_h) = output.spent_height {
@@ -754,13 +859,7 @@ impl WalletState {
         conflicts
     }
 
-    /// Roll back wallet state to just before `split_height`.
-    ///
-    /// 1. Un-spend outputs with spent_height >= split_height
-    /// 2. Remove outputs with block_height >= split_height
-    /// 3. Rebuild key_image_index
-    /// 4. Roll back block_hashes
-    /// 5. Update current_height
+    /// Roll back to just before `split_height`. The ring database is kept.
     pub fn rollback_to_height(&mut self, split_height: u64) -> RollbackResult {
         let mut unspent_key_images = Vec::new();
         let mut outputs_unspent = 0usize;
@@ -833,7 +932,10 @@ impl WalletState {
     /// Freeze an output by key image, preventing it from being selected for spending.
     /// Returns true if the output was found and frozen.
     pub fn freeze_output(&mut self, key_image: &str) -> bool {
-        if let Some(&idx) = self.key_image_index.get(key_image) {
+        if let Some(&idx) = self
+            .key_image_index
+            .get(&crate::ring_db::canonical_key_image(key_image))
+        {
             self.outputs[idx].frozen = true;
             true
         } else {
@@ -844,7 +946,10 @@ impl WalletState {
     /// Thaw (unfreeze) an output by key image, allowing it to be selected for spending.
     /// Returns true if the output was found and thawed.
     pub fn thaw_output(&mut self, key_image: &str) -> bool {
-        if let Some(&idx) = self.key_image_index.get(key_image) {
+        if let Some(&idx) = self
+            .key_image_index
+            .get(&crate::ring_db::canonical_key_image(key_image))
+        {
             self.outputs[idx].frozen = false;
             true
         } else {
@@ -871,7 +976,10 @@ impl WalletState {
     /// Returns true if the key image was pending.
     pub fn confirm_pending_spend(&mut self, key_image: &str, height: u64) -> bool {
         if self.pending_spends.remove(key_image).is_some() {
-            if let Some(&idx) = self.key_image_index.get(key_image) {
+            if let Some(&idx) = self
+                .key_image_index
+                .get(&crate::ring_db::canonical_key_image(key_image))
+            {
                 if !self.outputs[idx].spent {
                     self.outputs[idx].spent = true;
                     self.outputs[idx].spent_height = Some(height);
@@ -1022,6 +1130,11 @@ impl WalletState {
         offset: usize,
         key_images: &[String],
     ) -> Result<usize, String> {
+        let key_images: Vec<String> = key_images
+            .iter()
+            .map(|key_image| crate::ring_db::canonical_key_image(key_image))
+            .collect();
+        let key_images = key_images.as_slice();
         // Reject an export longer than the known output list, as Monero does.
         // The wallet may need to sync before it can apply the entire export.
         if offset.saturating_add(key_images.len()) > self.outputs.len() {
@@ -1067,6 +1180,7 @@ impl WalletState {
         // Rebuild after all assignments. Incremental removal could erase an
         // entry just inserted for another output when the images are permuted.
         self.rebuild_key_image_index();
+        self.attach_rings();
         Ok(count)
     }
 
@@ -1181,7 +1295,8 @@ impl WalletState {
         self.key_image_index.clear();
         self.output_index.clear();
         self.pub_key_index.clear();
-        for (i, output) in self.outputs.iter().enumerate() {
+        for (i, output) in self.outputs.iter_mut().enumerate() {
+            output.key_image = crate::ring_db::canonical_key_image(&output.key_image);
             self.output_index.insert(output.output_key(), i);
             if let Some(key) = one_time_key(output) {
                 self.pub_key_index.entry(key.to_string()).or_insert(i);
@@ -1615,6 +1730,164 @@ mod tests {
         assert!(error.contains("replace") || error.contains("not in wallet"));
         assert_eq!(state.outputs()[0].ring, Some(ring(1)));
         assert!(state.outputs()[1].ring.is_none());
+    }
+
+    fn test_ring(offset: u64) -> DecoySelection {
+        use crate::tx_builder::native::RingMember;
+        DecoySelection {
+            real_index: 0,
+            offsets: vec![offset; 16],
+            ring: vec![
+                RingMember {
+                    key: "00".repeat(32),
+                    commitment: "00".repeat(32),
+                };
+                16
+            ],
+        }
+    }
+
+    fn input_ring(key_image: &str, offset: u64) -> crate::tx_builder::native::InputRing {
+        crate::tx_builder::native::InputRing {
+            key_image: key_image.into(),
+            ring: test_ring(offset),
+        }
+    }
+
+    #[test]
+    fn ring_survives_a_reorg_of_the_receiving_block() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1, 100, "ki1"), make_output(1, 90, "ki2")]);
+        state.record_input_rings(&[input_ring("ki1", 7)]).unwrap();
+
+        let rollback = state.rollback_to_height(100);
+        assert_eq!(rollback.removed_key_images, vec!["ki1".to_string()]);
+        assert_eq!(state.outputs().len(), 1);
+        assert_eq!(state.ring_database().ring("ki1"), Some(&test_ring(7)));
+        state.record_input_rings(&[input_ring("ki1", 7)]).unwrap();
+        state
+            .record_input_rings(&[input_ring("ki1", 8)])
+            .unwrap_err();
+
+        state.add_outputs(vec![make_output(1, 101, "ki1")]);
+        let found = state
+            .outputs()
+            .iter()
+            .find(|o| o.key_image == "ki1")
+            .unwrap();
+        assert_eq!(found.block_height, 101);
+        assert_eq!(found.ring, Some(test_ring(7)));
+    }
+
+    #[test]
+    fn replacing_outputs_keeps_the_ring_database() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1, 100, "ki1")]);
+        state.record_input_rings(&[input_ring("ki1", 7)]).unwrap();
+
+        state.replace_outputs(vec![make_output(1, 100, "ki1")]);
+        assert_eq!(state.outputs()[0].ring, Some(test_ring(7)));
+    }
+
+    #[test]
+    fn ring_stored_on_an_output_record_is_taken_into_the_database() {
+        let mut stored = make_output(1, 100, "ki1");
+        stored.ring = Some(test_ring(7));
+        let mut state = WalletState::new();
+        state.replace_outputs(vec![stored]);
+        assert_eq!(state.ring_database().ring("ki1"), Some(&test_ring(7)));
+
+        let mut stale = make_output(1, 100, "ki1");
+        stale.ring = Some(test_ring(8));
+        state.replace_outputs(vec![stale]);
+        assert_eq!(state.outputs()[0].ring, Some(test_ring(7)));
+        state.with_outputs_mut(|outputs| outputs[0].ring = None);
+        assert_eq!(state.outputs()[0].ring, Some(test_ring(7)));
+    }
+
+    #[test]
+    fn stored_ring_database_wins_over_output_records_in_either_order() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1, 100, "ki1")]);
+        state.record_input_rings(&[input_ring("ki1", 7)]).unwrap();
+        let stored = state.ring_database().clone();
+        let mut stale = make_output(1, 100, "ki1");
+        stale.ring = Some(test_ring(8));
+
+        let mut outputs_first = WalletState::new();
+        outputs_first.replace_outputs(vec![stale.clone()]);
+        outputs_first.restore_ring_database(stored.clone()).unwrap();
+        assert_eq!(
+            outputs_first.ring_database().ring("ki1"),
+            Some(&test_ring(7))
+        );
+        assert_eq!(outputs_first.outputs()[0].ring, Some(test_ring(7)));
+
+        let mut database_first = WalletState::new();
+        database_first.restore_ring_database(stored).unwrap();
+        database_first.replace_outputs(vec![stale]);
+        assert_eq!(
+            database_first.ring_database(),
+            outputs_first.ring_database()
+        );
+        assert_eq!(database_first.outputs()[0].ring, Some(test_ring(7)));
+    }
+
+    #[test]
+    fn key_images_are_stored_and_compared_in_lower_case() {
+        let upper = "AB".repeat(32);
+        let lower = "ab".repeat(32);
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1, 100, &upper)]);
+        assert_eq!(state.outputs()[0].key_image, lower);
+        state.record_input_rings(&[input_ring(&upper, 7)]).unwrap();
+        assert_eq!(state.ring_database().ring(&lower), Some(&test_ring(7)));
+        assert_eq!(state.ring_database().ring(&upper), Some(&test_ring(7)));
+        state
+            .record_input_rings(&[input_ring(&lower, 8)])
+            .unwrap_err();
+
+        let json = serde_json::to_string(state.ring_database()).unwrap();
+        let stored: RingDatabase = serde_json::from_str(&json.replace(&lower, &upper)).unwrap();
+        let mut reloaded = WalletState::new();
+        reloaded.restore_ring_database(stored).unwrap();
+        reloaded.add_outputs(vec![make_output(1, 100, &lower)]);
+        assert_eq!(reloaded.outputs()[0].ring, Some(test_ring(7)));
+
+        let mut view_only = WalletState::new();
+        view_only.add_outputs(vec![make_output(1, 100, "")]);
+        view_only.try_import_key_images(0, &[upper]).unwrap();
+        assert_eq!(view_only.outputs()[0].key_image, lower);
+    }
+
+    #[test]
+    fn ring_database_round_trips_and_never_replaces_a_ring_on_restore() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1, 100, "ki1"), make_output(1, 100, "ki2")]);
+        state
+            .record_input_rings(&[input_ring("ki1", 7), input_ring("ki2", 9)])
+            .unwrap();
+        let stored = serde_json::to_string(state.ring_database()).unwrap();
+        let stored: RingDatabase = serde_json::from_str(&stored).unwrap();
+        assert_eq!(&stored, state.ring_database());
+
+        let mut reloaded = WalletState::new();
+        reloaded.restore_ring_database(stored.clone()).unwrap();
+        reloaded.add_outputs(vec![make_output(1, 100, "ki2")]);
+        assert_eq!(reloaded.outputs()[0].ring, Some(test_ring(9)));
+
+        let mut other = WalletState::new();
+        other.add_outputs(vec![make_output(1, 100, "ki1"), make_output(1, 100, "ki3")]);
+        other
+            .record_input_rings(&[input_ring("ki1", 8), input_ring("ki3", 5)])
+            .unwrap();
+        let before = other.ring_database().clone();
+        other.restore_ring_database(stored).unwrap_err();
+        assert_eq!(
+            other.ring_database(),
+            &before,
+            "nothing is loaded on a conflict"
+        );
     }
 
     #[test]

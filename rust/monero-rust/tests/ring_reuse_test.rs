@@ -1003,7 +1003,6 @@ async fn relay_first_spend(
 }
 
 #[tokio::test]
-#[ignore = "known defect: a reorg of the receiving block removes the output record, and the ring is stored on that record"]
 async fn reorg_of_the_receiving_block_keeps_the_ring() {
     let node = FakeNode::uniform();
     let (mut state, owned, disk) = funded(&node, 1);
@@ -1039,7 +1038,6 @@ async fn reorg_of_the_receiving_block_keeps_the_ring() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: a reorg of the receiving block removes the output record and its ring, so an output that comes back at another index silently gets a fresh ring"]
 async fn reorg_that_moves_the_global_index_never_draws_a_fresh_ring_silently() {
     let node = FakeNode::uniform();
     let (mut state, owned, _disk) = funded(&node, 1);

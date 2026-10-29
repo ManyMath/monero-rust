@@ -16,6 +16,7 @@ pub(crate) mod decoy_select;
 pub mod encryption;
 pub mod key_image_import;
 pub mod monero_rpc;
+pub mod ring_db;
 pub mod scan_coordinator;
 pub mod scanner;
 pub mod seed_compat;
@@ -53,6 +54,8 @@ pub use wallet_state::{
     RollbackResult, SpentConflict, TrackedTransaction, TxStatus, WalletState, MAX_REORG_DEPTH,
     PENDING_SPEND_TTL_SECS,
 };
+
+pub use ring_db::RingDatabase;
 
 // -- Coin selection --
 pub use coin_selection::{

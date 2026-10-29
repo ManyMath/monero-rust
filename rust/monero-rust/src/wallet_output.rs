@@ -23,7 +23,8 @@ pub struct WalletOutput {
     /// be refreshed before spending: a lookup by tx hash reveals the real input.
     #[serde(default)]
     pub global_index: Option<u64>,
-    /// Ring selected for this output.
+    /// A copy of the wallet's ring database entry for `key_image`; it is the
+    /// database (`WalletState::ring_database`) that must be stored.
     #[serde(default)]
     pub ring: Option<DecoySelection>,
     pub block_height: u64,
