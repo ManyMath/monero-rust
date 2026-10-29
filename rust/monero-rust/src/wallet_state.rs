@@ -378,10 +378,40 @@ impl WalletState {
             self.adopted_rings.remove(&key_image);
             self.rings.set_ring(&key_image, ring.clone());
         }
+        for key_image in stored.cleared_key_images() {
+            if self
+                .adopted_rings
+                .contains(&crate::ring_db::canonical_key_image(key_image))
+            {
+                self.rings.remove_ring(key_image);
+            }
+            if !self.rings.holds(key_image) {
+                self.rings.mark_cleared(key_image);
+            }
+        }
         self.adopted_rings.clear();
         self.rings_restored = true;
         self.attach_rings();
         Ok(())
+    }
+
+    /// Forget and return the ring of `key_image`. Ask the user: a new ring beside
+    /// a published one shows which member is real.
+    pub fn clear_ring(&mut self, key_image: &str) -> Option<DecoySelection> {
+        let key_image = crate::ring_db::canonical_key_image(key_image);
+        let key_image = key_image.as_str();
+        let cleared = self.rings.remove_ring(key_image);
+        self.adopted_rings.remove(key_image);
+        if cleared.is_some() {
+            self.rings.mark_cleared(key_image);
+        }
+        let cleared = cleared?;
+        for output in &mut self.outputs {
+            if output.key_image == key_image {
+                output.ring = None;
+            }
+        }
+        Some(cleared)
     }
 
     fn attach_rings(&mut self) {
@@ -1858,6 +1888,57 @@ mod tests {
         view_only.add_outputs(vec![make_output(1, 100, "")]);
         view_only.try_import_key_images(0, &[upper]).unwrap();
         assert_eq!(view_only.outputs()[0].key_image, lower);
+    }
+
+    #[test]
+    fn clearing_a_ring_removes_it_from_the_database_and_the_record() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1, 100, "ki1"), make_output(1, 100, "ki2")]);
+        state
+            .record_input_rings(&[input_ring("ki1", 7), input_ring("ki2", 9)])
+            .unwrap();
+
+        assert_eq!(state.clear_ring("ki1"), Some(test_ring(7)));
+        assert_eq!(state.clear_ring("ki1"), None);
+        assert!(state.ring_database().ring("ki1").is_none());
+        assert!(state.outputs()[0].ring.is_none());
+        assert_eq!(state.outputs()[1].ring, Some(test_ring(9)));
+
+        state.add_outputs(vec![make_output(1, 100, "ki1")]);
+        assert!(state.outputs()[0].ring.is_none());
+        state.record_input_rings(&[input_ring("ki1", 8)]).unwrap();
+        assert_eq!(state.outputs()[0].ring, Some(test_ring(8)));
+    }
+
+    #[test]
+    fn a_cleared_ring_stays_cleared_against_copies_saved_before() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1, 100, "ki1")]);
+        state.record_input_rings(&[input_ring("ki1", 7)]).unwrap();
+        let saved_outputs = state.outputs().to_vec();
+        state.clear_ring("ki1").unwrap();
+        assert!(state.ring_database().is_cleared("ki1"));
+        let json = serde_json::to_string(state.ring_database()).unwrap();
+        let stored: RingDatabase = serde_json::from_str(&json).unwrap();
+        assert_eq!(&stored, state.ring_database());
+
+        let mut outputs_first = WalletState::new();
+        outputs_first.replace_outputs(saved_outputs.clone());
+        outputs_first.restore_ring_database(stored.clone()).unwrap();
+        let mut database_first = WalletState::new();
+        database_first.restore_ring_database(stored).unwrap();
+        database_first.replace_outputs(saved_outputs.clone());
+        for restarted in [&mut outputs_first, &mut database_first] {
+            assert!(restarted.ring_database().ring("ki1").is_none());
+            assert!(restarted.outputs()[0].ring.is_none());
+            restarted.replace_outputs(saved_outputs.clone());
+            assert!(restarted.ring_database().ring("ki1").is_none());
+            restarted
+                .record_input_rings(&[input_ring("ki1", 8)])
+                .unwrap();
+            assert!(!restarted.ring_database().is_cleared("ki1"));
+            assert_eq!(restarted.outputs()[0].ring, Some(test_ring(8)));
+        }
     }
 
     #[test]

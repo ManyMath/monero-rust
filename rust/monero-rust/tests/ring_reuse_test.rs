@@ -1177,6 +1177,71 @@ async fn recorded_ring_with_a_vanished_or_changed_member_fails_closed() {
 }
 
 #[tokio::test]
+async fn clearing_a_recorded_ring_is_the_only_way_to_draw_another() {
+    let node = FakeNode::uniform();
+    let (mut state, owned, disk) = funded(&node, 1);
+    let a = &owned[0];
+    let (first_ring, _) = relay_first_spend(&node, &mut state, a).await;
+    let decoy = *first_ring
+        .iter()
+        .find(|index| **index != a.global_index())
+        .unwrap();
+    let (key, commitment) = default_member(decoy + 1);
+    node.set_output(decoy, key, commitment);
+    for _ in 0..2 {
+        hot_send(
+            &node,
+            &mut state,
+            &[a.key_image()],
+            &destination(1),
+            XMR,
+            NORMAL,
+        )
+        .await
+        .expect_err("refused for as long as the ring is recorded");
+    }
+
+    let cleared = state
+        .clear_ring(a.key_image())
+        .expect("a ring was recorded");
+    assert_eq!(ring_indexes(&cleared), first_ring);
+    assert!(state.outputs()[0].ring.is_none());
+    assert!(state.clear_ring(a.key_image()).is_none());
+
+    let second = hot_send(
+        &node,
+        &mut state,
+        &[a.key_image()],
+        &destination(1),
+        XMR,
+        NORMAL,
+    )
+    .await
+    .unwrap();
+    let second_ring = signed_ring(&second.tx_blob, a);
+    assert_ne!(second_ring, first_ring);
+    relay(&node, &mut state, &second).await.unwrap();
+
+    disk.save(&state);
+    let mut state = crash_and_reload(&disk);
+    let third = hot_send(
+        &node,
+        &mut state,
+        &[a.key_image()],
+        &destination(2),
+        XMR,
+        NORMAL,
+    )
+    .await
+    .unwrap();
+    assert_same_ring(
+        "the ring drawn after clearing and a later rebuild",
+        &second_ring,
+        &signed_ring(&third.tx_blob, a),
+    );
+}
+
+#[tokio::test]
 #[ignore = "known defect: the scanner reports the key images a block spends without their rings, so the ring of a spend made by another instance is never learned"]
 async fn ring_of_a_spend_made_by_another_instance_is_learned_from_the_chain() {
     let node = FakeNode::uniform();
