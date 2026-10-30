@@ -1454,7 +1454,6 @@ async fn wallet2_unsigned_txset_is_signed_with_the_rings_wallet2_chose() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: converting a wallet2 unsigned txset reports no rings, so the rings wallet2 chose never reach wallet state"]
 async fn wallet2_txset_rings_are_recorded_for_a_later_native_rebuild() {
     let node = FakeNode::small();
     let fixture = wallet2_txset::fixture(&node);

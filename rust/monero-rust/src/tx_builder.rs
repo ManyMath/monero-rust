@@ -2049,10 +2049,17 @@ pub mod native {
             &construction.subaddr_indices,
         );
         let mut inputs = Vec::with_capacity(construction.sources.len());
+        let mut input_rings = Vec::with_capacity(construction.sources.len());
         for source in &construction.sources {
             let (key_offset, _, _) =
                 derive_source_key_offset(source, spend_secret, view_secret_key, &subaddresses)?;
-            inputs.push(wallet2_input(source, key_offset)?);
+            let input = wallet2_input(source, key_offset)?;
+            let output_secret = Zeroizing::new(**spend_secret + key_offset);
+            input_rings.push(InputRing {
+                key_image: hex::encode(generate_key_image(&output_secret).compress().to_bytes()),
+                ring: DecoySelection::from_decoys(input.decoys()),
+            });
+            inputs.push(input);
         }
 
         let mut payments = Vec::with_capacity(construction.destinations.len());
@@ -2120,10 +2127,12 @@ pub mod native {
             unsigned_tx_hex: hex::encode(unsigned.serialize()),
             fee,
             recipients,
-            input_rings: vec![],
+            input_rings,
         })
     }
 
+    /// Convert every transaction of a wallet2 unsigned txset. Record each
+    /// result's `input_rings` before this wallet spends the same outputs.
     pub fn create_unsigned_transactions_from_wallet2_txset_keys(
         spend_secret_key: [u8; 32],
         view_secret_key: [u8; 32],
