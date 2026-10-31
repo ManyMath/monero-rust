@@ -346,6 +346,19 @@ impl WalletState {
         Ok(())
     }
 
+    /// Whether the wallet holds the output of `key_image`, or a ring for it.
+    pub(crate) fn can_record_ring(&self, key_image: &str) -> bool {
+        let key_image = crate::ring_db::canonical_key_image(key_image);
+        self.key_image_index.contains_key(&key_image) || self.rings.ring(&key_image).is_some()
+    }
+
+    pub(crate) fn key_image_of_output_key(&self, output_key: &str) -> Option<&str> {
+        self.outputs
+            .iter()
+            .find(|output| output.key == output_key && !output.key_image.is_empty())
+            .map(|output| output.key_image.as_str())
+    }
+
     /// Store `ring` for a key image holding no different ring.
     fn keep_ring(&mut self, key_image: &str, ring: &DecoySelection) {
         let known_with_members = self

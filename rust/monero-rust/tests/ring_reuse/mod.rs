@@ -556,7 +556,6 @@ pub async fn hot_send_as(
     amount: u64,
     priority: FeePriority,
 ) -> Result<TransactionResult, String> {
-    let _ = state;
     monero_rust::native::create_transaction_with_rpc_and_policy(
         &node.rpc(),
         seed,
@@ -565,6 +564,7 @@ pub async fn hot_send_as(
         &[(destination.to_string(), amount)],
         "",
         policy(priority),
+        state,
     )
     .await
 }
@@ -604,7 +604,6 @@ pub async fn hot_sweep_with(
     inputs: Vec<StoredOutputData>,
     destination: &str,
 ) -> Result<TransactionResult, String> {
-    let _ = state;
     monero_rust::native::sweep_all_with_rpc_and_policy(
         &node.rpc(),
         SEED,
@@ -613,6 +612,7 @@ pub async fn hot_sweep_with(
         destination,
         "",
         policy(FeePriority::Normal),
+        state,
     )
     .await
 }
@@ -655,7 +655,7 @@ pub async fn draw_rings(
     key_images: &[&str],
 ) -> Result<Vec<DecoySelection>, String> {
     let inputs = inputs(state, key_images);
-    monero_rust::native::fetch_decoys_with_rpc(&node.rpc(), inputs)
+    monero_rust::native::fetch_decoys_with_rpc(&node.rpc(), inputs, state)
         .await
         .map(|drawn| drawn.decoys)
 }
@@ -692,6 +692,7 @@ pub async fn build_unsigned_from_raw_output(
             address: own,
             subaddress: None,
         }),
+        state,
     )
     .await?;
     Ok(hex::encode(unsigned.serialize()))

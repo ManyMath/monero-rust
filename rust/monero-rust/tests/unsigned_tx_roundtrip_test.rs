@@ -128,6 +128,9 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
     #[cfg(not(feature = "mock-rpc"))]
     let mut rng = rand::rngs::OsRng;
 
+    let mut wallet_state = monero_rust::WalletState::new();
+    wallet_state.add_outputs(vec![test_output.clone()]);
+
     let unsigned = build_unsigned_transaction(
         &mut rng,
         &rpc,
@@ -136,6 +139,7 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
         &[spendable],
         vec![(address, send_amount)],
         Some(change),
+        &mut wallet_state,
     )
     .await
     .map_err(|e| format!("build_unsigned_transaction failed: {:?}", e))?;

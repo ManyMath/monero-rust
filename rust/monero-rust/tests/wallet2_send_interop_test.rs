@@ -418,6 +418,7 @@ mod regtest {
     use monero_rust::scanner::{
         derive_address, scan_blocks_batch, scan_single_transaction, Lookahead,
     };
+    use monero_rust::WalletState;
     use zeroize::Zeroizing;
 
     const SEED: &str = "velvet lymph giddy number token physics poetry unquoted nibs useful \
@@ -456,7 +457,7 @@ mod regtest {
         .collect()
     }
 
-    async fn mature_outputs(rpc: &Rpc<HttpRpc>) -> Vec<StoredOutputData> {
+    async fn mature_outputs(rpc: &Rpc<HttpRpc>) -> (Vec<StoredOutputData>, WalletState) {
         let address = derive_address(SEED, NETWORK, "")
             .expect("derive address")
             .to_string();
@@ -470,25 +471,39 @@ mod regtest {
         rpc.generate_blocks(&address, 3 + 60)
             .await
             .expect("mine and mature three outputs");
-        scan_blocks_batch(rpc, start as u64, SEED, NETWORK, LOOKAHEAD, false, "")
-            .await
-            .expect("scan mined blocks")
-            .into_iter()
-            .filter(|block| block.block_height < (start + 3) as u64)
-            .flat_map(|block| block.outputs)
-            .map(StoredOutputData::from)
-            .collect()
+        let outputs: Vec<_> =
+            scan_blocks_batch(rpc, start as u64, SEED, NETWORK, LOOKAHEAD, false, "")
+                .await
+                .expect("scan mined blocks")
+                .into_iter()
+                .filter(|block| block.block_height < (start + 3) as u64)
+                .flat_map(|block| block.outputs)
+                .collect();
+        let mut wallet_state = WalletState::new();
+        wallet_state.add_outputs(outputs.clone());
+        (
+            outputs.into_iter().map(StoredOutputData::from).collect(),
+            wallet_state,
+        )
     }
 
     async fn with_ring(
         rpc: &Rpc<HttpRpc>,
         mut input: StoredOutputData,
         recipients: &[(String, u64)],
+        wallet_state: &mut WalletState,
     ) -> (StoredOutputData, u64) {
-        let first =
-            create_transaction_with_rpc(rpc, SEED, "mainnet", vec![input.clone()], recipients, "")
-                .await
-                .expect("first build");
+        let first = create_transaction_with_rpc(
+            rpc,
+            SEED,
+            "mainnet",
+            vec![input.clone()],
+            recipients,
+            "",
+            wallet_state,
+        )
+        .await
+        .expect("first build");
         input.ring = Some(first.input_rings[0].ring.clone());
         (input, first.fee)
     }
@@ -499,7 +514,7 @@ mod regtest {
             return;
         };
         let rpc = HttpRpc::new(node).expect("regtest RPC");
-        let mut inputs = mature_outputs(&rpc).await;
+        let (mut inputs, mut wallet_state) = mature_outputs(&rpc).await;
         assert_eq!(inputs.len(), 3, "three matured outputs of the test wallet");
         let (first, second) = (recipient(2777, 2888), recipient(3777, 3888));
         let first_address = first.legacy_address(NETWORK).to_string();
@@ -510,6 +525,7 @@ mod regtest {
             &rpc,
             inputs.pop().unwrap(),
             &[(first_address.clone(), small)],
+            &mut wallet_state,
         )
         .await;
         let amount = input.amount - fee;
@@ -521,6 +537,7 @@ mod regtest {
             vec![input.clone()],
             &[(first_address.clone(), amount + 1)],
             "",
+            &mut wallet_state,
         )
         .await
         .expect_err("the inputs do not cover the fee");
@@ -533,6 +550,7 @@ mod regtest {
             vec![input.clone()],
             &[(first_address.clone(), amount - 1)],
             "",
+            &mut wallet_state,
         )
         .await
         .expect("one piconero of change");
@@ -547,6 +565,7 @@ mod regtest {
             vec![input],
             &[(first_address.clone(), amount)],
             "",
+            &mut wallet_state,
         )
         .await
         .expect("a transfer that uses its input exactly");
@@ -570,6 +589,7 @@ mod regtest {
                 (first_address.clone(), small),
                 (second_address.clone(), small),
             ],
+            &mut wallet_state,
         )
         .await;
         let rest = input.amount - small - fee;
@@ -580,6 +600,7 @@ mod regtest {
             vec![input],
             &[(first_address, small), (second_address, rest)],
             "",
+            &mut wallet_state,
         )
         .await
         .expect("two destinations that use the input exactly");

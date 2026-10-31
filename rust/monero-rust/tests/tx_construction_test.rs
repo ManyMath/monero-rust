@@ -77,6 +77,7 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut all_outputs = Vec::new();
+    let mut wallet_state = monero_rust::WalletState::new();
     for height in START_BLOCK..=END_BLOCK {
         let lookahead = Lookahead {
             account: 0,
@@ -85,6 +86,7 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
         let scan_result =
             scan_block_for_outputs_with_lookahead(&rpc, height, TEST_SEED, NETWORK, lookahead, "")
                 .await?;
+        wallet_state.add_outputs(scan_result.outputs.clone());
 
         for output in scan_result.outputs {
             assert!(!output.tx_hash.is_empty());
@@ -162,6 +164,7 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
         &[spendable],
         vec![(address, send_amount)],
         Some(change),
+        &mut wallet_state,
     )
     .await?;
 
@@ -260,6 +263,7 @@ async fn sweep_uses_the_exact_fee_and_a_throwaway_dummy_output(
     let fee_rate = FeeRate::new(25_000, 10_000).ok_or("zero fee rate")?;
 
     let mut stored = Vec::new();
+    let mut wallet_state = monero_rust::WalletState::new();
     for height in START_BLOCK..=END_BLOCK {
         let scan = scan_block_for_outputs_with_lookahead(
             &rpc,
@@ -273,6 +277,7 @@ async fn sweep_uses_the_exact_fee_and_a_throwaway_dummy_output(
             "",
         )
         .await?;
+        wallet_state.add_outputs(scan.outputs.clone());
         stored.extend(scan.outputs.into_iter().map(|output| StoredOutputData {
             tx_hash: output.tx_hash,
             output_index: output.output_index,
@@ -300,6 +305,7 @@ async fn sweep_uses_the_exact_fee_and_a_throwaway_dummy_output(
         stored,
         &destination.to_string(),
         "",
+        &mut wallet_state,
     )
     .await?;
     let bytes = hex::decode(result.tx_blob)?;
@@ -447,6 +453,8 @@ async fn test_transaction_with_multiple_inputs() -> Result<(), Box<dyn std::erro
                 all_outputs.push(output);
             }
         }
+        let mut wallet_state = monero_rust::WalletState::new();
+        wallet_state.add_outputs(all_outputs.clone());
 
         if all_outputs.len() >= 2 {
             let seed = Seed::from_string(Zeroizing::new(TEST_SEED.to_string()))?;
@@ -506,6 +514,7 @@ async fn test_transaction_with_multiple_inputs() -> Result<(), Box<dyn std::erro
                     address: wallet_view_pair.legacy_address(NETWORK),
                     subaddress: None,
                 }),
+                &mut wallet_state,
             )
             .await?;
 

@@ -16,7 +16,7 @@ use monero_rust::native::{
     StoredOutputData, TransactionResult,
 };
 use monero_rust::scanner::{derive_address, scan_mempool};
-use monero_rust::WalletOutput;
+use monero_rust::{WalletOutput, WalletState};
 
 type Node = HostileNode<SnapshotNode>;
 
@@ -46,7 +46,11 @@ fn coinbase_at(wallet: &Wallet, height: u64) -> WalletOutput {
         .clone()
 }
 
-async fn send(node: &Node, inputs: &[WalletOutput]) -> Result<TransactionResult, String> {
+async fn send(
+    node: &Node,
+    inputs: &[WalletOutput],
+    wallet_state: &mut WalletState,
+) -> Result<TransactionResult, String> {
     let w2 = derive_address(SEED_W2, NETWORK, "").unwrap().to_string();
     create_transaction_with_rpc(
         &node.rpc(),
@@ -55,6 +59,7 @@ async fn send(node: &Node, inputs: &[WalletOutput]) -> Result<TransactionResult,
         inputs.iter().map(StoredOutputData::from).collect(),
         &[(w2, 100_000_000_000)],
         "",
+        wallet_state,
     )
     .await
 }
@@ -74,7 +79,9 @@ async fn honest_send_hides_each_input_in_one_batched_get_outs_request() {
     let mut wallet = hostile::synced_wallet().await;
     let node = Node::honest(SnapshotNode::new());
     let inputs = [change_output(&wallet), coinbase_at(&wallet, 500)];
-    let tx = send(&node, &inputs).await.expect("honest send");
+    let tx = send(&node, &inputs, &mut wallet.state)
+        .await
+        .expect("honest send");
     broadcast_transaction_with_rpc(&node.rpc(), &tx, &mut wallet.state, false)
         .await
         .unwrap();
@@ -116,13 +123,21 @@ async fn honest_send_hides_each_input_in_one_batched_get_outs_request() {
 
 #[tokio::test]
 async fn sweep_request_pattern_matches_a_send() {
-    let wallet = hostile::synced_wallet().await;
+    let mut wallet = hostile::synced_wallet().await;
     let node = Node::honest(SnapshotNode::new());
     let w2 = derive_address(SEED_W2, NETWORK, "").unwrap().to_string();
     let inputs = vec![StoredOutputData::from(&change_output(&wallet))];
-    let _ = sweep_all_with_rpc(&node.rpc(), SEED_W, NETWORK_STR, inputs, &w2, "")
-        .await
-        .expect("honest sweep");
+    let _ = sweep_all_with_rpc(
+        &node.rpc(),
+        SEED_W,
+        NETWORK_STR,
+        inputs,
+        &w2,
+        "",
+        &mut wallet.state,
+    )
+    .await
+    .expect("honest sweep");
     assert_eq!(node.count("get_outs.bin"), 1);
     assert_eq!(
         node.requests("get_outs.bin")[0].get_outs_indices().len(),
@@ -170,12 +185,16 @@ async fn persisted_ring_is_reused_and_never_silently_replaced() {
     let mut wallet = hostile::synced_wallet().await;
     let real = change_output(&wallet);
     let node = Node::honest(SnapshotNode::new());
-    let first = send(&node, &[real.clone()]).await.unwrap();
+    let first = send(&node, &[real.clone()], &mut wallet.state)
+        .await
+        .unwrap();
     first.persist_input_rings(&mut wallet.state).unwrap();
     let persisted = change_output(&wallet);
     assert!(persisted.ring.is_some());
 
-    let second = send(&node, &[persisted.clone()]).await.unwrap();
+    let second = send(&node, &[persisted.clone()], &mut wallet.state)
+        .await
+        .unwrap();
     assert_eq!(first.input_rings[0].ring, second.input_rings[0].ring);
     let ring: HashSet<u64> = {
         let mut index = 0;
@@ -216,7 +235,9 @@ async fn persisted_ring_is_reused_and_never_silently_replaced() {
             reply
         },
     );
-    let err = send(&hostile, &[persisted]).await.unwrap_err();
+    let err = send(&hostile, &[persisted], &mut wallet.state)
+        .await
+        .unwrap_err();
     assert!(err.contains("persisted ring member"), "{err}");
     assert_eq!(hostile.count("get_outs.bin"), 1);
 }
@@ -224,7 +245,7 @@ async fn persisted_ring_is_reused_and_never_silently_replaced() {
 #[tokio::test]
 #[ignore = "known defect: candidate sets are redrawn on each sanity-check retry, so the requests intersect on the real output"]
 async fn sanity_check_failure_sends_one_candidate_request() {
-    let wallet = hostile::synced_wallet().await;
+    let mut wallet = hostile::synced_wallet().await;
     let real = change_output(&wallet);
     let real_index = real.global_index.unwrap();
     let honest = SnapshotNode::new();
@@ -239,7 +260,7 @@ async fn sanity_check_failure_sends_one_candidate_request() {
         }
         reply
     });
-    let err = send(&node, &[real]).await.unwrap_err();
+    let err = send(&node, &[real], &mut wallet.state).await.unwrap_err();
     assert!(err.contains("sanity check"), "{err}");
 
     let requests: Vec<HashSet<u64>> = node
@@ -263,7 +284,7 @@ async fn sanity_check_failure_sends_one_candidate_request() {
 
 #[tokio::test]
 async fn parity_failed_get_outs_leaves_no_ring_so_a_user_retry_redraws_decoys() {
-    let wallet = hostile::synced_wallet().await;
+    let mut wallet = hostile::synced_wallet().await;
     let real = change_output(&wallet);
     let real_index = real.global_index.unwrap();
     let node = Node::with(
@@ -280,8 +301,12 @@ async fn parity_failed_get_outs_leaves_no_ring_so_a_user_retry_redraws_decoys() 
             reply
         },
     );
-    send(&node, &[real.clone()]).await.unwrap_err();
-    let _ = send(&node, &[real]).await.expect("second attempt succeeds");
+    send(&node, &[real.clone()], &mut wallet.state)
+        .await
+        .unwrap_err();
+    let _ = send(&node, &[real], &mut wallet.state)
+        .await
+        .expect("second attempt succeeds");
     let requests: Vec<HashSet<u64>> = node
         .requests("get_outs.bin")
         .iter()

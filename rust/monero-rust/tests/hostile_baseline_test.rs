@@ -90,6 +90,7 @@ async fn honest_send_builds_and_relays() {
         vec![input],
         &[(w2, 100_000_000_000)],
         "",
+        &mut wallet.state,
     )
     .await
     .expect("honest send");

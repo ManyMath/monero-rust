@@ -697,6 +697,8 @@ async fn op_build(request: &Value) -> Value {
     let mut first: Option<TransactionResult> = None;
     let build_started = Instant::now();
     for _ in 0..repeat {
+        let mut build_state = WalletState::new();
+        build_state.add_outputs(wallet_outputs.clone());
         let built = match kind {
             "send" => {
                 create_transaction_with_rpc_and_policy(
@@ -707,6 +709,7 @@ async fn op_build(request: &Value) -> Value {
                     &recipients,
                     "",
                     policy,
+                    &mut build_state,
                 )
                 .await
             }
@@ -719,6 +722,7 @@ async fn op_build(request: &Value) -> Value {
                     &recipients[0].0,
                     "",
                     policy,
+                    &mut build_state,
                 )
                 .await
             }

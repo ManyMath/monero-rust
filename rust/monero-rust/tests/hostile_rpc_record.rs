@@ -243,9 +243,17 @@ async fn record_main(node: &LiveNode) {
     let mut send_raw_ok = Value::Null;
     let mut tx_heights = Vec::new();
     for (position, (inputs, recipients)) in plans.into_iter().enumerate() {
-        let tx = create_transaction_with_rpc(&rpc, SEED_W, NETWORK_STR, inputs, &recipients, "")
-            .await
-            .expect("honest send builds");
+        let tx = create_transaction_with_rpc(
+            &rpc,
+            SEED_W,
+            NETWORK_STR,
+            inputs,
+            &recipients,
+            "",
+            &mut wallet.state,
+        )
+        .await
+        .expect("honest send builds");
         let reply = other(
             node,
             "send_raw_transaction",

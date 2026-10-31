@@ -168,6 +168,8 @@ async fn probe_send() {
     };
     let inputs = stored.len();
 
+    let mut wallet_state = monero_rust::WalletState::new();
+    wallet_state.add_outputs(outputs.clone());
     match create_transaction_with_rpc_and_policy(
         &rpc,
         &seed,
@@ -176,6 +178,7 @@ async fn probe_send() {
         &[(dest, amount)],
         "",
         policy,
+        &mut wallet_state,
     )
     .await
     {

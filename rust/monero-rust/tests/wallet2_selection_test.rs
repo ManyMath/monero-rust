@@ -483,20 +483,38 @@ async fn construction_refuses_more_than_one_transaction_before_asking_the_node()
         let outputs = vec![output.clone(); inputs];
         let rpc = rpc.clone();
         async move {
-            create_transaction_with_rpc(&rpc, SEED, "mainnet", outputs, &recipients, "")
-                .await
-                .map(|_| ())
-                .unwrap_err()
+            let mut wallet_state = monero_rust::WalletState::new();
+            create_transaction_with_rpc(
+                &rpc,
+                SEED,
+                "mainnet",
+                outputs,
+                &recipients,
+                "",
+                &mut wallet_state,
+            )
+            .await
+            .map(|_| ())
+            .unwrap_err()
         }
     };
     let sweep = |inputs: usize| {
         let outputs = vec![output.clone(); inputs];
         let (rpc, address) = (rpc.clone(), address.clone());
         async move {
-            sweep_all_with_rpc(&rpc, SEED, "mainnet", outputs, &address, "")
-                .await
-                .map(|_| ())
-                .unwrap_err()
+            let mut wallet_state = monero_rust::WalletState::new();
+            sweep_all_with_rpc(
+                &rpc,
+                SEED,
+                "mainnet",
+                outputs,
+                &address,
+                "",
+                &mut wallet_state,
+            )
+            .await
+            .map(|_| ())
+            .unwrap_err()
         }
     };
 

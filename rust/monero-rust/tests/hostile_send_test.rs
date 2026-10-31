@@ -21,7 +21,7 @@ use monero_rust::native::{
     create_transaction_with_rpc, DecoySelection, StoredOutputData, TransactionResult,
 };
 use monero_rust::scanner::derive_address;
-use monero_rust::WalletOutput;
+use monero_rust::{WalletOutput, WalletState};
 
 type Node = HostileNode<SnapshotNode>;
 
@@ -63,6 +63,8 @@ fn coinbase_at(wallet: &Wallet, height: u64) -> WalletOutput {
 
 async fn send(node: &Node, input: &WalletOutput) -> Result<TransactionResult, String> {
     let w2 = derive_address(SEED_W2, NETWORK, "").unwrap().to_string();
+    let mut wallet_state = WalletState::new();
+    wallet_state.add_outputs(vec![input.clone()]);
     create_transaction_with_rpc(
         &node.rpc(),
         SEED_W,
@@ -70,6 +72,7 @@ async fn send(node: &Node, input: &WalletOutput) -> Result<TransactionResult, St
         vec![StoredOutputData::from(input)],
         &[(w2, 100_000_000_000)],
         "",
+        &mut wallet_state,
     )
     .await
 }

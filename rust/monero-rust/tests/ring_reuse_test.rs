@@ -126,7 +126,6 @@ async fn rings_drawn_up_front_and_saved_are_fixed_before_any_build() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: the hot builders record nothing, so two builds of one output return two different rings"]
 async fn two_hot_builds_of_one_output_carry_one_ring() {
     let node = FakeNode::uniform();
     let (mut state, owned, _disk) = funded(&node, 1);
@@ -640,7 +639,6 @@ async fn recorded_rings_that_fail_sanity_together_are_never_redrawn() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: build_unsigned_transaction always draws a fresh ring, whatever ring the output already has"]
 async fn build_unsigned_transaction_reuses_a_recorded_ring() {
     let node = FakeNode::uniform();
     let (mut state, owned, _disk) = funded(&node, 1);
@@ -670,7 +668,6 @@ async fn build_unsigned_transaction_reuses_a_recorded_ring() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: the hot builders trust the ring field of the inputs they are handed, so inputs captured before a ring was recorded produce a second ring"]
 async fn hot_rebuild_from_stale_inputs_reuses_the_recorded_ring() {
     let node = FakeNode::uniform();
     let (mut state, owned, _disk) = funded(&node, 1);
@@ -700,7 +697,6 @@ async fn hot_rebuild_from_stale_inputs_reuses_the_recorded_ring() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: the cold builder reads rings from the inputs it is handed, so with stale inputs it requests fresh candidates before it refuses to record the second ring"]
 async fn cold_rebuild_from_stale_inputs_sends_no_fresh_candidates() {
     let node = FakeNode::uniform();
     let (mut state, owned, _disk) = funded(&node, 1);
@@ -729,7 +725,6 @@ async fn cold_rebuild_from_stale_inputs_sends_no_fresh_candidates() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: an input without a key image is refused only after its candidate request has been sent"]
 async fn input_without_key_image_is_refused_before_any_candidate_request() {
     let node = FakeNode::uniform();
     let (mut state, owned, _disk) = funded(&node, 1);
@@ -961,7 +956,6 @@ async fn respend_after_releasing_an_unmined_spend_reuses_the_ring() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: the hot builders record nothing, so a prepared sweep that is built twice gets two rings for every input"]
 async fn prepared_sweep_built_twice_carries_one_ring_per_input() {
     let node = FakeNode::uniform();
     let (mut state, owned, _disk) = funded(&node, 3);
@@ -1238,6 +1232,30 @@ async fn clearing_a_recorded_ring_is_the_only_way_to_draw_another() {
         "the ring drawn after clearing and a later rebuild",
         &second_ring,
         &signed_ring(&third.tx_blob, a),
+    );
+}
+
+#[tokio::test]
+async fn inputs_prepared_before_clear_ring_do_not_bring_the_ring_back() {
+    let node = FakeNode::uniform();
+    let (mut state, owned, _disk) = funded(&node, 1);
+    let a = &owned[0];
+    let (first_ring, _) = relay_first_spend(&node, &mut state, a).await;
+    let prepared = inputs(&state, &[a.key_image()]);
+    assert!(prepared[0].ring.is_some());
+
+    state.clear_ring(a.key_image()).unwrap();
+    let rebuilt = hot_send_with(&node, &mut state, prepared, &destination(1), XMR, NORMAL)
+        .await
+        .unwrap();
+    let ring = signed_ring(&rebuilt.tx_blob, a);
+    assert_ne!(
+        ring, first_ring,
+        "the cleared ring came back from the inputs"
+    );
+    assert_eq!(
+        ring_indexes(state.ring_database().ring(a.key_image()).unwrap()),
+        ring
     );
 }
 

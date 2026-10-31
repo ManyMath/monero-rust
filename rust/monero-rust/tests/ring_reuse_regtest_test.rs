@@ -167,7 +167,6 @@ async fn build(
     recipient: &str,
     amount: u64,
 ) -> TransactionResult {
-    let _ = state;
     create_transaction_with_rpc(
         rpc,
         seed,
@@ -175,6 +174,7 @@ async fn build(
         vec![input],
         &[(address(recipient), amount)],
         "",
+        state,
     )
     .await
     .expect("build and sign")

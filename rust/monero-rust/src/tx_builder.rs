@@ -59,15 +59,49 @@ pub mod native {
         Ok((output, global_index))
     }
 
-    fn persisted_rings(
+    fn input_key_images(
+        wallet_state: &mut crate::wallet_state::WalletState,
         stored_outputs: &[StoredOutputData],
+    ) -> Result<Vec<String>, String> {
+        let mut key_images = Vec::with_capacity(stored_outputs.len());
+        for stored in stored_outputs {
+            if stored.key_image.is_empty() {
+                return Err(
+                    "Cannot build a transaction until every selected output has a key image"
+                        .to_string(),
+                );
+            }
+            let key_image = crate::ring_db::canonical_key_image(&stored.key_image);
+            if !wallet_state.can_record_ring(&key_image) {
+                return Err(format!(
+                    "Cannot build a transaction: the output with key image {} is not in wallet \
+                     state, so its ring could not be recorded",
+                    stored.key_image
+                ));
+            }
+            if let Some(ring) = &stored.ring {
+                if !wallet_state.ring_database().holds(&key_image) {
+                    wallet_state.record_input_rings(&[InputRing {
+                        key_image: key_image.clone(),
+                        ring: ring.clone(),
+                    }])?;
+                }
+            }
+            key_images.push(key_image);
+        }
+        Ok(key_images)
+    }
+
+    fn recorded_rings(
+        wallet_state: &crate::wallet_state::WalletState,
+        key_images: &[String],
     ) -> Result<Vec<Option<crate::decoy_select::RecordedRing>>, String> {
-        stored_outputs
+        key_images
             .iter()
-            .map(|stored| {
-                stored
-                    .ring
-                    .as_ref()
+            .map(|key_image| {
+                wallet_state
+                    .ring_database()
+                    .ring(key_image)
                     .map(DecoySelection::to_recorded_ring)
                     .transpose()
             })
@@ -142,28 +176,44 @@ pub mod native {
         rct_type: RctType,
         height: usize,
         outputs: &[(WalletOutput, u64)],
-        existing_rings: &[Option<crate::decoy_select::RecordedRing>],
+        key_images: &[String],
         blackballed: &HashSet<u64>,
-    ) -> Result<Vec<Decoys>, String> {
+        wallet_state: &mut crate::wallet_state::WalletState,
+    ) -> Result<(Vec<Decoys>, Vec<InputRing>), String> {
         let ring_len = ring_len(rct_type).ok_or_else(|| "Unsupported RingCT type".to_string())?;
+        if key_images.len() != outputs.len() {
+            return Err("selected ring count does not match stored input count".to_string());
+        }
+        let existing_rings = recorded_rings(wallet_state, key_images)?;
         let mut spent = Vec::with_capacity(outputs.len());
         for (output, global_index) in outputs {
             spent.push(spent_output(output, *global_index));
         }
-        crate::decoy_select::select_decoys_for_outputs(
+        let decoys = crate::decoy_select::select_decoys_for_outputs(
             rng,
             rpc,
             ring_len,
             height,
             &spent,
-            existing_rings,
+            &existing_rings,
             blackballed,
         )
         .await
-        .map_err(|e| format!("Decoy selection failed: {}", e))
+        .map_err(|e| format!("Decoy selection failed: {}", e))?;
+        let input_rings: Vec<InputRing> = key_images
+            .iter()
+            .zip(&decoys)
+            .map(|(key_image, decoys)| InputRing {
+                key_image: key_image.clone(),
+                ring: DecoySelection::from_decoys(decoys),
+            })
+            .collect();
+        wallet_state.record_input_rings(&input_rings)?;
+        Ok((decoys, input_rings))
     }
 
     /// Select decoys for every output and assemble the unsigned transaction.
+    /// Every output must be in `wallet_state`; a ring recorded there is reused.
     pub async fn build_unsigned_transaction<G: RngCore + CryptoRng, R: RpcConnection>(
         rng: &mut G,
         rpc: &Rpc<R>,
@@ -172,6 +222,7 @@ pub mod native {
         outputs: &[(WalletOutput, u64)],
         payments: Vec<(MoneroAddress, u64)>,
         change: Option<UnsignedChange>,
+        wallet_state: &mut crate::wallet_state::WalletState,
     ) -> Result<UnsignedTransaction, String> {
         build_unsigned_transaction_with_blackballs(
             rng,
@@ -182,6 +233,7 @@ pub mod native {
             payments,
             change,
             &HashSet::new(),
+            wallet_state,
         )
         .await
     }
@@ -200,22 +252,35 @@ pub mod native {
         payments: Vec<(MoneroAddress, u64)>,
         change: Option<UnsignedChange>,
         blackballed: &HashSet<u64>,
+        wallet_state: &mut crate::wallet_state::WalletState,
     ) -> Result<UnsignedTransaction, String> {
-        let existing_rings: Vec<_> = outputs.iter().map(|_| None).collect();
+        let mut key_images = Vec::with_capacity(outputs.len());
+        for (output, _) in outputs {
+            let key = hex::encode(output.key().compress().to_bytes());
+            let key_image = wallet_state.key_image_of_output_key(&key).ok_or_else(|| {
+                format!(
+                    "Cannot build a transaction: output {key} is not in wallet state with a key \
+                     image, so its ring could not be recorded"
+                )
+            })?;
+            key_images.push(key_image.to_string());
+        }
         let source_account = output_source_account(outputs)?;
-        build_unsigned_transaction_with_rings(
+        let (unsigned, _) = build_unsigned_transaction_with_rings(
             rng,
             rpc,
             rct_type,
             fee_rate,
             outputs,
-            &existing_rings,
+            &key_images,
             source_account,
             payments,
             change,
             blackballed,
+            wallet_state,
         )
-        .await
+        .await?;
+        Ok(unsigned)
     }
 
     async fn build_unsigned_transaction_with_rings<G: RngCore + CryptoRng, R: RpcConnection>(
@@ -224,12 +289,13 @@ pub mod native {
         rct_type: RctType,
         fee_rate: FeeRate,
         outputs: &[(WalletOutput, u64)],
-        existing_rings: &[Option<crate::decoy_select::RecordedRing>],
+        key_images: &[String],
         source_account: u32,
         payments: Vec<(MoneroAddress, u64)>,
         change: Option<UnsignedChange>,
         blackballed: &HashSet<u64>,
-    ) -> Result<UnsignedTransaction, String> {
+        wallet_state: &mut crate::wallet_state::WalletState,
+    ) -> Result<(UnsignedTransaction, Vec<InputRing>), String> {
         if output_source_account(outputs)? != source_account {
             return Err("Stored source account does not match the selected outputs".to_string());
         }
@@ -238,14 +304,15 @@ pub mod native {
             .await
             .map_err(|e| format!("Failed to get height: {:?}", e))?;
 
-        let decoys = select_output_decoys(
+        let (decoys, input_rings) = select_output_decoys(
             rng,
             rpc,
             rct_type,
             height.saturating_sub(1),
             outputs,
-            existing_rings,
+            key_images,
             blackballed,
+            wallet_state,
         )
         .await?;
         let mut inputs = Vec::with_capacity(outputs.len());
@@ -261,15 +328,18 @@ pub mod native {
         let mut seed = Zeroizing::new([0u8; 32]);
         rng.fill_bytes(seed.as_mut());
 
-        Ok(UnsignedTransaction {
-            rct_type,
-            seed,
-            fee_rate,
-            source_account,
-            inputs,
-            payments,
-            change,
-        })
+        Ok((
+            UnsignedTransaction {
+                rct_type,
+                seed,
+                fee_rate,
+                source_account,
+                inputs,
+                payments,
+                change,
+            },
+            input_rings,
+        ))
     }
 
     fn check_payment_id_destinations(
@@ -499,7 +569,7 @@ pub mod native {
         pub key_image: String,
     }
 
-    #[must_use = "persist input_rings in WalletState before a transaction may be rebuilt"]
+    #[must_use = "store the wallet's ring database before these bytes leave the process"]
     #[derive(Clone, Serialize, Deserialize)]
     pub struct TransactionResult {
         pub tx_id: String,
@@ -559,7 +629,8 @@ pub mod native {
         /// Key image, which keys the wallet's ring database.
         #[serde(default)]
         pub key_image: String,
-        /// The ring a build reuses for this output.
+        /// A ring from older versions, recorded in the ring database if that
+        /// holds nothing for `key_image`.
         #[serde(default)]
         pub ring: Option<DecoySelection>,
     }
@@ -666,32 +737,6 @@ pub mod native {
                 members,
             })
         }
-    }
-
-    fn selected_input_rings(
-        stored_outputs: &[StoredOutputData],
-        unsigned: &UnsignedTransaction,
-    ) -> Result<Vec<InputRing>, String> {
-        if stored_outputs.len() != unsigned.inputs.len() {
-            return Err("selected ring count does not match stored input count".to_string());
-        }
-        if stored_outputs
-            .iter()
-            .any(|stored| stored.key_image.is_empty())
-        {
-            return Err(
-                "Cannot build a transaction until every selected output has a key image"
-                    .to_string(),
-            );
-        }
-        Ok(stored_outputs
-            .iter()
-            .zip(&unsigned.inputs)
-            .map(|(stored, input)| InputRing {
-                key_image: stored.key_image.clone(),
-                ring: DecoySelection::from_decoys(input.decoys()),
-            })
-            .collect())
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -838,10 +883,11 @@ pub mod native {
     pub async fn fetch_decoys(
         node_url: &str,
         stored_outputs: Vec<StoredOutputData>,
+        wallet_state: &mut crate::wallet_state::WalletState,
     ) -> Result<DecoyResult, String> {
         crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;
         let rpc = HttpRpc::new(node_url.to_string()).map_err(|e| format!("RPC error: {:?}", e))?;
-        fetch_decoys_with_rpc(&rpc, stored_outputs).await
+        fetch_decoys_with_rpc(&rpc, stored_outputs, wallet_state).await
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -849,23 +895,27 @@ pub mod native {
         node_url: &str,
         stored_outputs: Vec<StoredOutputData>,
         policy: &DecoyPolicy,
+        wallet_state: &mut crate::wallet_state::WalletState,
     ) -> Result<DecoyResult, String> {
         crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;
         let rpc = HttpRpc::new(node_url.to_string()).map_err(|e| format!("RPC error: {:?}", e))?;
-        fetch_decoys_with_rpc_and_policy(&rpc, stored_outputs, policy).await
+        fetch_decoys_with_rpc_and_policy(&rpc, stored_outputs, policy, wallet_state).await
     }
 
     pub async fn fetch_decoys_with_rpc<R: RpcConnection>(
         rpc: &Rpc<R>,
         stored_outputs: Vec<StoredOutputData>,
+        wallet_state: &mut crate::wallet_state::WalletState,
     ) -> Result<DecoyResult, String> {
-        fetch_decoys_with_rpc_and_policy(rpc, stored_outputs, &DecoyPolicy::default()).await
+        fetch_decoys_with_rpc_and_policy(rpc, stored_outputs, &DecoyPolicy::default(), wallet_state)
+            .await
     }
 
     pub async fn fetch_decoys_with_rpc_and_policy<R: RpcConnection>(
         rpc: &Rpc<R>,
         stored_outputs: Vec<StoredOutputData>,
         policy: &DecoyPolicy,
+        wallet_state: &mut crate::wallet_state::WalletState,
     ) -> Result<DecoyResult, String> {
         if stored_outputs.is_empty() {
             return Err("No outputs provided".to_string());
@@ -887,20 +937,22 @@ pub mod native {
             spendable_outputs.push(spendable);
         }
 
-        let decoys = select_output_decoys(
+        let key_images = input_key_images(wallet_state, &stored_outputs)?;
+        let (_, input_rings) = select_output_decoys(
             &mut rand::rngs::OsRng,
             rpc,
             rct_type,
             height.saturating_sub(1),
             &spendable_outputs,
-            &persisted_rings(&stored_outputs)?,
+            &key_images,
             &policy.blackballed_outputs,
+            wallet_state,
         )
         .await?;
 
         Ok(DecoyResult {
             height: height.saturating_sub(1),
-            decoys: decoys.iter().map(DecoySelection::from_decoys).collect(),
+            decoys: input_rings.into_iter().map(|input| input.ring).collect(),
         })
     }
 
@@ -1041,6 +1093,7 @@ pub mod native {
         prepared: PreparedTransaction,
         seed_phrase: &str,
         passphrase: &str,
+        wallet_state: &mut crate::wallet_state::WalletState,
     ) -> Result<TransactionResult, String> {
         create_transaction(
             &prepared.node_url,
@@ -1049,6 +1102,7 @@ pub mod native {
             prepared.stored_outputs,
             &prepared.recipients,
             passphrase,
+            wallet_state,
         )
         .await
     }
@@ -1077,6 +1131,7 @@ pub mod native {
         stored_outputs: Vec<StoredOutputData>,
         recipients: &[(String, u64)],
         passphrase: &str,
+        wallet_state: &mut crate::wallet_state::WalletState,
     ) -> Result<TransactionResult, String> {
         create_transaction_with_policy(
             node_url,
@@ -1086,6 +1141,7 @@ pub mod native {
             recipients,
             passphrase,
             FeePolicy::default(),
+            wallet_state,
         )
         .await
     }
@@ -1099,6 +1155,7 @@ pub mod native {
         recipients: &[(String, u64)],
         passphrase: &str,
         policy: FeePolicy,
+        wallet_state: &mut crate::wallet_state::WalletState,
     ) -> Result<TransactionResult, String> {
         crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;
         let rpc = HttpRpc::new(node_url.to_string())
@@ -1111,6 +1168,7 @@ pub mod native {
             recipients,
             passphrase,
             policy,
+            wallet_state,
         )
         .await
     }
@@ -1122,6 +1180,7 @@ pub mod native {
         stored_outputs: Vec<StoredOutputData>,
         recipients: &[(String, u64)],
         passphrase: &str,
+        wallet_state: &mut crate::wallet_state::WalletState,
     ) -> Result<TransactionResult, String> {
         create_transaction_with_rpc_and_policy(
             rpc,
@@ -1131,6 +1190,7 @@ pub mod native {
             recipients,
             passphrase,
             FeePolicy::default(),
+            wallet_state,
         )
         .await
     }
@@ -1143,6 +1203,7 @@ pub mod native {
         recipients: &[(String, u64)],
         passphrase: &str,
         policy: FeePolicy,
+        wallet_state: &mut crate::wallet_state::WalletState,
     ) -> Result<TransactionResult, String> {
         create_transaction_with_rpc_and_policies(
             rpc,
@@ -1153,6 +1214,7 @@ pub mod native {
             passphrase,
             policy,
             &DecoyPolicy::default(),
+            wallet_state,
         )
         .await
     }
@@ -1166,6 +1228,7 @@ pub mod native {
         passphrase: &str,
         policy: FeePolicy,
         decoy_policy: &DecoyPolicy,
+        wallet_state: &mut crate::wallet_state::WalletState,
     ) -> Result<TransactionResult, String> {
         crate::validation::validate_network(network_str).map_err(|e| e.to_string())?;
         if stored_outputs.is_empty() {
@@ -1272,22 +1335,23 @@ pub mod native {
 
         // Select decoys online, then sign; the signer returns the tx keys
         let mut rng = rand::rngs::OsRng;
-        let mut unsigned = build_unsigned_transaction_with_rings(
+        let key_images = input_key_images(wallet_state, &stored_outputs)?;
+        let (mut unsigned, input_rings) = build_unsigned_transaction_with_rings(
             &mut rng,
             rpc,
             rct_type,
             fee,
             &spendable_outputs,
-            &persisted_rings(&stored_outputs)?,
+            &key_images,
             source_account,
             payments,
             change,
             &decoy_policy.blackballed_outputs,
+            wallet_state,
         )
         .await
         .map_err(|e| format!("Failed to prepare transaction: {}", e))?;
         settle_change(&mut unsigned, &view_pair)?;
-        let input_rings = selected_input_rings(&stored_outputs, &unsigned)?;
         let signed = sign_offline(&mut rng, &spend_key, &view_key, &unsigned)
             .map_err(|e| format!("Failed to sign transaction: {}", e))?;
         let fee_amount = signed.fee;
@@ -1339,6 +1403,7 @@ pub mod native {
         stored_outputs: Vec<StoredOutputData>,
         destination_address: &str,
         passphrase: &str,
+        wallet_state: &mut crate::wallet_state::WalletState,
     ) -> Result<TransactionResult, String> {
         sweep_all_with_policy(
             node_url,
@@ -1348,6 +1413,7 @@ pub mod native {
             destination_address,
             passphrase,
             FeePolicy::default(),
+            wallet_state,
         )
         .await
     }
@@ -1361,6 +1427,7 @@ pub mod native {
         destination_address: &str,
         passphrase: &str,
         policy: FeePolicy,
+        wallet_state: &mut crate::wallet_state::WalletState,
     ) -> Result<TransactionResult, String> {
         crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;
         let rpc = HttpRpc::new(node_url.to_string())
@@ -1373,6 +1440,7 @@ pub mod native {
             destination_address,
             passphrase,
             policy,
+            wallet_state,
         )
         .await
     }
@@ -1384,6 +1452,7 @@ pub mod native {
         stored_outputs: Vec<StoredOutputData>,
         destination_address: &str,
         passphrase: &str,
+        wallet_state: &mut crate::wallet_state::WalletState,
     ) -> Result<TransactionResult, String> {
         sweep_all_with_rpc_and_policy(
             rpc,
@@ -1393,6 +1462,7 @@ pub mod native {
             destination_address,
             passphrase,
             FeePolicy::default(),
+            wallet_state,
         )
         .await
     }
@@ -1405,6 +1475,7 @@ pub mod native {
         destination_address: &str,
         passphrase: &str,
         policy: FeePolicy,
+        wallet_state: &mut crate::wallet_state::WalletState,
     ) -> Result<TransactionResult, String> {
         sweep_all_with_rpc_and_policies(
             rpc,
@@ -1415,6 +1486,7 @@ pub mod native {
             passphrase,
             policy,
             &DecoyPolicy::default(),
+            wallet_state,
         )
         .await
     }
@@ -1428,6 +1500,7 @@ pub mod native {
         passphrase: &str,
         policy: FeePolicy,
         decoy_policy: &DecoyPolicy,
+        wallet_state: &mut crate::wallet_state::WalletState,
     ) -> Result<TransactionResult, String> {
         crate::validation::validate_network(network_str).map_err(|e| e.to_string())?;
         if stored_outputs.is_empty() {
@@ -1489,24 +1562,25 @@ pub mod native {
             })?;
 
         let mut rng = rand::rngs::OsRng;
-        let mut unsigned = build_unsigned_transaction_with_rings(
+        let key_images = input_key_images(wallet_state, &stored_outputs)?;
+        let (mut unsigned, input_rings) = build_unsigned_transaction_with_rings(
             &mut rng,
             rpc,
             rct_type,
             fee,
             &spendable_outputs,
-            &persisted_rings(&stored_outputs)?,
+            &key_images,
             source_account,
             vec![(dest_addr, provisional_amount)],
             Some(UnsignedChange::Dummy),
             &decoy_policy.blackballed_outputs,
+            wallet_state,
         )
         .await
         .map_err(|e| format!("Failed to prepare sweep transaction: {}", e))?;
         pay_everything(&mut unsigned, &view_pair)
             .map_err(|e| format!("Failed to prepare sweep transaction: {}", e))?;
 
-        let input_rings = selected_input_rings(&stored_outputs, &unsigned)?;
         let signed = sign_offline(&mut rng, &spend_key, &view_key, &unsigned)
             .map_err(|e| format!("Failed to sign sweep transaction: {}", e))?;
         let actual_fee = signed.fee;
@@ -1666,7 +1740,7 @@ pub mod native {
         received_outputs_from_scan_inner(rpc, block_height, seed_phrase, passphrase).await
     }
 
-    #[must_use = "persist input_rings in WalletState before an unsigned transaction may be rebuilt"]
+    #[must_use = "store the wallet's ring database before the envelope leaves the process"]
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct UnsignedTransactionResult {
         pub unsigned_tx_hex: String,
@@ -1685,14 +1759,6 @@ pub mod native {
         ) -> Result<(), String> {
             wallet_state.record_input_rings(&self.input_rings)
         }
-    }
-
-    fn persist_unsigned_transaction_result(
-        result: UnsignedTransactionResult,
-        wallet_state: &mut crate::wallet_state::WalletState,
-    ) -> Result<UnsignedTransactionResult, String> {
-        result.persist_input_rings(wallet_state)?;
-        Ok(result)
     }
 
     #[derive(Clone, Serialize, Deserialize)]
@@ -2459,34 +2525,32 @@ pub mod native {
         check_payment_id_destinations(&payments, change.as_ref())?;
 
         let mut rng = rand::rngs::OsRng;
-        let mut unsigned = build_unsigned_transaction_with_rings(
+        let key_images = input_key_images(wallet_state, &stored_outputs)?;
+        let (mut unsigned, input_rings) = build_unsigned_transaction_with_rings(
             &mut rng,
             rpc,
             rct_type,
             fee_rate,
             &spendable_outputs,
-            &persisted_rings(&stored_outputs)?,
+            &key_images,
             source_account,
             payments,
             change,
             &decoy_policy.blackballed_outputs,
+            wallet_state,
         )
         .await
         .map_err(|e| format!("Failed to prepare unsigned tx: {}", e))?;
         settle_change(&mut unsigned, &view_pair)?;
 
         let fee = unsigned.resolve(&view_pair)?.fee;
-        let input_rings = selected_input_rings(&stored_outputs, &unsigned)?;
 
-        persist_unsigned_transaction_result(
-            UnsignedTransactionResult {
-                unsigned_tx_hex: hex::encode(unsigned.serialize()),
-                fee,
-                recipients: recipients.to_vec(),
-                input_rings,
-            },
-            wallet_state,
-        )
+        Ok(UnsignedTransactionResult {
+            unsigned_tx_hex: hex::encode(unsigned.serialize()),
+            fee,
+            recipients: recipients.to_vec(),
+            input_rings,
+        })
     }
 
     pub fn sign_unsigned_transaction(
@@ -3136,54 +3200,6 @@ pub mod native {
         }
 
         #[test]
-        fn unsigned_envelope_is_returned_only_after_its_ring_is_recorded() {
-            let selection = DecoySelection {
-                real_index: 0,
-                offsets: vec![1; 16],
-                ring: vec![
-                    RingMember {
-                        key: "00".repeat(32),
-                        commitment: "00".repeat(32),
-                    };
-                    16
-                ],
-            };
-            let mut state = crate::wallet_state::WalletState::new();
-            state.add_outputs(vec![crate::wallet_output::WalletOutput {
-                tx_hash: "tx".into(),
-                output_index: 0,
-                amount: 1,
-                key: String::new(),
-                key_offset: String::new(),
-                commitment_mask: String::new(),
-                subaddress_index: Some((0, 0)),
-                payment_id: None,
-                received_output_bytes: String::new(),
-                global_index: Some(1),
-                ring: None,
-                block_height: 1,
-                spent: false,
-                spent_height: None,
-                key_image: "ki".into(),
-                is_coinbase: false,
-                frozen: false,
-            }]);
-            let result = UnsignedTransactionResult {
-                unsigned_tx_hex: "envelope".into(),
-                fee: 1,
-                recipients: vec![],
-                input_rings: vec![InputRing {
-                    key_image: "ki".into(),
-                    ring: selection.clone(),
-                }],
-            };
-
-            let exported = persist_unsigned_transaction_result(result, &mut state).unwrap();
-            assert_eq!(exported.unsigned_tx_hex, "envelope");
-            assert_eq!(state.outputs()[0].ring, Some(selection));
-        }
-
-        #[test]
         fn test_decoy_selection_from_decoys() {
             // Test the conversion from Decoys to DecoySelection
             let g = monero_wallet::ed25519::Point::from(
@@ -3458,8 +3474,27 @@ pub mod native {
                 payment_id: None,
                 received_output_bytes: hex::encode(bytes),
                 global_index: Some(424_242),
-                key_image: String::new(),
+                key_image: "22".repeat(32),
                 ring: None,
+            };
+            let output = crate::wallet_output::WalletOutput {
+                tx_hash: stored.tx_hash.clone(),
+                output_index: stored.output_index,
+                amount: INPUT,
+                key: String::new(),
+                key_offset: String::new(),
+                commitment_mask: String::new(),
+                subaddress_index: Some((0, 0)),
+                payment_id: None,
+                received_output_bytes: stored.received_output_bytes.clone(),
+                global_index: stored.global_index,
+                ring: None,
+                block_height: 1,
+                spent: false,
+                spent_height: None,
+                key_image: stored.key_image.clone(),
+                is_coinbase: false,
+                frozen: false,
             };
             let address = crate::scanner::derive_address(SEED, Network::Mainnet, "")
                 .unwrap()
@@ -3474,6 +3509,8 @@ pub mod native {
                 let connection = Connection::default();
                 let log = connection.0.clone();
                 let stored = stored.clone();
+                let mut wallet_state = crate::wallet_state::WalletState::new();
+                wallet_state.add_outputs(vec![output.clone()]);
                 let recipients = vec![(address.clone(), amount)];
                 async move {
                     let result = create_transaction_with_rpc_and_policy(
@@ -3484,6 +3521,7 @@ pub mod native {
                         &recipients,
                         "",
                         policy,
+                        &mut wallet_state,
                     )
                     .await;
                     let log = log.lock().unwrap().clone();

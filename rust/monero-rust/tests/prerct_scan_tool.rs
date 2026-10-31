@@ -282,7 +282,7 @@ async fn prerct_scan_tool() {
 
     let rpc = HttpRpc::new(request.rpc.clone()).expect("regtest RPC");
     let mut response = Response::default();
-    let state = scan_wallet(&rpc, &request, &mut response).await;
+    let mut state = scan_wallet(&rpc, &request, &mut response).await;
     let outputs = state.outputs().to_vec();
     let height = response.daemon_height;
 
@@ -335,6 +335,7 @@ async fn prerct_scan_tool() {
                             &request.recipients,
                             "",
                             policy,
+                            &mut state,
                         )
                         .await
                     }
@@ -347,6 +348,7 @@ async fn prerct_scan_tool() {
                             &request.recipients[0].0,
                             "",
                             policy,
+                            &mut state,
                         )
                         .await
                     }

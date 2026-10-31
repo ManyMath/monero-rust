@@ -163,6 +163,8 @@ async fn build(rpc: &Rpc<HttpRpc>, request: &Request, response: &mut Response) {
     }
 
     for _ in 0..request.repeat {
+        let mut build_state = monero_rust::WalletState::new();
+        build_state.add_outputs(response.outputs.clone());
         let built = match request.op.as_str() {
             "send" => {
                 create_transaction_with_rpc_and_policy(
@@ -173,6 +175,7 @@ async fn build(rpc: &Rpc<HttpRpc>, request: &Request, response: &mut Response) {
                     &request.recipients,
                     "",
                     policy,
+                    &mut build_state,
                 )
                 .await
             }
@@ -185,6 +188,7 @@ async fn build(rpc: &Rpc<HttpRpc>, request: &Request, response: &mut Response) {
                     &request.recipients[0].0,
                     "",
                     policy,
+                    &mut build_state,
                 )
                 .await
             }

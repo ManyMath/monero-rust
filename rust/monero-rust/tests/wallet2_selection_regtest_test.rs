@@ -220,6 +220,8 @@ async fn related_second_input_is_not_added() {
     )
     .await
     .expect("select");
+    let mut wallet_state = monero_rust::WalletState::new();
+    wallet_state.add_outputs(outputs.clone());
     let built = create_transaction_with_rpc(
         &probe.rpc,
         &probe.seed("w_same_tx"),
@@ -227,6 +229,7 @@ async fn related_second_input_is_not_added() {
         prepared.stored_outputs,
         &[(probe.recipient.clone(), XMR)],
         "",
+        &mut wallet_state,
     )
     .await
     .expect("build");
@@ -348,6 +351,8 @@ async fn sweep_of_many_outputs_is_split() {
     assert_eq!(inputs, [146, 19]);
 
     let last = transactions.pop().expect("two transactions");
+    let mut wallet_state = monero_rust::WalletState::new();
+    wallet_state.add_outputs(outputs.clone());
     let built = sweep_all_with_rpc(
         &probe.rpc,
         &probe.seed("w_many"),
@@ -355,6 +360,7 @@ async fn sweep_of_many_outputs_is_split() {
         last.stored_outputs,
         &probe.recipient,
         "",
+        &mut wallet_state,
     )
     .await
     .expect("build");

@@ -225,6 +225,7 @@ async fn builds_signs_and_broadcasts_a_transaction() {
     // Select the first mature output.
     let mature_before = height.saturating_sub(60);
     let mut spendable = None;
+    let mut wallet_state = monero_rust::WalletState::new();
     for h in 1..mature_before {
         let scanned =
             scan_block_for_outputs_with_lookahead(&rpc, h as u64, SEED, NETWORK, LOOKAHEAD, "")
@@ -238,6 +239,7 @@ async fn builds_signs_and_broadcasts_a_transaction() {
                 .global_index
                 .expect("refresh must persist the authoritative global index");
             spendable = Some((wallet_output, global_index));
+            wallet_state.add_outputs(vec![output.clone()]);
             break;
         }
     }
@@ -276,6 +278,7 @@ async fn builds_signs_and_broadcasts_a_transaction() {
             address: view_pair.legacy_address(monero_rust::Network::Mainnet),
             subaddress: None,
         }),
+        &mut wallet_state,
     )
     .await
     .expect("select live decoys and assemble the unsigned transaction");
@@ -358,6 +361,8 @@ async fn sweep_with_dummy_output_is_accepted_by_the_daemon() {
     }
     let owned = owned.expect("a mature sweep output");
     let input_amount = owned.amount;
+    let mut wallet_state = monero_rust::WalletState::new();
+    wallet_state.add_outputs(vec![owned.clone()]);
     let stored = StoredOutputData::from(owned);
 
     let recipient_spend = Scalar::from(777u64);
@@ -377,6 +382,7 @@ async fn sweep_with_dummy_output_is_accepted_by_the_daemon() {
         vec![stored],
         &recipient.to_string(),
         "",
+        &mut wallet_state,
     )
     .await
     .expect("build and sign sweep");
@@ -445,6 +451,7 @@ async fn daemon_accepts_multi_input_mixed_recipient_account_change() {
         subaddress: 5,
     };
     let mut funding_input = None;
+    let mut wallet_state = monero_rust::WalletState::new();
     for height in start..(start + BLOCKS_TO_MINE - 60) {
         let scanned = scan_block_for_outputs_with_lookahead(
             &rpc,
@@ -457,6 +464,7 @@ async fn daemon_accepts_multi_input_mixed_recipient_account_change() {
         .await
         .expect("scan matrix output");
         if let Some(output) = scanned.outputs.into_iter().next() {
+            wallet_state.add_outputs(vec![output.clone()]);
             funding_input = Some(StoredOutputData::from(output));
             break;
         }
@@ -474,6 +482,7 @@ async fn daemon_accepts_multi_input_mixed_recipient_account_change() {
             (source_address.to_string(), 1_000_000_000_000),
         ],
         "",
+        &mut wallet_state,
     )
     .await
     .expect("fund account-subaddress outputs");
@@ -501,6 +510,7 @@ async fn daemon_accepts_multi_input_mixed_recipient_account_change() {
     )
     .await
     .expect("scan account funding");
+    wallet_state.add_outputs(funded.outputs.clone());
     let stored = funded
         .outputs
         .into_iter()
@@ -525,9 +535,17 @@ async fn daemon_accepts_multi_input_mixed_recipient_account_change() {
         (subaddress.to_string(), 2_000_000_000),
     ];
 
-    let result = create_transaction_with_rpc(&rpc, MATRIX_SEED, "mainnet", stored, &recipients, "")
-        .await
-        .expect("build mixed-recipient transaction");
+    let result = create_transaction_with_rpc(
+        &rpc,
+        MATRIX_SEED,
+        "mainnet",
+        stored,
+        &recipients,
+        "",
+        &mut wallet_state,
+    )
+    .await
+    .expect("build mixed-recipient transaction");
     let bytes = hex::decode(&result.tx_blob).expect("signed transaction hex");
     let tx = Transaction::<NotPruned>::read(&mut bytes.as_slice()).expect("signed transaction");
     assert_eq!(tx.prefix().inputs.len(), 2);
