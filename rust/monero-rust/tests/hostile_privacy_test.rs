@@ -243,7 +243,6 @@ async fn persisted_ring_is_reused_and_never_silently_replaced() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: candidate sets are redrawn on each sanity-check retry, so the requests intersect on the real output"]
 async fn sanity_check_failure_sends_one_candidate_request() {
     let mut wallet = hostile::synced_wallet().await;
     let real = change_output(&wallet);
@@ -283,7 +282,7 @@ async fn sanity_check_failure_sends_one_candidate_request() {
 }
 
 #[tokio::test]
-async fn parity_failed_get_outs_leaves_no_ring_so_a_user_retry_redraws_decoys() {
+async fn failed_get_outs_keeps_the_candidates_so_a_user_retry_repeats_them() {
     let mut wallet = hostile::synced_wallet().await;
     let real = change_output(&wallet);
     let real_index = real.global_index.unwrap();
@@ -313,7 +312,9 @@ async fn parity_failed_get_outs_leaves_no_ring_so_a_user_retry_redraws_decoys() 
         .map(|r| r.get_outs_indices().into_iter().collect())
         .collect();
     assert_eq!(requests.len(), 2);
-    let common: HashSet<u64> = requests[0].intersection(&requests[1]).copied().collect();
-    assert!(common.contains(&real_index));
-    assert!(common.len() < 75, "the two requests are different draws");
+    assert!(requests[0].contains(&real_index));
+    assert_eq!(
+        requests[0], requests[1],
+        "the retry asks for the same candidates"
+    );
 }

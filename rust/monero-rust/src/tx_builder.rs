@@ -185,15 +185,36 @@ pub mod native {
             return Err("selected ring count does not match stored input count".to_string());
         }
         let existing_rings = recorded_rings(wallet_state, key_images)?;
+        let existing_candidates: Vec<Option<Vec<u64>>> = key_images
+            .iter()
+            .map(|key_image| {
+                wallet_state
+                    .ring_database()
+                    .candidates(key_image)
+                    .map(<[u64]>::to_vec)
+            })
+            .collect();
         let mut spent = Vec::with_capacity(outputs.len());
         for (output, global_index) in outputs {
             spent.push(spent_output(output, *global_index));
         }
-        let decoys = crate::decoy_select::select_decoys_for_outputs(
+        let plan = crate::decoy_select::plan_candidates(
             rng,
             rpc,
             ring_len,
             height,
+            &spent,
+            &existing_rings,
+            &existing_candidates,
+            blackballed,
+        )
+        .await
+        .map_err(|e| format!("Decoy selection failed: {}", e))?;
+        wallet_state.record_ring_candidates(key_images, &plan.candidates)?;
+        let decoys = crate::decoy_select::choose_rings(
+            rng,
+            rpc,
+            &plan,
             &spent,
             &existing_rings,
             blackballed,

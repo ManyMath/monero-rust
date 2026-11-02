@@ -187,6 +187,139 @@ mod tests {
         assert!(!rings_are_sane(&[ring], 10_000).unwrap());
     }
 
+    fn sanity_fixture(
+        old: u64,
+    ) -> (
+        CandidatePlan,
+        SpentOutput,
+        Vec<Option<[curve25519_dalek::EdwardsPoint; 2]>>,
+    ) {
+        let real = 15_000u64;
+        let mut candidates = vec![real];
+        candidates.extend(100..100 + old);
+        candidates.extend(13_000..13_000 + (74 - old));
+        let point = |n: u64| Scalar::from(n) * ED25519_BASEPOINT_POINT;
+        let member = |index: u64| [point(index), point(index + 50_000)];
+        let mut sorted = candidates.clone();
+        sorted.sort_unstable();
+        let fetched = sorted.iter().map(|index| Some(member(*index))).collect();
+        let [key, commitment] = member(real);
+        (
+            CandidatePlan {
+                ring_len: 16,
+                block_number: 1_000,
+                rct_outputs_available: 20_000,
+                candidates: vec![candidates],
+            },
+            SpentOutput {
+                index_on_blockchain: real,
+                key,
+                commitment,
+            },
+            fetched,
+        )
+    }
+
+    #[test]
+    fn sanity_failure_is_retried_from_the_same_reply() {
+        use rand_core::SeedableRng;
+
+        let (plan, input, fetched) = sanity_fixture(15);
+        let first = ring_from_candidates(
+            &input,
+            16,
+            &plan.candidates[0],
+            &{
+                let mut sorted = plan.candidates[0].clone();
+                sorted.sort_unstable();
+                sorted
+            },
+            &fetched,
+            None,
+            &HashSet::new(),
+        )
+        .unwrap();
+        assert!(!rings_are_sane(&[first], plan.rct_outputs_available).unwrap());
+
+        let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(1);
+        let rings = rings_from_reply(
+            &mut rng,
+            &plan,
+            std::slice::from_ref(&input),
+            &[None],
+            &fetched,
+            &HashSet::new(),
+        )
+        .unwrap();
+        assert!(rings_are_sane(&rings, plan.rct_outputs_available).unwrap());
+        let chosen = absolute_indexes(&rings[0]).unwrap();
+        assert!(chosen.contains(&15_000));
+        assert!(chosen
+            .iter()
+            .all(|index| plan.candidates[0].contains(index)));
+    }
+
+    #[test]
+    fn sanity_failure_with_no_sane_choice_is_an_error_not_a_new_request() {
+        use rand_core::SeedableRng;
+
+        let (plan, input, fetched) = sanity_fixture(74);
+        let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(1);
+        let error = rings_from_reply(
+            &mut rng,
+            &plan,
+            std::slice::from_ref(&input),
+            &[None],
+            &fetched,
+            &HashSet::new(),
+        )
+        .unwrap_err();
+        assert!(error.contains("sanity check"), "{error}");
+
+        let recorded = RecordedRing {
+            indexes: {
+                let mut ring: Vec<u64> = (100..115).collect();
+                ring.push(15_000);
+                ring
+            },
+            members: None,
+        };
+        let error = rings_from_reply(
+            &mut rng,
+            &plan,
+            std::slice::from_ref(&input),
+            &[Some(recorded)],
+            &fetched,
+            &HashSet::new(),
+        )
+        .unwrap_err();
+        assert!(error.contains("persisted rings were kept"), "{error}");
+    }
+
+    #[test]
+    fn persisted_candidates_are_reused_whole_or_refused() {
+        let (plan, input, _) = sanity_fixture(15);
+        let candidates = &plan.candidates[0];
+        check_persisted_candidates(candidates, 75, &input, None).unwrap();
+
+        let error = check_persisted_candidates(&candidates[1..], 74, &input, None).unwrap_err();
+        assert!(
+            error.contains("does not contain the real output"),
+            "{error}"
+        );
+        let error = check_persisted_candidates(candidates, 76, &input, None).unwrap_err();
+        assert!(error.contains("wrong size"), "{error}");
+        let outside = RecordedRing {
+            indexes: vec![7, 15_000],
+            members: None,
+        };
+        let error = check_persisted_candidates(candidates, 75, &input, Some(&outside)).unwrap_err();
+        assert!(
+            error.contains("does not contain the persisted ring"),
+            "{error}"
+        );
+    }
+
     #[test]
     fn wallet2_sanity_accepts_distinct_recent_outputs() {
         let first = ring_at(&(7000..7016).collect::<Vec<_>>());
@@ -446,20 +579,37 @@ fn rings_are_sane(rings: &[Decoys], rct_outputs_available: u64) -> Result<bool, 
     Ok(median >= rct_outputs_available.saturating_mul(6) / 10)
 }
 
-pub(crate) async fn select_decoys_for_outputs<R: RngCore + CryptoRng, C: RpcConnection>(
+pub(crate) struct CandidatePlan {
+    ring_len: u8,
+    block_number: usize,
+    rct_outputs_available: u64,
+    pub candidates: Vec<Vec<u64>>,
+}
+
+/// Decide every input's candidates, keeping recorded sets. Only chain-wide
+/// data is fetched, so the plan can be recorded before [`choose_rings`]
+/// sends it.
+pub(crate) async fn plan_candidates<R: RngCore + CryptoRng, C: RpcConnection>(
     rng: &mut R,
     rpc: &Rpc<C>,
     ring_len: u8,
     block_number: usize,
     inputs: &[SpentOutput],
     existing_rings: &[Option<RecordedRing>],
+    existing_candidates: &[Option<Vec<u64>>],
     blackballed: &HashSet<u64>,
-) -> Result<Vec<Decoys>, String> {
+) -> Result<CandidatePlan, String> {
     if ring_len == 0 {
         return Err("requesting a ring of length 0".to_string());
     }
-    if inputs.len() != existing_rings.len() {
+    if inputs.len() != existing_rings.len() || inputs.len() != existing_candidates.len() {
         return Err("persisted ring count does not match input count".to_string());
+    }
+    if inputs.iter().zip(existing_rings).any(|(input, ring)| {
+        ring.as_ref()
+            .is_some_and(|ring| !ring.indexes.contains(&input.index_on_blockchain))
+    }) {
+        return Err("persisted ring does not contain the real output".to_string());
     }
     if block_number <= DEFAULT_LOCK_WINDOW {
         return Err("not enough blocks to select decoys".to_string());
@@ -514,61 +664,147 @@ pub(crate) async fn select_decoys_for_outputs<R: RngCore + CryptoRng, C: RpcConn
     let rct_outputs_available = *distribution
         .last()
         .ok_or_else(|| "RPC returned an empty output distribution".to_string())?;
-    for _attempt in 0..3 {
-        let mut secret_orders = Vec::with_capacity(inputs.len());
-        let mut request_orders = Vec::with_capacity(inputs.len());
-        let mut flattened = Vec::with_capacity(inputs.len() * count);
-        for (input, existing) in inputs.iter().zip(existing_rings) {
-            let initial = match existing {
-                Some(ring) => ring.indexes.clone(),
-                None => vec![input.index_on_blockchain],
-            };
-            let secret = sample_candidates(
-                rng,
-                &distribution,
-                highest_output_exclusive_bound,
-                per_second,
-                &initial,
-                count,
-                blackballed,
-            )?;
-            let mut requested = secret.clone();
-            requested.sort_unstable();
-            flattened.extend_from_slice(&requested);
-            secret_orders.push(secret);
-            request_orders.push(requested);
-        }
 
-        let fetched = rpc
-            .get_unlocked_outputs(&flattened, block_number)
-            .await
-            .map_err(|e| format!("Failed to fetch ring members: {:?}", e))?;
+    let mut candidates = Vec::with_capacity(inputs.len());
+    for ((input, ring), persisted) in inputs.iter().zip(existing_rings).zip(existing_candidates) {
+        if let Some(persisted) = persisted {
+            check_persisted_candidates(persisted, count, input, ring.as_ref())?;
+            candidates.push(persisted.clone());
+            continue;
+        }
+        let initial = match ring {
+            Some(ring) => ring.indexes.clone(),
+            None => vec![input.index_on_blockchain],
+        };
+        candidates.push(sample_candidates(
+            rng,
+            &distribution,
+            highest_output_exclusive_bound,
+            per_second,
+            &initial,
+            count,
+            blackballed,
+        )?);
+    }
+    Ok(CandidatePlan {
+        ring_len,
+        block_number,
+        rct_outputs_available,
+        candidates,
+    })
+}
+
+fn check_persisted_candidates(
+    persisted: &[u64],
+    count: usize,
+    input: &SpentOutput,
+    ring: Option<&RecordedRing>,
+) -> Result<(), String> {
+    if persisted.len() != count {
+        return Err("persisted candidate set has the wrong size for this protocol".to_string());
+    }
+    let distinct: HashSet<u64> = persisted.iter().copied().collect();
+    if distinct.len() != persisted.len() {
+        return Err("persisted candidate set repeats an output".to_string());
+    }
+    if !distinct.contains(&input.index_on_blockchain) {
+        return Err("persisted candidate set does not contain the real output".to_string());
+    }
+    if ring.is_some_and(|ring| !ring.indexes.iter().all(|index| distinct.contains(index))) {
+        return Err("persisted candidate set does not contain the persisted ring".to_string());
+    }
+    Ok(())
+}
+
+/// Request the planned candidates, once, with the same batched, sorted
+/// binary request shape as wallet2, and choose every input's ring from the
+/// reply.
+pub(crate) async fn choose_rings<R: RngCore + CryptoRng, C: RpcConnection>(
+    rng: &mut R,
+    rpc: &Rpc<C>,
+    plan: &CandidatePlan,
+    inputs: &[SpentOutput],
+    existing_rings: &[Option<RecordedRing>],
+    blackballed: &HashSet<u64>,
+) -> Result<Vec<Decoys>, String> {
+    let mut flattened = Vec::with_capacity(plan.candidates.iter().map(Vec::len).sum());
+    for candidates in &plan.candidates {
+        let mut requested = candidates.clone();
+        requested.sort_unstable();
+        flattened.extend_from_slice(&requested);
+    }
+    let fetched = rpc
+        .get_unlocked_outputs(&flattened, plan.block_number)
+        .await
+        .map_err(|e| format!("Failed to fetch ring members: {:?}", e))?;
+    rings_from_reply(rng, plan, inputs, existing_rings, &fetched, blackballed)
+}
+
+/// Choose every input's ring from one reply, retrying a failed sanity check
+/// on that reply. wallet2 requests new candidates instead
+/// (wallet2.cpp:9436-9457), which the daemon can intersect.
+fn rings_from_reply<R: RngCore + CryptoRng>(
+    rng: &mut R,
+    plan: &CandidatePlan,
+    inputs: &[SpentOutput],
+    existing_rings: &[Option<RecordedRing>],
+    fetched: &[Option<[curve25519_dalek::EdwardsPoint; 2]>],
+    blackballed: &HashSet<u64>,
+) -> Result<Vec<Decoys>, String> {
+    let mut request_orders = Vec::with_capacity(inputs.len());
+    let mut starts = Vec::with_capacity(inputs.len());
+    let mut start = 0;
+    for candidates in &plan.candidates {
+        let mut requested = candidates.clone();
+        requested.sort_unstable();
+        request_orders.push(requested);
+        starts.push(start);
+        start += candidates.len();
+    }
+    if fetched.len() != start {
+        return Err("node returned too few ring candidates".to_string());
+    }
+
+    let mut secret_orders = plan.candidates.clone();
+    for attempt in 0..3 {
+        if attempt > 0 {
+            let mut reordered = false;
+            for (order, existing) in secret_orders.iter_mut().zip(existing_rings) {
+                if existing.is_none() {
+                    for last in (1..order.len()).rev() {
+                        order.swap(last, (rng.next_u64() % (last as u64 + 1)) as usize);
+                    }
+                    reordered = true;
+                }
+            }
+            if !reordered {
+                break;
+            }
+        }
         let mut rings = Vec::with_capacity(inputs.len());
         for (position, input) in inputs.iter().enumerate() {
-            let start = position * count;
-            let end = start + count;
+            let chunk = starts[position]..starts[position] + request_orders[position].len();
             rings.push(ring_from_candidates(
                 input,
-                ring_len,
+                plan.ring_len,
                 &secret_orders[position],
                 &request_orders[position],
-                fetched
-                    .get(start..end)
-                    .ok_or_else(|| "node returned too few ring candidates".to_string())?,
+                &fetched[chunk],
                 existing_rings[position].as_ref(),
                 blackballed,
             )?);
         }
-        if rings_are_sane(&rings, rct_outputs_available)? {
+        if rings_are_sane(&rings, plan.rct_outputs_available)? {
             return Ok(rings);
         }
     }
     let detail = if existing_rings.iter().any(Option::is_some) {
-        "; persisted rings were retained while unpersisted rings were redrawn"
+        "; persisted rings were kept"
     } else {
         ""
     };
     Err(format!(
-        "decoy rings failed wallet2's transaction sanity check after three attempts{detail}"
+        "decoy rings failed wallet2's transaction sanity check with every choice tried from the \
+         candidates already requested; no further candidates were requested{detail}"
     ))
 }

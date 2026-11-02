@@ -7,7 +7,7 @@ mod ring_reuse;
 use std::collections::BTreeSet;
 
 use monero_rust::monero_rpc::FeePriority;
-use monero_rust::native::{InputRing, StoredOutputData};
+use monero_rust::native::{InputRing, StoredOutputData, TransactionResult};
 use monero_rust::{PendingSpend, WalletState, PENDING_SPEND_TTL_SECS};
 use ring_reuse::*;
 
@@ -527,7 +527,6 @@ async fn partially_recorded_inputs_keep_the_old_ring_and_draw_only_the_new_one()
 }
 
 #[tokio::test]
-#[ignore = "known defect: a failed ring sanity check makes the builder draw and request new candidates, up to three sets per build, which the daemon can intersect to find the real outputs"]
 async fn sanity_failure_sends_one_candidate_request_and_the_next_build_repeats_it() {
     let node = FakeNode::tail_heavy();
     let threshold = node.total_outputs() * 6 / 10;
@@ -600,6 +599,110 @@ async fn sanity_failure_sends_one_candidate_request_and_the_next_build_repeats_i
             &signed_ring(&third.tx_blob, owned),
         );
     }
+}
+
+async fn spend_by_another_instance(owned: &[Owned], a: &Owned) -> TransactionResult {
+    let their_node = FakeNode::uniform();
+    for output in owned {
+        their_node.set_output(output.global_index(), output.key, output.commitment);
+    }
+    let (mut theirs, _their_disk) = second_instance(owned);
+    hot_send(
+        &their_node,
+        &mut theirs,
+        &[a.key_image()],
+        &destination(1),
+        XMR,
+        NORMAL,
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_ring_outside_the_candidates_the_daemon_was_asked_for_is_never_recorded() {
+    let node = FakeNode::uniform();
+    let (mut state, owned, _disk) = funded(&node, 1);
+    let a = &owned[0];
+    node.set_lock_script(vec![Lock::AtOrAbove(0)]);
+    hot_send(
+        &node,
+        &mut state,
+        &[a.key_image()],
+        &destination(0),
+        XMR,
+        NORMAL,
+    )
+    .await
+    .expect_err("every decoy is locked");
+    let asked = state
+        .ring_database()
+        .candidates(a.key_image())
+        .expect("recorded before the request")
+        .to_vec();
+
+    let theirs = spend_by_another_instance(&owned, a).await;
+    let error = theirs.persist_input_rings(&mut state).unwrap_err();
+    assert!(
+        error.contains("not drawn from the 75 candidates"),
+        "{error}"
+    );
+    assert!(state.ring_database().ring(a.key_image()).is_none());
+    assert_eq!(
+        state.ring_database().candidates(a.key_image()),
+        Some(asked.as_slice())
+    );
+
+    node.set_lock_script(vec![]);
+    let _rebuilt = hot_send(
+        &node,
+        &mut state,
+        &[a.key_image()],
+        &destination(2),
+        XMR,
+        NORMAL,
+    )
+    .await
+    .unwrap();
+    let log = node.get_outs_log();
+    assert_eq!(log.len(), 2);
+    assert_eq!(log[0], log[1], "the daemon was asked for a second set");
+}
+
+#[tokio::test]
+async fn a_recorded_ring_without_the_real_output_is_refused_before_any_request() {
+    let node = FakeNode::uniform();
+    let (mut state, owned, _disk) = funded(&node, 1);
+    let a = &owned[0];
+    let mut offsets = vec![1_000];
+    offsets.extend(std::iter::repeat_n(1, 15));
+    state
+        .record_input_rings(&[InputRing {
+            key_image: a.key_image().to_string(),
+            ring: monero_rust::native::DecoySelection {
+                real_index: 0,
+                offsets,
+                ring: vec![],
+            },
+        }])
+        .unwrap();
+
+    let error = hot_send(
+        &node,
+        &mut state,
+        &[a.key_image()],
+        &destination(0),
+        XMR,
+        NORMAL,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error.contains("does not contain the real output"),
+        "{error}"
+    );
+    assert!(node.get_outs_log().is_empty());
+    assert!(state.ring_database().candidates(a.key_image()).is_none());
 }
 
 /// wallet2 unsets these rings and redraws (wallet2.cpp:9449-9454); this crate refuses.

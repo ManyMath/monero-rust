@@ -332,7 +332,9 @@ impl WalletState {
                         input_ring.key_image
                     ));
                 }
-                None => {}
+                None => {
+                    self.check_drawn_from_candidates(&input_ring.key_image, &input_ring.ring)?
+                }
             }
         }
 
@@ -342,6 +344,57 @@ impl WalletState {
         self.attach_rings();
         for input_ring in rings {
             self.adopted_rings.remove(&input_ring.key_image);
+        }
+        Ok(())
+    }
+
+    /// Record candidate sets before the daemon is asked for them; never replace one.
+    pub(crate) fn record_ring_candidates(
+        &mut self,
+        key_images: &[String],
+        candidates: &[Vec<u64>],
+    ) -> Result<(), String> {
+        if key_images.len() != candidates.len() {
+            return Err("candidate set count does not match input count".to_string());
+        }
+        for (key_image, candidates) in key_images.iter().zip(candidates) {
+            match self.rings.candidates(key_image) {
+                Some(existing) if existing != candidates.as_slice() => {
+                    return Err(format!(
+                        "Refusing to replace the persisted candidate set for key image {key_image}"
+                    ));
+                }
+                Some(_) => {}
+                None => self.rings.set_candidates(key_image, candidates.clone()),
+            }
+        }
+        Ok(())
+    }
+
+    /// Refuse a new ring outside the recorded candidate set: with that set, it
+    /// would show the daemon the real output.
+    fn check_drawn_from_candidates(
+        &self,
+        key_image: &str,
+        ring: &DecoySelection,
+    ) -> Result<(), String> {
+        let Some(candidates) = self.rings.candidates(key_image) else {
+            return Ok(());
+        };
+        let indexes = ring.indexes()?;
+        let real = self
+            .key_image_index
+            .get(key_image)
+            .and_then(|&index| self.outputs[index].global_index);
+        if !self.rings.is_within_candidates(key_image, ring)
+            || real.is_some_and(|real| !indexes.contains(&real))
+        {
+            return Err(format!(
+                "Refusing to record a ring for key image {key_image} that is not drawn from the \
+                 {} candidates the daemon was already asked for: the two together would show \
+                 the daemon the real output",
+                candidates.len()
+            ));
         }
         Ok(())
     }
@@ -414,6 +467,14 @@ impl WalletState {
                     let recorded = existing.indexes().unwrap_or_default();
                     self.note_ring_conflict(&key_image, recorded, indexes);
                 }
+                None if !self.rings.is_within_candidates(&key_image, &ring) => {
+                    let recorded = self
+                        .rings
+                        .candidates(&key_image)
+                        .unwrap_or_default()
+                        .to_vec();
+                    self.note_ring_conflict(&key_image, recorded, indexes);
+                }
                 None => {
                     if !self.rings_restored {
                         self.adopted_rings.insert(key_image.clone());
@@ -461,10 +522,11 @@ impl WalletState {
     /// Load a stored ring database; on a conflict with recorded rings nothing is
     /// loaded. Rings from output records give way to it.
     pub fn restore_ring_database(&mut self, stored: RingDatabase) -> Result<(), String> {
-        let mut spellings: HashMap<String, &DecoySelection> = HashMap::new();
+        let canonical = crate::ring_db::canonical_key_image;
+        let mut stored_rings: BTreeMap<String, &DecoySelection> = BTreeMap::new();
         for (key_image, ring) in stored.rings() {
-            let key_image = crate::ring_db::canonical_key_image(key_image);
-            if spellings
+            let key_image = canonical(key_image);
+            if stored_rings
                 .insert(key_image.clone(), ring)
                 .is_some_and(|other| !other.is_same_ring(ring))
             {
@@ -472,44 +534,90 @@ impl WalletState {
                     "Stored ring database holds two rings for key image {key_image}"
                 ));
             }
-            if !self.adopted_rings.contains(&key_image)
-                && self
-                    .rings
-                    .ring(&key_image)
-                    .is_some_and(|existing| !existing.is_same_ring(ring))
+        }
+        let mut stored_candidates: BTreeMap<String, &[u64]> = BTreeMap::new();
+        for (key_image, candidates) in stored.candidate_sets() {
+            let key_image = canonical(key_image);
+            if stored_candidates
+                .insert(key_image.clone(), candidates)
+                .is_some_and(|other| other != candidates)
             {
                 return Err(format!(
-                    "Stored ring database holds a different ring for key image {key_image}"
+                    "Stored ring database holds two candidate sets for key image {key_image}"
                 ));
             }
         }
-        for (key_image, ring) in stored.rings() {
-            let key_image = crate::ring_db::canonical_key_image(key_image);
-            if self.adopted_rings.remove(&key_image) {
-                let learned = self
-                    .rings
-                    .ring(&key_image)
-                    .filter(|_| self.learned_before_restore.contains(&key_image))
-                    .filter(|learned| !learned.is_same_ring(ring))
-                    .map(|learned| learned.indexes().unwrap_or_default());
-                if let Some(seen) = learned {
-                    self.note_ring_conflict(&key_image, ring.indexes().unwrap_or_default(), seen);
+
+        let mut merged = self.rings.clone();
+        let mut conflicts = Vec::new();
+        for key_image in &self.adopted_rings {
+            let learned = self.learned_before_restore.contains(key_image);
+            let Some(provisional) = merged.ring(key_image).cloned() else {
+                continue;
+            };
+            let seen = provisional.indexes().unwrap_or_default();
+            if let Some(ring) = stored_rings.get(key_image) {
+                if learned && !ring.is_same_ring(&provisional) {
+                    conflicts.push((key_image.clone(), ring.indexes()?, seen));
                 }
-                self.rings.set_ring(&key_image, ring.clone());
-            } else {
-                self.keep_ring(&key_image, ring);
+                merged.remove_ring(key_image);
+            } else if let Some(candidates) = stored_candidates.get(key_image) {
+                if !seen.iter().all(|index| candidates.contains(index)) {
+                    if learned {
+                        conflicts.push((key_image.clone(), candidates.to_vec(), seen));
+                    }
+                    merged.remove_ring(key_image);
+                }
+            } else if stored.is_cleared(key_image) && !learned {
+                merged.remove_ring(key_image);
+            }
+        }
+        for (key_image, candidates) in &stored_candidates {
+            match merged.candidates(key_image) {
+                Some(existing) if existing != *candidates => {
+                    return Err(format!(
+                        "Stored ring database holds a different candidate set for key image \
+                         {key_image}"
+                    ));
+                }
+                Some(_) => {}
+                None => merged.set_candidates(key_image, candidates.to_vec()),
+            }
+        }
+        for (key_image, ring) in &stored_rings {
+            match merged.ring(key_image) {
+                Some(existing) if !existing.is_same_ring(ring) => {
+                    return Err(format!(
+                        "Stored ring database holds a different ring for key image {key_image}"
+                    ));
+                }
+                Some(existing) if !existing.ring.is_empty() => {}
+                _ if !merged.is_within_candidates(key_image, ring) => {
+                    return Err(format!(
+                        "Stored ring database holds a ring for key image {key_image} outside \
+                         its candidate set"
+                    ));
+                }
+                _ => merged.set_ring(key_image, (*ring).clone()),
             }
         }
         for key_image in stored.cleared_key_images() {
-            if self
-                .adopted_rings
-                .contains(&crate::ring_db::canonical_key_image(key_image))
-            {
-                self.rings.remove_ring(key_image);
+            if !merged.holds(key_image) {
+                merged.mark_cleared(key_image);
             }
-            if !self.rings.holds(key_image) {
-                self.rings.mark_cleared(key_image);
+        }
+        for (key_image, ring) in merged.rings() {
+            if !merged.is_within_candidates(key_image, ring) {
+                return Err(format!(
+                    "Stored ring database holds a candidate set for key image {key_image} that \
+                     does not contain the ring held for it"
+                ));
             }
+        }
+
+        self.rings = merged;
+        for (key_image, recorded, seen) in conflicts {
+            self.note_ring_conflict(&key_image, recorded, seen);
         }
         self.adopted_rings.clear();
         self.learned_before_restore.clear();
@@ -2147,6 +2255,108 @@ mod tests {
         let conflicts = restarted.ring_conflicts();
         assert_eq!(conflicts.len(), 1);
         assert_eq!(conflicts[0].recorded, test_ring(7).indexes().unwrap());
+    }
+
+    #[test]
+    fn candidate_sets_are_fixed_once_recorded() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1, 100, "ki1"), make_output(1, 100, "ki2")]);
+        let first: Vec<u64> = (1..=75).collect();
+        let key = |k: &str| vec![k.to_string()];
+        state
+            .record_ring_candidates(&key("ki1"), &[first.clone()])
+            .unwrap();
+        state
+            .record_ring_candidates(&key("ki1"), &[first.clone()])
+            .unwrap();
+        let other: Vec<u64> = (2..=76).collect();
+        state
+            .record_ring_candidates(&key("ki1"), &[other.clone()])
+            .unwrap_err();
+        assert_eq!(
+            state.ring_database().candidates("ki1"),
+            Some(first.as_slice())
+        );
+
+        let mut within = test_ring(1);
+        within.offsets = vec![1; 16];
+        state
+            .record_input_rings(&[crate::tx_builder::native::InputRing {
+                key_image: "ki1".into(),
+                ring: within,
+            }])
+            .unwrap();
+        assert_eq!(
+            state.ring_database().candidates("ki1"),
+            Some(first.as_slice())
+        );
+        let stored: RingDatabase =
+            serde_json::from_str(&serde_json::to_string(state.ring_database()).unwrap()).unwrap();
+        let mut reloaded = WalletState::new();
+        reloaded.restore_ring_database(stored.clone()).unwrap();
+        assert_eq!(reloaded.ring_database(), state.ring_database());
+        let mut conflicting = WalletState::new();
+        conflicting.add_outputs(vec![make_output(1, 100, "ki1")]);
+        conflicting
+            .record_ring_candidates(&key("ki1"), &[other.clone()])
+            .unwrap();
+        conflicting.restore_ring_database(stored).unwrap_err();
+
+        state
+            .record_ring_candidates(&key("ki2"), &[first.clone()])
+            .unwrap();
+        let error = state
+            .record_input_rings(&[input_ring("ki2", 9)])
+            .unwrap_err();
+        assert!(
+            error.contains("not drawn from the 75 candidates"),
+            "{error}"
+        );
+        assert_eq!(state.learn_spent_rings(&key("ki2"), &[vec![9; 16]]), 0);
+        assert_eq!(state.ring_conflicts().len(), 1);
+        assert_eq!(state.ring_conflicts()[0].recorded, first);
+        assert!(state.ring_database().ring("ki2").is_none());
+        assert_eq!(
+            state.ring_database().candidates("ki2"),
+            Some(first.as_slice())
+        );
+
+        state.clear_ring("ki1").unwrap();
+        assert!(state.ring_database().candidates("ki1").is_none());
+        state.record_ring_candidates(&key("ki1"), &[other]).unwrap();
+    }
+
+    #[test]
+    fn restore_refuses_or_repairs_a_ring_outside_the_stored_candidates() {
+        let candidates: Vec<u64> = (1..=75).collect();
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1, 100, "ki1")]);
+        state
+            .record_ring_candidates(&["ki1".to_string()], &[candidates])
+            .unwrap();
+        let stored = state.ring_database().clone();
+
+        let mut recorded = WalletState::new();
+        recorded.add_outputs(vec![make_output(1, 100, "ki1")]);
+        recorded
+            .record_input_rings(&[input_ring("ki1", 9)])
+            .unwrap();
+        let before = recorded.ring_database().clone();
+        let error = recorded.restore_ring_database(stored.clone()).unwrap_err();
+        assert!(error.contains("does not contain the ring"), "{error}");
+        assert_eq!(recorded.ring_database(), &before);
+
+        let mut record = make_output(1, 100, "ki1");
+        record.ring = Some(test_ring(9));
+        let mut adopted = WalletState::new();
+        adopted.add_outputs(vec![record]);
+        adopted.restore_ring_database(stored.clone()).unwrap();
+        assert!(adopted.ring_database().ring("ki1").is_none());
+        assert_eq!(
+            adopted.ring_database().candidates("ki1"),
+            stored.candidates("ki1")
+        );
+        assert!(adopted.outputs()[0].ring.is_none());
     }
 
     #[test]
