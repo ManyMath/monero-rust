@@ -221,6 +221,7 @@ async fn related_second_input_is_not_added() {
     .await
     .expect("select");
     let mut wallet_state = monero_rust::WalletState::new();
+    wallet_state.set_ring_persister(Box::new(monero_rust::RingsNotPersisted));
     wallet_state.add_outputs(outputs.clone());
     let built = create_transaction_with_rpc(
         &probe.rpc,
@@ -352,6 +353,7 @@ async fn sweep_of_many_outputs_is_split() {
 
     let last = transactions.pop().expect("two transactions");
     let mut wallet_state = monero_rust::WalletState::new();
+    wallet_state.set_ring_persister(Box::new(monero_rust::RingsNotPersisted));
     wallet_state.add_outputs(outputs.clone());
     let built = sweep_all_with_rpc(
         &probe.rpc,

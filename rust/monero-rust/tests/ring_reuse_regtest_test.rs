@@ -144,6 +144,7 @@ async fn refresh(rpc: &Rpc<HttpRpc>, state: &mut WalletState, from: u64) -> bool
 
 fn wallet_holding(outputs: Vec<WalletOutput>) -> WalletState {
     let mut state = WalletState::new();
+    state.set_ring_persister(Box::new(monero_rust::RingsNotPersisted));
     state.add_outputs(outputs);
     state
 }
@@ -151,7 +152,7 @@ fn wallet_holding(outputs: Vec<WalletOutput>) -> WalletState {
 fn restart(state: &WalletState) -> WalletState {
     let outputs = serde_json::to_string(state.outputs()).unwrap();
     let rings = serde_json::to_string(state.ring_database()).unwrap();
-    let mut state = WalletState::new();
+    let mut state = wallet_holding(vec![]);
     state
         .restore_ring_database(serde_json::from_str(&rings).unwrap())
         .unwrap();

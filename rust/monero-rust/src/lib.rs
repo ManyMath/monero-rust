@@ -55,7 +55,7 @@ pub use wallet_state::{
     PENDING_SPEND_TTL_SECS,
 };
 
-pub use ring_db::RingDatabase;
+pub use ring_db::{RingDatabase, RingPersister, RingsNotPersisted};
 
 // -- Coin selection --
 pub use coin_selection::{

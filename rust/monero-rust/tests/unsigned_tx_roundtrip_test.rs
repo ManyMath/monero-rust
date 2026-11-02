@@ -129,6 +129,7 @@ async fn test_unsigned_tx_serialize_deserialize_sign() -> Result<(), Box<dyn std
     let mut rng = rand::rngs::OsRng;
 
     let mut wallet_state = monero_rust::WalletState::new();
+    wallet_state.set_ring_persister(Box::new(monero_rust::RingsNotPersisted));
     wallet_state.add_outputs(vec![test_output.clone()]);
 
     let unsigned = build_unsigned_transaction(

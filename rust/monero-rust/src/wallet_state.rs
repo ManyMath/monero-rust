@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::ring_db::RingDatabase;
+use crate::ring_db::{RingDatabase, RingPersister};
 use crate::tx_builder::native::DecoySelection;
 use crate::wallet_output::WalletOutput;
 
@@ -268,6 +268,10 @@ pub struct WalletState {
     /// Rings by key image. Independent of `outputs`, so a ring outlives the
     /// output record it was chosen for.
     rings: RingDatabase,
+    ring_persister: Option<Box<dyn RingPersister>>,
+    rings_unsaved: bool,
+    /// Loaded from storage before the ring database; see `check_ring_database_loaded`.
+    loaded_without_rings: bool,
 }
 
 impl WalletState {
@@ -290,7 +294,58 @@ impl WalletState {
             learned_before_restore: HashSet::new(),
             ring_conflicts: Vec::new(),
             rings: RingDatabase::default(),
+            ring_persister: None,
+            rings_unsaved: false,
+            loaded_without_rings: false,
         }
+    }
+
+    /// Refuse to record or store rings that would overwrite a stored ring database not yet loaded.
+    fn check_ring_database_loaded(&self) -> Result<(), String> {
+        let writes = self
+            .ring_persister
+            .as_ref()
+            .is_some_and(|persister| persister.writes_storage());
+        if self.loaded_without_rings && writes {
+            return Err(
+                "This wallet state was loaded from storage but its ring database was not: call \
+                 restore_ring_database first (a new wallet restores RingDatabase::default()), \
+                 or the stored rings would be overwritten"
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Set where the ring database is stored; builders and relay store through it
+    /// before anything leaves the process.
+    pub fn set_ring_persister(&mut self, persister: Box<dyn RingPersister>) {
+        self.ring_persister = Some(persister);
+    }
+
+    /// Whether the ring database has changes the persister has not stored.
+    pub fn has_unsaved_rings(&self) -> bool {
+        self.rings_unsaved
+    }
+
+    /// Hand a changed ring database to the persister. Builders and `broadcast_*`
+    /// call it; call it after scans, `record_input_rings` and `clear_ring`.
+    pub async fn persist_rings(&mut self) -> Result<(), String> {
+        if !self.rings_unsaved {
+            return Ok(());
+        }
+        self.check_ring_database_loaded()?;
+        let persister = self.ring_persister.as_mut().ok_or_else(|| {
+            "The ring database has changes and no ring persister to store them; call \
+             WalletState::set_ring_persister first"
+                .to_string()
+        })?;
+        persister
+            .persist(&self.rings)
+            .await
+            .map_err(|e| format!("Failed to persist the ring database: {e}"))?;
+        self.rings_unsaved = false;
+        Ok(())
     }
 
     /// Record rings by key image, so rebuilt and conflicting spends reuse them.
@@ -307,6 +362,7 @@ impl WalletState {
             })
             .collect();
         let rings = rings.as_slice();
+        self.check_ring_database_loaded()?;
         let mut seen = HashSet::with_capacity(rings.len());
         for input_ring in rings {
             if input_ring.key_image.is_empty() {
@@ -339,7 +395,9 @@ impl WalletState {
         }
 
         for input_ring in rings {
-            self.keep_ring(&input_ring.key_image, &input_ring.ring);
+            if self.keep_ring(&input_ring.key_image, &input_ring.ring) {
+                self.rings_unsaved = true;
+            }
         }
         self.attach_rings();
         for input_ring in rings {
@@ -357,6 +415,7 @@ impl WalletState {
         if key_images.len() != candidates.len() {
             return Err("candidate set count does not match input count".to_string());
         }
+        self.check_ring_database_loaded()?;
         for (key_image, candidates) in key_images.iter().zip(candidates) {
             match self.rings.candidates(key_image) {
                 Some(existing) if existing != candidates.as_slice() => {
@@ -365,7 +424,10 @@ impl WalletState {
                     ));
                 }
                 Some(_) => {}
-                None => self.rings.set_candidates(key_image, candidates.clone()),
+                None => {
+                    self.rings.set_candidates(key_image, candidates.clone());
+                    self.rings_unsaved = true;
+                }
             }
         }
         Ok(())
@@ -412,15 +474,16 @@ impl WalletState {
             .map(|output| output.key_image.as_str())
     }
 
-    /// Store `ring` for a key image holding no different ring.
-    fn keep_ring(&mut self, key_image: &str, ring: &DecoySelection) {
-        let known_with_members = self
+    /// Store `ring` for a key image holding no different ring; returns whether it changed.
+    fn keep_ring(&mut self, key_image: &str, ring: &DecoySelection) -> bool {
+        let unchanged = self
             .rings
             .ring(key_image)
-            .is_some_and(|existing| !existing.ring.is_empty());
-        if !known_with_members {
+            .is_some_and(|existing| !existing.ring.is_empty() || existing == ring);
+        if !unchanged {
             self.rings.set_ring(key_image, ring.clone());
         }
+        !unchanged
     }
 
     /// Learn the rings of this wallet's own spends seen on chain. Unlike wallet2,
@@ -486,6 +549,7 @@ impl WalletState {
             }
         }
         if learned > 0 {
+            self.rings_unsaved = true;
             self.attach_rings();
         }
         learned
@@ -622,6 +686,7 @@ impl WalletState {
         self.adopted_rings.clear();
         self.learned_before_restore.clear();
         self.rings_restored = true;
+        self.loaded_without_rings = false;
         self.attach_rings();
         Ok(())
     }
@@ -631,10 +696,12 @@ impl WalletState {
     pub fn clear_ring(&mut self, key_image: &str) -> Option<DecoySelection> {
         let key_image = crate::ring_db::canonical_key_image(key_image);
         let key_image = key_image.as_str();
+        let had_candidates = self.rings.candidates(key_image).is_some();
         let cleared = self.rings.remove_ring(key_image);
         self.adopted_rings.remove(key_image);
-        if cleared.is_some() {
+        if cleared.is_some() || had_candidates {
             self.rings.mark_cleared(key_image);
+            self.rings_unsaved = true;
         }
         let cleared = cleared?;
         for output in &mut self.outputs {
@@ -670,6 +737,7 @@ impl WalletState {
                 self.adopted_rings.insert(key_image.clone());
             }
             self.rings.set_ring(&key_image, ring);
+            self.rings_unsaved = true;
         }
     }
 
@@ -830,6 +898,7 @@ impl WalletState {
 
     /// Replace all outputs, as when restoring from persistence; the ring database is kept.
     pub fn replace_outputs(&mut self, outputs: Vec<WalletOutput>) {
+        self.loaded_without_rings |= !self.rings_restored;
         self.superseded.clear();
         self.outputs.clear();
         self.rebuild_key_image_index();
@@ -1336,6 +1405,7 @@ impl WalletState {
 
     /// Restore pending spends from persistence, filtering out expired entries.
     pub fn restore_pending_spends(&mut self, spends: HashMap<String, PendingSpend>, now_secs: u64) {
+        self.loaded_without_rings |= !self.rings_restored;
         for (ki, ps) in spends {
             if now_secs.saturating_sub(ps.created_at_secs) < PENDING_SPEND_TTL_SECS {
                 self.pending_spends.insert(ki, ps);
@@ -1348,6 +1418,7 @@ impl WalletState {
     /// Also rebuilds `spent_by_tx` from confirmed transactions so that
     /// subsequent rescans can identify idempotent key-image observations.
     pub fn restore_tracked_transactions(&mut self, txs: HashMap<String, TrackedTransaction>) {
+        self.loaded_without_rings |= !self.rings_restored;
         for (id, tx) in txs {
             if matches!(tx.status, TxStatus::Confirmed { .. } | TxStatus::Broadcast) {
                 for ki in &tx.spent_key_images {
@@ -2357,6 +2428,111 @@ mod tests {
             stored.candidates("ki1")
         );
         assert!(adopted.outputs()[0].ring.is_none());
+    }
+
+    struct CountingPersister {
+        stored: std::sync::Arc<std::sync::Mutex<Vec<RingDatabase>>>,
+        fail: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl RingPersister for CountingPersister {
+        async fn persist(&mut self, rings: &RingDatabase) -> Result<(), String> {
+            if self.fail {
+                return Err("disk full".to_string());
+            }
+            self.stored.lock().unwrap().push(rings.clone());
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn ring_database_is_handed_to_the_persister_only_when_it_changed() {
+        let stored = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1, 100, "ki1")]);
+
+        state.persist_rings().await.unwrap();
+
+        state.record_input_rings(&[input_ring("ki1", 7)]).unwrap();
+        assert!(state.has_unsaved_rings());
+        let error = state.persist_rings().await.unwrap_err();
+        assert!(error.contains("no ring persister"), "{error}");
+
+        state.set_ring_persister(Box::new(CountingPersister {
+            stored: stored.clone(),
+            fail: true,
+        }));
+        let error = state.persist_rings().await.unwrap_err();
+        assert!(error.contains("disk full"), "{error}");
+        assert!(
+            state.has_unsaved_rings(),
+            "a failed write leaves the changes unsaved"
+        );
+
+        state.set_ring_persister(Box::new(CountingPersister {
+            stored: stored.clone(),
+            fail: false,
+        }));
+        state.persist_rings().await.unwrap();
+        state.persist_rings().await.unwrap();
+        assert_eq!(
+            stored.lock().unwrap().as_slice(),
+            &[state.ring_database().clone()]
+        );
+
+        state.record_input_rings(&[input_ring("ki1", 7)]).unwrap();
+        assert!(!state.has_unsaved_rings());
+        state.clear_ring("ki1").unwrap();
+        assert!(state.has_unsaved_rings());
+        state.persist_rings().await.unwrap();
+        assert_eq!(
+            state.learn_spent_rings(&["ki1".to_string()], &[vec![8; 16]]),
+            1
+        );
+        assert!(state.has_unsaved_rings());
+        state.persist_rings().await.unwrap();
+        assert_eq!(stored.lock().unwrap().len(), 3);
+
+        let mut reloaded = WalletState::new();
+        reloaded
+            .restore_ring_database(stored.lock().unwrap()[1].clone())
+            .unwrap();
+        assert!(!reloaded.has_unsaved_rings());
+    }
+
+    #[tokio::test]
+    async fn a_state_loaded_without_its_ring_database_stores_no_rings() {
+        let stored = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut state = WalletState::new();
+        state.set_ring_persister(Box::new(CountingPersister {
+            stored: stored.clone(),
+            fail: false,
+        }));
+        state.replace_outputs(vec![make_output(1, 100, "ki1")]);
+        let error = state
+            .record_input_rings(&[input_ring("ki1", 7)])
+            .unwrap_err();
+        assert!(error.contains("restore_ring_database"), "{error}");
+        state
+            .record_ring_candidates(&["ki1".to_string()], &[(1..=75).collect()])
+            .unwrap_err();
+        assert!(state.ring_database().is_empty());
+
+        state
+            .restore_ring_database(RingDatabase::default())
+            .unwrap();
+        state.record_input_rings(&[input_ring("ki1", 7)]).unwrap();
+        state.persist_rings().await.unwrap();
+        assert_eq!(stored.lock().unwrap().len(), 1);
+
+        let mut throwaway = WalletState::new();
+        throwaway.set_ring_persister(Box::new(crate::ring_db::RingsNotPersisted));
+        throwaway.replace_outputs(vec![make_output(1, 100, "ki1")]);
+        throwaway
+            .record_input_rings(&[input_ring("ki1", 7)])
+            .unwrap();
+        throwaway.persist_rings().await.unwrap();
     }
 
     #[test]

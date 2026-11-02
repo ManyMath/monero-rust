@@ -715,9 +715,11 @@ pub struct Wallet {
 
 impl Wallet {
     pub fn new(seed: &'static str) -> Self {
+        let mut state = WalletState::new();
+        state.set_ring_persister(Box::new(monero_rust::RingsNotPersisted));
         Wallet {
             seed,
-            state: WalletState::new(),
+            state,
             restore_height: 0,
             reorgs: Vec::new(),
             started: false,

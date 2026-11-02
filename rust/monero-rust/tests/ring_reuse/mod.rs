@@ -454,6 +454,16 @@ struct Stored {
     rings: String,
 }
 
+struct DiskRings(Disk);
+
+#[async_trait::async_trait]
+impl monero_rust::RingPersister for DiskRings {
+    async fn persist(&mut self, rings: &monero_rust::RingDatabase) -> Result<(), String> {
+        self.0 .0.lock().unwrap().rings = serde_json::to_string(rings).unwrap();
+        Ok(())
+    }
+}
+
 impl Disk {
     pub fn save(&self, state: &WalletState) {
         let mut stored = self.0.lock().unwrap();
@@ -464,6 +474,10 @@ impl Disk {
 
 fn wallet_on(disk: &Disk, outputs: Vec<WalletOutput>) -> WalletState {
     let mut state = WalletState::new();
+    state.set_ring_persister(Box::new(DiskRings(disk.clone())));
+    state
+        .restore_ring_database(monero_rust::RingDatabase::default())
+        .unwrap();
     state.replace_outputs(outputs);
     disk.save(&state);
     state
@@ -495,9 +509,18 @@ pub fn second_instance(owned: &[Owned]) -> (WalletState, Disk) {
 pub fn crash_and_reload(disk: &Disk) -> WalletState {
     let stored = disk.0.lock().unwrap();
     let mut state = WalletState::new();
+    state.set_ring_persister(Box::new(DiskRings(disk.clone())));
     state
         .restore_ring_database(serde_json::from_str(&stored.rings).unwrap())
         .unwrap();
+    state.replace_outputs(serde_json::from_str(&stored.outputs).unwrap());
+    state
+}
+
+pub fn reload_without_ring_database(disk: &Disk) -> WalletState {
+    let stored = disk.0.lock().unwrap();
+    let mut state = WalletState::new();
+    state.set_ring_persister(Box::new(DiskRings(disk.clone())));
     state.replace_outputs(serde_json::from_str(&stored.outputs).unwrap());
     state
 }

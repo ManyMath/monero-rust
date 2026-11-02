@@ -64,6 +64,7 @@ fn coinbase_at(wallet: &Wallet, height: u64) -> WalletOutput {
 async fn send(node: &Node, input: &WalletOutput) -> Result<TransactionResult, String> {
     let w2 = derive_address(SEED_W2, NETWORK, "").unwrap().to_string();
     let mut wallet_state = WalletState::new();
+    wallet_state.set_ring_persister(Box::new(monero_rust::RingsNotPersisted));
     wallet_state.add_outputs(vec![input.clone()]);
     create_transaction_with_rpc(
         &node.rpc(),

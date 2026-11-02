@@ -178,6 +178,7 @@ fn save_state(path: &str, state: &StateFile) {
 
 fn wallet_state_from(file: &StateFile) -> WalletState {
     let mut state = WalletState::new();
+    state.set_ring_persister(Box::new(monero_rust::RingsNotPersisted));
     state.replace_outputs(file.outputs.clone());
     state.block_hashes = file.block_hashes.clone();
     state.current_height = file.next_height.saturating_sub(1);
@@ -698,6 +699,7 @@ async fn op_build(request: &Value) -> Value {
     let build_started = Instant::now();
     for _ in 0..repeat {
         let mut build_state = WalletState::new();
+        build_state.set_ring_persister(Box::new(monero_rust::RingsNotPersisted));
         build_state.add_outputs(wallet_outputs.clone());
         let built = match kind {
             "send" => {

@@ -164,6 +164,7 @@ async fn build(rpc: &Rpc<HttpRpc>, request: &Request, response: &mut Response) {
 
     for _ in 0..request.repeat {
         let mut build_state = monero_rust::WalletState::new();
+        build_state.set_ring_persister(Box::new(monero_rust::RingsNotPersisted));
         build_state.add_outputs(response.outputs.clone());
         let built = match request.op.as_str() {
             "send" => {

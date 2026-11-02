@@ -283,6 +283,8 @@ async fn prerct_scan_tool() {
     let rpc = HttpRpc::new(request.rpc.clone()).expect("regtest RPC");
     let mut response = Response::default();
     let mut state = scan_wallet(&rpc, &request, &mut response).await;
+    // The tool keeps no wallet files, so the ring persister has nothing to do.
+    state.set_ring_persister(Box::new(monero_rust::RingsNotPersisted));
     let outputs = state.outputs().to_vec();
     let height = response.daemon_height;
 

@@ -14,7 +14,6 @@ use ring_reuse::*;
 const NORMAL: FeePriority = FeePriority::Normal;
 
 #[tokio::test]
-#[ignore = "known defect: after a crash the hot builder draws new candidates, and the daemon can intersect the two requests to find the real output"]
 async fn crash_after_selection_shows_the_daemon_the_same_candidates_hot() {
     let node = FakeNode::uniform();
     let (mut state, owned, disk) = funded(&node, 1);
@@ -57,7 +56,6 @@ async fn crash_after_selection_shows_the_daemon_the_same_candidates_hot() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: after a crash the cold builder draws new candidates, and the daemon can intersect the two requests to find the real output"]
 async fn crash_after_selection_shows_the_daemon_the_same_candidates_cold() {
     let node = FakeNode::uniform();
     let (mut state, owned, disk) = funded(&node, 1);
@@ -191,7 +189,6 @@ async fn cold_ring_survives_a_crash_when_state_is_saved_before_export() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: the cold builder returns the envelope with its ring recorded in memory only, so a crash before the caller saves loses the exported ring"]
 async fn unsigned_envelope_ring_is_durable_before_the_envelope_is_returned() {
     let node = FakeNode::uniform();
     let (mut state, owned, disk) = funded(&node, 1);
@@ -251,7 +248,6 @@ async fn cold_signed_transaction_carries_the_saved_ring_and_a_rebuild_reuses_it(
 }
 
 #[tokio::test]
-#[ignore = "known defect: the hot builders return signed bytes with no ring recorded anywhere, so a crash before the caller records and saves loses the ring"]
 async fn signed_bytes_ring_is_durable_before_the_bytes_are_returned() {
     let node = FakeNode::uniform();
     let (mut state, owned, disk) = funded(&node, 1);
@@ -374,13 +370,11 @@ async fn relay_then_crash_before_the_next_save(outcome: Relay) {
 }
 
 #[tokio::test]
-#[ignore = "known defect: the relay helper records the ring in memory and relays in one call, so a crash before the caller's next save loses the ring of a relayed transaction"]
 async fn crash_after_relay_keeps_the_relayed_ring() {
     relay_then_crash_before_the_next_save(Relay::Accept).await;
 }
 
 #[tokio::test]
-#[ignore = "known defect: the relay helper records the ring in memory and relays in one call, so a crash before the caller's next save loses the ring of a relayed transaction"]
 async fn crash_after_a_relay_whose_reply_was_lost_keeps_the_ring() {
     relay_then_crash_before_the_next_save(Relay::AcceptButLoseReply).await;
 }
@@ -1360,6 +1354,75 @@ async fn inputs_prepared_before_clear_ring_do_not_bring_the_ring_back() {
         ring_indexes(state.ring_database().ring(a.key_image()).unwrap()),
         ring
     );
+}
+
+#[tokio::test]
+async fn a_cleared_ring_stays_cleared_after_a_restart_with_an_older_output_list() {
+    let node = FakeNode::uniform();
+    let (mut state, owned, disk) = funded(&node, 1);
+    let a = &owned[0];
+    relay_first_spend(&node, &mut state, a).await;
+    disk.save(&state);
+
+    state.clear_ring(a.key_image()).unwrap();
+    state.persist_rings().await.unwrap();
+    let restarted = crash_and_reload(&disk);
+    assert!(restarted.ring_database().ring(a.key_image()).is_none());
+    assert!(restarted.ring_database().is_cleared(a.key_image()));
+    assert!(restarted.outputs()[0].ring.is_none());
+}
+
+#[tokio::test]
+async fn a_missed_ring_database_restore_cannot_overwrite_the_stored_rings() {
+    let node = FakeNode::uniform();
+    let (mut state, owned, disk) = funded(&node, 1);
+    let a = &owned[0];
+    node.set_lock_script(vec![Lock::AtOrAbove(0)]);
+    hot_send(
+        &node,
+        &mut state,
+        &[a.key_image()],
+        &destination(0),
+        XMR,
+        NORMAL,
+    )
+    .await
+    .expect_err("every decoy is locked");
+    disk.save(&state);
+    node.set_lock_script(vec![]);
+
+    let mut forgetful = reload_without_ring_database(&disk);
+    let error = hot_send(
+        &node,
+        &mut forgetful,
+        &[a.key_image()],
+        &destination(0),
+        XMR,
+        NORMAL,
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("restore_ring_database"), "{error}");
+    assert_eq!(node.get_outs_log().len(), 1);
+
+    let mut restarted = crash_and_reload(&disk);
+    assert!(restarted
+        .ring_database()
+        .candidates(a.key_image())
+        .is_some());
+    let _rebuilt = hot_send(
+        &node,
+        &mut restarted,
+        &[a.key_image()],
+        &destination(0),
+        XMR,
+        NORMAL,
+    )
+    .await
+    .unwrap();
+    let log = node.get_outs_log();
+    assert_eq!(log.len(), 2);
+    assert_eq!(log[0], log[1]);
 }
 
 #[tokio::test]

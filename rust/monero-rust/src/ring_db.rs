@@ -1,14 +1,75 @@
 //! The wallet's ring database: one ring per key image, kept apart from the
 //! output records as in wallet2's `ringdb.cpp`. Spending an output with two
 //! different rings lets an observer intersect them and find it.
-//! The application stores it: serialize `WalletState::ring_database` and
-//! load it back with `WalletState::restore_ring_database`.
+//!
+//! # Durability
+//!
+//! The crate does no I/O. When the database has changed, it awaits the
+//! [`RingPersister`] set on `WalletState` before the next `get_outs` request,
+//! builder result or `broadcast_transaction` relay, and stops if that fails
+//! or none is set. The application must:
+//!
+//! - return `Ok` from `persist` only once the database is atomically on
+//!   stable storage;
+//! - call `WalletState::restore_ring_database` before the first build after a
+//!   restart (`RingDatabase::default()` if none is stored), and never load an
+//!   older copy over a newer one without merging;
+//! - call `WalletState::persist_rings` after rings change outside a build: a
+//!   scan batch, `record_input_rings`, `clear_ring`.
+//!
+//! Instances on several devices share rings only through scanned blocks.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::tx_builder::native::DecoySelection;
+
+/// Durable storage for the ring database; see the module documentation.
+#[cfg(not(target_arch = "wasm32"))]
+#[async_trait]
+pub trait RingPersister: Send + Sync {
+    /// Store `rings`, the whole database, and return once it is durable.
+    async fn persist(&mut self, rings: &RingDatabase) -> Result<(), String>;
+
+    /// Whether `persist` writes to storage that a stored ring database is
+    /// loaded from. Only [`RingsNotPersisted`] says no.
+    fn writes_storage(&self) -> bool {
+        true
+    }
+}
+
+/// Durable storage for the ring database; see the module documentation.
+#[cfg(target_arch = "wasm32")]
+#[async_trait(?Send)]
+pub trait RingPersister {
+    /// Store `rings`, the whole database, and return once it is durable.
+    async fn persist(&mut self, rings: &RingDatabase) -> Result<(), String>;
+
+    /// Whether `persist` writes to storage that a stored ring database is
+    /// loaded from. Only [`RingsNotPersisted`] says no.
+    fn writes_storage(&self) -> bool {
+        true
+    }
+}
+
+/// A [`RingPersister`] that stores nothing. Only for a state that is never
+/// reloaded: after a restart its rings are gone.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RingsNotPersisted;
+
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+impl RingPersister for RingsNotPersisted {
+    async fn persist(&mut self, _rings: &RingDatabase) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn writes_storage(&self) -> bool {
+        false
+    }
+}
 
 /// Rings, and the candidate sets they were chosen from, by key image (hex).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

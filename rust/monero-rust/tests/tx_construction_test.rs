@@ -78,6 +78,7 @@ async fn test_tx_construction() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut all_outputs = Vec::new();
     let mut wallet_state = monero_rust::WalletState::new();
+    wallet_state.set_ring_persister(Box::new(monero_rust::RingsNotPersisted));
     for height in START_BLOCK..=END_BLOCK {
         let lookahead = Lookahead {
             account: 0,
@@ -264,6 +265,7 @@ async fn sweep_uses_the_exact_fee_and_a_throwaway_dummy_output(
 
     let mut stored = Vec::new();
     let mut wallet_state = monero_rust::WalletState::new();
+    wallet_state.set_ring_persister(Box::new(monero_rust::RingsNotPersisted));
     for height in START_BLOCK..=END_BLOCK {
         let scan = scan_block_for_outputs_with_lookahead(
             &rpc,
@@ -454,6 +456,7 @@ async fn test_transaction_with_multiple_inputs() -> Result<(), Box<dyn std::erro
             }
         }
         let mut wallet_state = monero_rust::WalletState::new();
+        wallet_state.set_ring_persister(Box::new(monero_rust::RingsNotPersisted));
         wallet_state.add_outputs(all_outputs.clone());
 
         if all_outputs.len() >= 2 {

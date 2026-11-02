@@ -211,6 +211,7 @@ pub mod native {
         .await
         .map_err(|e| format!("Decoy selection failed: {}", e))?;
         wallet_state.record_ring_candidates(key_images, &plan.candidates)?;
+        wallet_state.persist_rings().await?;
         let decoys = crate::decoy_select::choose_rings(
             rng,
             rpc,
@@ -230,6 +231,7 @@ pub mod native {
             })
             .collect();
         wallet_state.record_input_rings(&input_rings)?;
+        wallet_state.persist_rings().await?;
         Ok((decoys, input_rings))
     }
 
@@ -590,7 +592,7 @@ pub mod native {
         pub key_image: String,
     }
 
-    #[must_use = "store the wallet's ring database before these bytes leave the process"]
+    #[must_use]
     #[derive(Clone, Serialize, Deserialize)]
     pub struct TransactionResult {
         pub tx_id: String,
@@ -1659,6 +1661,7 @@ pub mod native {
         do_not_relay: bool,
     ) -> Result<(), String> {
         transaction.persist_input_rings(wallet_state)?;
+        wallet_state.persist_rings().await?;
         broadcast_raw_transaction_with_rpc(rpc, &transaction.tx_blob, do_not_relay).await
     }
 
@@ -1761,7 +1764,7 @@ pub mod native {
         received_outputs_from_scan_inner(rpc, block_height, seed_phrase, passphrase).await
     }
 
-    #[must_use = "store the wallet's ring database before the envelope leaves the process"]
+    #[must_use]
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct UnsignedTransactionResult {
         pub unsigned_tx_hex: String,

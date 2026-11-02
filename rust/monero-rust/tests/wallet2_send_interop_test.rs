@@ -480,6 +480,7 @@ mod regtest {
                 .flat_map(|block| block.outputs)
                 .collect();
         let mut wallet_state = WalletState::new();
+        wallet_state.set_ring_persister(Box::new(monero_rust::RingsNotPersisted));
         wallet_state.add_outputs(outputs.clone());
         (
             outputs.into_iter().map(StoredOutputData::from).collect(),

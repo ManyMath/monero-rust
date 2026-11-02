@@ -226,6 +226,7 @@ async fn builds_signs_and_broadcasts_a_transaction() {
     let mature_before = height.saturating_sub(60);
     let mut spendable = None;
     let mut wallet_state = monero_rust::WalletState::new();
+    wallet_state.set_ring_persister(Box::new(monero_rust::RingsNotPersisted));
     for h in 1..mature_before {
         let scanned =
             scan_block_for_outputs_with_lookahead(&rpc, h as u64, SEED, NETWORK, LOOKAHEAD, "")
@@ -362,6 +363,7 @@ async fn sweep_with_dummy_output_is_accepted_by_the_daemon() {
     let owned = owned.expect("a mature sweep output");
     let input_amount = owned.amount;
     let mut wallet_state = monero_rust::WalletState::new();
+    wallet_state.set_ring_persister(Box::new(monero_rust::RingsNotPersisted));
     wallet_state.add_outputs(vec![owned.clone()]);
     let stored = StoredOutputData::from(owned);
 
@@ -452,6 +454,7 @@ async fn daemon_accepts_multi_input_mixed_recipient_account_change() {
     };
     let mut funding_input = None;
     let mut wallet_state = monero_rust::WalletState::new();
+    wallet_state.set_ring_persister(Box::new(monero_rust::RingsNotPersisted));
     for height in start..(start + BLOCKS_TO_MINE - 60) {
         let scanned = scan_block_for_outputs_with_lookahead(
             &rpc,
