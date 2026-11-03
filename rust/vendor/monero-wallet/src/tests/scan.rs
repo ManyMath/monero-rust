@@ -164,3 +164,79 @@ fn scan_long_encrypted_amount() {
   assert_eq!(outputs[0], wallet_output0());
   assert_eq!(outputs[1], wallet_output1());
 }
+
+// A version 1 transaction paying the view pair at its second output.
+#[test]
+fn scan_version_1_transaction() {
+  use crate::{
+    transaction::{Input, NotPruned, Output, TransactionPrefix},
+    block::BlockHeader,
+    Extra, SharedKeyDerivations,
+  };
+
+  let spend_key_buf = hex::decode(SPEND_KEY).unwrap();
+  let spend_key = Zeroizing::new(Scalar::read(&mut spend_key_buf.as_slice()).unwrap());
+  let view_key_buf = hex::decode(VIEW_KEY).unwrap();
+  let view_key = Zeroizing::new(Scalar::read(&mut view_key_buf.as_slice()).unwrap());
+  let spend_pub = Point::from(&(*spend_key).into() * ED25519_BASEPOINT_TABLE);
+  let view_pub = Point::from(&(*view_key).into() * ED25519_BASEPOINT_TABLE);
+
+  let r = curve25519_dalek::Scalar::from(987_654_321u64);
+  let tx_key = Point::from(&r * ED25519_BASEPOINT_TABLE);
+  let ecdh = Zeroizing::new(Point::from(r * view_pub.into()));
+  let shared = SharedKeyDerivations::output_derivations(None, ecdh, 1).shared_key;
+  let ours = Point::from(&shared.into() * ED25519_BASEPOINT_TABLE + spend_pub.into());
+  let other = Point::from(&curve25519_dalek::Scalar::from(5u64) * ED25519_BASEPOINT_TABLE);
+
+  let mut extra = vec![];
+  Extra::new(tx_key.compress(), vec![]).write(&mut extra).unwrap();
+  let prefix = |inputs, outputs| TransactionPrefix {
+    additional_timelock: Timelock::None,
+    inputs,
+    outputs,
+    extra: extra.clone(),
+  };
+  let output =
+    |amount, key: Point| Output { amount: Some(amount), key: key.compress(), view_tag: None };
+  let tx = Transaction::<NotPruned>::V1 {
+    prefix: prefix(
+      vec![Input::ToKey {
+        amount: Some(8_000_000),
+        key_offsets: vec![3],
+        key_image: other.compress(),
+      }],
+      vec![output(1_000_000, other), output(7_000_000, ours)],
+    ),
+    signatures: vec![],
+  };
+  let miner = Transaction::<NotPruned>::V1 {
+    prefix: prefix(vec![Input::Gen(1)], vec![output(1, other)]),
+    signatures: vec![],
+  };
+  let header = BlockHeader {
+    hardfork_version: 1,
+    hardfork_signal: 0,
+    timestamp: 0,
+    previous: [0; 32],
+    nonce: 0,
+  };
+  let block = Block::new(header, miner, vec![tx.hash()]).unwrap();
+
+  let mut scanner = Scanner::new(ViewPair::new(spend_pub, view_key).unwrap());
+  let outputs = scanner
+    .scan(ScannableBlock {
+      block,
+      transactions: vec![Transaction::<Pruned>::from(tx.clone())],
+      output_index_for_first_ringct_output: Some(1000),
+    })
+    .unwrap()
+    .not_additionally_locked();
+
+  assert_eq!(outputs.len(), 1);
+  assert_eq!(outputs[0].transaction(), tx.hash());
+  assert_eq!(outputs[0].index_in_transaction(), 1);
+  assert_eq!(outputs[0].index_on_blockchain(), 1);
+  assert_eq!(outputs[0].key(), ours);
+  assert_eq!(outputs[0].commitment().amount, 7_000_000);
+  assert_eq!(<[u8; 32]>::from(outputs[0].commitment().mask), curve25519_dalek::Scalar::ONE.to_bytes());
+}

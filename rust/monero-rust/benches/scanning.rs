@@ -67,6 +67,7 @@ fn make_sample_wallet_output(index: u64) -> WalletOutput {
         key_image: "e".repeat(64),
         is_coinbase: false,
         frozen: false,
+        pre_ringct: false,
     }
 }
 

@@ -207,6 +207,16 @@ def scan_diff(w2, mr):
         row["match"] = row["w2_balance"] == row["mr_balance"] and row["w2_unlocked"] == row["mr_unlocked"]
         balance_rows.append(row)
 
+    mr_balance = mr.get("balance") or {}
+    mr_total = sum(mr_balance.get(k, 0) for k in ("confirmed", "unconfirmed", "pre_ringct"))
+    total_row = {"w2_balance": w2["balance"].get("balance"), "w2_unlocked": w2["balance"].get("unlocked_balance"),
+                 "mr_confirmed": mr_balance.get("confirmed"), "mr_unconfirmed": mr_balance.get("unconfirmed"),
+                 "mr_pre_ringct": mr_balance.get("pre_ringct"), "mr_pending_spend": mr_balance.get("pending_spend"),
+                 "mr_confirmed_unconfirmed_pre_ringct": mr_total,
+                 "mr_pre_ringct_outputs": sum(1 for o in mr["outputs"] if o.get("pre_ringct") and not o["spent"])}
+    total_row["match"] = total_row["w2_balance"] == mr_total
+    balance_rows.append(dict(total_row, account="all"))
+
     mr_spends = {}
     for o in mr["outputs"]:
         if o["spent"] and o.get("spent_by_tx"):

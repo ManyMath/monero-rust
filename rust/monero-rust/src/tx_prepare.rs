@@ -126,11 +126,13 @@ pub fn prepare_send_inputs_at_with_fee(
     rct_type: monero_wallet::ringct::RctType,
     fee_rate: monero_wallet::interface::FeeRate,
 ) -> Result<PreparedInputs, String> {
+    refuse_pre_ringct_selection(wallet_outputs, manual_selection)?;
     let spendable: Vec<WalletOutput> = wallet_outputs
         .iter()
         .filter(|o| {
             !o.spent
                 && !o.frozen
+                && !o.pre_ringct
                 && is_spendable_at(o, wallet_height, now_secs)
                 && !excluded_key_images.map_or(false, |exc| exc.contains(&o.key_image))
         })
@@ -148,7 +150,8 @@ pub fn prepare_send_inputs_at_with_fee(
         source_account,
         rct_type,
         fee_rate,
-    )?;
+    )
+    .map_err(|error| note_pre_ringct_funds(error, wallet_outputs, Some(source_account)))?;
     let spent_output_keys = selected.iter().map(WalletOutput::output_key).collect();
     let stored_outputs = selected.into_iter().map(Into::into).collect();
     Ok(PreparedInputs {
@@ -171,11 +174,13 @@ pub fn prepare_send_inputs_at(
     manual_selection: Option<&[String]>,
     excluded_key_images: Option<&HashSet<String>>,
 ) -> Result<PreparedInputs, String> {
+    refuse_pre_ringct_selection(wallet_outputs, manual_selection)?;
     let spendable: Vec<WalletOutput> = wallet_outputs
         .iter()
         .filter(|o| {
             !o.spent
                 && !o.frozen
+                && !o.pre_ringct
                 && is_spendable_at(o, wallet_height, now_secs)
                 && !excluded_key_images.map_or(false, |exc| exc.contains(&o.key_image))
         })
@@ -186,7 +191,8 @@ pub fn prepare_send_inputs_at(
         selected,
         total,
         estimated_fee,
-    } = select_inputs(&spendable, total_amount, num_recipients, manual_selection)?;
+    } = select_inputs(&spendable, total_amount, num_recipients, manual_selection)
+        .map_err(|error| note_pre_ringct_funds(error, wallet_outputs, None))?;
 
     let spent_output_keys: Vec<String> = selected.iter().map(|o| o.output_key()).collect();
     let stored_outputs: Vec<StoredOutputData> = selected.into_iter().map(Into::into).collect();
@@ -274,6 +280,7 @@ pub fn prepare_sweep_inputs_at_with_fee(
     rct_type: monero_wallet::ringct::RctType,
     fee_rate: monero_wallet::interface::FeeRate,
 ) -> Result<PreparedInputs, String> {
+    refuse_pre_ringct_selection(wallet_outputs, selected_output_keys)?;
     let spendable = spendable_in_account(
         wallet_outputs,
         wallet_height,
@@ -295,6 +302,7 @@ pub fn prepare_sweep_inputs_at_with_fee(
         )?,
     };
     prepared_sweep(spendable, rct_type, fee_rate)
+        .map_err(|error| note_pre_ringct_funds(error, wallet_outputs, Some(source_account)))
 }
 
 /// Which subaddresses of the source account a sweep spends from. A sweep of
@@ -331,6 +339,7 @@ pub fn prepare_sweep_inputs_from_subaddresses<R: RngCore + CryptoRng>(
     );
     let spendable = from_subaddresses(rng, spendable, subaddresses, rct_type, fee_rate)?;
     prepared_sweep(spendable, rct_type, fee_rate)
+        .map_err(|error| note_pre_ringct_funds(error, wallet_outputs, Some(source_account)))
 }
 
 /// [`prepare_sweep_inputs_from_subaddresses`] at the node's current RingCT
@@ -379,7 +388,11 @@ pub fn prepare_sweep_transactions<R: RngCore + CryptoRng>(
     );
     let mut remaining = from_subaddresses(rng, spendable, subaddresses, rct_type, fee_rate)?;
     if remaining.is_empty() {
-        return Err("No spendable outputs available for sweep in the selected account".to_string());
+        return Err(note_pre_ringct_funds(
+            "No spendable outputs available for sweep in the selected account".to_string(),
+            wallet_outputs,
+            Some(source_account),
+        ));
     }
 
     let mut transactions = Vec::new();
@@ -452,6 +465,54 @@ async fn construction_fee_rate<R: RpcConnection>(
     Ok((rct_type, fee_rate))
 }
 
+fn refuse_pre_ringct_selection(
+    wallet_outputs: &[WalletOutput],
+    selected_output_keys: Option<&[String]>,
+) -> Result<(), String> {
+    let Some(keys) = selected_output_keys else {
+        return Ok(());
+    };
+    match wallet_outputs
+        .iter()
+        .find(|output| output.pre_ringct && keys.contains(&output.output_key()))
+    {
+        Some(output) => Err(format!(
+            "Output {} is a pre-RingCT output, which this library cannot spend; wallet2 can move \
+             it to a RingCT output (sweep_all, or sweep_unmixable)",
+            output.output_key()
+        )),
+        None => Ok(()),
+    }
+}
+
+fn note_pre_ringct_funds(
+    error: String,
+    wallet_outputs: &[WalletOutput],
+    account: Option<u32>,
+) -> String {
+    let held = wallet_outputs
+        .iter()
+        .filter(|output| {
+            output.pre_ringct
+                && !output.spent
+                && !output.frozen
+                && account.map_or(true, |account| {
+                    output.subaddress_index.map_or(0, |index| index.0) == account
+                })
+        })
+        .fold(0u64, |sum, output| sum.saturating_add(output.amount));
+    if held == 0 {
+        return error;
+    }
+    format!(
+        "{error}. Another {}.{:012} XMR is held in pre-RingCT outputs, which this library cannot \
+         spend; wallet2 can move it to a RingCT output with sweep_all, or with sweep_unmixable \
+         for amounts with too few outputs for a ring",
+        held / 1_000_000_000_000,
+        held % 1_000_000_000_000
+    )
+}
+
 fn spendable_in_account(
     wallet_outputs: &[WalletOutput],
     wallet_height: u64,
@@ -464,6 +525,7 @@ fn spendable_in_account(
         .filter(|output| {
             !output.spent
                 && !output.frozen
+                && !output.pre_ringct
                 && is_spendable_at(output, wallet_height, now_secs)
                 && output.subaddress_index.map_or(0, |index| index.0) == source_account
                 && !excluded_key_images
@@ -568,11 +630,13 @@ pub fn prepare_sweep_inputs_at(
     selected_output_keys: Option<&[String]>,
     excluded_key_images: Option<&HashSet<String>>,
 ) -> Result<PreparedInputs, String> {
+    refuse_pre_ringct_selection(wallet_outputs, selected_output_keys)?;
     let mut spendable: Vec<WalletOutput> = wallet_outputs
         .iter()
         .filter(|o| {
             !o.spent
                 && !o.frozen
+                && !o.pre_ringct
                 && is_spendable_at(o, wallet_height, now_secs)
                 && !excluded_key_images.map_or(false, |exc| exc.contains(&o.key_image))
         })
@@ -584,7 +648,11 @@ pub fn prepare_sweep_inputs_at(
     }
 
     if spendable.is_empty() {
-        return Err("No spendable outputs available for sweep".to_string());
+        return Err(note_pre_ringct_funds(
+            "No spendable outputs available for sweep".to_string(),
+            wallet_outputs,
+            None,
+        ));
     }
 
     let total_input = crate::tx_utils::checked_amount_sum(spendable.iter().map(|o| o.amount))
@@ -627,6 +695,7 @@ mod tests {
             key_image: format!("ki_{}", tx_hash),
             is_coinbase: false,
             frozen: false,
+            pre_ringct: false,
         }
     }
 

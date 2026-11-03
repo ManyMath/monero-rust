@@ -334,6 +334,8 @@ impl WalletOutput {
   }
 
   /// The index of the output on the blockchain.
+  ///
+  /// For an output of a version 1 transaction this is the index within the transaction.
   pub fn index_on_blockchain(&self) -> u64 {
     self.relative_id.index_on_blockchain
   }

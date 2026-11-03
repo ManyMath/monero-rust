@@ -1769,6 +1769,7 @@ mod wallet2_txset {
                 key_image: derived.key_image.clone(),
                 is_coinbase: false,
                 frozen: false,
+                pre_ringct: false,
             };
             let mut previous = 0;
             let persisted = InputRing {

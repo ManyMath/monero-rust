@@ -437,6 +437,7 @@ pub fn owned_output(n: u8, global_index: u64, block_height: u64, amount: u64) ->
             key_image: hex::encode(key_image),
             is_coinbase: false,
             frozen: false,
+            pre_ringct: false,
         },
         key,
         commitment,

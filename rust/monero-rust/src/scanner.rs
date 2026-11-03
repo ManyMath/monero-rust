@@ -988,6 +988,93 @@ fn first_ringct_index_from_rpc(
     })
 }
 
+/// The per-amount global indices of the outputs of each version 1 transaction
+/// of a block, by hash; `None` for a miner transaction sent without its entry.
+fn version_1_output_indices<'a>(
+    block: &OxideBlock,
+    txs: &[([u8; 32], OxideTransaction<Pruned>)],
+    indices: Option<&'a BlockOutputIndices>,
+) -> Result<HashMap<[u8; 32], Option<&'a [u64]>>, String> {
+    let height = block.number();
+    let miner = block.miner_transaction();
+    let miner_hash = (miner.version() == 1).then(|| miner.hash());
+    let is_v1 = |tx: &OxideTransaction<Pruned>| matches!(tx, OxideTransaction::V1 { .. });
+    let any_v1_tx = txs.iter().any(|(_, tx)| is_v1(tx));
+    let mut found: HashMap<[u8; 32], Option<&[u64]>> =
+        miner_hash.map(|hash| (hash, None)).into_iter().collect();
+    if found.is_empty() && !any_v1_tx {
+        return Ok(found);
+    }
+
+    let entries = indices.map_or(&[][..], |indices| indices.indices.as_slice());
+    let (miner_entry, tx_entries) = if entries.len() == 1 + txs.len() {
+        (entries.first(), &entries[1..])
+    } else if entries.len() == txs.len() {
+        (None, entries)
+    } else if any_v1_tx {
+        return Err(format!(
+            "Block {height} has {} transactions but the node sent output indices for {}",
+            1 + txs.len(),
+            entries.len()
+        ));
+    } else {
+        return Ok(found);
+    };
+
+    let miner_entry = miner_hash.zip(
+        miner_entry
+            .map(|entry| entry.indices.as_slice())
+            .filter(|entry| !entry.is_empty()),
+    );
+    let miner_outputs = miner.prefix().outputs.as_slice();
+    let version_1 = miner_entry
+        .map(|(hash, entry)| (hash, miner_outputs, entry))
+        .into_iter()
+        .chain(
+            txs.iter()
+                .zip(tx_entries)
+                .filter(|((_, tx), _)| is_v1(tx))
+                .map(|((hash, tx), entry)| {
+                    (
+                        *hash,
+                        tx.prefix().outputs.as_slice(),
+                        entry.indices.as_slice(),
+                    )
+                }),
+        );
+
+    let mut next: HashMap<u64, u64> = HashMap::new();
+    for (hash, outputs, sent) in version_1 {
+        if sent.len() != outputs.len() {
+            return Err(format!(
+                "Block {height}: the node sent {} output indices for version 1 transaction {} \
+                 with {} outputs",
+                sent.len(),
+                hex::encode(hash),
+                outputs.len()
+            ));
+        }
+        for (output, index) in outputs.iter().zip(sent) {
+            let amount = output.amount.unwrap_or(0);
+            if let Some(expected) = next.get(&amount) {
+                if index != expected {
+                    return Err(format!(
+                        "Block {height}: output index {index} for amount {amount} does not \
+                         follow {}",
+                        expected.wrapping_sub(1)
+                    ));
+                }
+            }
+            let following = index.checked_add(1).ok_or_else(|| {
+                format!("Block {height}: output index {index} leaves no room for the next")
+            })?;
+            next.insert(amount, following);
+        }
+        found.insert(hash, Some(sent));
+    }
+    Ok(found)
+}
+
 /// Drop zero-amount outputs, which wallet2 does not record (wallet2.cpp:2272-2277).
 fn without_zero_amounts(mut outputs: Vec<OxideWalletOutput>) -> Vec<OxideWalletOutput> {
     outputs.retain(|output| output.commitment().amount != 0);
@@ -1081,16 +1168,13 @@ fn oxide_payment_id_hex(payment_id: PaymentId) -> Option<String> {
     }
 }
 
-/// Convert a scanned `monero-wallet` output into the wallet output model.
-///
-/// `key_image_scalar` carries the private spend key when key images should be
-/// filled at scan time (WASM full wallets); `None` leaves them empty.
 fn map_oxide_output(
     output: &OxideWalletOutput,
     block_height: u64,
     miner_tx_hash: [u8; 32],
     key_image_scalar: Option<&Scalar>,
-    global_index_is_authoritative: bool,
+    global_index: Option<u64>,
+    pre_ringct: bool,
 ) -> Result<WalletOutput, String> {
     let output_index = output.index_in_transaction();
     let key_offset_bytes = <[u8; 32]>::from(output.key_offset());
@@ -1118,7 +1202,7 @@ fn map_oxide_output(
             .map(|idx| (idx.account(), idx.address())),
         payment_id: output.payment_id().and_then(oxide_payment_id_hex),
         received_output_bytes: hex::encode(output.serialize()),
-        global_index: global_index_is_authoritative.then(|| output.index_on_blockchain()),
+        global_index,
         ring: None,
         block_height,
         spent: false,
@@ -1126,7 +1210,53 @@ fn map_oxide_output(
         key_image,
         is_coinbase: output.transaction() == miner_tx_hash,
         frozen: false,
+        pre_ringct,
     })
+}
+
+/// Convert a block's outputs; a wallet output without a global index is refused.
+fn map_block_outputs(
+    scanned: &[OxideWalletOutput],
+    block_height: u64,
+    miner_tx_hash: [u8; 32],
+    key_image_scalar: Option<&Scalar>,
+    first_ringct_index: Option<u64>,
+    version_1: &HashMap<[u8; 32], Option<&[u64]>>,
+) -> Result<Vec<WalletOutput>, String> {
+    let mut outputs = Vec::with_capacity(scanned.len());
+    for output in scanned {
+        let (global_index, pre_ringct) = match version_1.get(&output.transaction()) {
+            Some(indices) => (
+                indices
+                    .and_then(|indices| {
+                        usize::try_from(output.index_in_transaction())
+                            .ok()
+                            .and_then(|position| indices.get(position))
+                    })
+                    .copied(),
+                true,
+            ),
+            None => (
+                first_ringct_index.map(|_| output.index_on_blockchain()),
+                false,
+            ),
+        };
+        if global_index.is_none() {
+            return Err(format!(
+                "Block {block_height} contains a wallet output but no authoritative global \
+                 output index; refuse to store an output that cannot be spent privately"
+            ));
+        }
+        outputs.push(map_oxide_output(
+            output,
+            block_height,
+            miner_tx_hash,
+            key_image_scalar,
+            global_index,
+            pre_ringct,
+        )?);
+    }
+    Ok(outputs)
 }
 
 pub async fn scan_block_for_outputs<R: RpcConnection>(
@@ -1455,6 +1585,11 @@ pub async fn process_batch_response(
                 &scan_txs,
                 response.output_indices.get(block_idx),
             )?;
+            let version_1 = version_1_output_indices(
+                &block,
+                &parsed_txs,
+                response.output_indices.get(block_idx),
+            )?;
             let scanned = scan_parsed_block_expanding(
                 &mut scanner.scanner,
                 &mut scanner.watermark,
@@ -1463,26 +1598,16 @@ pub async fn process_batch_response(
                 &scan_txs,
                 first_ringct_index.unwrap_or(0),
             )?;
-            let global_index_is_authoritative = first_ringct_index.is_some();
 
             let key_image_scalar = scanner.spend_scalar.as_ref().map(|scalar| &**scalar);
-
-            let mut outputs = Vec::with_capacity(scanned.len());
-            for output in &scanned {
-                outputs.push(map_oxide_output(
-                    output,
-                    block_height,
-                    miner_tx_hash,
-                    key_image_scalar,
-                    global_index_is_authoritative,
-                )?);
-            }
-            if outputs.iter().any(|output| output.global_index.is_none()) {
-                return Err(format!(
-                    "Block {block_height} contains a wallet output but no authoritative global \
-                     output index; refuse to store an output that cannot be spent privately"
-                ));
-            }
+            let outputs = map_block_outputs(
+                &scanned,
+                block_height,
+                miner_tx_hash,
+                key_image_scalar,
+                first_ringct_index,
+                &version_1,
+            )?;
 
             results.push(BlockScanResult {
                 previous_block_hash: hex::encode(block.header.previous),
@@ -1726,6 +1851,11 @@ pub async fn process_batch_multi_wallet_response(
                 &scan_txs,
                 response.output_indices.get(block_idx),
             )?;
+            let version_1 = version_1_output_indices(
+                &block,
+                &parsed_txs,
+                response.output_indices.get(block_idx),
+            )?;
 
             let mut wallet_results = HashMap::new();
             for entry in &mut cached_scanners.entries {
@@ -1739,23 +1869,14 @@ pub async fn process_batch_multi_wallet_response(
                 )?;
 
                 let key_image_scalar = entry.spend_scalar.as_ref().map(|scalar| &**scalar);
-
-                let mut outputs = Vec::with_capacity(scanned.len());
-                for output in &scanned {
-                    outputs.push(map_oxide_output(
-                        output,
-                        block_height,
-                        miner_tx_hash,
-                        key_image_scalar,
-                        first_ringct_index.is_some(),
-                    )?);
-                }
-                if outputs.iter().any(|output| output.global_index.is_none()) {
-                    return Err(format!(
-                        "Block {block_height} contains a wallet output but no authoritative global \
-                         output index; refuse to store an output that cannot be spent privately"
-                    ));
-                }
+                let outputs = map_block_outputs(
+                    &scanned,
+                    block_height,
+                    miner_tx_hash,
+                    key_image_scalar,
+                    first_ringct_index,
+                    &version_1,
+                )?;
                 wallet_results.insert(
                     entry.address.clone(),
                     WalletScanData {
@@ -2273,7 +2394,8 @@ pub async fn scan_mempool<R: RpcConnection>(
                 0,         // unconfirmed: still in the mempool
                 [0u8; 32], // mempool transactions are never coinbase
                 key_image_scalar,
-                false,
+                None,
+                parsed.version() == 1,
             )?);
         }
     }
@@ -2684,6 +2806,7 @@ mod tests {
             key_image: "keyimage".to_string(),
             is_coinbase: false,
             frozen: false,
+            pre_ringct: false,
         };
 
         let json = serde_json::to_string(&output).unwrap();
@@ -2728,6 +2851,7 @@ mod tests {
                 key_image: String::new(),
                 is_coinbase: false,
                 frozen: false,
+                pre_ringct: false,
             }
         }
 
@@ -2770,6 +2894,7 @@ mod tests {
             key_image: String::new(),
             is_coinbase: false,
             frozen: false,
+            pre_ringct: false,
         }];
 
         retain_mempool_outputs_for_accounts(&mut outputs, None);
@@ -3016,6 +3141,97 @@ mod tests {
         assert_eq!(first(&old, &[&[5], &[40, 41]]), Ok(Some(40)));
         assert_eq!(first(&old, &[&[40, 41]]), Ok(Some(40)));
         assert_eq!(first_ringct_index_from_rpc(&old, &[], None), Ok(None));
+    }
+
+    #[test]
+    fn version_1_output_indices_are_per_amount_and_checked() {
+        use crate::monero_rpc::TxOutputIndices;
+        use monero_oxide::ed25519::CompressedPoint;
+        use monero_oxide::transaction::Output;
+
+        let basepoint = curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
+        let output = |amount| Output {
+            amount,
+            key: CompressedPoint::from(basepoint.compress().to_bytes()),
+            view_tag: None,
+        };
+        let prefix = |inputs, outputs| OxideTransactionPrefix {
+            additional_timelock: OxideTimelock::None,
+            inputs,
+            outputs,
+            extra: vec![],
+        };
+        let header = OxideBlockHeader {
+            hardfork_version: 4,
+            hardfork_signal: 0,
+            timestamp: 0,
+            previous: [0; 32],
+            nonce: 0,
+        };
+        let miner = OxideTransaction::<NotPruned>::V1 {
+            prefix: prefix(vec![OxideInput::Gen(9)], vec![output(Some(300))]),
+            signatures: vec![],
+        };
+        let miner_hash = miner.hash();
+        let old = OxideTransaction::<Pruned>::V1 {
+            prefix: prefix(
+                vec![],
+                vec![output(Some(100)), output(Some(200)), output(Some(100))],
+            ),
+            signatures: (),
+        };
+        let ringct = OxideTransaction::<Pruned>::V2 {
+            prefix: prefix(vec![], vec![output(None)]),
+            proofs: None,
+        };
+        let txs = vec![([1; 32], old), ([2; 32], ringct)];
+        let block = OxideBlock::new(header, miner, vec![[1; 32], [2; 32]]).unwrap();
+        let indices = |entries: &[&[u64]]| BlockOutputIndices {
+            indices: entries
+                .iter()
+                .map(|entry| TxOutputIndices {
+                    indices: entry.to_vec(),
+                })
+                .collect(),
+        };
+        let check = |entries: &[&[u64]]| {
+            version_1_output_indices(&block, &txs, Some(&indices(entries))).map(|found| {
+                let mut found: Vec<([u8; 32], Option<Vec<u64>>)> = found
+                    .into_iter()
+                    .map(|(hash, sent)| (hash, sent.map(<[u64]>::to_vec)))
+                    .collect();
+                found.sort();
+                found
+            })
+        };
+        let expect = |miner: Option<Vec<u64>>| {
+            let mut expected = vec![([1; 32], Some(vec![7, 3, 8])), (miner_hash, miner)];
+            expected.sort();
+            expected
+        };
+
+        assert_eq!(
+            check(&[&[12], &[7, 3, 8], &[40]]),
+            Ok(expect(Some(vec![12])))
+        );
+        assert_eq!(check(&[&[], &[7, 3, 8], &[40]]), Ok(expect(None)));
+        assert_eq!(check(&[&[7, 3, 8], &[40]]), Ok(expect(None)));
+        assert!(check(&[&[12], &[7, 3], &[40]]).is_err());
+        assert!(check(&[&[12], &[7, 3, 8, 9], &[40]]).is_err());
+        assert!(check(&[&[12], &[7, 3, 9], &[40]]).is_err());
+        assert!(check(&[&[12], &[7, 3, 7], &[40]]).is_err());
+        assert!(check(&[&[12, 13], &[7, 3, 8], &[40]]).is_err());
+        assert!(check(&[&[12], &[u64::MAX, 3, 8], &[40]]).is_err());
+        assert!(check(&[&[7, 3, 8]]).is_err());
+        assert!(version_1_output_indices(&block, &txs, None).is_err());
+
+        let ringct_only = &txs[1..];
+        let header = block.header.clone();
+        let miner = block.miner_transaction().clone();
+        let block = OxideBlock::new(header, miner, vec![[2; 32]]).unwrap();
+        let found = version_1_output_indices(&block, ringct_only, None).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found.get(&miner_hash), Some(&None));
     }
 
     #[test]

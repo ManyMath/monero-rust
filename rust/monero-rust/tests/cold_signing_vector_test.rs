@@ -75,6 +75,7 @@ fn synthetic_output_for_spend_key(
             key_image: key_image_hex.clone(),
             is_coinbase: false,
             frozen: false,
+            pre_ringct: false,
         },
         key_image_hex,
     )
@@ -1125,6 +1126,7 @@ fn cold_signing_key_image_rpc_vector_flows_through_app_import_state() {
                 key_image: String::new(),
                 is_coinbase: true,
                 frozen: false,
+                pre_ringct: false,
             })
             .collect(),
     );

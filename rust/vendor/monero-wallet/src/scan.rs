@@ -124,9 +124,8 @@ impl InternalScanner {
     tx_hash: [u8; 32],
     tx: &Transaction<Pruned>,
   ) -> Result<Timelocked, ScanError> {
-    // Only scan TXs creating RingCT outputs
-    // For the full details on why this check is equivalent, please see the documentation in `scan`
-    if tx.version() != 2 {
+    // Version 1 transactions are scanned too.
+    if !matches!(tx.version(), 1 | 2) {
       return Ok(Timelocked(vec![]));
     }
 
@@ -209,7 +208,7 @@ impl InternalScanner {
         // Since we've found an output to us, get its amount
         let mut commitment = Commitment::zero();
 
-        // Miner transaction
+        // Miner transaction or version 1 transaction
         if let Some(amount) = output.amount {
           commitment.amount = amount;
         // Regular transaction
@@ -238,15 +237,20 @@ impl InternalScanner {
 
         let o = u64::try_from(o).expect("couldn't convert output index (usize) to u64");
 
+        // A version 1 output is indexed per amount, which a ScannableBlock does not carry.
+        let index_on_blockchain = if matches!(tx, Transaction::V1 { .. }) {
+          o
+        } else {
+          output_index_for_first_ringct_output.checked_add(o).ok_or(
+            ScanError::InvalidScannableBlock(
+              "transaction's output's index isn't representable as a u64",
+            ),
+          )?
+        };
+
         res.push(WalletOutput {
           absolute_id: AbsoluteId { transaction: tx_hash, index_in_transaction: o },
-          relative_id: RelativeId {
-            index_on_blockchain: output_index_for_first_ringct_output.checked_add(o).ok_or(
-              ScanError::InvalidScannableBlock(
-                "transaction's output's index isn't representable as a u64",
-              ),
-            )?,
-          },
+          relative_id: RelativeId { index_on_blockchain },
           data: OutputData { key: output_key, key_offset: Scalar::from(key_offset), commitment },
           metadata: Metadata {
             additional_timelock: tx.prefix().additional_timelock,

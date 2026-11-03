@@ -538,6 +538,7 @@ async fn scan_one<R: RpcConnection + 'static>(rpc: Rpc<R>, request: Value) -> Va
             "confirmed": balance.confirmed,
             "unconfirmed": balance.unconfirmed,
             "pending_spend": balance.pending_spend,
+            "pre_ringct": balance.pre_ringct,
         },
         "conflicts": file.conflicts,
         "reorgs": file.reorgs,

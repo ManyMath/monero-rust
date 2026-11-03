@@ -75,6 +75,7 @@ fn output(amount: u64, tx: &str, index: u8, height: u64, subaddress: (u32, u32))
         key_image: format!("ki_{tx}_{index}"),
         is_coinbase: false,
         frozen: false,
+        pre_ringct: false,
     }
 }
 
@@ -475,6 +476,7 @@ async fn construction_refuses_more_than_one_transaction_before_asking_the_node()
         global_index: None,
         key_image: String::new(),
         ring: None,
+        pre_ringct: false,
     };
     let node = Node::default();
     let rpc = Rpc::new_with_connection(node.clone());

@@ -257,7 +257,6 @@ fn differences(scan: &Scan, wallet2: &Value, rust: &WalletOutput) -> Vec<String>
 }
 
 #[tokio::test]
-#[ignore = "known defect: outputs in blocks of version 1 to 3, and outputs of version 1 transactions in later blocks, are skipped"]
 async fn every_wallet2_output_is_reported() {
     let Some(fx) = fixture().await else { return };
     for wallet in WALLETS {
@@ -283,24 +282,35 @@ async fn every_wallet2_output_is_reported() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: pre-RingCT outputs are skipped silently, so the balance is lower than wallet2's with no error"]
 async fn balance_matches_wallet2() {
     let Some(fx) = fixture().await else { return };
+    let mut old_funds = 0;
     for wallet in WALLETS {
         let scan = fx.scan(wallet, 0).await;
         let balance = scan.state.balance_at_height(scan.height);
         let expected = fx.wallet2(wallet).balance();
+        let total = balance.confirmed + balance.unconfirmed + balance.pre_ringct;
         assert_eq!(
-            balance.confirmed + balance.unconfirmed,
-            expected,
-            "{wallet}: wallet2 balance {expected}, monero-rust {} with no error",
-            balance.confirmed + balance.unconfirmed
+            total, expected,
+            "{wallet}: wallet2 balance {expected}, monero-rust {total} with no error"
         );
+        let pre_ringct: u64 = scan
+            .state
+            .outputs()
+            .iter()
+            .filter(|output| output.pre_ringct && !output.spent)
+            .map(|output| output.amount)
+            .sum();
+        assert_eq!(balance.pre_ringct, pre_ringct, "{wallet}");
+        old_funds += pre_ringct;
     }
+    assert!(
+        old_funds > 0,
+        "the fixture has no unspent pre-RingCT output"
+    );
 }
 
 #[tokio::test]
-#[ignore = "known defect: version 1 transactions in blocks of version 4 and later are skipped"]
 async fn version_1_outputs_in_ringct_era_blocks_are_reported() {
     let Some(fx) = fixture().await else { return };
     let fork = fx.fork(4);
@@ -336,7 +346,130 @@ async fn version_1_outputs_in_ringct_era_blocks_are_reported() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: spends of outputs the scanner skipped are not seen, so their change looks like income"]
+async fn pre_ringct_outputs_are_flagged_and_never_spent() {
+    use monero_rust::native::{create_unsigned_transaction_with_rpc, StoredOutputData};
+    use monero_wallet::{interface::FeeRate, ringct::RctType};
+
+    let Some(fx) = fixture().await else { return };
+    let mut refused = 0;
+    for wallet in WALLETS {
+        let scan = fx.scan(wallet, 0).await;
+        let rust = scan.by_key();
+        for output in fx.wallet2(wallet).outputs() {
+            let key = output["pubkey"].as_str().unwrap();
+            assert_eq!(
+                rust[key].pre_ringct,
+                output["tx_version"] == 1,
+                "{wallet}: output {key} in block {}",
+                output["block_height"]
+            );
+        }
+        let state = &scan.state;
+        let height = state.chain_height();
+        assert!(state.spendable_outputs().iter().all(|o| !o.pre_ringct));
+        let balance = state.balance();
+        if balance.pre_ringct == 0 {
+            continue;
+        }
+
+        let error = monero_rust::prepare_send_inputs_at_with_fee(
+            state.outputs(),
+            height,
+            None,
+            balance.confirmed + balance.unconfirmed + 1,
+            1,
+            None,
+            None,
+            0,
+            RctType::ClsagBulletproofPlus,
+            FeeRate::new(20_000, 10_000).unwrap(),
+        )
+        .expect_err("pre-RingCT funds must not be selected");
+        assert!(
+            error.contains("pre-RingCT") && error.contains("sweep_unmixable"),
+            "{wallet}: {error}"
+        );
+
+        let old = state
+            .outputs()
+            .iter()
+            .find(|o| o.pre_ringct && !o.spent)
+            .expect("an unspent pre-RingCT output");
+        let error = monero_rust::prepare_send_inputs_at_with_fee(
+            state.outputs(),
+            height,
+            None,
+            1,
+            1,
+            Some(&[old.output_key()]),
+            None,
+            old.subaddress_index.map_or(0, |index| index.0),
+            RctType::ClsagBulletproofPlus,
+            FeeRate::new(20_000, 10_000).unwrap(),
+        )
+        .expect_err("a named pre-RingCT output must be refused");
+        assert!(error.contains("pre-RingCT"), "{wallet}: {error}");
+
+        let keys = monero_rust::scanner::derive_keys(&fx.seed(wallet), Network::Mainnet, "")
+            .expect("wallet keys");
+        let rpc = HttpRpc::new(fx.url.clone()).unwrap();
+        let mut ring_state = WalletState::new();
+        let error = create_unsigned_transaction_with_rpc(
+            &rpc,
+            &hex::encode(*keys.secret_view_key),
+            &hex::encode(keys.public_spend_key),
+            "mainnet",
+            vec![StoredOutputData::from(old)],
+            &[(keys.address.to_string(), 1)],
+            None,
+            &mut ring_state,
+        )
+        .await
+        .err()
+        .expect("a builder handed a pre-RingCT output must refuse it");
+        assert!(error.contains("pre-RingCT"), "{wallet}: {error}");
+        refused += 1;
+    }
+    assert!(
+        refused > 0,
+        "no wallet of the fixture holds pre-RingCT funds"
+    );
+}
+
+#[tokio::test]
+async fn outputs_found_in_one_block_say_whether_they_are_pre_ringct() {
+    let Some(fx) = fixture().await else { return };
+    let rpc = HttpRpc::new(fx.url.clone()).expect("regtest RPC");
+    let outputs = fx.wallet2("alice").outputs();
+    for version in [1, 2] {
+        let wallet2 = outputs
+            .iter()
+            .find(|output| output["tx_version"] == version)
+            .expect("an output of each transaction version");
+        let height = wallet2["block_height"].as_u64().unwrap();
+        let found = monero_rust::native::get_received_outputs_from_scan_with_rpc(
+            &rpc,
+            height,
+            &fx.seed("alice"),
+            "mainnet",
+            "",
+        )
+        .await
+        .unwrap();
+        let in_tx: Vec<_> = found
+            .iter()
+            .filter(|received| {
+                hex::encode(received.output.transaction()) == wallet2["tx_hash"].as_str().unwrap()
+            })
+            .collect();
+        assert!(!in_tx.is_empty(), "block {height}: output not found");
+        for received in in_tx {
+            assert_eq!(received.pre_ringct, version == 1, "block {height}");
+        }
+    }
+}
+
+#[tokio::test]
 async fn outgoing_transfers_are_seen_as_spends() {
     let Some(fx) = fixture().await else { return };
     for wallet in WALLETS {
@@ -572,9 +705,15 @@ async fn payment_ids_of_received_transfers_agree_with_wallet2() {
 #[tokio::test]
 async fn restore_height_at_ringct_fork_matches_full_scan() {
     let Some(fx) = fixture().await else { return };
+    let fork = fx.fork(4);
     let full = fx.scan("alice", 0).await;
-    let late = fx.scan("alice", fx.fork(4)).await;
-    let full_keys: HashSet<String> = full.by_key().into_keys().collect();
+    let late = fx.scan("alice", fork).await;
+    let full_keys: HashSet<String> = full
+        .by_key()
+        .into_iter()
+        .filter(|(_, output)| output.block_height >= fork)
+        .map(|(key, _)| key)
+        .collect();
     let late_keys: HashSet<String> = late.by_key().into_keys().collect();
     assert!(!late_keys.is_empty());
     assert_eq!(full_keys, late_keys);

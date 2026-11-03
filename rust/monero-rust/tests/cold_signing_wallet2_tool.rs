@@ -132,6 +132,7 @@ fn outputs_for_state(transfers: &[ExportedTransferDetails]) -> Vec<WalletOutput>
             key_image: String::new(),
             is_coinbase: false,
             frozen: false,
+            pre_ringct: false,
         })
         .collect()
 }

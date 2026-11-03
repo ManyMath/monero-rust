@@ -293,6 +293,7 @@ async fn sweep_uses_the_exact_fee_and_a_throwaway_dummy_output(
             subaddress: None,
             payment_id: None,
             received_output_bytes: output.received_output_bytes,
+            pre_ringct: output.pre_ringct,
         }));
     }
     stored.truncate(1);
