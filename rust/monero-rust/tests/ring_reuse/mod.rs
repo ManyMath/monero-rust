@@ -735,8 +735,8 @@ pub async fn relay_raw(
     state: &mut WalletState,
     tx_blob_hex: &str,
 ) -> Result<(), String> {
-    let _ = state;
-    monero_rust::native::broadcast_raw_transaction_with_rpc(&node.rpc(), tx_blob_hex, false).await
+    monero_rust::native::broadcast_raw_transaction_with_rpc(&node.rpc(), tx_blob_hex, state, false)
+        .await
 }
 
 pub fn scanned_block(height: u64, hash: &str, tx_blobs: &[&str]) -> BlockScanResult {

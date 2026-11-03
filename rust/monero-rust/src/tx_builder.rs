@@ -1662,29 +1662,35 @@ pub mod native {
     ) -> Result<(), String> {
         transaction.persist_input_rings(wallet_state)?;
         wallet_state.persist_rings().await?;
-        broadcast_raw_transaction_with_rpc(rpc, &transaction.tx_blob, do_not_relay).await
+        broadcast_raw_transaction_with_rpc(rpc, &transaction.tx_blob, wallet_state, do_not_relay)
+            .await
     }
 
-    /// Relay signed transaction bytes whose rings were managed elsewhere.
+    /// Relay signed transaction bytes, after checking and recording their rings
+    /// in the wallet's ring database.
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn broadcast_raw_transaction(
         node_url: &str,
         tx_blob_hex: &str,
+        wallet_state: &mut crate::wallet_state::WalletState,
         do_not_relay: bool,
     ) -> Result<(), String> {
         let rpc = HttpRpc::new(node_url.to_string())
             .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
-        broadcast_raw_transaction_with_rpc(&rpc, tx_blob_hex, do_not_relay).await
+        broadcast_raw_transaction_with_rpc(&rpc, tx_blob_hex, wallet_state, do_not_relay).await
     }
 
     pub async fn broadcast_raw_transaction_with_rpc<R: RpcConnection>(
         rpc: &Rpc<R>,
         tx_blob_hex: &str,
+        wallet_state: &mut crate::wallet_state::WalletState,
         do_not_relay: bool,
     ) -> Result<(), String> {
         let tx_bytes = hex::decode(tx_blob_hex).map_err(|e| format!("Invalid hex: {:?}", e))?;
         let tx = Transaction::<NotPruned>::read::<&[u8]>(&mut tx_bytes.as_ref())
             .map_err(|e| format!("Invalid transaction: {:?}", e))?;
+        wallet_state.record_transaction_rings(&tx.serialize())?;
+        wallet_state.persist_rings().await?;
         let response: Value = rpc
             .rpc_call(
                 "send_raw_transaction",

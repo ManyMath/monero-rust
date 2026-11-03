@@ -579,7 +579,7 @@ mod regtest {
         assert_eq!(tx.prefix().outputs.len(), 2);
         assert_eq!(tx.prefix().extra.len(), 44);
         assert_eq!(paid_to(&first, &tx), vec![amount]);
-        broadcast_raw_transaction_with_rpc(&rpc, &exact.tx_blob, false)
+        broadcast_raw_transaction_with_rpc(&rpc, &exact.tx_blob, &mut wallet_state, false)
             .await
             .expect("daemon accepts the zero-change transfer");
 
@@ -612,7 +612,7 @@ mod regtest {
         assert_eq!(tx.prefix().extra.len(), 33);
         assert_eq!(paid_to(&first, &tx), vec![small]);
         assert_eq!(paid_to(&second, &tx), vec![rest]);
-        broadcast_raw_transaction_with_rpc(&rpc, &exact.tx_blob, false)
+        broadcast_raw_transaction_with_rpc(&rpc, &exact.tx_blob, &mut wallet_state, false)
             .await
             .expect("daemon accepts the transfer without change");
     }

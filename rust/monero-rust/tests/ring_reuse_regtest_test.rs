@@ -194,8 +194,7 @@ async fn relay_raw(
     state: &mut WalletState,
     tx_blob_hex: &str,
 ) -> Result<(), String> {
-    let _ = state;
-    broadcast_raw_transaction_with_rpc(rpc, tx_blob_hex, false).await
+    broadcast_raw_transaction_with_rpc(rpc, tx_blob_hex, state, false).await
 }
 
 struct Funded {

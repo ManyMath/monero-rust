@@ -577,6 +577,49 @@ impl WalletState {
         }
     }
 
+    /// Record a signed transaction's rings before relay; all or none, refusing a
+    /// second ring or one outside the recorded candidate set.
+    pub fn record_transaction_rings(&mut self, tx_blob: &[u8]) -> Result<usize, String> {
+        self.check_ring_database_loaded()?;
+        let mut new_rings = Vec::new();
+        for (key_image, offsets) in crate::scanner::extract_spent_rings_from_raw_tx(tx_blob) {
+            if !self.can_record_ring(&key_image) {
+                continue;
+            }
+            let mut ring = DecoySelection::from_offsets(&offsets, 0);
+            let indexes = ring.indexes()?;
+            match self.rings.ring(&key_image) {
+                Some(existing) if existing.is_same_ring(&ring) => continue,
+                Some(_) => {
+                    return Err(format!(
+                        "Refusing to replace the persisted ring for key image {key_image}: the \
+                         transaction carries a different one"
+                    ));
+                }
+                None => self.check_drawn_from_candidates(&key_image, &ring)?,
+            }
+            let global_index = self
+                .key_image_index
+                .get(&key_image)
+                .and_then(|&index| self.outputs[index].global_index);
+            if let Some(position) = global_index
+                .and_then(|global_index| indexes.iter().position(|i| *i == global_index))
+            {
+                ring.real_index = u8::try_from(position).unwrap_or(0);
+            }
+            new_rings.push((key_image, ring));
+        }
+        let recorded = new_rings.len();
+        for (key_image, ring) in new_rings {
+            self.rings.set_ring(&key_image, ring);
+            self.rings_unsaved = true;
+        }
+        if recorded > 0 {
+            self.attach_rings();
+        }
+        Ok(recorded)
+    }
+
     /// Every recorded ring by key image, to be stored durably. Rollbacks and
     /// rescans leave it alone.
     pub fn ring_database(&self) -> &RingDatabase {
@@ -2533,6 +2576,50 @@ mod tests {
             .record_input_rings(&[input_ring("ki1", 7)])
             .unwrap();
         throwaway.persist_rings().await.unwrap();
+    }
+
+    #[test]
+    fn transaction_rings_are_recorded_or_refused_as_a_whole() {
+        let raw_tx = |inputs: &[(&[u8], [u8; 32])]| {
+            let mut blob = vec![2, 0, inputs.len() as u8];
+            for (offsets, key_image) in inputs {
+                blob.extend_from_slice(&[0x02, 0, offsets.len() as u8]);
+                blob.extend_from_slice(offsets);
+                blob.extend_from_slice(key_image);
+            }
+            blob.extend_from_slice(&[0, 0]);
+            blob
+        };
+        let (ki1, ki2, foreign) = ([0x11; 32], [0x22; 32], [0x33; 32]);
+        let mut state = WalletState::new();
+        let mut first = make_output(1, 100, &hex::encode(ki1));
+        first.global_index = Some(12);
+        state.add_outputs(vec![first, make_output(1, 100, &hex::encode(ki2))]);
+
+        let tx = raw_tx(&[(&[7, 5, 10], ki1), (&[1, 2, 3], foreign)]);
+        assert_eq!(state.record_transaction_rings(&tx), Ok(1));
+        let recorded = state
+            .ring_database()
+            .ring(&hex::encode(ki1))
+            .unwrap()
+            .clone();
+        assert_eq!(recorded.offsets, vec![7, 5, 10]);
+        assert_eq!(recorded.real_index, 1);
+        assert_eq!(state.ring_database().len(), 1);
+        assert!(state.has_unsaved_rings());
+        assert_eq!(state.record_transaction_rings(&tx), Ok(0));
+
+        let conflicting = raw_tx(&[(&[4, 4, 4], ki2), (&[7, 5, 11], ki1)]);
+        let error = state.record_transaction_rings(&conflicting).unwrap_err();
+        assert!(
+            error.contains("Refusing to replace the persisted ring"),
+            "{error}"
+        );
+        assert_eq!(state.ring_database().len(), 1);
+        assert_eq!(
+            state.ring_database().ring(&hex::encode(ki1)),
+            Some(&recorded)
+        );
     }
 
     #[test]

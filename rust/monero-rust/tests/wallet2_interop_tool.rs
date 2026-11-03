@@ -162,6 +162,7 @@ async fn build(rpc: &Rpc<HttpRpc>, request: &Request, response: &mut Response) {
         }
     }
 
+    let mut relay_state = None;
     for _ in 0..request.repeat {
         let mut build_state = monero_rust::WalletState::new();
         build_state.set_ring_persister(Box::new(monero_rust::RingsNotPersisted));
@@ -195,21 +196,31 @@ async fn build(rpc: &Rpc<HttpRpc>, request: &Request, response: &mut Response) {
             }
         };
         match built {
-            Ok(result) => response.builds.push(Build {
-                inputs: prepared.spent_output_keys.clone(),
-                input_total: prepared.total_input,
-                estimated_fee: prepared.estimated_fee,
-                result,
-            }),
+            Ok(result) => {
+                response.builds.push(Build {
+                    inputs: prepared.spent_output_keys.clone(),
+                    input_total: prepared.total_input,
+                    estimated_fee: prepared.estimated_fee,
+                    result,
+                });
+                relay_state.get_or_insert(build_state);
+            }
             Err(error) => response.build_errors.push(error),
         }
     }
 
     if request.broadcast {
         assert_eq!(request.repeat, 1, "broadcast one build at a time");
-        if let Some(build) = response.builds.first() {
+        if let (Some(build), Some(relay_state)) = (response.builds.first(), relay_state.as_mut()) {
             response.broadcast = Some(
-                match broadcast_raw_transaction_with_rpc(rpc, &build.result.tx_blob, false).await {
+                match broadcast_raw_transaction_with_rpc(
+                    rpc,
+                    &build.result.tx_blob,
+                    relay_state,
+                    false,
+                )
+                .await
+                {
                     Ok(()) => "OK".to_string(),
                     Err(error) => error,
                 },

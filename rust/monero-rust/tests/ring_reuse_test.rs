@@ -923,7 +923,6 @@ async fn relaying_a_second_ring_for_a_relayed_output_is_refused() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: broadcast_raw_transaction relays any bytes without consulting wallet state, so it hands the daemon a second ring for an output this wallet already spent"]
 async fn raw_relay_never_hands_the_daemon_a_second_ring() {
     let node = FakeNode::uniform();
     let (mut state, owned, second) = conflicting_spends(&node).await;
@@ -931,6 +930,118 @@ async fn raw_relay_never_hands_the_daemon_a_second_ring() {
     let _ = relay_raw(&node, &mut state, &second.tx_blob).await;
 
     assert_daemon_saw_one_ring(&node, &owned[0]);
+}
+
+#[tokio::test]
+async fn relaying_signed_bytes_from_elsewhere_records_their_rings() {
+    let node = FakeNode::uniform();
+    let (mut state, owned, disk) = funded(&node, 1);
+    let (mut other_device, _other_disk) = second_instance(&owned);
+    let a = &owned[0];
+
+    let theirs = hot_send(
+        &node,
+        &mut other_device,
+        &[a.key_image()],
+        &destination(0),
+        XMR,
+        NORMAL,
+    )
+    .await
+    .unwrap();
+    relay_raw(&node, &mut state, &theirs.tx_blob).await.unwrap();
+    drop(state);
+
+    let mut state = crash_and_reload(&disk);
+    let ours = hot_send(
+        &node,
+        &mut state,
+        &[a.key_image()],
+        &destination(1),
+        2 * XMR,
+        NORMAL,
+    )
+    .await
+    .unwrap();
+    assert_same_ring(
+        "a relayed transaction from elsewhere and this wallet's own rebuild",
+        &signed_ring(&theirs.tx_blob, a),
+        &signed_ring(&ours.tx_blob, a),
+    );
+}
+
+#[tokio::test]
+async fn relaying_a_ring_outside_the_candidates_the_daemon_was_asked_for_is_refused() {
+    let node = FakeNode::uniform();
+    let (mut state, owned, _disk) = funded(&node, 1);
+    let a = &owned[0];
+    node.set_lock_script(vec![Lock::AtOrAbove(0)]);
+    hot_send(
+        &node,
+        &mut state,
+        &[a.key_image()],
+        &destination(0),
+        XMR,
+        NORMAL,
+    )
+    .await
+    .expect_err("every decoy is locked");
+    let asked = state
+        .ring_database()
+        .candidates(a.key_image())
+        .unwrap()
+        .to_vec();
+
+    let theirs = spend_by_another_instance(&owned, a).await;
+    let error = relay_raw(&node, &mut state, &theirs.tx_blob)
+        .await
+        .unwrap_err();
+    assert!(
+        error.contains("not drawn from the 75 candidates"),
+        "{error}"
+    );
+    let error = relay(&node, &mut state, &theirs).await.unwrap_err();
+    assert!(
+        error.contains("not drawn from the 75 candidates"),
+        "{error}"
+    );
+    assert!(node.seen_txs().is_empty());
+    assert!(state.ring_database().ring(a.key_image()).is_none());
+    assert_eq!(
+        state.ring_database().candidates(a.key_image()),
+        Some(asked.as_slice())
+    );
+}
+
+#[tokio::test]
+async fn relay_check_holds_for_a_key_image_given_in_upper_case() {
+    let node = FakeNode::uniform();
+    let (_funded, owned, _funded_disk) = funded(&node, 1);
+    let a = &owned[0];
+    let mut upper = a.output.clone();
+    upper.key_image = upper.key_image.to_uppercase();
+    let (mut state, _disk) = wallet_holding(vec![upper.clone()]);
+    let first = hot_send_with(
+        &node,
+        &mut state,
+        vec![StoredOutputData::from(&upper)],
+        &destination(0),
+        XMR,
+        NORMAL,
+    )
+    .await
+    .unwrap();
+    relay(&node, &mut state, &first).await.unwrap();
+
+    let theirs = spend_by_another_instance(&owned, a).await;
+    let error = relay_raw(&node, &mut state, &theirs.tx_blob)
+        .await
+        .unwrap_err();
+    assert!(
+        error.contains("Refusing to replace the persisted ring"),
+        "{error}"
+    );
+    assert_eq!(node.seen_txs().len(), 1);
 }
 
 #[tokio::test]

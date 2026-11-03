@@ -1519,6 +1519,9 @@ impl<R: RpcConnection> Rpc<R> {
         Ok(fee)
     }
 
+    /// Hand a transaction to the daemon, without the ring database check: a
+    /// wallet relays through `native::broadcast_transaction*` or
+    /// `native::broadcast_raw_transaction*`.
     pub async fn publish_transaction(&self, tx: &Transaction) -> Result<(), RpcError> {
         #[allow(dead_code)]
         #[derive(Deserialize, Debug)]

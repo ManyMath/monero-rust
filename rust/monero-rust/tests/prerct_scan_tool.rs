@@ -362,6 +362,7 @@ async fn prerct_scan_tool() {
                                 match broadcast_raw_transaction_with_rpc(
                                     &rpc,
                                     &result.tx_blob,
+                                    &mut state,
                                     false,
                                 )
                                 .await
