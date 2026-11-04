@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::scanner::{BlockScanResult, Lookahead, DEFAULT_LOOKAHEAD};
 use crate::wallet_output::WalletOutput;
@@ -177,6 +177,47 @@ pub fn process_single_wallet_batch(
     }
 }
 
+/// The account each transaction of the batch spends the wallet's outputs from.
+fn spending_accounts(batch: &ProcessedBatch, wallet_state: &WalletState) -> HashMap<String, u32> {
+    let in_batch: HashMap<&str, u32> = batch
+        .outputs_to_store
+        .iter()
+        .filter(|output| !output.key_image.is_empty())
+        .map(|output| (output.key_image.as_str(), output_account(output)))
+        .collect();
+    let mut spending = HashMap::new();
+    for (key_image, tx_hash) in batch
+        .spent_key_images
+        .iter()
+        .zip(&batch.spent_key_image_tx_hashes)
+    {
+        if tx_hash.is_empty() {
+            continue;
+        }
+        let account = wallet_state
+            .output_by_key_image(key_image)
+            .map(output_account)
+            .or_else(|| in_batch.get(key_image.as_str()).copied());
+        if let Some(account) = account {
+            spending.insert(tx_hash.clone(), account);
+        }
+    }
+    spending
+}
+
+fn output_account(output: &WalletOutput) -> u32 {
+    output.subaddress_index.map_or(0, |(major, _)| major)
+}
+
+/// Clear the payment ID of change, as wallet2 does (wallet2.cpp:2867-2879).
+fn clear_change_payment_ids(outputs: &mut [WalletOutput], spending: &HashMap<String, u32>) {
+    for output in outputs {
+        if spending.get(&output.tx_hash) == Some(&output_account(output)) {
+            output.payment_id = None;
+        }
+    }
+}
+
 /// Apply a processed batch block by block, crediting a block's outputs before
 /// marking its spends at its own height, as wallet2 does (wallet2.cpp:3436-3466);
 /// otherwise a rollback can bring a spent output back.
@@ -192,7 +233,9 @@ pub fn apply_processed_batch(
             .unwrap_or(batch.batch_end_height)
     };
     // Stable sorts keep a block's outputs and spends in transaction order.
-    let mut outputs: Vec<&WalletOutput> = batch.outputs_to_store.iter().collect();
+    let mut received = batch.outputs_to_store.clone();
+    clear_change_payment_ids(&mut received, &spending_accounts(batch, wallet_state));
+    let mut outputs: Vec<&WalletOutput> = received.iter().collect();
     outputs.sort_by_key(|output| output.block_height);
     let mut spends: Vec<usize> = (0..batch.spent_key_images.len()).collect();
     spends.sort_by_key(|&i| spend_height(i));
@@ -353,12 +396,17 @@ pub fn process_batch_with_reorg_detection(
         );
     }
 
-    let batch = process_single_wallet_batch(
+    let mut batch = process_single_wallet_batch(
         batch_results,
         accounts_to_scan,
         target_height,
         batch_start_height,
     );
+    let spending = spending_accounts(&batch, wallet_state);
+    clear_change_payment_ids(&mut batch.outputs_to_store, &spending);
+    for block in &mut batch.blocks_with_outputs {
+        clear_change_payment_ids(&mut block.outputs, &spending);
+    }
     Ok(ScanBatchOutcome::Normal(batch))
 }
 
@@ -463,6 +511,83 @@ mod tests {
             spent_key_image_tx_hashes: vec![String::new(); tx_hashes_len],
             spent_key_image_rings: vec![],
         }
+    }
+
+    fn tx_output(tx_hash: &str, index: u64, account: u32, payment_id: &str) -> WalletOutput {
+        let mut output = make_output(1_000, 0, tx_hash, account);
+        output.output_index = index;
+        output.key = format!("k_{tx_hash}_{index}");
+        output.key_image = format!("ki_{tx_hash}_{index}");
+        output.payment_id = Some(payment_id.to_string());
+        output
+    }
+
+    fn spend_batch(received: WalletOutput) -> Vec<BlockScanResult> {
+        let mut first = make_block_result(100, vec![received], vec![]);
+        first.outputs[0].block_height = 100;
+        let mut outputs = vec![
+            tx_output("spend", 0, 0, "1111111111111111"),
+            tx_output("spend", 1, 1, "2222222222222222"),
+            tx_output("payment", 0, 0, "3333333333333333"),
+        ];
+        for output in &mut outputs {
+            output.block_height = 120;
+        }
+        let mut second = make_block_result(120, outputs, vec!["ki_in_0".into(), "ki_other".into()]);
+        second.spent_key_image_tx_hashes = vec!["spend".into(), "payment".into()];
+        vec![first, second]
+    }
+
+    fn payment_ids(state: &WalletState) -> Vec<(String, Option<String>)> {
+        state
+            .outputs()
+            .iter()
+            .map(|o| (o.output_key(), o.payment_id.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn change_carries_no_payment_id() {
+        let expected = vec![
+            ("in:0".to_string(), Some("aaaaaaaaaaaaaaaa".to_string())),
+            ("spend:0".to_string(), None),
+            ("spend:1".to_string(), Some("2222222222222222".to_string())),
+            (
+                "payment:0".to_string(),
+                Some("3333333333333333".to_string()),
+            ),
+        ];
+
+        let results = spend_batch(tx_output("in", 0, 0, "aaaaaaaaaaaaaaaa"));
+        let mut state = WalletState::new();
+        let ScanBatchOutcome::Normal(batch) =
+            process_batch_with_reorg_detection(&results, &mut state, None, 200, 100).unwrap()
+        else {
+            panic!("no reorg expected");
+        };
+        assert_eq!(batch.blocks_with_outputs[1].outputs[0].payment_id, None);
+        state.add_outputs(batch.outputs_to_store.clone());
+        assert_eq!(payment_ids(&state), expected);
+
+        let mut state = WalletState::new();
+        state.add_outputs(vec![results[0].outputs[0].clone()]);
+        let batch = process_single_wallet_batch(&results[1..], None, 200, 120);
+        apply_processed_batch(&mut state, &batch);
+        assert_eq!(payment_ids(&state), expected);
+
+        let mut received = tx_output("in", 0, 0, "aaaaaaaaaaaaaaaa");
+        received.key_image.clear();
+        let mut results = spend_batch(received);
+        for output in &mut results[1].outputs {
+            output.key_image.clear();
+        }
+        let mut state = WalletState::new();
+        let batch = process_single_wallet_batch(&results, None, 200, 100);
+        apply_processed_batch(&mut state, &batch);
+        assert_eq!(
+            state.outputs()[1].payment_id.as_deref(),
+            Some("1111111111111111")
+        );
     }
 
     // ---- sync_progress ----

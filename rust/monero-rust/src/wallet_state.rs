@@ -1116,6 +1116,13 @@ impl WalletState {
         &self.outputs
     }
 
+    /// The credited output with this key image, if any.
+    pub(crate) fn output_by_key_image(&self, key_image: &str) -> Option<&WalletOutput> {
+        self.key_image_index
+            .get(key_image)
+            .map(|&index| &self.outputs[index])
+    }
+
     /// Modify outputs; indexes are rebuilt and each `ring` reset from the ring
     /// database afterwards.
     pub fn with_outputs_mut<R>(&mut self, f: impl FnOnce(&mut Vec<WalletOutput>) -> R) -> R {

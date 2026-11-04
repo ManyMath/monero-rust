@@ -499,7 +499,6 @@ async fn outgoing_transfers_are_seen_as_spends() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: the wallet's own change is reported with the dummy payment ID decrypted under the wrong key"]
 async fn change_outputs_carry_no_payment_id() {
     let Some(fx) = fixture().await else { return };
     let (mut checked, mut checked_with_id) = (0, 0);
