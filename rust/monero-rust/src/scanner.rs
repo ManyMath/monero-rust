@@ -166,6 +166,9 @@ pub struct MempoolScanResult {
 pub struct MultiWalletScanResult {
     pub block_height: u64,
     pub block_hash: String,
+    /// Hash of the block this one builds on; empty in old records.
+    #[serde(default)]
+    pub previous_block_hash: String,
     pub block_timestamp: u64,
     pub tx_count: usize,
     pub daemon_height: u64,
@@ -1810,6 +1813,7 @@ pub async fn process_batch_multi_wallet_response(
 
         let block_timestamp = block.header.timestamp;
         let block_hash = hex::encode(block.hash());
+        let parent_hash = hex::encode(block.header.previous);
 
         let miner_tx_hash = block.miner_transaction().hash();
         let miner_tx = OxideTransaction::<Pruned>::from(block.miner_transaction().clone());
@@ -1889,6 +1893,7 @@ pub async fn process_batch_multi_wallet_response(
             results.push(MultiWalletScanResult {
                 block_height,
                 block_hash,
+                previous_block_hash: parent_hash,
                 block_timestamp,
                 tx_count,
                 daemon_height,

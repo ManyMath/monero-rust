@@ -410,9 +410,65 @@ pub fn process_batch_with_reorg_detection(
     Ok(ScanBatchOutcome::Normal(batch))
 }
 
+/// The chain check of `process_batch_with_reorg_detection` for a multi-wallet
+/// batch; run it against each wallet's state before applying the batch.
+pub fn check_multi_wallet_batch_extends_chain(
+    batch_results: &[crate::scanner::MultiWalletScanResult],
+    wallet_state: &WalletState,
+) -> Result<(), String> {
+    for (i, result) in batch_results.iter().enumerate() {
+        let parent_in_batch = i > 0 && batch_results[i - 1].block_height + 1 == result.block_height;
+        if parent_in_batch || result.block_height == 0 {
+            continue;
+        }
+        if result.previous_block_hash.is_empty() {
+            return Err(format!(
+                "Block {} carries no parent hash, so the batch cannot be checked against the \
+                 wallet's chain",
+                result.block_height
+            ));
+        }
+        let parent_height = result.block_height - 1;
+        if let Some(known_parent) = wallet_state.block_hashes.get_hash(parent_height) {
+            if known_parent != result.previous_block_hash {
+                return Err(format!(
+                    "Block {} builds on {} but the wallet holds {} at height {}: the chain was \
+                     reorganised below this batch. Fetch again with the wallet's block history \
+                     and start height 0",
+                    result.block_height, result.previous_block_hash, known_parent, parent_height
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn multi_wallet_batch_must_build_on_the_wallets_chain() {
+        let mut state = WalletState::new();
+        state.record_block_hash(99, "hash_99".to_string());
+        let result = |parent: &str| -> crate::scanner::MultiWalletScanResult {
+            serde_json::from_value(serde_json::json!({
+                "block_height": 100,
+                "block_hash": "hash_100",
+                "previous_block_hash": parent,
+                "block_timestamp": 0,
+                "tx_count": 1,
+                "daemon_height": 101,
+                "spent_key_images": [],
+                "spent_key_image_tx_hashes": [],
+                "wallet_results": {},
+            }))
+            .unwrap()
+        };
+        assert!(check_multi_wallet_batch_extends_chain(&[result("hash_99")], &state).is_ok());
+        assert!(check_multi_wallet_batch_extends_chain(&[result("other_99")], &state).is_err());
+        assert!(check_multi_wallet_batch_extends_chain(&[result("")], &state).is_err());
+    }
 
     #[test]
     fn deep_reorg_after_compaction_is_found_through_the_history() {

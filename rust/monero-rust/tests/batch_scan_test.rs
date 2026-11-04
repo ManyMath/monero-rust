@@ -235,6 +235,10 @@ async fn test_multi_wallet_produces_entry_per_wallet() {
     for r in &results {
         assert_eq!(r.wallet_results.len(), 2);
     }
+    for pair in results.windows(2) {
+        assert_eq!(pair[1].previous_block_hash, pair[0].block_hash);
+    }
+    assert_eq!(results[0].previous_block_hash.len(), 64);
 }
 
 // Batch range and chain validation
