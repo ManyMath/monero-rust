@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::monero_rpc::RpcClientKey;
 use crate::ring_db::{RingDatabase, RingPersister};
 use crate::tx_builder::native::DecoySelection;
 use crate::wallet_output::WalletOutput;
@@ -277,6 +278,7 @@ pub struct WalletState {
     rings_unsaved: bool,
     /// Loaded from storage before the ring database; see `check_ring_database_loaded`.
     loaded_without_rings: bool,
+    rpc_client_key: RpcClientKey,
 }
 
 impl WalletState {
@@ -302,6 +304,7 @@ impl WalletState {
             ring_persister: None,
             rings_unsaved: false,
             loaded_without_rings: false,
+            rpc_client_key: RpcClientKey::random(),
         }
     }
 
@@ -320,6 +323,24 @@ impl WalletState {
             );
         }
         Ok(())
+    }
+
+    /// The key this wallet's daemon requests are signed with. wallet2 draws a new
+    /// one per load unless `persistent_rpc_client_id` is set.
+    pub fn rpc_client_key(&self) -> &RpcClientKey {
+        &self.rpc_client_key
+    }
+
+    /// Sign this wallet's requests with a key stored earlier.
+    pub fn restore_rpc_client_key(&mut self, key: RpcClientKey) {
+        self.rpc_client_key = key;
+    }
+
+    /// Draw a new key, as wallet2 does for a new daemon, so it cannot link the
+    /// wallet to the old one. Returns the new key.
+    pub fn new_rpc_client_key(&mut self) -> &RpcClientKey {
+        self.rpc_client_key = RpcClientKey::random();
+        &self.rpc_client_key
     }
 
     /// Set where the ring database is stored; builders and relay store through it

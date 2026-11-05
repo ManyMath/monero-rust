@@ -767,9 +767,8 @@ pub async fn key_image_spent_status<R: RpcConnection>(
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn is_key_image_spent(node_url: &str, key_images: &[String]) -> Result<Vec<u32>, String> {
     crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;
-    use crate::monero_rpc::HttpRpc;
-    let rpc = HttpRpc::new(node_url.to_string())
-        .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
+    use crate::monero_rpc::url_rpc;
+    let rpc = url_rpc(node_url).map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
     key_image_spent_status(&rpc, key_images).await
 }
 
@@ -784,9 +783,8 @@ pub async fn daemon_height<R: RpcConnection>(rpc: &Rpc<R>) -> Result<u64, String
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn get_daemon_height(node_url: &str) -> Result<u64, String> {
     crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;
-    use crate::monero_rpc::HttpRpc;
-    let rpc = HttpRpc::new(node_url.to_string())
-        .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
+    use crate::monero_rpc::url_rpc;
+    let rpc = url_rpc(node_url).map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
     daemon_height(&rpc).await
 }
 
@@ -823,9 +821,8 @@ pub async fn scan_block_for_outputs_with_url_and_lookahead(
     lookahead: Lookahead,
     passphrase: &str,
 ) -> Result<BlockScanResult, String> {
-    use crate::monero_rpc::HttpRpc;
-    let rpc =
-        HttpRpc::new(node_url.to_string()).map_err(|e| format!("Failed to create RPC: {:?}", e))?;
+    use crate::monero_rpc::url_rpc;
+    let rpc = url_rpc(node_url).map_err(|e| format!("Failed to create RPC: {:?}", e))?;
     scan_block_for_outputs_with_lookahead(
         &rpc,
         block_height,
@@ -1650,9 +1647,8 @@ pub async fn scan_blocks_batch_with_url(
     prune: bool,
     passphrase: &str,
 ) -> Result<Vec<BlockScanResult>, String> {
-    use crate::monero_rpc::HttpRpc;
-    let rpc =
-        HttpRpc::new(node_url.to_string()).map_err(|e| format!("Failed to create RPC: {:?}", e))?;
+    use crate::monero_rpc::url_rpc;
+    let rpc = url_rpc(node_url).map_err(|e| format!("Failed to create RPC: {:?}", e))?;
     scan_blocks_batch(
         &rpc,
         start_height,
@@ -1925,9 +1921,8 @@ pub async fn scan_blocks_batch_multi_wallet_with_url(
     wallet_configs: Vec<WalletScanConfig>,
     prune: bool,
 ) -> Result<Vec<MultiWalletScanResult>, String> {
-    use crate::monero_rpc::HttpRpc;
-    let rpc =
-        HttpRpc::new(node_url.to_string()).map_err(|e| format!("Failed to create RPC: {:?}", e))?;
+    use crate::monero_rpc::url_rpc;
+    let rpc = url_rpc(node_url).map_err(|e| format!("Failed to create RPC: {:?}", e))?;
     scan_blocks_batch_multi_wallet(&rpc, start_height, wallet_configs, prune).await
 }
 
@@ -2010,9 +2005,8 @@ pub async fn fetch_blocks_batch_with_url(
     start_height: u64,
     prune: bool,
 ) -> Result<FetchedBlocks, String> {
-    use crate::monero_rpc::HttpRpc;
-    let rpc =
-        HttpRpc::new(node_url.to_string()).map_err(|e| format!("Failed to create RPC: {:?}", e))?;
+    use crate::monero_rpc::url_rpc;
+    let rpc = url_rpc(node_url).map_err(|e| format!("Failed to create RPC: {:?}", e))?;
     fetch_blocks_batch(&rpc, start_height, prune).await
 }
 
@@ -2101,9 +2095,8 @@ pub async fn scan_blocks_batch_with_history_url(
     prune: bool,
     passphrase: &str,
 ) -> Result<(Vec<BlockScanResult>, u64), String> {
-    use crate::monero_rpc::HttpRpc;
-    let rpc =
-        HttpRpc::new(node_url.to_string()).map_err(|e| format!("Failed to create RPC: {:?}", e))?;
+    use crate::monero_rpc::url_rpc;
+    let rpc = url_rpc(node_url).map_err(|e| format!("Failed to create RPC: {:?}", e))?;
     scan_blocks_batch_with_history(
         &rpc,
         start_height,
@@ -2173,9 +2166,8 @@ pub async fn fetch_blocks_batch_with_history_url(
     known_hashes: &[(u64, String)],
     prune: bool,
 ) -> Result<(FetchedBlocks, u64), String> {
-    use crate::monero_rpc::HttpRpc;
-    let rpc =
-        HttpRpc::new(node_url.to_string()).map_err(|e| format!("Failed to create RPC: {:?}", e))?;
+    use crate::monero_rpc::url_rpc;
+    let rpc = url_rpc(node_url).map_err(|e| format!("Failed to create RPC: {:?}", e))?;
     fetch_blocks_batch_with_history(&rpc, start_height, known_hashes, prune).await
 }
 
@@ -2232,9 +2224,8 @@ pub async fn scan_block_multi_wallet_with_url(
     block_height: u64,
     wallet_configs: Vec<WalletScanConfig>,
 ) -> Result<MultiWalletScanResult, String> {
-    use crate::monero_rpc::HttpRpc;
-    let rpc =
-        HttpRpc::new(node_url.to_string()).map_err(|e| format!("Failed to create RPC: {:?}", e))?;
+    use crate::monero_rpc::url_rpc;
+    let rpc = url_rpc(node_url).map_err(|e| format!("Failed to create RPC: {:?}", e))?;
     scan_block_multi_wallet(&rpc, block_height, wallet_configs).await
 }
 
@@ -2288,9 +2279,8 @@ pub async fn scan_mempool_for_outputs_with_account_lookahead(
         },
     };
     crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;
-    use crate::monero_rpc::HttpRpc;
-    let rpc = HttpRpc::new(node_url.to_string())
-        .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
+    use crate::monero_rpc::url_rpc;
+    let rpc = url_rpc(node_url).map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
     scan_mempool(
         &rpc,
         mnemonic,
@@ -2327,9 +2317,8 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
     passphrase: &str,
 ) -> Result<MempoolScanResult, String> {
     crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;
-    use crate::monero_rpc::HttpRpc;
-    let rpc = HttpRpc::new(node_url.to_string())
-        .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
+    use crate::monero_rpc::url_rpc;
+    let rpc = url_rpc(node_url).map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
     scan_mempool(&rpc, mnemonic, _network, lookahead, None, passphrase).await
 }
 

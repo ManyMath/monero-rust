@@ -105,7 +105,17 @@ impl Node {
             .unwrap()
             .iter()
             .filter(|(called, _)| called == method)
-            .map(|(_, params)| params.clone())
+            .map(|(_, params)| {
+                let mut params = params.clone();
+                let client = params
+                    .as_object_mut()
+                    .and_then(|members| members.remove("client"));
+                assert_eq!(
+                    client.as_ref().and_then(Value::as_str).map(str::len),
+                    Some(208)
+                );
+                params
+            })
             .collect()
     }
 }

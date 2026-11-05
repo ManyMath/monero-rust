@@ -146,6 +146,20 @@ async fn sweep_request_pattern_matches_a_send() {
     assert_no_revealing_requests(&node);
 }
 
+fn without_client(request: &hostile::Logged) -> String {
+    if request.route.ends_with(".bin") {
+        let mut members = request.epee();
+        members.retain(|(name, _)| name != "client");
+        format!("{members:?}")
+    } else {
+        let mut json = request.json();
+        if let Some(params) = json["params"].as_object_mut() {
+            params.remove("client");
+        }
+        json.to_string()
+    }
+}
+
 #[tokio::test]
 async fn refresh_requests_do_not_depend_on_the_wallet() {
     let mut logs = Vec::new();
@@ -164,7 +178,7 @@ async fn refresh_requests_do_not_depend_on_the_wallet() {
         logs.push(
             node.log()
                 .into_iter()
-                .map(|l| (l.name(), l.body))
+                .map(|l| (l.name(), without_client(&l)))
                 .collect::<Vec<_>>(),
         );
     }

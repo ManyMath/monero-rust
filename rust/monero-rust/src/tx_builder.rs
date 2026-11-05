@@ -326,6 +326,7 @@ pub mod native {
         blackballed: &HashSet<u64>,
         wallet_state: &mut crate::wallet_state::WalletState,
     ) -> Result<(UnsignedTransaction, Vec<InputRing>), String> {
+        let rpc = &rpc.for_wallet(wallet_state);
         if output_source_account(outputs)? != source_account {
             return Err("Stored source account does not match the selected outputs".to_string());
         }
@@ -950,6 +951,7 @@ pub mod native {
         policy: &DecoyPolicy,
         wallet_state: &mut crate::wallet_state::WalletState,
     ) -> Result<DecoyResult, String> {
+        let rpc = &rpc.for_wallet(wallet_state);
         if stored_outputs.is_empty() {
             return Err("No outputs provided".to_string());
         }
@@ -1009,7 +1011,8 @@ pub mod native {
         policy: FeePolicy,
     ) -> Result<FeeEstimate, String> {
         crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;
-        let rpc = HttpRpc::new(node_url.to_string()).map_err(|e| format!("RPC error: {:?}", e))?;
+        let rpc =
+            crate::monero_rpc::url_rpc(node_url).map_err(|e| format!("RPC error: {:?}", e))?;
         estimate_fee_with_rpc_and_policy(&rpc, num_inputs, num_outputs, policy).await
     }
 
@@ -1263,6 +1266,7 @@ pub mod native {
         decoy_policy: &DecoyPolicy,
         wallet_state: &mut crate::wallet_state::WalletState,
     ) -> Result<TransactionResult, String> {
+        let rpc = &rpc.for_wallet(wallet_state);
         crate::validation::validate_network(network_str).map_err(|e| e.to_string())?;
         if stored_outputs.is_empty() {
             return Err("No outputs provided".to_string());
@@ -1535,6 +1539,7 @@ pub mod native {
         decoy_policy: &DecoyPolicy,
         wallet_state: &mut crate::wallet_state::WalletState,
     ) -> Result<TransactionResult, String> {
+        let rpc = &rpc.for_wallet(wallet_state);
         crate::validation::validate_network(network_str).map_err(|e| e.to_string())?;
         if stored_outputs.is_empty() {
             return Err("No outputs provided".to_string());
@@ -1696,6 +1701,7 @@ pub mod native {
         wallet_state: &mut crate::wallet_state::WalletState,
         do_not_relay: bool,
     ) -> Result<(), String> {
+        let rpc = &rpc.for_wallet(wallet_state);
         let tx_bytes = hex::decode(tx_blob_hex).map_err(|e| format!("Invalid hex: {:?}", e))?;
         let tx = Transaction::<NotPruned>::read::<&[u8]>(&mut tx_bytes.as_ref())
             .map_err(|e| format!("Invalid transaction: {:?}", e))?;
@@ -1775,7 +1781,7 @@ pub mod native {
         _network_str: &str,
         passphrase: &str,
     ) -> Result<Vec<ReceivedOutput>, String> {
-        let rpc = HttpRpc::new(node_url.to_string())
+        let rpc = crate::monero_rpc::url_rpc(node_url)
             .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
         received_outputs_from_scan_inner(&rpc, block_height, seed_phrase, passphrase).await
     }
@@ -2454,6 +2460,7 @@ pub mod native {
         decoy_policy: &DecoyPolicy,
         wallet_state: &mut crate::wallet_state::WalletState,
     ) -> Result<UnsignedTransactionResult, String> {
+        let rpc = &rpc.for_wallet(wallet_state);
         if stored_outputs.is_empty() {
             return Err("No outputs provided".to_string());
         }

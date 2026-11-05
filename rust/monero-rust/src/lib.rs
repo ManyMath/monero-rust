@@ -6,6 +6,7 @@
 // Compatibility wrappers call deprecated fixed-fee entry points internally.
 #![allow(deprecated)]
 
+mod rpc_client_id;
 mod safe_epee;
 
 // Core modules

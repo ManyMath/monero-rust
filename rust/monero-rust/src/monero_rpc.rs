@@ -33,6 +33,7 @@ use monero_oxide::{
 };
 use monero_wallet::interface::FeeRate;
 
+pub use crate::rpc_client_id::RpcClientKey;
 use crate::wallet_state::current_time_secs;
 
 /// A node's fee estimate: piconero per byte of weight, and the quantization mask.
@@ -102,6 +103,7 @@ struct GetOutputsOut {
 
 #[derive(Serialize, Deserialize, Debug)]
 struct GetOutputsRequest {
+    client: String,
     get_txid: bool,
     outputs: Vec<GetOutputsOut>,
 }
@@ -127,6 +129,7 @@ struct GetOutputsKey {
 #[derive(Serialize, Debug)]
 struct OutputDistributionRequest {
     amounts: Vec<u64>,
+    client: String,
     compress: bool,
 }
 
@@ -639,6 +642,48 @@ impl HttpRpc {
     }
 }
 
+fn route_carries_client(route: &str) -> bool {
+    matches!(
+        route,
+        "get_transactions"
+            | "gettransactions"
+            | "is_key_image_spent"
+            | "send_raw_transaction"
+            | "sendrawtransaction"
+            | "get_transaction_pool"
+            | "get_transaction_pool_hashes"
+            | "get_transaction_pool_hashes.bin"
+            | "get_transaction_pool_stats"
+            | "get_outs"
+            | "get_output_distribution"
+    )
+}
+
+fn method_carries_client(method: &str) -> bool {
+    matches!(
+        method,
+        "get_info"
+            | "get_fee_estimate"
+            | "get_txpool_backlog"
+            | "getblockheadersrange"
+            | "get_block_headers_range"
+            | "get_last_block_header"
+            | "getlastblockheader"
+            | "get_block_header_by_height"
+            | "getblockheaderbyheight"
+            | "get_block_header_by_hash"
+            | "getblockheaderbyhash"
+            | "get_block"
+            | "getblock"
+            | "hard_fork_info"
+            | "get_coinbase_tx_sum"
+            | "get_output_histogram"
+            | "get_output_distribution"
+            | "relay_tx"
+            | "sync_info"
+    )
+}
+
 fn json_rpc_request(method: &str, params: Value) -> Value {
     json!({ "id": "0", "jsonrpc": "2.0", "method": method, "params": params })
 }
@@ -792,22 +837,93 @@ impl NodeCacheState {
 }
 
 #[derive(Clone, Debug, Default)]
-struct NodeCache(Arc<Mutex<NodeCacheState>>);
+struct NodeCache {
+    state: Arc<Mutex<NodeCacheState>>,
+    by_client: Arc<Mutex<std::collections::HashMap<[u8; 32], Arc<Mutex<NodeCacheState>>>>>,
+}
 
 impl NodeCache {
     /// Never held across an await.
     fn state(&self) -> MutexGuard<'_, NodeCacheState> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
+
+    fn for_client(&self, client: &RpcClientKey) -> Self {
+        let state = self
+            .by_client
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(client.public_key())
+            .or_default()
+            .clone();
+        NodeCache {
+            state,
+            by_client: self.by_client.clone(),
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn client_key_for_url(url: &str) -> RpcClientKey {
+    static KEYS: std::sync::OnceLock<Mutex<std::collections::HashMap<String, RpcClientKey>>> =
+        std::sync::OnceLock::new();
+    let mut keys = KEYS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if keys.len() >= 64 && !keys.contains_key(url) {
+        keys.clear();
+    }
+    keys.entry(url.to_string())
+        .or_insert_with(RpcClientKey::random)
+        .clone()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn url_rpc(url: &str) -> Result<Rpc<HttpRpc>, RpcError> {
+    Ok(HttpRpc::new(url.to_string())?.with_client_key(&client_key_for_url(url)))
 }
 
 /// A node connection. Clones share what the node answered recently.
 #[derive(Clone, Debug)]
-pub struct Rpc<R: RpcConnection>(R, NodeCache);
+pub struct Rpc<R: RpcConnection>(R, NodeCache, RpcClientKey);
 impl<R: RpcConnection> Rpc<R> {
-    /// Create a new Rpc instance from any RpcConnection implementation.
+    /// Create a new Rpc instance from any RpcConnection implementation. It signs
+    /// with a random key: use [`Self::for_wallet`] for a wallet's requests.
     pub fn new_with_connection(connection: R) -> Self {
-        Rpc(connection, NodeCache::default())
+        let key = RpcClientKey::random();
+        Rpc(connection, NodeCache::default().for_client(&key), key)
+    }
+
+    /// The same connection, signing with `key`.
+    pub fn with_client_key(&self, key: &RpcClientKey) -> Self {
+        Rpc(self.0.clone(), self.1.for_client(key), key.clone())
+    }
+
+    /// The same connection, signing with the key of `state`'s wallet.
+    pub fn for_wallet(&self, state: &crate::wallet_state::WalletState) -> Self {
+        self.with_client_key(state.rpc_client_key())
+    }
+
+    /// The key requests are signed with.
+    pub fn client_key(&self) -> &RpcClientKey {
+        &self.2
+    }
+
+    fn client(&self) -> String {
+        self.2.signature()
+    }
+
+    fn with_client(&self, method: &str, params: Option<Value>) -> Value {
+        let mut params = params.unwrap_or_else(|| json!({}));
+        if method_carries_client(method) {
+            if let Value::Object(members) = &mut params {
+                members
+                    .entry("client")
+                    .or_insert_with(|| Value::String(self.client()));
+            }
+        }
+        params
     }
 
     /// Perform a RPC call to the specified route with the provided parameters.
@@ -829,11 +945,18 @@ impl<R: RpcConnection> Rpc<R> {
         params: Option<Params>,
         limit: usize,
     ) -> Result<Response, RpcError> {
-        let params = match params {
+        let mut params = match params {
             Some(params) => serde_json::to_value(&params)
                 .map_err(|_| RpcError::InternalError("Failed to serialize JSON request"))?,
             None => json!({}),
         };
+        if route_carries_client(route) {
+            if let Value::Object(members) = &mut params {
+                members
+                    .entry("client")
+                    .or_insert_with(|| Value::String(self.client()));
+            }
+        }
         self.call_tail(
             route,
             self.0
@@ -849,7 +972,7 @@ impl<R: RpcConnection> Rpc<R> {
         method: &str,
         params: Option<Value>,
     ) -> Result<Response, RpcError> {
-        let req = json_rpc_request(method, params.unwrap_or_else(|| json!({})));
+        let req = json_rpc_request(method, self.with_client(method, params));
         let limit = response_limit("json_rpc", Some(method));
         Ok(self
             .rpc_call_limited::<_, JsonRpcResponse<Response>>("json_rpc", Some(req), limit)
@@ -1150,6 +1273,7 @@ impl<R: RpcConnection> Rpc<R> {
     pub async fn get_o_indexes(&self, hash: [u8; 32]) -> Result<Vec<u64>, RpcError> {
         #[derive(Serialize, Debug)]
         struct Request {
+            client: String,
             txid: [u8; 32],
         }
 
@@ -1166,7 +1290,11 @@ impl<R: RpcConnection> Rpc<R> {
         let indexes: OIndexes = self
             .bin_call(
                 "get_o_indexes.bin",
-                monero_epee_bin_serde::to_bytes(&Request { txid: hash }).map_err(|_| {
+                monero_epee_bin_serde::to_bytes(&Request {
+                    client: self.client(),
+                    txid: hash,
+                })
+                .map_err(|_| {
                     RpcError::InternalError("epee serialization failed for get_o_indexes request")
                 })?,
             )
@@ -1187,6 +1315,7 @@ impl<R: RpcConnection> Rpc<R> {
                 "get_output_distribution.bin",
                 monero_epee_bin_serde::to_bytes(&OutputDistributionRequest {
                     amounts: vec![0],
+                    client: self.client(),
                     compress: true,
                 })
                 .map_err(|_| {
@@ -1246,6 +1375,7 @@ impl<R: RpcConnection> Rpc<R> {
         let mut result = Vec::with_capacity(indexes.len());
         for indexes in indexes.chunks(WALLET2_GET_OUTS_CHUNK) {
             let request = GetOutputsRequest {
+                client: self.client(),
                 get_txid: false,
                 outputs: indexes
                     .iter()
@@ -1313,7 +1443,10 @@ impl<R: RpcConnection> Rpc<R> {
             return Err(RpcError::ZeroFee);
         }
 
-        let request = epee_json(&json_rpc_request("get_txpool_backlog", json!({})));
+        let request = epee_json(&json_rpc_request(
+            "get_txpool_backlog",
+            self.with_client("get_txpool_backlog", None),
+        ));
         let limit = response_limit("json_rpc", Some("get_txpool_backlog"));
         let backlog =
             parse_txpool_backlog(&self.0.post_limited("json_rpc", request, limit).await?)?;
@@ -1702,12 +1835,14 @@ impl<R: RpcConnection> Rpc<R> {
         #[derive(Serialize, Debug)]
         struct Request {
             block_ids: Vec<u8>,
+            client: String,
             prune: bool,
             start_height: u64,
         }
 
         let req = Request {
             block_ids: block_ids_blob,
+            client: self.client(),
             prune,
             start_height,
         };
@@ -2028,8 +2163,12 @@ mod tests {
         assert_eq!(request.outputs[0].index, 7);
         assert_eq!(request.outputs[1].index, 11);
 
+        let client = client_member(&calls[0].1);
         let mut expected = hex::decode("011101010101020101").unwrap();
-        expected.extend_from_slice(&[0x08, 8]);
+        expected.extend_from_slice(&[0x0c, 6]);
+        expected.extend_from_slice(b"client\x0a\x41\x03");
+        expected.extend_from_slice(client.as_bytes());
+        expected.extend_from_slice(&[8]);
         expected.extend_from_slice(b"get_txid\x0b\x00");
         expected.extend_from_slice(&[7]);
         expected.extend_from_slice(b"outputs\x8c\x08");
@@ -2044,6 +2183,18 @@ mod tests {
         assert_eq!(hex::encode(&calls[0].1), hex::encode(expected));
     }
 
+    fn client_member(body: &[u8]) -> String {
+        #[derive(Deserialize)]
+        struct Client {
+            client: String,
+        }
+        let client = crate::safe_epee::from_bytes::<Client, _>(body)
+            .unwrap()
+            .client;
+        assert!(crate::rpc_client_id::tests::verify(&client).is_some());
+        client
+    }
+
     #[derive(Clone, Debug, Default)]
     struct Recorder(std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>);
     #[async_trait]
@@ -2052,6 +2203,95 @@ mod tests {
             self.0.lock().unwrap().push((route.to_string(), body));
             Err(RpcError::ConnectionError)
         }
+    }
+
+    fn signer_of(body: &[u8]) -> String {
+        let request: Value = serde_json::from_slice(body).unwrap();
+        let client = request["params"]["client"].as_str().unwrap();
+        assert!(crate::rpc_client_id::tests::verify(client).is_some());
+        client[..64].to_string()
+    }
+
+    #[tokio::test]
+    async fn every_request_of_a_wallet_is_signed_with_its_key() {
+        let recorder = Recorder::default();
+        let rpc = Rpc::new_with_connection(recorder.clone());
+        let first = crate::wallet_state::WalletState::new();
+        let second = crate::wallet_state::WalletState::new();
+        assert_ne!(first.rpc_client_key(), second.rpc_client_key());
+        for _ in 0..3 {
+            for state in [&first, &second] {
+                let rpc = rpc.for_wallet(state);
+                assert!(rpc.fetch_fee_estimate().await.is_err());
+                assert!(rpc.get_rct_type().await.is_err());
+            }
+        }
+        assert!(rpc.fetch_fee_estimate().await.is_err());
+
+        let calls = recorder.0.lock().unwrap();
+        assert_eq!(calls.len(), 13);
+        let signers: Vec<String> = calls.iter().map(|(_, body)| signer_of(body)).collect();
+        let key = |state: &crate::wallet_state::WalletState| {
+            hex::encode(state.rpc_client_key().public_key())
+        };
+        for (index, signer) in signers[..12].iter().enumerate() {
+            let state = if index % 4 < 2 { &first } else { &second };
+            assert_eq!(*signer, key(state), "request {index}");
+        }
+        assert_eq!(signers[12], hex::encode(rpc.client_key().public_key()));
+        assert_ne!(signers[12], key(&first));
+        assert_ne!(signers[12], key(&second));
+
+        let mut restored = crate::wallet_state::WalletState::new();
+        restored.restore_rpc_client_key(
+            RpcClientKey::from_secret_bytes(&first.rpc_client_key().to_secret_bytes()).unwrap(),
+        );
+        assert_eq!(
+            rpc.for_wallet(&restored).client_key(),
+            first.rpc_client_key()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_wallets_answers_are_not_another_wallets() {
+        #[derive(Clone, Debug, Default)]
+        struct Node(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+        #[async_trait]
+        impl RpcConnection for Node {
+            async fn post(&self, _route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
+                let request: Value = serde_json::from_slice(&body).unwrap();
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push(request["method"].as_str().unwrap().to_string());
+                Ok(serde_json::to_vec(&json!({
+                    "id": "0", "jsonrpc": "2.0",
+                    "result": {"block_header": {"hash": "11".repeat(32)}, "status": "OK"}
+                }))
+                .unwrap())
+            }
+        }
+        let node = Node::default();
+        let rpc = Rpc::new_with_connection(node.clone());
+        let first = crate::wallet_state::WalletState::new();
+        let second = crate::wallet_state::WalletState::new();
+        for _ in 0..2 {
+            rpc.for_wallet(&first).genesis_hash().await.unwrap();
+        }
+        rpc.for_wallet(&second).genesis_hash().await.unwrap();
+        rpc.for_wallet(&second).genesis_hash().await.unwrap();
+        assert_eq!(node.0.lock().unwrap().len(), 2);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn url_functions_keep_one_key_per_daemon() {
+        let a = client_key_for_url("http://127.0.0.1:1");
+        assert_eq!(client_key_for_url("http://127.0.0.1:1"), a);
+        assert_ne!(client_key_for_url("http://127.0.0.1:2"), a);
+        let rpc = url_rpc("http://127.0.0.1:1").unwrap();
+        assert_eq!(rpc.client_key(), &a);
+        assert_eq!(url_rpc("http://127.0.0.1:1").unwrap().client_key(), &a);
     }
 
     #[tokio::test]
@@ -2073,22 +2313,37 @@ mod tests {
             .iter()
             .map(|(route, body)| (route.as_str(), String::from_utf8(body.clone()).unwrap()))
             .collect();
+        let clients: Vec<String> = bodies[..2]
+            .iter()
+            .map(|(_, body)| {
+                let request: Value = serde_json::from_str(body).unwrap();
+                let client = request["params"]["client"].as_str().unwrap().to_string();
+                assert!(crate::rpc_client_id::tests::verify(&client).is_some());
+                client
+            })
+            .collect();
+        assert_eq!(clients[0][..64], clients[1][..64]);
         assert_eq!(
             bodies,
             vec![
                 (
                     "json_rpc",
-                    "{\r\n  \"id\": \"0\",\r\n  \"jsonrpc\": \"2.0\",\r\n  \"method\": \
-                     \"get_fee_estimate\",\r\n  \"params\": {\r\n    \"grace_blocks\": 10\r\n  \
-                     }\r\n}"
-                        .to_string()
+                    format!(
+                        "{{\r\n  \"id\": \"0\",\r\n  \"jsonrpc\": \"2.0\",\r\n  \"method\": \
+                         \"get_fee_estimate\",\r\n  \"params\": {{\r\n    \"client\": \"{}\",\r\n    \
+                         \"grace_blocks\": 10\r\n  }}\r\n}}",
+                        clients[0]
+                    )
                 ),
                 (
                     "json_rpc",
-                    "{\r\n  \"id\": \"0\",\r\n  \"jsonrpc\": \"2.0\",\r\n  \"method\": \
-                     \"getblockheadersrange\",\r\n  \"params\": {\r\n    \"end_height\": 262,\
-                     \r\n    \"start_height\": 253\r\n  }\r\n}"
-                        .to_string()
+                    format!(
+                        "{{\r\n  \"id\": \"0\",\r\n  \"jsonrpc\": \"2.0\",\r\n  \"method\": \
+                         \"getblockheadersrange\",\r\n  \"params\": {{\r\n    \"client\": \
+                         \"{}\",\r\n    \"end_height\": 262,\r\n    \"start_height\": 253\r\n  \
+                         }}\r\n}}",
+                        clients[1]
+                    )
                 ),
                 ("get_height", "{\r\n}".to_string()),
             ]
@@ -2184,6 +2439,24 @@ mod tests {
         let request: Request = crate::safe_epee::from_bytes(&calls[0].1).unwrap();
         assert_eq!(request.amounts, vec![0]);
         assert!(request.compress);
+
+        let wallet2 = hex::decode(concat!(
+            "0111010101010201010c07616d6f756e747385040000000000000000",
+            "06636c69656e740a4103",
+            "3064386132353535633365333264393930663063306537353330353362353534",
+            "6234643666623166663930316463316235643166336639666435666465633837",
+            "3030303636303939633564633937373731333833363562396438306565353164",
+            "3039653361623064663932326434383330363731666236303964396135383966",
+            "6137383730653530613763643862306535663833316538373863396361363934",
+            "3637633533356461343936656535666461393632336131613837343532623139",
+            "3862386266303538636630346239303108636f6d70726573730b01",
+        ))
+        .unwrap();
+        let client = client_member(&calls[0].1);
+        let mut expected = wallet2[..38].to_vec();
+        expected.extend_from_slice(client.as_bytes());
+        expected.extend_from_slice(&wallet2[38 + 208..]);
+        assert_eq!(hex::encode(&calls[0].1), hex::encode(expected));
     }
 
     #[cfg(not(target_arch = "wasm32"))]
