@@ -442,6 +442,7 @@ pub struct HttpRpc {
     client: Client,
     userpass: Option<(String, String)>,
     url: String,
+    host: Option<String>,
     timeouts: HttpTimeouts,
 }
 
@@ -490,12 +491,17 @@ impl HttpRpc {
         let client = Client::builder()
             .connect_timeout(timeouts.connect)
             .read_timeout(timeouts.idle)
+            .http1_title_case_headers()
             .build()
             .map_err(|_| RpcError::InternalError("Failed to build the HTTP client"))?;
+        let host = reqwest::Url::parse(&url)
+            .ok()
+            .and_then(|parsed| parsed.host_str().map(str::to_string));
         Ok(Rpc::new_with_connection(HttpRpc {
             client,
             userpass,
             url,
+            host,
             timeouts,
         }))
     }
@@ -591,11 +597,23 @@ impl HttpRpc {
         fn invalid<E>(_: E) -> Failure {
             Failure::Final(RpcError::InvalidNode)
         }
+        // wallet2 sends Host, Content-Length and, on JSON routes, Content-Type,
+        // in that order; reqwest also adds `Accept: */*`.
         let mut builder = self
             .client
             .post(self.url.clone() + "/" + route)
-            .timeout(self.timeouts.deadline(limit))
-            .body(body);
+            .timeout(self.timeouts.deadline(limit));
+        if let Some(host) = &self.host {
+            builder = builder.header(reqwest::header::HOST, host);
+        }
+        builder = builder.header(reqwest::header::CONTENT_LENGTH, body.len());
+        if !route.ends_with(".bin") {
+            builder = builder.header(
+                reqwest::header::CONTENT_TYPE,
+                "application/json; charset=utf-8",
+            );
+        }
+        let mut builder = builder.body(body);
 
         if let Some((user, pass)) = &self.userpass {
             let req = self
@@ -2521,6 +2539,85 @@ mod tests {
         assert!(response_limit("json_rpc", Some("get_txpool_backlog")) > MIB);
         assert_eq!(transactions_limit(3), 4 * MIB);
         assert_eq!(transactions_limit(usize::MAX), MAX_RESPONSE_BYTES);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn serve_and_record_headers(
+        replies: Vec<&'static [u8]>,
+    ) -> (u16, std::thread::JoinHandle<Vec<(String, Vec<String>)>>) {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = stream;
+            let mut seen = Vec::new();
+            for reply in replies {
+                let mut request_line = String::new();
+                reader.read_line(&mut request_line).unwrap();
+                let mut headers = Vec::new();
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    let line = line.trim_end_matches("\r\n").to_string();
+                    if line.is_empty() {
+                        break;
+                    }
+                    if let Some(value) = line.strip_prefix("Content-Length: ") {
+                        length = value.parse().unwrap();
+                    }
+                    headers.push(line);
+                }
+                let mut body = vec![0u8; length];
+                reader.read_exact(&mut body).unwrap();
+                seen.push((request_line.trim_end().to_string(), headers));
+                write!(
+                    writer,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+                    reply.len()
+                )
+                .unwrap();
+                writer.write_all(reply).unwrap();
+            }
+            seen
+        });
+        (port, handle)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn requests_carry_wallet2s_headers_in_wallet2s_order() {
+        let (port, server) = serve_and_record_headers(vec![b"{\"height\": 7}", b"x"]);
+        let rpc = HttpRpc::new(format!("http://127.0.0.1:{port}")).unwrap();
+        assert_eq!(rpc.get_height().await.unwrap(), 7);
+        assert!(rpc
+            .bin_call::<EmptyResponse>("get_o_indexes.bin", vec![1, 2, 3])
+            .await
+            .is_err());
+        assert_eq!(
+            server.join().unwrap(),
+            vec![
+                (
+                    "POST /get_height HTTP/1.1".to_string(),
+                    vec![
+                        "Host: 127.0.0.1".to_string(),
+                        "Content-Length: 4".to_string(),
+                        "Content-Type: application/json; charset=utf-8".to_string(),
+                        "Accept: */*".to_string(),
+                    ]
+                ),
+                (
+                    "POST /get_o_indexes.bin HTTP/1.1".to_string(),
+                    vec![
+                        "Host: 127.0.0.1".to_string(),
+                        "Content-Length: 3".to_string(),
+                        "Accept: */*".to_string(),
+                    ]
+                ),
+            ]
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]
