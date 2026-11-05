@@ -102,8 +102,8 @@ struct GetOutputsOut {
 
 #[derive(Serialize, Deserialize, Debug)]
 struct GetOutputsRequest {
-    outputs: Vec<GetOutputsOut>,
     get_txid: bool,
+    outputs: Vec<GetOutputsOut>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -639,6 +639,72 @@ impl HttpRpc {
     }
 }
 
+fn json_rpc_request(method: &str, params: Value) -> Value {
+    json!({ "id": "0", "jsonrpc": "2.0", "method": method, "params": params })
+}
+
+fn epee_json(value: &Value) -> Vec<u8> {
+    let mut out = String::new();
+    write_epee_json(&mut out, value, 0);
+    out.into_bytes()
+}
+
+fn write_epee_json(out: &mut String, value: &Value, indent: usize) {
+    match value {
+        Value::Object(members) => {
+            out.push_str("{\r\n");
+            let mut members: Vec<_> = members.iter().collect();
+            members.sort_by(|a, b| a.0.cmp(b.0));
+            let count = members.len();
+            for (position, (name, member)) in members.into_iter().enumerate() {
+                out.push_str(&"  ".repeat(indent + 1));
+                write_epee_string(out, name);
+                out.push_str(": ");
+                write_epee_json(out, member, indent + 1);
+                if position + 1 != count {
+                    out.push(',');
+                }
+                out.push_str("\r\n");
+            }
+            out.push_str(&"  ".repeat(indent));
+            out.push('}');
+        }
+        Value::Array(elements) => {
+            out.push('[');
+            for (position, element) in elements.iter().enumerate() {
+                if position != 0 {
+                    out.push(',');
+                }
+                write_epee_json(out, element, indent);
+            }
+            out.push(']');
+        }
+        Value::String(text) => write_epee_string(out, text),
+        Value::Number(number) => out.push_str(&number.to_string()),
+        Value::Bool(flag) => out.push_str(if *flag { "true" } else { "false" }),
+        Value::Null => out.push_str("null"),
+    }
+}
+
+fn write_epee_string(out: &mut String, text: &str) {
+    out.push('"');
+    for character in text.chars() {
+        match character {
+            '\u{8}' => out.push_str("\\b"),
+            '\u{c}' => out.push_str("\\f"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{b}' => out.push_str("\\v"),
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '/' => out.push_str("\\/"),
+            other => out.push(other),
+        }
+    }
+    out.push('"');
+}
+
 const MIB: usize = 1 << 20;
 
 /// The largest reply of any call that carries no pool data.
@@ -763,20 +829,15 @@ impl<R: RpcConnection> Rpc<R> {
         params: Option<Params>,
         limit: usize,
     ) -> Result<Response, RpcError> {
+        let params = match params {
+            Some(params) => serde_json::to_value(&params)
+                .map_err(|_| RpcError::InternalError("Failed to serialize JSON request"))?,
+            None => json!({}),
+        };
         self.call_tail(
             route,
             self.0
-                .post_limited(
-                    route,
-                    if let Some(params) = params {
-                        serde_json::to_vec(&params).map_err(|_| {
-                            RpcError::InternalError("Failed to serialize JSON request")
-                        })?
-                    } else {
-                        vec![]
-                    },
-                    limit,
-                )
+                .post_limited(route, epee_json(&params), limit)
                 .await?,
         )
         .await
@@ -788,12 +849,7 @@ impl<R: RpcConnection> Rpc<R> {
         method: &str,
         params: Option<Value>,
     ) -> Result<Response, RpcError> {
-        let mut req = json!({ "method": method });
-        if let Some(params) = params {
-            req.as_object_mut()
-                .ok_or(RpcError::InternalError("Failed to build JSON-RPC request"))?
-                .insert("params".into(), params);
-        }
+        let req = json_rpc_request(method, params.unwrap_or_else(|| json!({})));
         let limit = response_limit("json_rpc", Some(method));
         Ok(self
             .rpc_call_limited::<_, JsonRpcResponse<Response>>("json_rpc", Some(req), limit)
@@ -1257,8 +1313,7 @@ impl<R: RpcConnection> Rpc<R> {
             return Err(RpcError::ZeroFee);
         }
 
-        let request = serde_json::to_vec(&json!({ "method": "get_txpool_backlog", "params": {} }))
-            .map_err(|_| RpcError::InternalError("Failed to serialize JSON request"))?;
+        let request = epee_json(&json_rpc_request("get_txpool_backlog", json!({})));
         let limit = response_limit("json_rpc", Some("get_txpool_backlog"));
         let backlog =
             parse_txpool_backlog(&self.0.post_limited("json_rpc", request, limit).await?)?;
@@ -1972,6 +2027,88 @@ mod tests {
         assert_eq!(request.outputs[0].amount, 0);
         assert_eq!(request.outputs[0].index, 7);
         assert_eq!(request.outputs[1].index, 11);
+
+        let mut expected = hex::decode("011101010101020101").unwrap();
+        expected.extend_from_slice(&[0x08, 8]);
+        expected.extend_from_slice(b"get_txid\x0b\x00");
+        expected.extend_from_slice(&[7]);
+        expected.extend_from_slice(b"outputs\x8c\x08");
+        for index in [7u64, 11] {
+            expected.extend_from_slice(&[0x08, 6]);
+            expected.extend_from_slice(b"amount\x05");
+            expected.extend_from_slice(&0u64.to_le_bytes());
+            expected.extend_from_slice(&[5]);
+            expected.extend_from_slice(b"index\x05");
+            expected.extend_from_slice(&index.to_le_bytes());
+        }
+        assert_eq!(hex::encode(&calls[0].1), hex::encode(expected));
+    }
+
+    #[derive(Clone, Debug, Default)]
+    struct Recorder(std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>);
+    #[async_trait]
+    impl RpcConnection for Recorder {
+        async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
+            self.0.lock().unwrap().push((route.to_string(), body));
+            Err(RpcError::ConnectionError)
+        }
+    }
+
+    #[tokio::test]
+    async fn json_requests_are_written_like_wallet2s() {
+        let recorder = Recorder::default();
+        let rpc = Rpc::new_with_connection(recorder.clone());
+        assert!(rpc.fetch_fee_estimate().await.is_err());
+        assert!(rpc
+            .json_rpc_call::<Value>(
+                "getblockheadersrange",
+                Some(json!({ "start_height": 253, "end_height": 262 })),
+            )
+            .await
+            .is_err());
+        assert!(rpc.get_height().await.is_err());
+
+        let calls = recorder.0.lock().unwrap();
+        let bodies: Vec<_> = calls
+            .iter()
+            .map(|(route, body)| (route.as_str(), String::from_utf8(body.clone()).unwrap()))
+            .collect();
+        assert_eq!(
+            bodies,
+            vec![
+                (
+                    "json_rpc",
+                    "{\r\n  \"id\": \"0\",\r\n  \"jsonrpc\": \"2.0\",\r\n  \"method\": \
+                     \"get_fee_estimate\",\r\n  \"params\": {\r\n    \"grace_blocks\": 10\r\n  \
+                     }\r\n}"
+                        .to_string()
+                ),
+                (
+                    "json_rpc",
+                    "{\r\n  \"id\": \"0\",\r\n  \"jsonrpc\": \"2.0\",\r\n  \"method\": \
+                     \"getblockheadersrange\",\r\n  \"params\": {\r\n    \"end_height\": 262,\
+                     \r\n    \"start_height\": 253\r\n  }\r\n}"
+                        .to_string()
+                ),
+                ("get_height", "{\r\n}".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn epee_json_writes_arrays_empty_sections_and_escapes_like_epee() {
+        let value = json!({
+            "txs_hashes": ["ab", "cd"],
+            "empty": {},
+            "list": [{ "a": 1 }, { "b": true }],
+            "text": "a/b\"c\\d\ne\u{b}",
+        });
+        assert_eq!(
+            String::from_utf8(epee_json(&value)).unwrap(),
+            "{\r\n  \"empty\": {\r\n  },\r\n  \"list\": [{\r\n    \"a\": 1\r\n  },{\r\n    \
+             \"b\": true\r\n  }],\r\n  \"text\": \"a\\/b\\\"c\\\\d\\ne\\v\",\r\n  \
+             \"txs_hashes\": [\"ab\",\"cd\"]\r\n}"
+        );
     }
 
     #[tokio::test]

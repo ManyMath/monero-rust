@@ -219,18 +219,12 @@ impl MockRpc {
                     serde_json::from_str::<serde_json::Value>(&call.body),
                 ) {
                     if req.get("method") == stored.get("method") {
-                        match (req.get("params"), stored.get("params")) {
-                            (Some(req_params), Some(stored_params)) => {
-                                if req_params.get("height") == stored_params.get("height") {
-                                    self.call_sequence.lock().unwrap().push(idx);
-                                    return Some(call.clone());
-                                }
-                            }
-                            (None, None) => {
-                                self.call_sequence.lock().unwrap().push(idx);
-                                return Some(call.clone());
-                            }
-                            _ => {}
+                        let empty = serde_json::json!({});
+                        let req_params = req.get("params").unwrap_or(&empty);
+                        let stored_params = stored.get("params").unwrap_or(&empty);
+                        if req_params.get("height") == stored_params.get("height") {
+                            self.call_sequence.lock().unwrap().push(idx);
+                            return Some(call.clone());
                         }
                     }
                 }
