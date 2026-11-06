@@ -71,10 +71,7 @@ pub struct TrackedTransaction {
     pub created_at_secs: u64,
 }
 
-/// Sparse chain of block hashes for fork-point detection.
-///
-/// Stores a compact set of block hashes: dense for recent blocks, exponentially
-/// spaced for older ones. Mirrors wallet2's `get_short_chain_history()`.
+/// The wallet's block ids, for fork detection and the `/getblocks.bin` history.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BlockHashChain {
     hashes: BTreeMap<u64, String>,
@@ -118,7 +115,8 @@ impl BlockHashChain {
         }
     }
 
-    /// Prune to keep last DENSE_HASH_WINDOW dense + exponential anchors + genesis.
+    /// Keep the last DENSE_HASH_WINDOW ids, exponential anchors, genesis and the
+    /// lowest height above it. A node can tell this history from wallet2's.
     pub fn compact(&mut self) {
         let tip = match self.tip_height() {
             Some(t) => t,
@@ -156,61 +154,70 @@ impl BlockHashChain {
         self.hashes.retain(|h, _| keep.contains(h));
     }
 
-    /// Block ids for `/getblocks.bin`, newest first.
+    /// wallet2's short chain history, newest first. wallet2 drops the three
+    /// oldest entries before genesis before sending it.
     pub fn get_short_chain_history(&self) -> Vec<(u64, String)> {
-        let genesis = self.hashes.get(&0).or(self.genesis_hash.as_ref());
-        let tip = match self.tip_height() {
-            Some(t) => t,
-            None => {
-                // Only genesis available
-                if let Some(g) = genesis {
-                    return vec![(0, g.clone())];
-                }
-                return vec![];
-            }
-        };
+        self.get_short_chain_history_with_granularity(1)
+    }
 
-        let mut result: Vec<(u64, String)> = Vec::new();
-        let push = |result: &mut Vec<(u64, String)>, target: u64| {
+    /// From the tip rounded down to `granularity`, as wallet2's first untrusted
+    /// refresh hides the height (FIRST_REFRESH_GRANULARITY).
+    pub fn get_short_chain_history_with_granularity(&self, granularity: u64) -> Vec<(u64, String)> {
+        let genesis = self.hashes.get(&0).or(self.genesis_hash.as_ref());
+        let Some(tip) = self.tip_height() else {
+            return genesis
+                .map(|hash| vec![(0, hash.clone())])
+                .unwrap_or_default();
+        };
+        let offset = match self.hashes.range(1..).next() {
+            Some((&1, _)) if self.hashes.contains_key(&0) => 0,
+            Some((&lowest, _)) => lowest,
+            None => 0,
+        };
+        let size = tip + 1;
+        let granularity = granularity.max(1);
+        let rounded = (size / granularity * granularity).max(offset);
+        let sz = rounded - offset;
+
+        let mut ids: Vec<(u64, String)> = Vec::new();
+        let mut push = |target: u64| {
             if target == 0 {
+                if let Some(hash) = genesis {
+                    ids.push((0, hash.clone()));
+                }
                 return;
             }
             if let Some((&height, hash)) = self.hashes.range(1..=target).next_back() {
-                if result.last().map_or(true, |(last, _)| height < *last) {
-                    result.push((height, hash.clone()));
+                if ids.last().map_or(true, |(last, _)| height < *last) {
+                    ids.push((height, hash.clone()));
                 }
             }
         };
-        let mut current = tip;
-        let mut step = 1u64;
-        let mut count = 0u64;
-
-        loop {
-            push(&mut result, current);
-
-            if current == 0 {
-                break;
+        if sz == 0 {
+            if size > offset {
+                push(offset);
             }
-
-            // First 10 are dense (step=1), then exponential
-            count += 1;
-            if count >= 10 {
-                step *= 2;
+            push(0);
+            return ids;
+        }
+        let mut back = 1u64;
+        let mut multiplier = 1u64;
+        let mut i = 0;
+        while back < sz {
+            push(offset + sz - back);
+            if i < 10 {
+                back += 1;
+            } else {
+                multiplier *= 2;
+                back += multiplier;
             }
-
-            if current < step {
-                break;
-            }
-            current -= step;
+            i += 1;
         }
-        if let Some((&base, _)) = self.hashes.range(1..).next() {
-            push(&mut result, base);
+        push(offset);
+        if offset != 0 {
+            push(0);
         }
-        if let Some(hash) = genesis {
-            result.push((0, hash.clone()));
-        }
-
-        result
+        ids
     }
 
     pub fn len(&self) -> usize {
@@ -3086,6 +3093,64 @@ mod tests {
         for i in 0..10 {
             assert_eq!(history[i].0, 200 - i as u64);
         }
+    }
+
+    fn chain(heights: impl IntoIterator<Item = u64>) -> BlockHashChain {
+        let mut chain = BlockHashChain::new();
+        for h in heights {
+            chain.record_block(h, format!("hash_{}", h));
+        }
+        chain
+    }
+
+    fn heights(history: &[(u64, String)]) -> Vec<u64> {
+        history.iter().map(|(height, _)| *height).collect()
+    }
+
+    #[test]
+    fn short_chain_history_is_wallet2s() {
+        // wallet2 at 260 sent these less 220, 188, 124, which it drops.
+        assert_eq!(
+            heights(&chain(0..=260).get_short_chain_history()),
+            [
+                260, 259, 258, 257, 256, 255, 254, 253, 252, 251, 250, 248, 244, 236, 220, 188,
+                124, 0
+            ]
+        );
+        let history = chain(0..=100_000).get_short_chain_history();
+        assert_eq!(history.len(), 27);
+        assert_eq!(
+            heights(&history)[24..],
+            [100_001 - 32_777, 100_001 - 65_545, 0]
+        );
+    }
+
+    #[test]
+    fn short_chain_history_from_an_offset_ends_in_the_offset_then_genesis() {
+        let mut offset = chain(1000..=1100);
+        offset.record_block(0, "genesis".into());
+        assert_eq!(
+            heights(&offset.get_short_chain_history()),
+            [
+                1100, 1099, 1098, 1097, 1096, 1095, 1094, 1093, 1092, 1091, 1090, 1088, 1084, 1076,
+                1060, 1028, 1000, 0
+            ]
+        );
+        assert_eq!(
+            heights(&chain(1000..=1003).get_short_chain_history()),
+            [1003, 1002, 1001, 1000]
+        );
+    }
+
+    #[test]
+    fn short_chain_history_rounds_the_tip_for_a_first_untrusted_refresh() {
+        let history = chain(0..=3000).get_short_chain_history_with_granularity(1024);
+        assert_eq!(heights(&history)[..3], [2047, 2046, 2045]);
+        assert_eq!(*heights(&history).last().unwrap(), 0);
+        assert_eq!(
+            heights(&chain(0..=10).get_short_chain_history_with_granularity(1024)),
+            [0, 0]
+        );
     }
 
     #[test]
