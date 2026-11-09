@@ -3,7 +3,9 @@
 //! This module provides wallet scanning functionality that works across
 //! both native and WASM targets through generic RpcConnection support.
 
-use crate::monero_rpc::{BlockOutputIndices, GetBlocksFastResponse, Rpc, RpcConnection};
+use crate::monero_rpc::{
+    BlockOutputIndices, GetBlocksFastResponse, PoolInfo, PoolTx, Rpc, RpcConnection,
+};
 use crate::seed_compat::{Language, Seed};
 use curve25519_dalek::{
     constants::ED25519_BASEPOINT_TABLE,
@@ -29,7 +31,7 @@ use sha3::{Digest, Keccak256};
 
 use crate::wallet_output::WalletOutput;
 use crate::wallet_state::WalletState;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 /// Yield interval for the non-WASM code path; WASM uses time-based yielding (~16 ms).
@@ -1976,6 +1978,7 @@ pub struct FetchedBlocks {
     requested_start_height: u64,
     /// Wallet-supplied anchors for the zero-height history negotiation sentinel.
     requested_history: Vec<(u64, [u8; 32])>,
+    pool: Option<PoolUpdate>,
 }
 
 impl FetchedBlocks {
@@ -2032,6 +2035,12 @@ impl FetchedBlocks {
     /// The chain length the node claimed. Unverified.
     pub fn daemon_height(&self) -> u64 {
         self.response.current_height
+    }
+
+    /// The pool changes fetched with this batch, for `scan_pool_update` after the
+    /// blocks as wallet2 does (wallet2.cpp:4335-4337).
+    pub fn take_pool(&mut self) -> Option<PoolUpdate> {
+        self.pool.take()
     }
 
     fn last_block_ids(&self, count: usize) -> Result<Vec<(u64, [u8; 32])>, String> {
@@ -2214,6 +2223,7 @@ pub struct Refresh {
     tail: Vec<(u64, [u8; 32])>,
     previous_start: Option<u64>,
     done: bool,
+    pool: Option<(u64, HashSet<[u8; 32]>)>,
 }
 
 impl Refresh {
@@ -2244,7 +2254,15 @@ impl Refresh {
             tail: Vec::new(),
             previous_start: None,
             done: false,
+            pool: None,
         })
+    }
+
+    /// Ask for the pool with the first block request, as wallet2's refresh does
+    /// (wallet2.cpp:3206), incrementally from `view`.
+    pub fn with_pool(mut self, view: &MempoolView) -> Self {
+        self.pool = Some((view.query_time, view.known_ids()));
+        self
     }
 
     /// Whether the refresh has reached the node's tip.
@@ -2316,10 +2334,25 @@ impl Refresh {
             self.known.insert(0, id);
         }
         let block_ids: Vec<[u8; 32]> = self.history.iter().map(|(_, hash)| *hash).collect();
-        let response = rpc
-            .get_blocks_fast(&block_ids, self.start_height, true)
-            .await
-            .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
+        let (response, pool) = match self.pool.take() {
+            None => (
+                rpc.get_blocks_fast(&block_ids, self.start_height, true)
+                    .await
+                    .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?,
+                None,
+            ),
+            Some((since, known)) => {
+                let (response, info) = rpc
+                    .get_blocks_and_pool(&block_ids, self.start_height, true, since)
+                    .await
+                    .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
+                let update = match info {
+                    Some(info) => pool_update_from_info(rpc, info, &known).await?,
+                    None => fetch_pool_by_query(rpc, &known).await?,
+                };
+                (response, Some(update))
+            }
+        };
         let fetched = FetchedBlocks {
             response,
             scan_from: self.restore_height,
@@ -2329,6 +2362,7 @@ impl Refresh {
             } else {
                 Vec::new()
             },
+            pool,
         };
         let start = fetched.validated_start_height()?;
         self.start_height = 0;
@@ -2369,6 +2403,7 @@ pub async fn fetch_blocks_batch<R: RpcConnection>(
         scan_from: 0,
         requested_start_height: start_height,
         requested_history: Vec::new(),
+        pool: None,
     })
 }
 
@@ -2532,6 +2567,7 @@ pub async fn fetch_blocks_batch_with_history<R: RpcConnection>(
         scan_from: 0,
         requested_start_height: start_height,
         requested_history,
+        pool: None,
     };
     fetched.validated_start_height()?;
     Ok((fetched, actual_start))
@@ -2619,6 +2655,290 @@ pub async fn scan_block_multi_wallet_wasm<R: RpcConnection>(
         .into_iter()
         .find(|result| result.block_height == block_height)
         .ok_or_else(|| format!("Node did not return requested block {block_height}"))
+}
+
+/// What a wallet knows of the node's pool between refreshes. As in wallet2, the
+/// first update in a session asks for and scans the whole pool.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MempoolView {
+    #[serde(skip)]
+    query_time: u64,
+    #[serde(default)]
+    txs: BTreeMap<String, MempoolTx>,
+    #[serde(skip)]
+    updated: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct MempoolTx {
+    key_images: Vec<String>,
+    outputs: Vec<WalletOutput>,
+}
+
+impl MempoolView {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The `pool_info_since` of the next request; zero before any reply
+    /// carried pool data.
+    pub fn query_time(&self) -> u64 {
+        self.query_time
+    }
+
+    /// Whether the pool held `tx_hash` (hex) when the view was last updated.
+    pub fn contains(&self, tx_hash: &str) -> bool {
+        self.txs.contains_key(tx_hash)
+    }
+
+    /// Make the next update ask for the whole pool, as wallet2 does on a daemon change.
+    pub fn node_changed(&mut self) {
+        self.query_time = 0;
+    }
+
+    /// Number of pool transactions in the view.
+    pub fn len(&self) -> usize {
+        self.txs.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.txs.is_empty()
+    }
+
+    fn known_ids(&self) -> HashSet<[u8; 32]> {
+        if !self.updated {
+            return HashSet::new();
+        }
+        self.txs
+            .keys()
+            .filter_map(|hash| hex_to_hash(hash).ok())
+            .collect()
+    }
+
+    /// The whole pool as the view holds it, in the form `scan_mempool`
+    /// reports it.
+    pub fn result(&self, accounts_to_scan: Option<&[u32]>) -> MempoolScanResult {
+        let mut spent_key_images = Vec::new();
+        let mut spent_key_image_tx_hashes = Vec::new();
+        let mut outputs = Vec::new();
+        for (tx_hash, tx) in &self.txs {
+            for key_image in &tx.key_images {
+                spent_key_images.push(key_image.clone());
+                spent_key_image_tx_hashes.push(tx_hash.clone());
+            }
+            outputs.extend(tx.outputs.iter().cloned());
+        }
+        retain_mempool_outputs_for_accounts(&mut outputs, accounts_to_scan);
+        MempoolScanResult {
+            tx_count: self.txs.len(),
+            outputs,
+            spent_key_images,
+            spent_key_image_tx_hashes,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum PoolMembership {
+    Whole(HashSet<[u8; 32]>),
+    Removed(Vec<[u8; 32]>),
+}
+
+/// Pool changes fetched from the node, to be applied to a `MempoolView`
+/// with `scan_pool_update`.
+#[derive(Debug, Clone)]
+pub struct PoolUpdate {
+    added: Vec<PoolTx>,
+    membership: PoolMembership,
+    daemon_time: Option<u64>,
+}
+
+async fn pool_update_from_info<R: RpcConnection>(
+    rpc: &Rpc<R>,
+    info: PoolInfo,
+    known: &HashSet<[u8; 32]>,
+) -> Result<PoolUpdate, String> {
+    // A transaction listed both removed and added came back: take the removals
+    // first, as monerod asks (tx_pool.cpp:1805-1808).
+    let mut known = known.clone();
+    for id in &info.removed {
+        known.remove(id);
+    }
+    let known = &known;
+    let membership = if info.incremental {
+        PoolMembership::Removed(info.removed)
+    } else {
+        PoolMembership::Whole(
+            info.added
+                .iter()
+                .map(|tx| tx.tx_hash)
+                .chain(info.remaining_added.iter().copied())
+                .collect(),
+        )
+    };
+    let missing: Vec<[u8; 32]> = info
+        .remaining_added
+        .iter()
+        .copied()
+        .filter(|hash| !known.contains(hash))
+        .collect();
+    let mut added: Vec<PoolTx> = info
+        .added
+        .into_iter()
+        .filter(|tx| !known.contains(&tx.tx_hash))
+        .collect();
+    if !missing.is_empty() {
+        added.extend(
+            rpc.get_pool_transactions(&missing)
+                .await
+                .map_err(|e| format!("Failed to fetch pool transactions: {:?}", e))?,
+        );
+    }
+    Ok(PoolUpdate {
+        added,
+        membership,
+        daemon_time: Some(info.daemon_time),
+    })
+}
+
+async fn fetch_pool_by_query<R: RpcConnection>(
+    rpc: &Rpc<R>,
+    known: &HashSet<[u8; 32]>,
+) -> Result<PoolUpdate, String> {
+    let hashes = rpc
+        .get_pool_hashes()
+        .await
+        .map_err(|e| format!("Failed to fetch the pool's transaction ids: {:?}", e))?;
+    let missing: Vec<[u8; 32]> = hashes
+        .iter()
+        .copied()
+        .filter(|hash| !known.contains(hash))
+        .collect();
+    let added = if missing.is_empty() {
+        Vec::new()
+    } else {
+        rpc.get_pool_transactions(&missing)
+            .await
+            .map_err(|e| format!("Failed to fetch pool transactions: {:?}", e))?
+    };
+    Ok(PoolUpdate {
+        added,
+        membership: PoolMembership::Whole(hashes.into_iter().collect()),
+        daemon_time: None,
+    })
+}
+
+fn parse_pool_tx(tx: &PoolTx) -> Result<OxideTransaction<Pruned>, String> {
+    let mut pruned = tx.blob.clone();
+    pruned.extend_from_slice(&[0u8; 32]);
+    if let Some((_, parsed)) = parse_pruned_tx_blob(&pruned) {
+        return Ok(parsed);
+    }
+    match parse_full_tx_blob(&tx.blob) {
+        Some((hash, parsed)) if hash == tx.tx_hash => Ok(parsed),
+        _ => Err(format!(
+            "Pool transaction {} does not parse",
+            hex::encode(tx.tx_hash)
+        )),
+    }
+}
+
+fn scan_pool_txs(
+    scanner: &mut Scanner,
+    key_image_scalar: Option<&Scalar>,
+    txs: &[PoolTx],
+) -> Result<Vec<(String, MempoolTx)>, String> {
+    let mut records = Vec::with_capacity(txs.len());
+    for tx in txs {
+        let parsed = parse_pool_tx(tx)?;
+        let mut record = MempoolTx::default();
+        for input in &parsed.prefix().inputs {
+            if let OxideInput::ToKey { key_image, .. } = input {
+                record.key_images.push(hex::encode(key_image.to_bytes()));
+            }
+        }
+        for output in &scan_single_transaction(scanner, tx.tx_hash, &parsed)? {
+            record.outputs.push(map_oxide_output(
+                output,
+                0,         // unconfirmed: still in the mempool
+                [0u8; 32], // mempool transactions are never coinbase
+                key_image_scalar,
+                None,
+                parsed.version() == 1,
+            )?);
+        }
+        records.push((hex::encode(tx.tx_hash), record));
+    }
+    Ok(records)
+}
+
+/// Apply pool changes to `view`, scanning the transactions new to it. A
+/// transaction that does not parse fails the update and leaves the view as it was.
+pub fn scan_pool_update(
+    update: PoolUpdate,
+    view: &mut MempoolView,
+    mnemonic: &str,
+    _network: Network,
+    lookahead: Lookahead,
+    accounts_to_scan: Option<&[u32]>,
+    passphrase: &str,
+) -> Result<MempoolScanResult, String> {
+    let removed: HashSet<[u8; 32]> = match &update.membership {
+        PoolMembership::Removed(ids) => ids.iter().copied().collect(),
+        PoolMembership::Whole(_) => HashSet::new(),
+    };
+    let known = view.known_ids();
+    let new: Vec<PoolTx> = update
+        .added
+        .into_iter()
+        .filter(|tx| !known.contains(&tx.tx_hash) || removed.contains(&tx.tx_hash))
+        .collect();
+    let records = if new.is_empty() {
+        Vec::new()
+    } else {
+        let view_only = parse_view_only_keys(mnemonic);
+        let seed = match view_only {
+            Some(_) => None,
+            None => Some(resolve_seed(mnemonic)?),
+        };
+        let (spend_point, view_scalar) = match (&view_only, &seed) {
+            (Some((view_scalar, spend_point)), _) => (*spend_point, *view_scalar),
+            (None, Some(seed)) => (
+                spend_key_from_seed(seed, passphrase),
+                view_key_from_seed(seed, passphrase),
+            ),
+            (None, None) => unreachable!("a seed resolves or the call returned"),
+        };
+        let mut scanner = oxide_scanner_from_keys(&spend_point, &view_scalar)?;
+        register_subaddresses(&mut scanner, lookahead);
+        #[cfg(target_arch = "wasm32")]
+        let spend_scalar = seed
+            .as_ref()
+            .map(|seed| spend_key_scalar_from_seed(seed, passphrase));
+        #[cfg(target_arch = "wasm32")]
+        let key_image_scalar = spend_scalar.as_ref().map(|scalar| &**scalar);
+        #[cfg(not(target_arch = "wasm32"))]
+        let key_image_scalar: Option<&Scalar> = None;
+        scan_pool_txs(&mut scanner, key_image_scalar, &new)?
+    };
+
+    match update.membership {
+        PoolMembership::Whole(ids) => {
+            view.txs
+                .retain(|hash, _| hex_to_hash(hash).map_or(false, |hash| ids.contains(&hash)));
+        }
+        PoolMembership::Removed(ids) => {
+            for id in ids {
+                view.txs.remove(&hex::encode(id));
+            }
+        }
+    }
+    view.txs.extend(records);
+    if let Some(time) = update.daemon_time {
+        view.query_time = time;
+    }
+    view.updated = true;
+    Ok(view.result(accounts_to_scan))
 }
 
 #[cfg(not(target_arch = "wasm32"))]

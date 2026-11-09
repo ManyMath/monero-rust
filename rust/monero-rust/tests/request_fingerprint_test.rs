@@ -151,3 +151,41 @@ async fn relay_is_sent_to_wallet2s_route_with_wallet2s_body() {
         assert_same_request(request, &wallet2_relay);
     }
 }
+
+fn block_ids_of(body: &[u8]) -> Vec<[u8; 32]> {
+    let name = b"\x09block_ids\x0a";
+    let at = body.windows(name.len()).position(|w| w == name).unwrap() + name.len();
+    let width = 1usize << (body[at] & 3);
+    let mut raw = [0u8; 8];
+    raw[..width].copy_from_slice(&body[at..at + width]);
+    let length = (u64::from_le_bytes(raw) >> 2) as usize;
+    body[at + width..at + width + length]
+        .chunks(32)
+        .map(|id| id.try_into().unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn block_and_pool_requests_are_wallet2s() {
+    let node = Recorder::new(vec![]);
+    let rpc = node.rpc();
+
+    let initial = wallet2("getblocks_initial");
+    let ids = block_ids_of(&initial.1);
+    assert!(rpc.get_blocks_and_pool(&ids, 0, true, 0).await.is_err());
+
+    let incremental = wallet2("getblocks_incremental");
+    let ids = block_ids_of(&incremental.1);
+    assert_eq!(ids.len(), 15);
+    assert!(rpc
+        .get_blocks_and_pool(&ids, 0, true, 1_795_063_405)
+        .await
+        .is_err());
+
+    assert!(rpc.get_pool_hashes().await.is_err());
+
+    let requests = node.requests();
+    assert_same_request(&requests[0], &initial);
+    assert_same_request(&requests[1], &incremental);
+    assert_same_request(&requests[2], &wallet2("pool_hashes"));
+}

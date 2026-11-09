@@ -114,6 +114,7 @@ pub use scanner::{
     resolve_seed_bip39,
     // Mempool scanning
     scan_mempool,
+    scan_pool_update,
     seed_birthday,
     // Fingerprint computation
     spend_key_fingerprint,
@@ -127,7 +128,9 @@ pub use scanner::{
     FetchedBlocks,
     Lookahead,
     MempoolScanResult,
+    MempoolView,
     MultiWalletScanResult,
+    PoolUpdate,
     Refresh,
     SeedFormat,
     WalletScanConfig,

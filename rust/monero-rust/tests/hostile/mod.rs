@@ -468,6 +468,18 @@ impl RpcConnection for SnapshotNode {
             "gethashes.bin" => self.get_hashes(&body),
             "getblocks.bin" => self.get_blocks(&body),
             "get_transaction_pool" => json_bytes(self.snapshot.transaction_pool.clone()),
+            "get_transaction_pool_hashes.bin" => {
+                let ids: Vec<[u8; 32]> = self.snapshot.transaction_pool["transactions"]
+                    .as_array()
+                    .map(|txs| {
+                        txs.iter()
+                            .map(|tx| hex32(tx["id_hash"].as_str().unwrap()).try_into().unwrap())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Ok(pool_hashes_reply(&ids))
+            }
+            "gettransactions" => json_bytes(json!({ "status": "OK", "txs": [] })),
             "send_raw_transaction" | "sendrawtransaction" => {
                 let request: Value =
                     serde_json::from_slice(&body).map_err(|_| RpcError::InvalidNode)?;
@@ -577,6 +589,29 @@ impl Call {
             self.method == name || format!("{}:{}", self.route, self.method) == name
         }
     }
+}
+
+pub fn pool_hashes_reply(ids: &[[u8; 32]]) -> Vec<u8> {
+    let mut out =
+        b"{\r\n  \"credits\": 0,\r\n  \"status\": \"OK\",\r\n  \"top_hash\": \"\",\r\n".to_vec();
+    if !ids.is_empty() {
+        out.extend_from_slice(b"  \"tx_hashes\": \"");
+        for byte in ids.iter().flatten() {
+            match byte {
+                8 => out.extend_from_slice(b"\\b"),
+                12 => out.extend_from_slice(b"\\f"),
+                b'\n' => out.extend_from_slice(b"\\n"),
+                b'\r' => out.extend_from_slice(b"\\r"),
+                b'\t' => out.extend_from_slice(b"\\t"),
+                11 => out.extend_from_slice(b"\\v"),
+                b'"' | b'\\' | b'/' => out.extend_from_slice(&[b'\\', *byte]),
+                other => out.push(*other),
+            }
+        }
+        out.extend_from_slice(b"\",\r\n");
+    }
+    out.extend_from_slice(b"  \"untrusted\": false\r\n}");
+    out
 }
 
 pub type Reply = Result<Vec<u8>, RpcError>;

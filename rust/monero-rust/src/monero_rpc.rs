@@ -568,7 +568,9 @@ fn is_read_only(route: &str, body: &[u8]) -> bool {
         | "get_output_distribution.bin"
         | "get_o_indexes.bin"
         | "get_transactions"
+        | "gettransactions"
         | "get_transaction_pool"
+        | "get_transaction_pool_hashes.bin"
         | "is_key_image_spent" => true,
         "json_rpc" => serde_json::from_slice::<Value>(body)
             .ok()
@@ -608,7 +610,7 @@ impl HttpRpc {
             builder = builder.header(reqwest::header::HOST, host);
         }
         builder = builder.header(reqwest::header::CONTENT_LENGTH, body.len());
-        if !route.ends_with(".bin") {
+        if !is_binary_route(route) {
             builder = builder.header(
                 reqwest::header::CONTENT_TYPE,
                 "application/json; charset=utf-8",
@@ -659,6 +661,12 @@ impl HttpRpc {
         }
         Ok(reply)
     }
+}
+
+/// Whether `route` is epee binary. get_transaction_pool_hashes.bin is JSON:
+/// wallet2 posts it with invoke_http_json.
+fn is_binary_route(route: &str) -> bool {
+    route.ends_with(".bin") && route != "get_transaction_pool_hashes.bin"
 }
 
 fn route_carries_client(route: &str) -> bool {
@@ -769,17 +777,50 @@ fn write_epee_string(out: &mut String, text: &str) {
     out.push('"');
 }
 
+fn epee_json_string(body: &[u8], name: &str) -> Option<Vec<u8>> {
+    let key = format!("\"{name}\": \"");
+    let start = body
+        .windows(key.len())
+        .position(|window| window == key.as_bytes())?
+        + key.len();
+    let mut out = Vec::new();
+    let mut bytes = body[start..].iter();
+    loop {
+        match *bytes.next()? {
+            b'"' => return Some(out),
+            b'\\' => out.push(match *bytes.next()? {
+                b'b' => 8,
+                b'f' => 12,
+                b'n' => b'\n',
+                b'r' => b'\r',
+                b't' => b'\t',
+                b'v' => 11,
+                other => other,
+            }),
+            byte => out.push(byte),
+        }
+    }
+}
+
 const MIB: usize = 1 << 20;
 
 /// The largest reply of any call that carries no pool data.
 pub const MAX_RESPONSE_BYTES: usize = 256 * MIB;
+
+/// The reply limit of a getblocks.bin call that also asks for the pool.
+pub const MAX_POOL_REPLY_BYTES: usize = 768 * MIB;
+
+/// `MAX_POOL_REPLY_BYTES` when pruned data is asked for.
+pub const MAX_PRUNED_POOL_REPLY_BYTES: usize = 512 * MIB;
 
 fn response_limit(route: &str, method: Option<&str>) -> usize {
     match (route, method) {
         ("getblocks.bin", _) | ("get_transaction_pool", _) | ("get_transactions", _) => {
             MAX_RESPONSE_BYTES
         }
-        ("get_output_distribution.bin", _) | ("json_rpc", Some("get_txpool_backlog")) => 64 * MIB,
+        ("get_output_distribution.bin", _)
+        | ("get_transaction_pool_hashes.bin", _)
+        | ("json_rpc", Some("get_txpool_backlog")) => 64 * MIB,
         ("get_height", _)
         | ("send_raw_transaction", _)
         | ("sendrawtransaction", _)
@@ -1026,7 +1067,7 @@ impl<R: RpcConnection> Rpc<R> {
         route: &str,
         res: Vec<u8>,
     ) -> Result<Response, RpcError> {
-        Ok(if !route.ends_with(".bin") {
+        Ok(if !is_binary_route(route) {
             serde_json::from_str(std::str::from_utf8(&res).map_err(|_| RpcError::InvalidNode)?)
                 .map_err(|_| RpcError::InternalError("Failed to parse JSON response"))?
         } else {
@@ -1835,6 +1876,111 @@ impl<R: RpcConnection> Rpc<R> {
         Ok(())
     }
 
+    /// The ids of every pool transaction, asked for as wallet2 asks.
+    pub async fn get_pool_hashes(&self) -> Result<Vec<[u8; 32]>, RpcError> {
+        let route = "get_transaction_pool_hashes.bin";
+        let body = epee_json(&json!({ "client": self.client() }));
+        let reply = self
+            .0
+            .post_limited(route, body, response_limit(route, None))
+            .await?;
+        let status = epee_json_string(&reply, "status").ok_or(RpcError::InvalidNode)?;
+        require_ok_status(std::str::from_utf8(&status).map_err(|_| RpcError::InvalidNode)?)?;
+        let present = reply
+            .windows(b"\"tx_hashes\": \"".len())
+            .any(|window| window == b"\"tx_hashes\": \"");
+        let blob = match epee_json_string(&reply, "tx_hashes") {
+            Some(blob) => blob,
+            None if !present => Vec::new(),
+            None => return Err(RpcError::InvalidNode),
+        };
+        if blob.len() % 32 != 0 {
+            return Err(RpcError::InvalidNode);
+        }
+        let hashes: Vec<[u8; 32]> = blob
+            .chunks(32)
+            .map(|hash| <[u8; 32]>::try_from(hash).unwrap())
+            .collect();
+        let mut seen = std::collections::HashSet::new();
+        if !hashes.iter().all(|hash| seen.insert(*hash)) {
+            return Err(RpcError::InvalidNode);
+        }
+        Ok(hashes)
+    }
+
+    /// Pool transactions by id, pruned, asked for as wallet2 asks; those no
+    /// longer in the pool are left out.
+    pub async fn get_pool_transactions(
+        &self,
+        hashes: &[[u8; 32]],
+    ) -> Result<Vec<PoolTx>, RpcError> {
+        #[derive(Deserialize, Debug)]
+        struct Entry {
+            tx_hash: String,
+            #[serde(default)]
+            pruned_as_hex: String,
+            #[serde(default)]
+            prunable_hash: String,
+            #[serde(default)]
+            in_pool: bool,
+            #[serde(default)]
+            double_spend_seen: bool,
+        }
+        #[derive(Deserialize, Debug)]
+        struct Response {
+            status: String,
+            #[serde(default)]
+            txs: Vec<Entry>,
+        }
+
+        let mut result = Vec::with_capacity(hashes.len());
+        for slice in hashes.chunks(100) {
+            let res: Response = self
+                .rpc_call_limited(
+                    "gettransactions",
+                    Some(json!({
+                        "txs_hashes": slice.iter().map(hex::encode).collect::<Vec<_>>(),
+                        "decode_as_json": false,
+                        "prune": true,
+                    })),
+                    transactions_limit(slice.len()),
+                )
+                .await?;
+            require_ok_status(&res.status)?;
+            if res.txs.len() != slice.len() {
+                return Err(RpcError::InvalidNode);
+            }
+            for entry in res.txs {
+                let tx_hash = hash_hex(&entry.tx_hash)?;
+                if !slice.contains(&tx_hash) {
+                    return Err(RpcError::InvalidNode);
+                }
+                if !entry.in_pool {
+                    continue;
+                }
+                let blob = rpc_hex(&entry.pruned_as_hex)?;
+                let prunable_hash = if entry.prunable_hash.is_empty() {
+                    [0u8; 32]
+                } else {
+                    hash_hex(&entry.prunable_hash)?
+                };
+                let mut with_hash = blob.clone();
+                with_hash.extend_from_slice(&prunable_hash);
+                match crate::scanner::parse_pruned_tx_blob(&with_hash) {
+                    Some((Some(hash), _)) if hash != tx_hash => return Err(RpcError::InvalidNode),
+                    Some(_) => {}
+                    None => return Err(RpcError::InvalidTransaction(tx_hash)),
+                }
+                result.push(PoolTx {
+                    tx_hash,
+                    blob,
+                    double_spend_seen: entry.double_spend_seen,
+                });
+            }
+        }
+        Ok(result)
+    }
+
     pub async fn get_transaction_pool(
         &self,
     ) -> Result<(Vec<Transaction>, Vec<[u8; 32]>), RpcError> {
@@ -1904,6 +2050,32 @@ impl<R: RpcConnection> Rpc<R> {
         start_height: u64,
         prune: bool,
     ) -> Result<GetBlocksFastResponse, RpcError> {
+        Ok(self
+            .get_blocks(block_ids, start_height, prune, None)
+            .await?
+            .0)
+    }
+
+    /// `get_blocks_fast` that also asks for the pool, as wallet2's refresh does.
+    /// This call does not check pool transactions against their ids.
+    pub async fn get_blocks_and_pool(
+        &self,
+        block_ids: &[[u8; 32]],
+        start_height: u64,
+        prune: bool,
+        pool_info_since: u64,
+    ) -> Result<(GetBlocksFastResponse, Option<PoolInfo>), RpcError> {
+        self.get_blocks(block_ids, start_height, prune, Some(pool_info_since))
+            .await
+    }
+
+    async fn get_blocks(
+        &self,
+        block_ids: &[[u8; 32]],
+        start_height: u64,
+        prune: bool,
+        pool_info_since: Option<u64>,
+    ) -> Result<(GetBlocksFastResponse, Option<PoolInfo>), RpcError> {
         // block_ids must be serialized as a contiguous blob
         // (KV_SERIALIZE_CONTAINER_POD_AS_BLOB)
         let block_ids_blob: Vec<u8> = block_ids.iter().flat_map(|h| h.iter().copied()).collect();
@@ -1914,36 +2086,117 @@ impl<R: RpcConnection> Rpc<R> {
         struct Request {
             block_ids: Vec<u8>,
             client: String,
+            #[serde(skip_serializing_if = "is_zero")]
+            pool_info_since: u64,
             prune: bool,
+            #[serde(skip_serializing_if = "is_zero_u8")]
+            requested_info: u8,
             start_height: u64,
+        }
+        fn is_zero(value: &u64) -> bool {
+            *value == 0
+        }
+        fn is_zero_u8(value: &u8) -> bool {
+            *value == 0
         }
 
         let req = Request {
             block_ids: block_ids_blob,
             client: self.client(),
+            pool_info_since: pool_info_since.unwrap_or(0),
             prune,
+            requested_info: u8::from(pool_info_since.is_some()),
             start_height,
         };
+        let body = monero_epee_bin_serde::to_bytes(&req).map_err(|_| {
+            RpcError::InternalError("epee serialization failed for getblocks.bin request")
+        })?;
+        let limit = match (pool_info_since.is_some(), prune) {
+            (true, true) => MAX_PRUNED_POOL_REPLY_BYTES,
+            (true, false) => MAX_POOL_REPLY_BYTES,
+            (false, _) => response_limit("getblocks.bin", None),
+        };
+        let full: GetBlocksFastFullResponse =
+            self.bin_call_limited("getblocks.bin", body, limit).await?;
 
-        let res: GetBlocksFastResponse = self
-            .bin_call(
-                "getblocks.bin",
-                monero_epee_bin_serde::to_bytes(&req).map_err(|_| {
-                    RpcError::InternalError("epee serialization failed for getblocks.bin request")
-                })?,
-            )
-            .await?;
-
-        if res.status != "OK" {
+        if full.status != "OK" {
             return Err(RpcError::InvalidNode);
         }
         // A pruned reply to an unpruned request would skip the check that each
         // transaction is the one its block lists.
-        if !prune && res.blocks.iter().any(|block| block.pruned) {
+        if !prune && full.blocks.iter().any(|block| block.pruned) {
             return Err(RpcError::InvalidNode);
         }
 
-        Ok(res)
+        let pool = match (pool_info_since.is_some(), full.pool_info_extent) {
+            (false, 0) => None,
+            (false, _) => return Err(RpcError::InvalidNode),
+            (true, 0) => None,
+            (true, extent @ (1 | 2)) => {
+                let incremental = extent == 1;
+                let hashes = |blob: &[u8]| -> Result<Vec<[u8; 32]>, RpcError> {
+                    if blob.len() % 32 != 0 {
+                        return Err(RpcError::InvalidNode);
+                    }
+                    Ok(blob
+                        .chunks(32)
+                        .map(|hash| <[u8; 32]>::try_from(hash).unwrap())
+                        .collect())
+                };
+                let added = full
+                    .added_pool_txs
+                    .into_iter()
+                    .map(|tx| {
+                        Ok(PoolTx {
+                            tx_hash: <[u8; 32]>::try_from(tx.tx_hash.as_slice())
+                                .map_err(|_| RpcError::InvalidNode)?,
+                            blob: tx.tx_blob,
+                            double_spend_seen: tx.double_spend_seen,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, RpcError>>()?;
+                let remaining_added = hashes(&full.remaining_added_pool_txids)?;
+                let removed = hashes(&full.removed_pool_txids)?;
+                if !incremental && !removed.is_empty() {
+                    return Err(RpcError::InvalidNode);
+                }
+                if incremental && pool_info_since == Some(0) {
+                    return Err(RpcError::InvalidNode);
+                }
+                let mut seen = std::collections::HashSet::new();
+                if !added
+                    .iter()
+                    .map(|tx| tx.tx_hash)
+                    .chain(remaining_added.iter().copied())
+                    .all(|hash| seen.insert(hash))
+                {
+                    return Err(RpcError::InvalidNode);
+                }
+                Some(PoolInfo {
+                    incremental,
+                    added,
+                    remaining_added,
+                    removed,
+                    daemon_time: full.daemon_time,
+                })
+            }
+            (true, _) => return Err(RpcError::InvalidNode),
+        };
+
+        Ok((
+            GetBlocksFastResponse {
+                status: full.status,
+                blocks: full.blocks,
+                start_height: full.start_height,
+                current_height: full.current_height,
+                output_indices: full.output_indices,
+                untrusted: full.untrusted,
+                credits: full.credits,
+                top_hash: full.top_hash,
+                daemon_time: full.daemon_time,
+            },
+            pool,
+        ))
     }
 }
 
@@ -2215,6 +2468,70 @@ pub struct GetBlocksFastResponse {
     pub daemon_time: u64,
 }
 
+/// One pool transaction a getblocks.bin reply carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PoolTx {
+    /// The id the node gave; a pruned blob cannot be checked against it.
+    pub tx_hash: [u8; 32],
+    /// The transaction, pruned when pruned data was asked for.
+    pub blob: Vec<u8>,
+    pub double_spend_seen: bool,
+}
+
+/// The pool part of a getblocks.bin reply.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PoolInfo {
+    /// Whether `added` and `removed` are changes since `pool_info_since`, or
+    /// `added` is the whole pool.
+    pub incremental: bool,
+    /// Transactions new in the pool, or the whole pool.
+    pub added: Vec<PoolTx>,
+    /// Further new transactions a restricted node lists by id only.
+    pub remaining_added: Vec<[u8; 32]>,
+    /// Transactions that left the pool, in an incremental answer.
+    pub removed: Vec<[u8; 32]>,
+    /// The node's clock when it answered; the `pool_info_since` of the next
+    /// request.
+    pub daemon_time: u64,
+}
+
+#[derive(Deserialize, Debug)]
+struct PoolTxEntry {
+    #[serde(with = "epee_byte_blob")]
+    tx_hash: Vec<u8>,
+    #[serde(with = "epee_byte_blob")]
+    tx_blob: Vec<u8>,
+    #[serde(default)]
+    double_spend_seen: bool,
+}
+
+#[derive(Deserialize, Debug)]
+struct GetBlocksFastFullResponse {
+    status: String,
+    #[serde(default)]
+    blocks: Vec<BlockCompleteEntry>,
+    start_height: u64,
+    current_height: u64,
+    #[serde(default)]
+    output_indices: Vec<BlockOutputIndices>,
+    #[serde(default)]
+    untrusted: bool,
+    #[serde(default)]
+    credits: u64,
+    #[serde(default)]
+    top_hash: String,
+    #[serde(default)]
+    daemon_time: u64,
+    #[serde(default)]
+    pool_info_extent: u8,
+    #[serde(default)]
+    added_pool_txs: Vec<PoolTxEntry>,
+    #[serde(default, with = "epee_byte_blob")]
+    remaining_added_pool_txids: Vec<u8>,
+    #[serde(default, with = "epee_byte_blob")]
+    removed_pool_txids: Vec<u8>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2437,6 +2754,97 @@ mod tests {
                 ("get_height", "{\r\n}".to_string()),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn pool_ids_are_read_from_monerods_blob_string() {
+        #[derive(Clone, Debug)]
+        struct Node(Vec<u8>);
+        #[async_trait]
+        impl RpcConnection for Node {
+            async fn post(&self, route: &str, _: Vec<u8>) -> Result<Vec<u8>, RpcError> {
+                assert_eq!(route, "get_transaction_pool_hashes.bin");
+                Ok(self.0.clone())
+            }
+        }
+        let captured = hex::decode(concat!(
+            "7b0d0a20202263726564697473223a20302c0d0a202022737461747573223a2022",
+            "4f4b222c0d0a202022746f705f68617368223a2022222c0d0a20202274785f6861",
+            "73686573223a2022355c762d0100e9d458fa577ac88d9bb64bbcf8baca45cff559",
+            "7189e618d70f9af1222c0d0a202022756e74727573746564223a2066616c73650d",
+            "0a7d",
+        ))
+        .unwrap();
+        let ids = Rpc::new_with_connection(Node(captured.clone()))
+            .get_pool_hashes()
+            .await
+            .unwrap();
+        assert_eq!(
+            ids,
+            vec![
+                hash_hex("350b2d0100e9d458fa577ac88d9bb64bbcf8baca45cff5597189e618d70f9af1")
+                    .unwrap()
+            ]
+        );
+        let empty = b"{\r\n  \"credits\": 0,\r\n  \"status\": \"OK\"\r\n}".to_vec();
+        assert_eq!(
+            Rpc::new_with_connection(Node(empty))
+                .get_pool_hashes()
+                .await,
+            Ok(vec![])
+        );
+        let unterminated = captured[..captured.len() - 40].to_vec();
+        assert!(Rpc::new_with_connection(Node(unterminated))
+            .get_pool_hashes()
+            .await
+            .is_err());
+        let partial = b"{\r\n  \"status\": \"OK\",\r\n  \"tx_hashes\": \"abc\"\r\n}".to_vec();
+        assert!(Rpc::new_with_connection(Node(partial))
+            .get_pool_hashes()
+            .await
+            .is_err());
+        let failed = b"{\r\n  \"status\": \"Failed\"\r\n}".to_vec();
+        assert!(Rpc::new_with_connection(Node(failed))
+            .get_pool_hashes()
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn a_pruned_pool_request_is_held_to_the_pruned_pool_limit() {
+        #[derive(Clone, Debug, Default)]
+        struct Limits(std::sync::Arc<std::sync::Mutex<Vec<usize>>>);
+        #[async_trait]
+        impl RpcConnection for Limits {
+            async fn post(&self, _: &str, _: Vec<u8>) -> Result<Vec<u8>, RpcError> {
+                unreachable!("Rpc calls post_limited")
+            }
+            async fn post_limited(
+                &self,
+                _: &str,
+                _: Vec<u8>,
+                limit: usize,
+            ) -> Result<Vec<u8>, RpcError> {
+                self.0.lock().unwrap().push(limit);
+                Err(RpcError::ConnectionError)
+            }
+        }
+        let limits = Limits::default();
+        let rpc = Rpc::new_with_connection(limits.clone());
+        let ids = [[0u8; 32]];
+        assert!(rpc.get_blocks_and_pool(&ids, 0, true, 0).await.is_err());
+        assert!(rpc.get_blocks_and_pool(&ids, 0, false, 0).await.is_err());
+        assert!(rpc.get_blocks_fast(&ids, 0, true).await.is_err());
+        assert_eq!(
+            *limits.0.lock().unwrap(),
+            vec![
+                MAX_PRUNED_POOL_REPLY_BYTES,
+                MAX_POOL_REPLY_BYTES,
+                MAX_RESPONSE_BYTES
+            ]
+        );
+        assert!(MAX_RESPONSE_BYTES < MAX_PRUNED_POOL_REPLY_BYTES);
+        assert!(MAX_PRUNED_POOL_REPLY_BYTES < MAX_POOL_REPLY_BYTES);
     }
 
     #[test]
