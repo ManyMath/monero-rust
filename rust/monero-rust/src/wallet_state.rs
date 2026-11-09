@@ -997,6 +997,19 @@ impl WalletState {
         self.spent_by_tx.clear();
     }
 
+    /// Drop pool outputs whose transaction `in_pool` does not report, as wallet2
+    /// does; call after the refresh's blocks. Returns how many.
+    pub fn retain_pool_outputs(&mut self, in_pool: impl Fn(&str) -> bool) -> usize {
+        let before = self.outputs.len();
+        self.outputs
+            .retain(|output| output.block_height != 0 || in_pool(&output.tx_hash));
+        let dropped = before - self.outputs.len();
+        if dropped > 0 {
+            self.rebuild_key_image_index();
+        }
+        dropped
+    }
+
     /// Mark outputs as spent by matching key images.
     /// Returns the number of outputs newly marked as spent.
     pub fn mark_spent_by_key_images(&mut self, key_images: &[String]) -> usize {
@@ -3030,6 +3043,29 @@ mod tests {
         assert_eq!(state.outputs().len(), 1);
         assert_eq!(state.outputs()[0].block_height, 100); // original kept
         assert_eq!(state.outputs()[0].amount, 1_000_000_000_000); // original amount
+    }
+
+    #[test]
+    fn pool_outputs_whose_transaction_left_the_pool_are_dropped() {
+        let mut state = WalletState::new();
+        let mut gone = make_output(1_000_000, 0, "ki_gone");
+        gone.tx_hash = "gone".into();
+        let mut still = make_output(2_000_000, 0, "ki_still");
+        still.tx_hash = "still".into();
+        still.key = "k_still".into();
+        let mut mined = make_output(3_000_000, 50, "ki_mined");
+        mined.tx_hash = "mined".into();
+        mined.key = "k_mined".into();
+        state.add_outputs(vec![gone, still, mined]);
+        state.current_height = 100;
+        assert_eq!(state.balance().unconfirmed, 3_000_000);
+
+        assert_eq!(state.retain_pool_outputs(|tx| tx == "still"), 1);
+        let left: Vec<&str> = state.outputs().iter().map(|o| o.tx_hash.as_str()).collect();
+        assert_eq!(left, ["still", "mined"]);
+        assert_eq!(state.balance().unconfirmed, 2_000_000);
+        assert_eq!(state.mark_spent_by_key_images(&["ki_gone".into()]), 0);
+        assert_eq!(state.mark_spent_by_key_images(&["ki_mined".into()]), 1);
     }
 
     // ---- BlockHashChain tests ----

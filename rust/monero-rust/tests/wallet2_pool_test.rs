@@ -589,16 +589,26 @@ async fn a_whole_pool_answer_drops_what_left_the_pool() {
         honest_gettransactions,
     );
     let mut view = MempoolView::new();
-    assert_eq!(
-        refresh_pool(&node, &state, &mut view)
-            .await
-            .unwrap()
-            .tx_count,
-        1
-    );
+    let first = refresh_pool(&node, &state, &mut view).await.unwrap();
+    assert_eq!(first.tx_count, 1);
+    let mut wallet = synced_state().await;
+    wallet.add_outputs(first.outputs.clone());
+    assert!(wallet
+        .outputs()
+        .iter()
+        .any(|o| o.tx_hash == hex::encode(id)));
+
     let second = refresh_pool(&node, &state, &mut view).await.unwrap();
     assert_eq!(second.tx_count, 0);
     assert!(!view.contains(&hex::encode(id)));
+    assert_eq!(
+        wallet.retain_pool_outputs(|tx| view.contains(tx)),
+        first.outputs.len()
+    );
+    assert!(wallet
+        .outputs()
+        .iter()
+        .all(|o| o.tx_hash != hex::encode(id)));
 }
 
 fn keys(result: &monero_rust::scanner::MempoolScanResult) -> Vec<(String, u64, u64)> {
