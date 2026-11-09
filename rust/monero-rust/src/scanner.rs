@@ -3020,6 +3020,8 @@ pub async fn scan_mempool_for_outputs_with_lookahead(
     scan_mempool(&rpc, mnemonic, _network, lookahead, None, passphrase).await
 }
 
+/// Scan the node's whole pool for the wallet, asked for as wallet2 asks outside
+/// a refresh (`update_pool_state_by_pool_query`).
 pub async fn scan_mempool<R: RpcConnection>(
     rpc: &Rpc<R>,
     mnemonic: &str,
@@ -3050,59 +3052,42 @@ pub async fn scan_mempool<R: RpcConnection>(
     let mut scanner = oxide_scanner_from_keys(&spend_point, &view_scalar)?;
     register_subaddresses(&mut scanner, lookahead);
 
-    let (mempool_txs, mempool_spent_key_images) = rpc
-        .get_transaction_pool()
-        .await
-        .map_err(|e| format!("Failed to fetch mempool: {:?}", e))?;
-
-    let tx_count = mempool_txs.len();
-    let mut outputs = Vec::new();
-    let mut spent_key_images_map: HashMap<String, String> = mempool_spent_key_images
-        .iter()
-        .map(|ki| (hex::encode(ki), String::new()))
-        .collect();
-
     #[cfg(target_arch = "wasm32")]
     let key_image_scalar: Option<&Scalar> = spend_scalar.as_deref();
     #[cfg(not(target_arch = "wasm32"))]
     let key_image_scalar: Option<&Scalar> = None;
 
-    for tx in mempool_txs.iter() {
-        let (tx_hash, parsed) = parse_full_tx_blob(&tx.serialize())
-            .ok_or_else(|| format!("Failed to parse transaction {}", hex::encode(tx.hash())))?;
-        let tx_hash_hex = hex::encode(tx_hash);
+    let update = fetch_pool_by_query(rpc, &HashSet::new()).await?;
+    let mut view = MempoolView::new();
+    view.txs.extend(scan_pool_txs(
+        &mut scanner,
+        key_image_scalar,
+        &update.added,
+    )?);
+    Ok(view.result(accounts_to_scan))
+}
 
-        for input in &parsed.prefix().inputs {
-            if let OxideInput::ToKey { key_image, .. } = input {
-                let ki_hex = hex::encode(key_image.to_bytes());
-                spent_key_images_map.insert(ki_hex, tx_hash_hex.clone());
-            }
-        }
-
-        let scanned = scan_single_transaction(&mut scanner, tx_hash, &parsed)?;
-        for output in &scanned {
-            outputs.push(map_oxide_output(
-                output,
-                0,         // unconfirmed: still in the mempool
-                [0u8; 32], // mempool transactions are never coinbase
-                key_image_scalar,
-                None,
-                parsed.version() == 1,
-            )?);
-        }
-    }
-
-    let (spent_key_images, spent_key_image_tx_hashes): (Vec<String>, Vec<String>) =
-        spent_key_images_map.into_iter().unzip();
-
-    let mut result = MempoolScanResult {
-        tx_count,
-        outputs,
-        spent_key_images,
-        spent_key_image_tx_hashes,
-    };
-    retain_mempool_outputs_for_accounts(&mut result.outputs, accounts_to_scan);
-    Ok(result)
+/// `scan_mempool` that updates `view`, fetching and scanning only what it does
+/// not hold (everything in its first update of a session).
+pub async fn scan_mempool_with_view<R: RpcConnection>(
+    rpc: &Rpc<R>,
+    view: &mut MempoolView,
+    mnemonic: &str,
+    network: Network,
+    lookahead: Lookahead,
+    accounts_to_scan: Option<&[u32]>,
+    passphrase: &str,
+) -> Result<MempoolScanResult, String> {
+    let update = fetch_pool_by_query(rpc, &view.known_ids()).await?;
+    scan_pool_update(
+        update,
+        view,
+        mnemonic,
+        network,
+        lookahead,
+        accounts_to_scan,
+        passphrase,
+    )
 }
 
 #[cfg(test)]

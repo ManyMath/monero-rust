@@ -600,3 +600,96 @@ async fn a_whole_pool_answer_drops_what_left_the_pool() {
     assert_eq!(second.tx_count, 0);
     assert!(!view.contains(&hex::encode(id)));
 }
+
+fn keys(result: &monero_rust::scanner::MempoolScanResult) -> Vec<(String, u64, u64)> {
+    result
+        .outputs
+        .iter()
+        .map(|o| (o.tx_hash.clone(), o.output_index, o.amount))
+        .collect()
+}
+
+#[tokio::test]
+async fn pool_scans_outside_a_refresh_ask_like_wallet2s_pool_query() {
+    let tx = pool_tx(&hostile::synced_wallet().await).await;
+    let id = hex::encode(tx.id);
+    let pool = Arc::new(Mutex::new(vec![tx.clone()]));
+    let current = pool.clone();
+    let node = Node::with(SnapshotNode::new(), "pool-query", move |call, reply| {
+        let txs = current.lock().unwrap().clone();
+        match call.route.as_str() {
+            "get_transaction_pool_hashes.bin" => Ok(hostile::pool_hashes_reply(
+                &txs.iter().map(|tx| tx.id).collect::<Vec<_>>(),
+            )),
+            "gettransactions" => {
+                let request: Value = serde_json::from_slice(&call.body).unwrap();
+                Ok(serde_json::to_vec(&honest_gettransactions(&request, &txs)).unwrap())
+            }
+            _ => reply,
+        }
+    });
+    let rpc = node.rpc();
+
+    let whole = monero_rust::scanner::scan_mempool(&rpc, SEED_W, NETWORK, LOOKAHEAD, None, "")
+        .await
+        .unwrap();
+    assert_eq!(whole.tx_count, 1);
+    assert!(whole.outputs.iter().any(|o| o.tx_hash == id));
+    assert_eq!(
+        node.names(),
+        vec!["get_transaction_pool_hashes.bin", "gettransactions"]
+    );
+
+    let mut view = MempoolView::new();
+    let scan = |view: &mut MempoolView| {
+        let rpc = rpc.clone();
+        let mut owned = std::mem::take(view);
+        async move {
+            let result = monero_rust::scanner::scan_mempool_with_view(
+                &rpc, &mut owned, SEED_W, NETWORK, LOOKAHEAD, None, "",
+            )
+            .await
+            .unwrap();
+            (owned, result)
+        }
+    };
+    let (next, first) = scan(&mut view).await;
+    view = next;
+    assert_eq!(keys(&first), keys(&whole));
+    let (next, second) = scan(&mut view).await;
+    view = next;
+    assert_eq!(keys(&second), keys(&whole));
+    assert_eq!(
+        node.count("gettransactions"),
+        2,
+        "the second scan fetched nothing"
+    );
+    pool.lock().unwrap().clear();
+    let (next, third) = scan(&mut view).await;
+    assert_eq!(third.tx_count, 0);
+    assert!(next.is_empty());
+}
+
+#[tokio::test]
+async fn whole_pool_is_read_in_bounded_slices() {
+    let tx = pool_tx(&hostile::synced_wallet().await).await;
+    let id = tx.id;
+    let node = Node::with(
+        SnapshotNode::new(),
+        "pool-slices",
+        move |call, reply| match call.route.as_str() {
+            "get_transaction_pool_hashes.bin" => Ok(hostile::pool_hashes_reply(&[id])),
+            "get_transactions" => Ok(serde_json::to_vec(&json!({
+                "status": "OK", "txs": [], "missed_tx": [hex::encode(id)],
+            }))
+            .unwrap()),
+            _ => reply,
+        },
+    );
+    let (txs, spent) = node.rpc().get_transaction_pool().await.unwrap();
+    assert!(txs.is_empty() && spent.is_empty());
+    assert_eq!(
+        node.names(),
+        vec!["get_transaction_pool_hashes.bin", "get_transactions"]
+    );
+}

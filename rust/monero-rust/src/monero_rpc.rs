@@ -1981,61 +1981,34 @@ impl<R: RpcConnection> Rpc<R> {
         Ok(result)
     }
 
+    /// Every pool transaction, unpruned, and the key images they spend.
     pub async fn get_transaction_pool(
         &self,
     ) -> Result<(Vec<Transaction>, Vec<[u8; 32]>), RpcError> {
-        #[derive(Deserialize, Debug)]
-        struct PoolTransaction {
-            id_hash: String,
-            tx_blob: String,
-        }
-
-        #[derive(Deserialize, Debug)]
-        struct SpentKeyImage {
-            id_hash: String,
-        }
-
-        #[allow(dead_code)]
-        #[derive(Deserialize, Debug)]
-        struct TransactionPoolResponse {
-            #[serde(default)]
-            transactions: Vec<PoolTransaction>,
-            #[serde(default)]
-            spent_key_images: Vec<SpentKeyImage>,
-            status: String,
-        }
-
-        let res: TransactionPoolResponse = self
-            .rpc_call::<Option<()>, _>("get_transaction_pool", None)
-            .await?;
-
-        if res.status != "OK" {
-            return Err(RpcError::InvalidNode);
-        }
-
-        let transactions = res
-            .transactions
-            .iter()
-            .map(|pool_tx| {
-                let tx_bytes = rpc_hex(&pool_tx.tx_blob)?;
-                let tx = Transaction::<NotPruned>::read::<&[u8]>(&mut tx_bytes.as_ref())
-                    .map_err(|_| RpcError::InvalidNode)?;
-
-                let expected_hash = hash_hex(&pool_tx.id_hash)?;
-                if tx.hash() != expected_hash {
-                    return Err(RpcError::InvalidNode);
+        let hashes = self.get_pool_hashes().await?;
+        let mut transactions = Vec::with_capacity(hashes.len());
+        for slice in hashes.chunks(100) {
+            match self.get_transactions(slice).await {
+                Ok(found) => transactions.extend(found),
+                Err(RpcError::TransactionsNotFound(missing)) => {
+                    let present: Vec<[u8; 32]> = slice
+                        .iter()
+                        .copied()
+                        .filter(|hash| !missing.contains(hash))
+                        .collect();
+                    transactions.extend(self.get_transactions(&present).await?);
                 }
-
-                Ok(tx)
-            })
-            .collect::<Result<Vec<_>, RpcError>>()?;
-
-        let spent_key_images = res
-            .spent_key_images
+                Err(error) => return Err(error),
+            }
+        }
+        let spent_key_images = transactions
             .iter()
-            .map(|ki| hash_hex(&ki.id_hash))
-            .collect::<Result<Vec<_>, RpcError>>()?;
-
+            .flat_map(|tx| tx.prefix().inputs.iter())
+            .filter_map(|input| match input {
+                Input::ToKey { key_image, .. } => Some(key_image.to_bytes()),
+                Input::Gen(_) => None,
+            })
+            .collect();
         Ok((transactions, spent_key_images))
     }
 

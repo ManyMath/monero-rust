@@ -191,7 +191,7 @@ async fn mempool_scan_fetches_the_whole_pool_only() {
     scan_mempool(&node.rpc(), SEED_W, NETWORK, LOOKAHEAD, None, "")
         .await
         .unwrap();
-    assert_eq!(node.names(), vec!["get_transaction_pool"]);
+    assert_eq!(node.names(), vec!["get_transaction_pool_hashes.bin"]);
 }
 
 #[tokio::test]
