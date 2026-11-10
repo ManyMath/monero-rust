@@ -849,15 +849,13 @@ fn reorg_max_depth_boundary_integration() {
     // Record a hash far back
     state.record_block_hash(100, "old_hash_100".to_string());
 
-    // Set current height to MAX_REORG_DEPTH + 1 away (exceeds limit)
-    state.current_height = 100 + MAX_REORG_DEPTH + 1;
+    state.current_height = 100 + MAX_REORG_DEPTH;
 
     let results = vec![make_block_result(100, vec![], vec![])];
     let result = process_batch_with_reorg_detection(&results, &mut state, None, 5000, 100);
     assert!(result.is_err());
 
-    // Exactly MAX_REORG_DEPTH: should succeed (> not >=)
-    state.current_height = 100 + MAX_REORG_DEPTH;
+    state.current_height = 100 + MAX_REORG_DEPTH - 1;
     state.record_block_hash(100, "old_hash_100".to_string());
     let result = process_batch_with_reorg_detection(&results, &mut state, None, 5000, 100);
     assert!(result.is_ok());

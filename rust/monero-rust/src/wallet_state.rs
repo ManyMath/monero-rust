@@ -17,8 +17,8 @@ pub const PENDING_SPEND_TTL_SECS: u64 = 7200;
 /// Number of recent block hashes kept densely (every height).
 const DENSE_HASH_WINDOW: u64 = 100;
 
-/// Maximum reorg depth we'll handle. Deeper reorgs are treated as errors.
-pub const MAX_REORG_DEPTH: u64 = 1000;
+/// Default reorg depth limit, wallet2's ORPHANED_BLOCKS_MAX_COUNT.
+pub const MAX_REORG_DEPTH: u64 = 100;
 
 /// Balance breakdown for a wallet or account.
 #[derive(Debug, Clone, Default)]
@@ -280,6 +280,7 @@ pub struct WalletState {
     /// The node's claimed height, unverified: for sync progress, never unlocks.
     pub daemon_height: u64,
     pub block_hashes: BlockHashChain,
+    max_reorg_depth: u64,
     /// Outputs used in broadcast-but-unconfirmed transactions (key_image -> PendingSpend).
     pending_spends: HashMap<String, PendingSpend>,
     /// Transactions of pending spends seen in the pool, released by `retain_pool_outputs`.
@@ -316,6 +317,7 @@ impl WalletState {
             current_height: 0,
             daemon_height: 0,
             block_hashes: BlockHashChain::new(),
+            max_reorg_depth: MAX_REORG_DEPTH,
             pending_spends: HashMap::new(),
             pool_txs: HashSet::new(),
             tracked_transactions: HashMap::new(),
@@ -365,6 +367,17 @@ impl WalletState {
     pub fn new_rpc_client_key(&mut self) -> &RpcClientKey {
         self.rpc_client_key = RpcClientKey::random();
         &self.rpc_client_key
+    }
+
+    /// `MAX_REORG_DEPTH` unless `set_max_reorg_depth` changed it.
+    pub fn max_reorg_depth(&self) -> u64 {
+        self.max_reorg_depth
+    }
+
+    /// Let a reorg detach up to `depth` blocks, as wallet2's `max-reorg-depth`.
+    /// Not persisted.
+    pub fn set_max_reorg_depth(&mut self, depth: u64) {
+        self.max_reorg_depth = depth;
     }
 
     /// Set where the ring database is stored; builders and relay store through it

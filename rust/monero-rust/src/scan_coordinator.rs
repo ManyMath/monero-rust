@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::scanner::{BlockScanResult, Lookahead, DEFAULT_LOOKAHEAD};
 use crate::wallet_output::WalletOutput;
-use crate::wallet_state::{SpentConflict, WalletState, MAX_REORG_DEPTH};
+use crate::wallet_state::{SpentConflict, WalletState};
 
 /// Sync progress information.
 #[derive(Debug, Clone)]
@@ -363,12 +363,15 @@ pub fn process_batch_with_reorg_detection(
                 ));
             }
         };
+        // wallet2 counts its chain length minus the split height (wallet2.cpp:3454).
         let current = wallet_state.current_height;
-        if current >= split_height && current - split_height > MAX_REORG_DEPTH {
+        let detached = (current + 1).saturating_sub(split_height);
+        let max_reorg_depth = wallet_state.max_reorg_depth();
+        if detached > max_reorg_depth {
             return Err(format!(
-                "Reorg depth {} exceeds maximum {}",
-                current - split_height,
-                MAX_REORG_DEPTH
+                "Reorg depth {} exceeds maximum {}; WalletState::set_max_reorg_depth allows a \
+                 deeper one",
+                detached, max_reorg_depth
             ));
         }
         let rollback = wallet_state.rollback_to_height(split_height);
@@ -446,6 +449,7 @@ pub fn check_multi_wallet_batch_extends_chain(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::wallet_state::MAX_REORG_DEPTH;
 
     #[test]
     fn multi_wallet_batch_must_build_on_the_wallets_chain() {
@@ -1051,18 +1055,46 @@ mod tests {
         let mut state = WalletState::new();
         let results = vec![make_block_result(100, vec![], vec![])];
 
-        // Depth = MAX_REORG_DEPTH + 1: should fail
-        state.current_height = 100 + MAX_REORG_DEPTH + 1;
+        state.current_height = 100 + MAX_REORG_DEPTH;
         state.record_block_hash(100, "old_hash".to_string());
         let result = process_batch_with_reorg_detection(&results, &mut state, None, 3000, 100);
         assert!(result.is_err());
 
-        // Depth = MAX_REORG_DEPTH exactly: should succeed (> not >=)
-        state.current_height = 100 + MAX_REORG_DEPTH;
+        state.current_height = 100 + MAX_REORG_DEPTH - 1;
         state.record_block_hash(100, "old_hash".to_string());
         let result = process_batch_with_reorg_detection(&results, &mut state, None, 3000, 100);
         assert!(result.is_ok());
         assert!(matches!(result.unwrap(), ScanBatchOutcome::Reorg(_)));
+    }
+
+    #[test]
+    fn a_deeper_reorg_is_followed_once_the_wallet_allows_it() {
+        let results = vec![make_block_result(100, vec![], vec![])];
+        let mut state = WalletState::new();
+        state.current_height = 209;
+        state.record_block_hash(100, "old_hash".to_string());
+        let refused =
+            process_batch_with_reorg_detection(&results, &mut state, None, 3000, 100).unwrap_err();
+        assert!(
+            refused.contains("Reorg depth 110 exceeds maximum 100"),
+            "{refused}"
+        );
+        assert!(refused.contains("set_max_reorg_depth"), "{refused}");
+        assert_eq!(state.current_height, 209);
+
+        state.set_max_reorg_depth(200);
+        assert_eq!(state.max_reorg_depth(), 200);
+        let outcome =
+            process_batch_with_reorg_detection(&results, &mut state, None, 3000, 100).unwrap();
+        let ScanBatchOutcome::Reorg(info) = outcome else {
+            panic!("the reorg is followed");
+        };
+        assert_eq!((info.split_height, info.blocks_detached), (100, 110));
+
+        state.current_height = 209;
+        state.record_block_hash(100, "old_hash".to_string());
+        state.set_max_reorg_depth(109);
+        assert!(process_batch_with_reorg_detection(&results, &mut state, None, 3000, 100).is_err());
     }
 
     #[test]

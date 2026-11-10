@@ -377,13 +377,25 @@ async fn shallow_reorg_converges_on_the_new_chain() {
 }
 
 #[tokio::test]
-async fn deep_reorg_with_full_hash_history_converges() {
+async fn deep_reorg_with_full_hash_history_is_refused_beyond_wallet2s_limit() {
     let honest = SnapshotNode::new();
     let node = Node::honest(honest.clone());
     let mut wallet = hostile::synced_wallet().await;
+    let before = fingerprint(&wallet);
     honest.switch_chain(Chain::Deep);
+    let refreshed = wallet.refresh(&node.rpc(), 10).await;
+    assert!(
+        refreshed
+            .as_ref()
+            .is_err_and(|e| e.contains("exceeds maximum 100")),
+        "{refreshed:?}"
+    );
+    assert!(wallet.reorgs.is_empty());
+    assert_eq!(fingerprint(&wallet), before);
+
+    wallet.state.set_max_reorg_depth(200);
     wallet.refresh(&node.rpc(), 10).await.unwrap();
-    assert_eq!(wallet.reorgs[0].split_height, 700);
+    assert_eq!(wallet.reorgs.len(), 1);
     assert_eq!(
         fingerprint(&wallet),
         fingerprint(&fresh_sync(Chain::Deep).await)
