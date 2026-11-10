@@ -1138,19 +1138,19 @@ impl WalletState {
                 continue;
             }
             if output.pre_ringct {
-                bal.pre_ringct += output.amount;
+                bal.pre_ringct = bal.pre_ringct.saturating_add(output.amount);
                 continue;
             }
             if self.pending_spends.contains_key(&output.key_image) {
-                bal.pending_spend += output.amount;
+                bal.pending_spend = bal.pending_spend.saturating_add(output.amount);
                 continue;
             }
             // Use the coin-selection predicate for confirmed balance too. Outputs
             // with an unsatisfied additional timelock count as unconfirmed.
             if is_spendable_at(output, height, now_secs) {
-                bal.confirmed += output.amount;
+                bal.confirmed = bal.confirmed.saturating_add(output.amount);
             } else {
-                bal.unconfirmed += output.amount;
+                bal.unconfirmed = bal.unconfirmed.saturating_add(output.amount);
             }
         }
         bal
@@ -3165,6 +3165,21 @@ mod tests {
 
         assert_eq!(state.retain_pool_outputs(|_| false), 0);
         assert_eq!(state.pending_key_images(), ["ki_b".to_string()].into());
+    }
+
+    #[test]
+    fn balance_sums_that_do_not_fit_stop_at_the_maximum() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![
+            make_output(u64::MAX / 2 + 1, 10, "ki_a"),
+            make_output(u64::MAX / 2 + 1, 11, "ki_b"),
+            make_output(u64::MAX, 95, "ki_c"),
+            make_output(u64::MAX, 96, "ki_d"),
+        ]);
+        state.current_height = 100;
+        let balance = state.balance();
+        assert_eq!(balance.confirmed, u64::MAX);
+        assert_eq!(balance.unconfirmed, u64::MAX);
     }
 
     // ---- BlockHashChain tests ----
