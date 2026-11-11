@@ -1586,6 +1586,18 @@ impl WalletState {
             .find(|tx| tx.spent_key_images.iter().any(|ki| ki == key_image))
     }
 
+    /// Outputs set aside for a duplicate one-time key. Persist them and restore
+    /// them with `restore_superseded_outputs`, or a rollback cannot credit them.
+    pub fn superseded_outputs(&self) -> &[WalletOutput] {
+        &self.superseded
+    }
+
+    pub fn restore_superseded_outputs(&mut self, outputs: Vec<WalletOutput>) {
+        for output in outputs {
+            self.set_aside(output);
+        }
+    }
+
     /// Restore pending spends from persistence, filtering out expired entries.
     pub fn restore_pending_spends(&mut self, spends: HashMap<String, PendingSpend>, now_secs: u64) {
         self.loaded_without_rings |= !self.rings_restored;
@@ -3193,6 +3205,35 @@ mod tests {
         let balance = state.balance();
         assert_eq!(balance.confirmed, u64::MAX);
         assert_eq!(balance.unconfirmed, u64::MAX);
+    }
+
+    #[test]
+    fn set_aside_duplicates_survive_a_restart_and_a_rollback() {
+        let key = "ab".repeat(32);
+        let mut small = make_output(1_000_000, 100, "ki_shared");
+        small.key = key.clone();
+        small.tx_hash = "tx_small".into();
+        let mut large = make_output(5_000_000, 120, "ki_shared");
+        large.key = key.clone();
+        large.tx_hash = "tx_large".into();
+        let mut state = WalletState::new();
+        state.add_outputs(vec![small, large]);
+        state.current_height = 130;
+        assert_eq!(state.outputs().len(), 1);
+        assert_eq!(state.superseded_outputs().len(), 1);
+
+        let mut reloaded = WalletState::new();
+        reloaded.replace_outputs(state.outputs().to_vec());
+        reloaded.restore_superseded_outputs(state.superseded_outputs().to_vec());
+        reloaded.current_height = 130;
+
+        reloaded.rollback_to_height(110);
+        let left: Vec<(&str, u64)> = reloaded
+            .outputs()
+            .iter()
+            .map(|o| (o.tx_hash.as_str(), o.amount))
+            .collect();
+        assert_eq!(left, [("tx_small", 1_000_000)]);
     }
 
     // ---- BlockHashChain tests ----
