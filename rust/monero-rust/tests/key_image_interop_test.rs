@@ -80,6 +80,7 @@ fn test_outputs(entries: &[KeyImageExportEntry]) -> Vec<monero_rust::WalletOutpu
             is_coinbase: false,
             frozen: false,
             pre_ringct: false,
+            export_height: None,
         })
         .collect()
 }

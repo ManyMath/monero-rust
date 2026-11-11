@@ -76,6 +76,7 @@ fn synthetic_output_for_spend_key(
             is_coinbase: false,
             frozen: false,
             pre_ringct: false,
+            export_height: None,
         },
         key_image_hex,
     )
@@ -1127,6 +1128,7 @@ fn cold_signing_key_image_rpc_vector_flows_through_app_import_state() {
                 is_coinbase: true,
                 frozen: false,
                 pre_ringct: false,
+                export_height: None,
             })
             .collect(),
     );

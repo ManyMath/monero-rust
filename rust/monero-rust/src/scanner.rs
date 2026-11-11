@@ -1214,6 +1214,7 @@ fn map_oxide_output(
         is_coinbase: output.transaction() == miner_tx_hash,
         frozen: false,
         pre_ringct,
+        export_height: None,
     })
 }
 
@@ -3740,6 +3741,7 @@ mod tests {
             is_coinbase: false,
             frozen: false,
             pre_ringct: false,
+            export_height: None,
         };
 
         let json = serde_json::to_string(&output).unwrap();
@@ -3785,6 +3787,7 @@ mod tests {
                 is_coinbase: false,
                 frozen: false,
                 pre_ringct: false,
+                export_height: None,
             }
         }
 
@@ -3828,6 +3831,7 @@ mod tests {
             is_coinbase: false,
             frozen: false,
             pre_ringct: false,
+            export_height: None,
         }];
 
         retain_mempool_outputs_for_accounts(&mut outputs, None);

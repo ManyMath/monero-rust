@@ -438,6 +438,7 @@ pub fn owned_output(n: u8, global_index: u64, block_height: u64, amount: u64) ->
             is_coinbase: false,
             frozen: false,
             pre_ringct: false,
+            export_height: None,
         },
         key,
         commitment,

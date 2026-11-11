@@ -59,6 +59,7 @@ fn state_output(tx: &str, key: &EdwardsPoint, height: u64) -> WalletOutput {
         is_coinbase: false,
         frozen: false,
         pre_ringct: false,
+        export_height: None,
     }
 }
 
@@ -209,41 +210,59 @@ fn duplicate_one_time_keys_do_not_break_wallet2_ordered_imports() {
 }
 
 #[test]
-#[ignore = "known defect: an output that replaces a smaller one with the same one-time key leaves wallet2's export position"]
-fn larger_output_to_a_held_key_takes_the_earlier_export_position() {
+fn larger_output_to_a_held_key_takes_the_earlier_export_position_after_a_restart() {
     let (key_a, image_a) = signed("a");
     let (key_c, image_c) = signed("c");
     let mut larger = state_output("b", &key_a, 13);
     larger.amount *= 2;
+    let mut scanned = WalletState::new();
+    scanned.add_outputs(vec![state_output("a", &key_a, 10)]);
+    scanned.add_outputs(vec![state_output("c", &key_c, 12)]);
+    scanned.add_outputs(vec![larger]);
+
+    let stored = serde_json::to_string(&(scanned.outputs(), scanned.superseded_outputs())).unwrap();
+    let (outputs, superseded): (Vec<WalletOutput>, Vec<WalletOutput>) =
+        serde_json::from_str(&stored).unwrap();
     let mut state = WalletState::new();
-    state.replace_outputs(vec![
-        state_output("a", &key_a, 10),
-        state_output("c", &key_c, 12),
-        larger,
-    ]);
+    state.replace_outputs(outputs);
+    state.restore_superseded_outputs(superseded);
 
     let wallet2_order = SignedKeyImageImport {
         offset: 0,
         key_images: vec![image_a.clone(), image_c.clone()],
     };
-    state
-        .assign_verified_key_images_in_export_order(&wallet2_order)
-        .expect("wallet2's export of this wallet imports");
-    let image_of = |key: &EdwardsPoint| {
+    for state in [&mut scanned, &mut state] {
         state
+            .assign_verified_key_images_in_export_order(&wallet2_order)
+            .expect("wallet2's export of this wallet imports");
+        let image_of = |key: &EdwardsPoint| {
+            state
+                .outputs()
+                .iter()
+                .find(|o| o.key == hex::encode(key.compress().to_bytes()))
+                .map(|o| (o.amount, o.key_image.clone()))
+        };
+        assert_eq!(
+            image_of(&key_a),
+            Some((2_000_000_000_000, hex::encode(image_a.key_image)))
+        );
+        assert_eq!(
+            image_of(&key_c),
+            Some((1_000_000_000_000, hex::encode(image_c.key_image)))
+        );
+        let order: Vec<(u64, String)> = state
             .outputs()
             .iter()
-            .find(|o| o.key == hex::encode(key.compress().to_bytes()))
-            .map(|o| (o.amount, o.key_image.clone()))
-    };
-    assert_eq!(
-        image_of(&key_a),
-        Some((2_000_000_000_000, hex::encode(image_a.key_image)))
-    );
-    assert_eq!(
-        image_of(&key_c),
-        Some((1_000_000_000_000, hex::encode(image_c.key_image)))
-    );
+            .map(|o| (o.block_height, o.key.clone()))
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                (13, hex::encode(key_a.compress().to_bytes())),
+                (12, hex::encode(key_c.compress().to_bytes())),
+            ]
+        );
+    }
 }
 
 #[test]

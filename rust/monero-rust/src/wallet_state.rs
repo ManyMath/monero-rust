@@ -271,7 +271,6 @@ pub struct WalletState {
     /// Stable identity remains available before and after key-image import.
     output_index: HashMap<String, usize>,
     pub_key_index: HashMap<String, usize>,
-    slot_heights: HashMap<String, u64>,
     /// Outputs set aside for a credited one with the same one-time key.
     superseded: Vec<WalletOutput>,
     /// Top scanned height; the chain length is one more. Advance it for blocks
@@ -313,7 +312,6 @@ impl WalletState {
             output_index: HashMap::new(),
             pub_key_index: HashMap::new(),
             superseded: Vec::new(),
-            slot_heights: HashMap::new(),
             current_height: 0,
             daemon_height: 0,
             block_hashes: BlockHashChain::new(),
@@ -942,7 +940,6 @@ impl WalletState {
                                 self.key_image_index.insert(output.key_image.clone(), idx);
                             }
                             self.pub_key_index.insert(output.key.clone(), idx);
-                            self.slot_heights.remove(&output.key);
                             self.outputs.push(output);
                             continue;
                         }
@@ -951,12 +948,9 @@ impl WalletState {
                             self.key_image_index
                                 .insert(output.key_image.clone(), held_idx);
                         }
-                        let slot_height = self.export_height(held_idx);
-                        let key = output.key.clone();
-                        let displaced = std::mem::replace(&mut self.outputs[held_idx], output);
-                        if displaced.block_height != 0 {
-                            self.slot_heights.insert(key, slot_height);
-                        }
+                        output.export_height = Some(export_height(held));
+                        let mut displaced = std::mem::replace(&mut self.outputs[held_idx], output);
+                        displaced.export_height = None;
                         self.set_aside(displaced);
                     } else {
                         self.set_aside(output);
@@ -1806,14 +1800,8 @@ impl WalletState {
     /// Confirmed outputs in wallet2's transfer order, then pool outputs; returns
     /// how many are confirmed.
     fn sort_into_export_order(&mut self) -> usize {
-        let slot_heights = &self.slot_heights;
-        self.outputs.sort_by_key(|o| {
-            let height = one_time_key(o)
-                .and_then(|key| slot_heights.get(key))
-                .copied()
-                .unwrap_or(o.block_height);
-            (o.block_height == 0, height)
-        });
+        self.outputs
+            .sort_by_key(|o| (o.block_height == 0, export_height(o)));
         self.rebuild_key_image_index();
         self.outputs.partition_point(|o| o.block_height != 0)
     }
@@ -1832,17 +1820,11 @@ impl WalletState {
                 self.key_image_index.insert(output.key_image.clone(), i);
             }
         }
-        let held = &self.pub_key_index;
-        self.slot_heights.retain(|key, _| held.contains_key(key));
     }
+}
 
-    fn export_height(&self, index: usize) -> u64 {
-        let output = &self.outputs[index];
-        one_time_key(output)
-            .and_then(|key| self.slot_heights.get(key))
-            .copied()
-            .unwrap_or(output.block_height)
-    }
+fn export_height(output: &WalletOutput) -> u64 {
+    output.export_height.unwrap_or(output.block_height)
 }
 
 fn one_time_key(output: &WalletOutput) -> Option<&str> {
@@ -1933,6 +1915,7 @@ mod tests {
             is_coinbase: false,
             frozen: false,
             pre_ringct: false,
+            export_height: None,
         }
     }
 

@@ -550,6 +550,7 @@ mod tests {
             is_coinbase: false,
             frozen: false,
             pre_ringct: false,
+            export_height: None,
         }
     }
 

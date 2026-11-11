@@ -27,6 +27,7 @@ fn make_output(amount: u64, height: u64, tx_hash: &str, account: u32) -> WalletO
         is_coinbase: false,
         frozen: false,
         pre_ringct: false,
+        export_height: None,
     }
 }
 

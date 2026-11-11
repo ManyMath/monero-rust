@@ -22,6 +22,7 @@ fn scanned_output(global_index: Option<u64>) -> WalletOutput {
         is_coinbase: false,
         frozen: false,
         pre_ringct: false,
+        export_height: None,
     }
 }
 

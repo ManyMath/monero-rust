@@ -41,6 +41,11 @@ pub struct WalletOutput {
     /// cannot spend it; it counts in `Balance::pre_ringct` and is never selected.
     #[serde(default)]
     pub pre_ringct: bool,
+    /// For a record that replaced a smaller output with the same one-time key: the
+    /// height of the first output credited for the key, which keeps its position in
+    /// key image exports as wallet2 overwrites in place (wallet2.cpp:2653).
+    #[serde(default)]
+    pub export_height: Option<u64>,
 }
 
 impl From<&WalletOutput> for StoredOutputData {
@@ -138,6 +143,7 @@ mod tests {
             is_coinbase: false,
             frozen: false,
             pre_ringct: false,
+            export_height: None,
         }
     }
 

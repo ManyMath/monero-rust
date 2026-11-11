@@ -3581,6 +3581,7 @@ pub mod native {
                 is_coinbase: false,
                 frozen: false,
                 pre_ringct: false,
+                export_height: None,
             };
             let address = crate::scanner::derive_address(SEED, Network::Mainnet, "")
                 .unwrap()

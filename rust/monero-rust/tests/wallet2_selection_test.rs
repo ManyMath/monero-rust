@@ -76,6 +76,7 @@ fn output(amount: u64, tx: &str, index: u8, height: u64, subaddress: (u32, u32))
         is_coinbase: false,
         frozen: false,
         pre_ringct: false,
+        export_height: None,
     }
 }
 
