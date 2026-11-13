@@ -1773,6 +1773,8 @@ pub mod native {
         Ok(received_outputs)
     }
 
+    /// Privacy: this asks the node for one block, telling it which block this
+    /// wallet cares about.
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn get_received_outputs_from_scan(
         node_url: &str,
@@ -1786,6 +1788,8 @@ pub mod native {
         received_outputs_from_scan_inner(&rpc, block_height, seed_phrase, passphrase).await
     }
 
+    /// Privacy: this asks the node for one block, telling it which block this
+    /// wallet cares about.
     pub async fn get_received_outputs_from_scan_with_rpc<R: RpcConnection>(
         rpc: &Rpc<R>,
         block_height: u64,

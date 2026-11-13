@@ -749,6 +749,9 @@ const KEY_IMAGES_PER_REQUEST: usize = 1000;
 
 /// The spent status of each key image, in order: 0 unspent, 1 spent in a
 /// block, 2 spent in the pool.
+///
+/// Privacy: the node learns the wallet's key images, which wallet2 sends only in
+/// `import_key_images` and `rescan_spent`.
 pub async fn key_image_spent_status<R: RpcConnection>(
     rpc: &Rpc<R>,
     key_images: &[String],
@@ -776,7 +779,8 @@ pub async fn key_image_spent_status<R: RpcConnection>(
     Ok(statuses)
 }
 
-/// `key_image_spent_status` through a new connection to `node_url`.
+/// `key_image_spent_status` through a new connection to `node_url`. The
+/// same privacy warning applies.
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn is_key_image_spent(node_url: &str, key_images: &[String]) -> Result<Vec<u32>, String> {
     crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;
