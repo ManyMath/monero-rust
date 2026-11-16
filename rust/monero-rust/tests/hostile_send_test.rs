@@ -478,35 +478,35 @@ async fn parity_noncanonical_commitment_encoding_is_canonicalised_not_refused() 
 }
 
 #[tokio::test]
-async fn height_that_goes_backwards_between_calls_is_refused() {
+async fn send_asks_no_height_and_takes_it_from_the_distribution() {
     let wallet = hostile::synced_wallet().await;
-    let node = Node::with(SnapshotNode::new(), "height-backwards", |call, reply| {
-        if call.is("get_height") && call.nth == 1 {
-            return edit_json(reply, |v| v["height"] = 600.into());
-        }
-        reply
-    });
-    let err = send(&node, &change_output(&wallet)).await.unwrap_err();
-    assert!(err.contains("blocks this node doesn't have"), "{err}");
-    assert_eq!(node.count("get_outs.bin"), 0);
+    let node = Node::honest(SnapshotNode::new());
+    let _sent = send(&node, &change_output(&wallet))
+        .await
+        .expect("honest send");
+    assert_eq!(node.count("get_height"), 0);
 }
 
 #[tokio::test]
-async fn unparseable_or_absurd_heights_are_refused() {
+async fn distribution_with_an_impossible_start_height_is_refused() {
     let wallet = hostile::synced_wallet().await;
-    for height in [
-        serde_json::json!(-1),
-        serde_json::json!("850"),
-        serde_json::json!(5),
-    ] {
-        let node = Node::with(SnapshotNode::new(), "height-bad", move |call, reply| {
-            if call.is("get_height") {
-                let height = height.clone();
-                return edit_json(reply, move |v| v["height"] = height);
-            }
-            reply
-        });
-        send(&node, &change_output(&wallet)).await.unwrap_err();
+    for start in [u64::MAX - 5, u64::MAX] {
+        let node = Node::with(
+            SnapshotNode::new(),
+            "distribution-start",
+            move |call, reply| {
+                if !call.is("get_output_distribution.bin") {
+                    return reply;
+                }
+                let mut body = epee::decode(&reply?).unwrap();
+                if let Some(Val::Arr(_, items)) = epee::get_mut(&mut body, "distributions") {
+                    epee::set(items[0].obj_mut(), "start_height", Val::U64(start));
+                }
+                Ok(epee::encode(&body))
+            },
+        );
+        let err = send(&node, &change_output(&wallet)).await.unwrap_err();
+        assert!(err.contains("impossible height"), "{err}");
         assert_eq!(node.count("get_outs.bin"), 0);
     }
 }

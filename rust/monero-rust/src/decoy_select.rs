@@ -581,7 +581,7 @@ fn rings_are_sane(rings: &[Decoys], rct_outputs_available: u64) -> Result<bool, 
 
 pub(crate) struct CandidatePlan {
     ring_len: u8,
-    block_number: usize,
+    pub block_number: usize,
     rct_outputs_available: u64,
     pub candidates: Vec<Vec<u64>>,
 }
@@ -593,7 +593,6 @@ pub(crate) async fn plan_candidates<R: RngCore + CryptoRng, C: RpcConnection>(
     rng: &mut R,
     rpc: &Rpc<C>,
     ring_len: u8,
-    block_number: usize,
     inputs: &[SpentOutput],
     existing_rings: &[Option<RecordedRing>],
     existing_candidates: &[Option<Vec<u64>>],
@@ -611,24 +610,18 @@ pub(crate) async fn plan_candidates<R: RngCore + CryptoRng, C: RpcConnection>(
     }) {
         return Err("persisted ring does not contain the real output".to_string());
     }
-    if block_number <= DEFAULT_LOCK_WINDOW {
-        return Err("not enough blocks to select decoys".to_string());
-    }
-    let latest_block_number = rpc
-        .get_height()
-        .await
-        .map_err(|e| format!("Failed to fetch height: {:?}", e))?
-        .saturating_sub(1);
-    if block_number > latest_block_number {
-        return Err("decoys being requested from blocks this node doesn't have".to_string());
-    }
-
-    // Get the cumulative RingCT output distribution
-    let distribution = rpc
-        .get_output_distribution(0, block_number)
+    let (start_height, distribution) = rpc
+        .get_rct_output_distribution()
         .await
         .map_err(|e| format!("Failed to fetch output distribution: {:?}", e))?;
     if distribution.len() < DEFAULT_LOCK_WINDOW {
+        return Err("not enough blocks to select decoys".to_string());
+    }
+    let block_number = usize::try_from(start_height)
+        .ok()
+        .and_then(|start| start.checked_add(distribution.len() - 1))
+        .ok_or_else(|| "output distribution starts at an impossible height".to_string())?;
+    if block_number <= DEFAULT_LOCK_WINDOW {
         return Err("not enough blocks to select decoys".to_string());
     }
     let highest_output_exclusive_bound = distribution[distribution.len() - DEFAULT_LOCK_WINDOW];

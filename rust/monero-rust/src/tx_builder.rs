@@ -181,12 +181,11 @@ pub mod native {
         rng: &mut G,
         rpc: &Rpc<R>,
         rct_type: RctType,
-        height: usize,
         outputs: &[(WalletOutput, u64)],
         key_images: &[String],
         blackballed: &HashSet<u64>,
         wallet_state: &mut crate::wallet_state::WalletState,
-    ) -> Result<(Vec<Decoys>, Vec<InputRing>), String> {
+    ) -> Result<(Vec<Decoys>, Vec<InputRing>, usize), String> {
         let ring_len = ring_len(rct_type).ok_or_else(|| "Unsupported RingCT type".to_string())?;
         if key_images.len() != outputs.len() {
             return Err("selected ring count does not match stored input count".to_string());
@@ -209,7 +208,6 @@ pub mod native {
             rng,
             rpc,
             ring_len,
-            height,
             &spent,
             &existing_rings,
             &existing_candidates,
@@ -239,7 +237,7 @@ pub mod native {
             .collect();
         wallet_state.record_input_rings(&input_rings)?;
         wallet_state.persist_rings().await?;
-        Ok((decoys, input_rings))
+        Ok((decoys, input_rings, plan.block_number))
     }
 
     /// Select decoys for every output and assemble the unsigned transaction.
@@ -330,16 +328,10 @@ pub mod native {
         if output_source_account(outputs)? != source_account {
             return Err("Stored source account does not match the selected outputs".to_string());
         }
-        let height = rpc
-            .get_height()
-            .await
-            .map_err(|e| format!("Failed to get height: {:?}", e))?;
-
-        let (decoys, input_rings) = select_output_decoys(
+        let (decoys, input_rings, _) = select_output_decoys(
             rng,
             rpc,
             rct_type,
-            height.saturating_sub(1),
             outputs,
             key_images,
             blackballed,
@@ -961,11 +953,6 @@ pub mod native {
             .await
             .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
 
-        let height = rpc
-            .get_height()
-            .await
-            .map_err(|e| format!("Failed to get height: {:?}", e))?;
-
         let mut spendable_outputs = Vec::with_capacity(stored_outputs.len());
         for stored in &stored_outputs {
             let spendable = spendable_from_stored_data(stored)?;
@@ -973,11 +960,10 @@ pub mod native {
         }
 
         let key_images = input_key_images(wallet_state, &stored_outputs)?;
-        let (_, input_rings) = select_output_decoys(
+        let (_, input_rings, height) = select_output_decoys(
             &mut rand::rngs::OsRng,
             rpc,
             rct_type,
-            height.saturating_sub(1),
             &spendable_outputs,
             &key_images,
             &policy.blackballed_outputs,
@@ -986,7 +972,7 @@ pub mod native {
         .await?;
 
         Ok(DecoyResult {
-            height: height.saturating_sub(1),
+            height,
             decoys: input_rings.into_iter().map(|input| input.ring).collect(),
         })
     }
@@ -3629,7 +3615,7 @@ pub mod native {
                 error.starts_with("Failed to prepare transaction"),
                 "{error}"
             );
-            assert_eq!(log[2..], ["get_height"]);
+            assert_eq!(log[2..], ["get_output_distribution.bin"]);
         }
 
         #[test]

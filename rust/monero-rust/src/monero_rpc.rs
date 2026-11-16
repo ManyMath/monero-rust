@@ -1458,6 +1458,10 @@ impl<R: RpcConnection> Rpc<R> {
         _from: usize,
         _to: usize,
     ) -> Result<Vec<u64>, RpcError> {
+        Ok(self.get_rct_output_distribution().await?.1)
+    }
+
+    pub(crate) async fn get_rct_output_distribution(&self) -> Result<(u64, Vec<u64>), RpcError> {
         let response: OutputDistributionResponse = self
             .bin_call(
                 "get_output_distribution.bin",
@@ -1507,7 +1511,7 @@ impl<R: RpcConnection> Rpc<R> {
             result.push(cumulative);
         }
         check_distribution_is_monotonic(&result)?;
-        Ok(result)
+        Ok((distribution.start_height, result))
     }
 
     /// Get the specified outputs from the RingCT (zero-amount) pool, but only

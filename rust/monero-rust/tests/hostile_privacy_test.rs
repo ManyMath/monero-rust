@@ -94,8 +94,6 @@ async fn honest_send_hides_each_input_in_one_batched_get_outs_request() {
             "json_rpc:get_txpool_backlog",
             "json_rpc:get_info",
             "json_rpc:getblockheadersrange",
-            "get_height",
-            "get_height",
             "get_output_distribution.bin",
             "get_outs.bin",
             "sendrawtransaction",
