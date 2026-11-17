@@ -125,11 +125,12 @@ def check_built(shape, build, tx, state_before, state_after, tiers):
     by_ki_before = {o["key_image"]: o for o in state_before["outputs"]}
     by_ki_after = {o["key_image"]: o for o in state_after["outputs"]}
     selected = set(build["_selected_inputs"])
+    further = set(build.get("_further_inputs", []))
     kis = [i["key_image"] for i in tx["inputs"]]
+    spent = {"%s:%d" % (by_ki_before[k]["tx_hash"], by_ki_before[k]["output_index"]) for k in kis
+             if k in by_ki_before}
     checks["inputs_are_selected_outputs"] = (
-        len(kis) == len(selected)
-        and all(k in by_ki_before and "%s:%d" % (by_ki_before[k]["tx_hash"], by_ki_before[k]["output_index"])
-                in selected for k in kis))
+        len(spent) == len(kis) and selected <= spent and spent <= selected | further)
     checks["inputs_unspent_and_not_pending"] = all(
         k in by_ki_after and not by_ki_after[k]["spent"] and k not in state_after["pending_spends"] for k in kis)
     # The state file on disk must already hold exactly the rings in the blob.
@@ -176,12 +177,16 @@ def cmd_shape_build(args):
         return
     build = built["builds"][0]
     build["_selected_inputs"] = built["selected_inputs"]
+    build["_further_inputs"] = built.get("further_inputs", [])
     state_after = state_outputs(label)
     tx = lib.decode_tx(build["tx_blob"])
     checks = check_built(shape, build, tx, state_before, state_after, tiers)
     record = {"name": args.name, "shape": shape, "wallet_height": built["wallet_height"], "scan_height": scan["height"],
               "daemon_fee_estimate": tiers, "tx_id": build["tx_id"], "tx_hex": build["tx_blob"],
-              "selected_inputs": built["selected_inputs"], "input_total": built["input_total"],
+              "selected_inputs": built["selected_inputs"], "further_inputs": built.get("further_inputs", []),
+              "inputs": build.get("inputs", built["selected_inputs"]),
+              "rebuilt_with_further_inputs": len(build.get("inputs", [])) > len(built["selected_inputs"]),
+              "input_total": build.get("input_total", built["input_total"]),
               "estimated_fee": built["estimated_fee"], "fee": build["fee"],
               "change_outputs": build["change_outputs"], "rings": build["rings"],
               "decoded": tx, "observer": lib.observer_view(tx), "fee_tier": fee_tier_of(tx, tiers),
@@ -404,7 +409,8 @@ def cmd_ring_reuse(args):
     status = tx_status(record["tx_id"])
     other = [[args.address, args.amount]]
     built = mr_build(label, "ring-reuse-%s-%s" % (args.name, args.tag), "send", other, shape.get("account", 0),
-                     record["selected_inputs"], ignore_pending=True, repeat=args.repeat, keep_blobs=True)
+                     record.get("inputs", record["selected_inputs"]), ignore_pending=True, repeat=args.repeat,
+                     keep_blobs=True)
     out = {"name": args.name, "relayed_tx": record["tx_id"], "status_at_rebuild": status,
            "relayed_rings": record["rings"], "rebuilds": [], "prepare_error": built.get("prepare_error"),
            "build_errors": built.get("build_errors")}

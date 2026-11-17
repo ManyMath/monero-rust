@@ -390,6 +390,26 @@ pub mod native {
         }
         let total_send = crate::tx_utils::checked_amount_sum(payments.iter().map(|p| p.1))
             .ok_or_else(|| "requested amounts overflow".to_string())?;
+        let fee = wallet2_send_fee_estimate(rct_type, fee_rate, input_count, payments)?;
+        let needed = total_send
+            .checked_add(fee)
+            .ok_or_else(|| "requested amount plus fee overflows".to_string())?;
+        if total_input < needed {
+            return Err(format!(
+                "Insufficient funds: have {} piconero, need at least {} (amount {} + estimated \
+                 fee {})",
+                total_input, needed, total_send, fee
+            ));
+        }
+        Ok(())
+    }
+
+    fn wallet2_send_fee_estimate(
+        rct_type: RctType,
+        fee_rate: FeeRate,
+        input_count: usize,
+        payments: &[(MoneroAddress, u64)],
+    ) -> Result<u64, String> {
         // Tag, length, and the encrypted ID with its type byte.
         let extra = if payments
             .iter()
@@ -406,18 +426,7 @@ pub mod native {
         )?
         .checked_add(extra)
         .ok_or_else(|| "weight exceeds usize".to_string())?;
-        let fee = fee_for_weight(fee_rate, weight)?;
-        let needed = total_send
-            .checked_add(fee)
-            .ok_or_else(|| "requested amount plus fee overflows".to_string())?;
-        if total_input < needed {
-            return Err(format!(
-                "Insufficient funds: have {} piconero, need at least {} (amount {} + estimated \
-                 fee {})",
-                total_input, needed, total_send, fee
-            ));
-        }
-        Ok(())
+        fee_for_weight(fee_rate, weight)
     }
 
     /// Settle a zero change as wallet2 does: a zero dummy output for one
@@ -445,6 +454,147 @@ pub mod native {
             ));
         }
         Ok(())
+    }
+
+    /// Build, adding inputs from `further` and building again while the inputs
+    /// fall short of the fee, as wallet2 does (wallet2.cpp:11788-11818).
+    #[allow(clippy::too_many_arguments)]
+    async fn build_paying_its_fee<G: RngCore + CryptoRng, R: RpcConnection>(
+        rng: &mut G,
+        rpc: &Rpc<R>,
+        rct_type: RctType,
+        fee_rate: FeeRate,
+        mut stored_outputs: Vec<StoredOutputData>,
+        further: &[StoredOutputData],
+        source_account: u32,
+        payments: Vec<(MoneroAddress, u64)>,
+        change: Option<UnsignedChange>,
+        view_pair: &ViewPair,
+        blackballed: &HashSet<u64>,
+        wallet_state: &mut crate::wallet_state::WalletState,
+    ) -> Result<(UnsignedTransaction, Vec<InputRing>, Vec<StoredOutputData>), String> {
+        let amount = crate::tx_utils::checked_amount_sum(payments.iter().map(|p| p.1))
+            .ok_or_else(|| "requested amounts overflow".to_string())?;
+        let extra = crate::coin_selection::wallet2_caller_extra(
+            payments
+                .iter()
+                .any(|(address, _)| address.payment_id().is_some()),
+        );
+        let overflow = || "input amounts overflow".to_string();
+        let mut further = further.iter();
+        loop {
+            let mut spendable = Vec::with_capacity(stored_outputs.len());
+            for stored in &stored_outputs {
+                spendable.push(spendable_from_stored_data(stored)?);
+            }
+            let total_input = crate::tx_utils::checked_amount_sum(
+                spendable
+                    .iter()
+                    .map(|(output, _)| output.commitment().amount),
+            )
+            .ok_or_else(overflow)?;
+            if let Err(error) =
+                check_funds(rct_type, fee_rate, total_input, spendable.len(), &payments)
+            {
+                let estimate =
+                    wallet2_send_fee_estimate(rct_type, fee_rate, spendable.len(), &payments)?;
+                let short = u128::from(total_input) < u128::from(amount) + u128::from(estimate);
+                if !short
+                    || !add_inputs_for_fee(
+                        &mut stored_outputs,
+                        &mut further,
+                        total_input,
+                        amount,
+                        estimate,
+                        payments.len(),
+                        extra,
+                        rct_type,
+                        fee_rate,
+                    )?
+                {
+                    return Err(error);
+                }
+                continue;
+            }
+            let key_images = input_key_images(wallet_state, &stored_outputs)?;
+            let (mut unsigned, input_rings) = build_unsigned_transaction_with_rings(
+                rng,
+                rpc,
+                rct_type,
+                fee_rate,
+                &spendable,
+                &key_images,
+                source_account,
+                payments.clone(),
+                change,
+                blackballed,
+                wallet_state,
+            )
+            .await
+            .map_err(|e| format!("Failed to prepare transaction: {}", e))?;
+            let Some(real_fee) = unsigned.uncovered_fee(view_pair) else {
+                settle_change(&mut unsigned, view_pair)?;
+                return Ok((unsigned, input_rings, stored_outputs));
+            };
+
+            if !add_inputs_for_fee(
+                &mut stored_outputs,
+                &mut further,
+                total_input,
+                amount,
+                real_fee,
+                payments.len(),
+                extra,
+                rct_type,
+                fee_rate,
+            )? {
+                return Err(format!(
+                    "Insufficient funds: have {total_input} piconero, need {} (amount {amount} + \
+                     fee {real_fee})",
+                    u128::from(amount) + u128::from(real_fee)
+                ));
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn add_inputs_for_fee(
+        stored_outputs: &mut Vec<StoredOutputData>,
+        further: &mut std::slice::Iter<'_, StoredOutputData>,
+        total_input: u64,
+        amount: u64,
+        needed_fee: u64,
+        payments: usize,
+        extra: usize,
+        rct_type: RctType,
+        fee_rate: FeeRate,
+    ) -> Result<bool, String> {
+        let overflow = || "input amounts overflow".to_string();
+        let mut needed_fee = needed_fee;
+        let mut available_for_fee = total_input.saturating_sub(amount);
+        let mut total = total_input;
+        loop {
+            let Some(next) = further.next() else {
+                return Ok(false);
+            };
+            let value = spendable_from_stored_data(next)?.0.commitment().amount;
+            stored_outputs.push(next.clone());
+            crate::fee_estimate::check_one_transaction(stored_outputs.len(), payments + 1, false)?;
+            total = total.checked_add(value).ok_or_else(overflow)?;
+            available_for_fee = available_for_fee.checked_add(value).ok_or_else(overflow)?;
+            if available_for_fee >= needed_fee {
+                needed_fee = crate::coin_selection::wallet2_fee_estimate(
+                    stored_outputs.len(),
+                    crate::coin_selection::wallet2_output_count(payments, total, amount),
+                    extra,
+                    rct_type,
+                    fee_rate,
+                )?;
+                if u128::from(total) >= u128::from(amount) + u128::from(needed_fee) {
+                    return Ok(true);
+                }
+            }
+        }
     }
 
     fn pay_everything(
@@ -541,6 +691,46 @@ pub mod native {
             .await
             .map_err(|e| format!("Failed to get fee rate: {e:?}"))?;
         Ok((fee, fee_rate_of(fee)?))
+    }
+
+    fn prepared_fee(
+        prepared: &crate::tx_prepare::PreparedInputs,
+        policy: FeePolicy,
+    ) -> (FeePolicy, Option<crate::monero_rpc::Fee>) {
+        match prepared.fee_policy {
+            Some(settled) => (
+                FeePolicy {
+                    max_fee_per_weight: settled.max_fee_per_weight.min(policy.max_fee_per_weight),
+                    ..settled
+                },
+                prepared.fee_rate,
+            ),
+            None => (policy, None),
+        }
+    }
+
+    fn settled_fee_rate(
+        fee: crate::monero_rpc::Fee,
+        max_fee_per_weight: u64,
+    ) -> Result<FeeRate, String> {
+        use crate::monero_rpc::RpcError;
+        let refused = if fee.per_weight > max_fee_per_weight {
+            Some(RpcError::FeeExceedsLimit {
+                per_weight: fee.per_weight,
+                limit: max_fee_per_weight,
+            })
+        } else if fee.mask > max_fee_per_weight {
+            Some(RpcError::MaskExceedsLimit {
+                mask: fee.mask,
+                limit: max_fee_per_weight,
+            })
+        } else {
+            None
+        };
+        if let Some(error) = refused {
+            return Err(format!("Failed to get fee rate: {error:?}"));
+        }
+        fee_rate_of(fee)
     }
 
     fn fee_upper_bound(
@@ -1252,6 +1442,66 @@ pub mod native {
         decoy_policy: &DecoyPolicy,
         wallet_state: &mut crate::wallet_state::WalletState,
     ) -> Result<TransactionResult, String> {
+        create_transaction_adding_inputs(
+            rpc,
+            seed_phrase,
+            network_str,
+            stored_outputs,
+            &[],
+            recipients,
+            passphrase,
+            policy,
+            None,
+            decoy_policy,
+            wallet_state,
+        )
+        .await
+    }
+
+    /// Build and sign a send from `prepare_send_inputs_with_rpc` inputs, adding
+    /// `prepared.further_inputs` if needed; `input_rings` lists the inputs spent.
+    pub async fn create_transaction_from_prepared_inputs<R: RpcConnection>(
+        rpc: &Rpc<R>,
+        seed_phrase: &str,
+        network_str: &str,
+        prepared: &crate::tx_prepare::PreparedInputs,
+        recipients: &[(String, u64)],
+        passphrase: &str,
+        policy: FeePolicy,
+        decoy_policy: &DecoyPolicy,
+        wallet_state: &mut crate::wallet_state::WalletState,
+    ) -> Result<TransactionResult, String> {
+        let (policy, settled) = prepared_fee(prepared, policy);
+        create_transaction_adding_inputs(
+            rpc,
+            seed_phrase,
+            network_str,
+            prepared.stored_outputs.clone(),
+            &prepared.further_inputs,
+            recipients,
+            passphrase,
+            policy,
+            settled,
+            decoy_policy,
+            wallet_state,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn create_transaction_adding_inputs<R: RpcConnection>(
+        rpc: &Rpc<R>,
+        seed_phrase: &str,
+        network_str: &str,
+        stored_outputs: Vec<StoredOutputData>,
+        further: &[StoredOutputData],
+        recipients: &[(String, u64)],
+        passphrase: &str,
+        policy: FeePolicy,
+        settled: Option<crate::monero_rpc::Fee>,
+        decoy_policy: &DecoyPolicy,
+        wallet_state: &mut crate::wallet_state::WalletState,
+    ) -> Result<TransactionResult, String> {
         let rpc = &rpc.for_wallet(wallet_state);
         crate::validation::validate_network(network_str).map_err(|e| e.to_string())?;
         if stored_outputs.is_empty() {
@@ -1284,7 +1534,10 @@ pub mod native {
             .await
             .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
 
-        let (_, fee) = fee_for_policy(rpc, policy).await?;
+        let fee = match settled {
+            Some(fee) => settled_fee_rate(fee, policy.max_fee_per_weight)?,
+            None => fee_for_policy(rpc, policy).await?.1,
+        };
 
         // Parse and validate all destination addresses
         let mut dest_addrs = Vec::with_capacity(recipients.len());
@@ -1343,13 +1596,6 @@ pub mod native {
             .into_iter()
             .zip(recipients.iter().map(|(_, amount)| *amount))
             .collect();
-        check_funds(
-            rct_type,
-            fee,
-            total_input,
-            spendable_outputs.len(),
-            &payments,
-        )?;
 
         let change = with_change
             .then(|| wallet2_change(&view_pair, network, source_account))
@@ -1358,23 +1604,21 @@ pub mod native {
 
         // Select decoys online, then sign; the signer returns the tx keys
         let mut rng = rand::rngs::OsRng;
-        let key_images = input_key_images(wallet_state, &stored_outputs)?;
-        let (mut unsigned, input_rings) = build_unsigned_transaction_with_rings(
+        let (unsigned, input_rings, stored_outputs) = build_paying_its_fee(
             &mut rng,
             rpc,
             rct_type,
             fee,
-            &spendable_outputs,
-            &key_images,
+            stored_outputs,
+            further,
             source_account,
             payments,
             change,
+            &view_pair,
             &decoy_policy.blackballed_outputs,
             wallet_state,
         )
-        .await
-        .map_err(|e| format!("Failed to prepare transaction: {}", e))?;
-        settle_change(&mut unsigned, &view_pair)?;
+        .await?;
         let signed = sign_offline(&mut rng, &spend_key, &view_key, &unsigned)
             .map_err(|e| format!("Failed to sign transaction: {}", e))?;
         let fee_amount = signed.fee;
@@ -2450,6 +2694,66 @@ pub mod native {
         decoy_policy: &DecoyPolicy,
         wallet_state: &mut crate::wallet_state::WalletState,
     ) -> Result<UnsignedTransactionResult, String> {
+        create_unsigned_transaction_adding_inputs(
+            rpc,
+            view_key_hex,
+            pub_spend_key_hex,
+            network_str,
+            stored_outputs,
+            &[],
+            recipients,
+            policy,
+            None,
+            decoy_policy,
+            wallet_state,
+        )
+        .await
+    }
+
+    /// Build an unsigned send as `create_transaction_from_prepared_inputs` does.
+    /// Record the pending spend from the result's `input_rings`.
+    pub async fn create_unsigned_transaction_from_prepared_inputs<R: RpcConnection>(
+        rpc: &Rpc<R>,
+        view_key_hex: &str,
+        pub_spend_key_hex: &str,
+        network_str: &str,
+        prepared: &crate::tx_prepare::PreparedInputs,
+        recipients: &[(String, u64)],
+        policy: FeePolicy,
+        decoy_policy: &DecoyPolicy,
+        wallet_state: &mut crate::wallet_state::WalletState,
+    ) -> Result<UnsignedTransactionResult, String> {
+        let (policy, settled) = prepared_fee(prepared, policy);
+        create_unsigned_transaction_adding_inputs(
+            rpc,
+            view_key_hex,
+            pub_spend_key_hex,
+            network_str,
+            prepared.stored_outputs.clone(),
+            &prepared.further_inputs,
+            recipients,
+            policy,
+            settled,
+            decoy_policy,
+            wallet_state,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn create_unsigned_transaction_adding_inputs<R: RpcConnection>(
+        rpc: &Rpc<R>,
+        view_key_hex: &str,
+        pub_spend_key_hex: &str,
+        network_str: &str,
+        stored_outputs: Vec<StoredOutputData>,
+        further: &[StoredOutputData],
+        recipients: &[(String, u64)],
+        policy: FeePolicy,
+        settled: Option<crate::monero_rpc::Fee>,
+        decoy_policy: &DecoyPolicy,
+        wallet_state: &mut crate::wallet_state::WalletState,
+    ) -> Result<UnsignedTransactionResult, String> {
         let rpc = &rpc.for_wallet(wallet_state);
         if stored_outputs.is_empty() {
             return Err("No outputs provided".to_string());
@@ -2499,7 +2803,10 @@ pub mod native {
             .get_rct_type_at_height(Some(wallet_state.chain_height()))
             .await
             .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
-        let (_, fee_rate) = fee_for_policy(rpc, policy).await?;
+        let fee_rate = match settled {
+            Some(fee) => settled_fee_rate(fee, policy.max_fee_per_weight)?,
+            None => fee_for_policy(rpc, policy).await?.1,
+        };
 
         let mut dest_addrs = Vec::with_capacity(recipients.len());
         for (addr_str, _) in recipients {
@@ -2558,13 +2865,6 @@ pub mod native {
             .into_iter()
             .zip(recipients.iter().map(|(_, amount)| *amount))
             .collect();
-        check_funds(
-            rct_type,
-            fee_rate,
-            total_input,
-            spendable_outputs.len(),
-            &payments,
-        )?;
 
         let change = with_change
             .then(|| wallet2_change(&view_pair, network, source_account))
@@ -2572,23 +2872,21 @@ pub mod native {
         check_payment_id_destinations(&payments, change.as_ref())?;
 
         let mut rng = rand::rngs::OsRng;
-        let key_images = input_key_images(wallet_state, &stored_outputs)?;
-        let (mut unsigned, input_rings) = build_unsigned_transaction_with_rings(
+        let (unsigned, input_rings, _) = build_paying_its_fee(
             &mut rng,
             rpc,
             rct_type,
             fee_rate,
-            &spendable_outputs,
-            &key_images,
+            stored_outputs,
+            further,
             source_account,
             payments,
             change,
+            &view_pair,
             &decoy_policy.blackballed_outputs,
             wallet_state,
         )
-        .await
-        .map_err(|e| format!("Failed to prepare unsigned tx: {}", e))?;
-        settle_change(&mut unsigned, &view_pair)?;
+        .await?;
 
         let fee = unsigned.resolve(&view_pair)?.fee;
 
@@ -3616,6 +3914,95 @@ pub mod native {
                 "{error}"
             );
             assert_eq!(log[2..], ["get_output_distribution.bin"]);
+        }
+
+        #[test]
+        fn inputs_added_for_a_fee_still_fit_in_one_transaction() {
+            const XMR: u64 = 1_000_000_000_000;
+            let stored = |index: u64| {
+                let mut bytes = Vec::new();
+                bytes.extend_from_slice(&[0x33; 32]); // transaction hash
+                bytes.extend_from_slice(&index.to_le_bytes()); // index in transaction
+                bytes.extend_from_slice(&index.to_le_bytes()); // index on blockchain
+                bytes.extend_from_slice(
+                    (&Scalar::from(9u64) * ED25519_BASEPOINT_TABLE)
+                        .compress()
+                        .as_bytes(),
+                );
+                bytes.extend_from_slice(&Scalar::from(5u64).to_bytes()); // key offset
+                bytes.extend_from_slice(&Scalar::from(3u64).to_bytes()); // commitment mask
+                bytes.extend_from_slice(&XMR.to_le_bytes());
+                bytes.extend_from_slice(&[0, 0, 0, 0]); // timelock, subaddress, payment ID, data
+                StoredOutputData {
+                    tx_hash: "33".repeat(32),
+                    output_index: index,
+                    amount: XMR,
+                    key: String::new(),
+                    key_offset: String::new(),
+                    commitment_mask: String::new(),
+                    subaddress: None,
+                    payment_id: None,
+                    received_output_bytes: hex::encode(bytes),
+                    global_index: Some(1_000 + index),
+                    key_image: format!("{index:064x}"),
+                    ring: None,
+                    pre_ringct: false,
+                }
+            };
+            let fee_rate = FeeRate::new(20_000, 10_000).unwrap();
+            let rct = RctType::ClsagBulletproofPlus;
+            let reserve: Vec<StoredOutputData> = (200..203).map(stored).collect();
+
+            let mut inputs: Vec<StoredOutputData> = (0..144).map(stored).collect();
+            let mut further = reserve.iter();
+            let added = add_inputs_for_fee(
+                &mut inputs,
+                &mut further,
+                144 * XMR,
+                144 * XMR - XMR / 100,
+                XMR / 50,
+                1,
+                0,
+                rct,
+                fee_rate,
+            )
+            .unwrap();
+            assert!(added);
+            assert_eq!(inputs.len(), 145);
+
+            let mut inputs: Vec<StoredOutputData> = (0..145).map(stored).collect();
+            let mut further = reserve.iter();
+            let error = add_inputs_for_fee(
+                &mut inputs,
+                &mut further,
+                145 * XMR,
+                145 * XMR - XMR / 100,
+                2 * XMR,
+                1,
+                0,
+                rct,
+                fee_rate,
+            )
+            .unwrap_err();
+            assert!(error.contains("146 inputs"), "{error}");
+            assert_eq!(further.len(), 2, "no input is taken after the refusal");
+
+            let mut inputs: Vec<StoredOutputData> = (0..2).map(stored).collect();
+            let mut further = reserve.iter();
+            let added = add_inputs_for_fee(
+                &mut inputs,
+                &mut further,
+                2 * XMR,
+                2 * XMR - XMR / 100,
+                10 * XMR,
+                1,
+                0,
+                rct,
+                fee_rate,
+            )
+            .unwrap();
+            assert!(!added);
+            assert_eq!(inputs.len(), 5);
         }
 
         #[test]

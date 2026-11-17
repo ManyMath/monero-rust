@@ -82,7 +82,7 @@ fn output(amount: u64, tx: &str, index: u8, height: u64, subaddress: (u32, u32))
 
 fn select(seed: u64, outputs: &[WalletOutput], amount: u64) -> Result<Vec<WalletOutput>, String> {
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-    select_inputs_with_fee_and_rng(&mut rng, outputs, amount, 1, None, 0, RCT, rate())
+    select_inputs_with_fee_and_rng(&mut rng, outputs, amount, 1, false, None, 0, RCT, rate())
         .map(|selection| selection.selected)
 }
 
@@ -245,6 +245,7 @@ fn zero_amount_outputs_do_not_flood_a_multi_input_send() {
             &outputs,
             5 * XMR / 2,
             1,
+            false,
             None,
             0,
             RCT,
@@ -527,6 +528,47 @@ async fn construction_refuses_more_than_one_transaction_before_asking_the_node()
     assert!(error.contains("147 inputs"), "{error}");
     let error = sweep(1_000).await;
     assert!(error.contains("do not fit"), "{error}");
+    let prepared = monero_rust::PreparedInputs {
+        stored_outputs: vec![output.clone(); 146],
+        spent_output_keys: Vec::new(),
+        total_input: 146 * XMR,
+        estimated_fee: 0,
+        fee_policy: None,
+        fee_rate: None,
+        further_inputs: Vec::new(),
+    };
+    let recipients = [(address.clone(), XMR)];
+    let mut wallet_state = monero_rust::WalletState::new();
+    let error = monero_rust::native::create_transaction_from_prepared_inputs(
+        &rpc,
+        SEED,
+        "mainnet",
+        &prepared,
+        &recipients,
+        "",
+        monero_rust::native::FeePolicy::default(),
+        &monero_rust::native::DecoyPolicy::default(),
+        &mut wallet_state,
+    )
+    .await
+    .map(|_| ())
+    .unwrap_err();
+    assert!(error.contains("146 inputs"), "{error}");
+    let error = monero_rust::native::create_unsigned_transaction_from_prepared_inputs(
+        &rpc,
+        &"00".repeat(32),
+        &"00".repeat(32),
+        "mainnet",
+        &prepared,
+        &recipients,
+        monero_rust::native::FeePolicy::default(),
+        &monero_rust::native::DecoyPolicy::default(),
+        &mut wallet_state,
+    )
+    .await
+    .map(|_| ())
+    .unwrap_err();
+    assert!(error.contains("146 inputs"), "{error}");
     assert_eq!(node.0.load(Ordering::SeqCst), 0);
 
     pay(145).await;

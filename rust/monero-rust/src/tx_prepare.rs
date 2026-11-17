@@ -27,6 +27,8 @@ pub struct PreparedInputs {
     /// The fee policy the `_with_rpc` preparers used, an Automatic priority
     /// settled; `None` from the others.
     pub fee_policy: Option<FeePolicy>,
+    /// Inputs to add, in order, if the transaction cannot pay its real fee.
+    pub further_inputs: Vec<StoredOutputData>,
 }
 
 /// Prepare send inputs with a fixed tier-one fee estimate.
@@ -51,11 +53,13 @@ pub fn prepare_send_inputs(
 }
 
 /// Prepare send inputs at the fee rate transaction construction will use.
+/// `integrated` says the destination is an integrated address.
 pub fn prepare_send_inputs_with_fee(
     wallet_outputs: &[WalletOutput],
     wallet_height: u64,
     total_amount: u64,
     num_recipients: usize,
+    integrated: bool,
     manual_selection: Option<&[String]>,
     excluded_key_images: Option<&HashSet<String>>,
     source_account: u32,
@@ -68,6 +72,7 @@ pub fn prepare_send_inputs_with_fee(
         current_time_secs(),
         total_amount,
         num_recipients,
+        integrated,
         manual_selection,
         excluded_key_images,
         source_account,
@@ -88,6 +93,7 @@ pub async fn prepare_send_inputs_with_rpc<R: RpcConnection>(
     wallet_height: u64,
     total_amount: u64,
     num_recipients: usize,
+    integrated: bool,
     manual_selection: Option<&[String]>,
     excluded_key_images: Option<&HashSet<String>>,
     source_account: u32,
@@ -100,6 +106,7 @@ pub async fn prepare_send_inputs_with_rpc<R: RpcConnection>(
         wallet_height,
         total_amount,
         num_recipients,
+        integrated,
         manual_selection,
         excluded_key_images,
         source_account,
@@ -116,6 +123,7 @@ pub fn prepare_send_inputs_at_with_fee(
     now_secs: Option<u64>,
     total_amount: u64,
     num_recipients: usize,
+    integrated: bool,
     manual_selection: Option<&[String]>,
     excluded_key_images: Option<&HashSet<String>>,
     source_account: u32,
@@ -138,10 +146,12 @@ pub fn prepare_send_inputs_at_with_fee(
         selected,
         total,
         estimated_fee,
+        further,
     } = select_inputs_with_fee(
         &spendable,
         total_amount,
         num_recipients,
+        integrated,
         manual_selection,
         source_account,
         rct_type,
@@ -157,6 +167,7 @@ pub fn prepare_send_inputs_at_with_fee(
         estimated_fee,
         fee_rate: None,
         fee_policy: None,
+        further_inputs: further.into_iter().map(Into::into).collect(),
     })
 }
 
@@ -189,6 +200,7 @@ pub fn prepare_send_inputs_at(
         selected,
         total,
         estimated_fee,
+        ..
     } = select_inputs(&spendable, total_amount, num_recipients, manual_selection)
         .map_err(|error| note_pre_ringct_funds(error, wallet_outputs, None))?;
 
@@ -202,6 +214,7 @@ pub fn prepare_send_inputs_at(
         estimated_fee,
         fee_rate: None,
         fee_policy: None,
+        further_inputs: Vec::new(),
     })
 }
 
@@ -601,6 +614,7 @@ fn prepared_sweep(
         estimated_fee,
         fee_rate: None,
         fee_policy: None,
+        further_inputs: Vec::new(),
     })
 }
 
@@ -672,6 +686,7 @@ pub fn prepare_sweep_inputs_at(
         estimated_fee,
         fee_rate: None,
         fee_policy: None,
+        further_inputs: Vec::new(),
     })
 }
 

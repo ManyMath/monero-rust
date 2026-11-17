@@ -123,6 +123,10 @@ async fn build(rpc: &Rpc<HttpRpc>, request: &Request, response: &mut Response) {
                 height,
                 total,
                 request.recipients.len(),
+                request.recipients.iter().any(|(address, _)| {
+                    monero_rust::MoneroAddress::from_str(NETWORK, address)
+                        .is_ok_and(|address| address.payment_id().is_some())
+                }),
                 request.inputs.as_deref(),
                 None,
                 request.source_account,

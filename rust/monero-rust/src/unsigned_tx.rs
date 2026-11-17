@@ -300,6 +300,33 @@ impl UnsignedTransaction {
             .map(|(_, resolved)| resolved)
     }
 
+    /// The fee the real weight asks for when the inputs cannot pay it on top of
+    /// the payments, else `None`.
+    pub(crate) fn uncovered_fee(&self, view_pair: &ViewPair) -> Option<u64> {
+        let change = match &self.change {
+            None => Change::fingerprintable(None),
+            Some(UnsignedChange::Own { subaddress, .. }) => {
+                Change::new(view_pair.clone(), *subaddress)
+            }
+            Some(UnsignedChange::Dummy) => Change::new(view_pair.clone(), None),
+        };
+        match SignableTransaction::new(
+            self.rct_type,
+            self.seed.clone(),
+            self.inputs.clone(),
+            self.payments.clone(),
+            change,
+            vec![],
+            self.fee_rate,
+        ) {
+            Err(SendError::NotEnoughFunds {
+                necessary_fee: Some(fee),
+                ..
+            }) => Some(fee),
+            _ => None,
+        }
+    }
+
     fn build(
         &self,
         view_pair: &ViewPair,

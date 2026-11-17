@@ -87,6 +87,8 @@ pub struct CoinSelectionResult {
     pub selected: Vec<WalletOutput>,
     pub total: u64,
     pub estimated_fee: u64,
+    /// Inputs to add, in order, if the transaction cannot pay its real fee.
+    pub further: Vec<WalletOutput>,
 }
 
 /// Select inputs for a transaction.
@@ -121,10 +123,12 @@ pub fn select_inputs(
 /// wallet2's input selection for one transaction at `fee_rate`. Outputs below
 /// [`fractional_threshold`] are left out unless `manual_selection` names them.
 /// A payment wallet2 would split is an error.
+/// `integrated`: the destination is an integrated address.
 pub fn select_inputs_with_fee(
     spendable: &[WalletOutput],
     amount: u64,
     num_recipients: usize,
+    integrated: bool,
     manual_selection: Option<&[String]>,
     source_account: u32,
     rct_type: RctType,
@@ -135,6 +139,7 @@ pub fn select_inputs_with_fee(
         spendable,
         amount,
         num_recipients,
+        integrated,
         manual_selection,
         source_account,
         rct_type,
@@ -148,6 +153,7 @@ pub fn select_inputs_with_fee_and_rng<R: RngCore + CryptoRng>(
     spendable: &[WalletOutput],
     amount: u64,
     num_recipients: usize,
+    integrated: bool,
     manual_selection: Option<&[String]>,
     source_account: u32,
     rct_type: RctType,
@@ -164,6 +170,7 @@ pub fn select_inputs_with_fee_and_rng<R: RngCore + CryptoRng>(
         })
         .cloned()
         .collect::<Vec<_>>();
+    let extra = wallet2_caller_extra(integrated);
     let selection = wallet2_select_inputs(
         rng,
         candidates,
@@ -171,17 +178,17 @@ pub fn select_inputs_with_fee_and_rng<R: RngCore + CryptoRng>(
         num_recipients,
         manual_selection,
         fractional_threshold(rct_type, fee_rate)?,
-        crate::fee_estimate::fee_for_weight(
-            fee_rate,
-            crate::fee_estimate::wallet2_weight_estimate(rct_type, 2, 2)?,
-        )?,
+        |inputs, outputs| wallet2_fee_estimate(inputs, outputs, extra, rct_type, fee_rate),
         |inputs, outputs| estimate_fee_with_rate(inputs, outputs, rct_type, fee_rate),
     )?;
-    if crate::fee_estimate::wallet2_transaction_is_full(
+    if crate::fee_estimate::wallet2_weight_estimate(
         rct_type,
         selection.selected.len(),
         num_recipients.saturating_add(1),
-    )? {
+    )?
+    .saturating_add(extra)
+        >= crate::fee_estimate::WALLET2_TX_WEIGHT_TARGET
+    {
         return Err(format!(
             "This payment needs {} inputs, more than wallet2 puts in one transaction. wallet2 \
              would split it over several transactions, which is not supported: pay in parts, \
@@ -190,6 +197,35 @@ pub fn select_inputs_with_fee_and_rng<R: RngCore + CryptoRng>(
         ));
     }
     Ok(selection)
+}
+
+pub(crate) fn wallet2_caller_extra(integrated: bool) -> usize {
+    if integrated {
+        1 + 1 + 1 + 8
+    } else {
+        0
+    }
+}
+
+pub(crate) fn wallet2_fee_estimate(
+    inputs: usize,
+    outputs: usize,
+    extra: usize,
+    rct_type: RctType,
+    fee_rate: FeeRate,
+) -> Result<u64, String> {
+    crate::fee_estimate::fee_for_weight(
+        fee_rate,
+        crate::fee_estimate::wallet2_weight_estimate(rct_type, inputs, outputs)?
+            .checked_add(extra)
+            .ok_or_else(|| "weight exceeds usize".to_string())?,
+    )
+}
+
+pub(crate) fn wallet2_output_count(destinations: usize, inputs: u64, payments: u64) -> usize {
+    destinations
+        .saturating_add(usize::from(inputs != payments))
+        .max(2)
 }
 
 fn output_relatedness(a: &WalletOutput, b: &WalletOutput) -> u8 {
@@ -260,6 +296,25 @@ pub(crate) fn random_of<R: RngCore + CryptoRng>(rng: &mut R, indexes: &[usize]) 
     indexes[(rng.next_u64() as usize) % indexes.len()]
 }
 
+fn next_input<R: RngCore + CryptoRng>(
+    rng: &mut R,
+    candidates: &mut Vec<WalletOutput>,
+    selected: &[WalletOutput],
+    order: &[Option<(u32, u32)>],
+    current: &mut usize,
+) -> Option<WalletOutput> {
+    let pool = loop {
+        let subaddress = order.get(*current)?;
+        let pool = in_subaddress(candidates, *subaddress);
+        if !pool.is_empty() {
+            break pool;
+        }
+        *current += 1;
+    };
+    let ties = least_related(candidates, &pool, selected);
+    Some(take(candidates, random_of(rng, &ties)))
+}
+
 /// The second input wallet2 adds when one input already pays: an output of
 /// the same subaddress, unrelated to the first, or none.
 fn second_input(candidates: &[WalletOutput], first: &WalletOutput) -> Option<usize> {
@@ -300,8 +355,8 @@ fn wallet2_select_inputs<R: RngCore + CryptoRng>(
     num_recipients: usize,
     manual_selection: Option<&[String]>,
     fractional_threshold: u64,
-    preferred_fee: u64,
-    fee_for: impl Fn(usize, usize) -> Result<u64, String>,
+    estimate: impl Fn(usize, usize) -> Result<u64, String>,
+    bound: impl Fn(usize, usize) -> Result<u64, String>,
 ) -> Result<CoinSelectionResult, String> {
     let outputs = num_recipients
         .checked_add(1)
@@ -313,11 +368,12 @@ fn wallet2_select_inputs<R: RngCore + CryptoRng>(
         }
         let total = crate::tx_utils::checked_amount_sum(candidates.iter().map(|o| o.amount))
             .ok_or_else(|| "selected output amounts overflow".to_string())?;
-        let estimated_fee = fee_for(candidates.len(), outputs)?;
+        let estimated_fee = bound(candidates.len(), outputs)?;
         return Ok(CoinSelectionResult {
             selected: candidates,
             total,
             estimated_fee,
+            further: Vec::new(),
         });
     }
     if candidates.is_empty() {
@@ -332,7 +388,7 @@ fn wallet2_select_inputs<R: RngCore + CryptoRng>(
     // wallet2 judges preferred inputs by its fee estimate for two inputs and
     // two outputs, whatever the number of destinations.
     let preferred_needed = amount
-        .checked_add(preferred_fee)
+        .checked_add(estimate(2, 2)?)
         .ok_or_else(|| "amount plus fee overflows".to_string())?;
     let mut selected = Vec::new();
 
@@ -384,49 +440,75 @@ fn wallet2_select_inputs<R: RngCore + CryptoRng>(
         }
     }
     let mut current = 0;
+    let sum = |outputs: &[WalletOutput]| {
+        crate::tx_utils::checked_amount_sum(outputs.iter().map(|o| o.amount))
+            .ok_or_else(|| "selected output amounts overflow".to_string())
+    };
+    let plus = |a: u64, b: u64| {
+        a.checked_add(b)
+            .ok_or_else(|| "amount plus fee overflows".to_string())
+    };
 
-    loop {
-        let total = crate::tx_utils::checked_amount_sum(selected.iter().map(|o| o.amount))
-            .ok_or_else(|| "selected output amounts overflow".to_string())?;
-        let fee = fee_for(selected.len().max(1), outputs)?;
-        let enough = total
-            >= amount
-                .checked_add(fee)
-                .ok_or_else(|| "amount plus fee overflows".to_string())?;
-        if enough {
-            if let [first] = selected.as_slice() {
-                if let Some(index) = second_input(&candidates, first) {
-                    let with_second = total.checked_add(candidates[index].amount);
-                    let needed = amount.checked_add(fee_for(2, outputs)?);
-                    if with_second
-                        .zip(needed)
-                        .is_some_and(|(have, need)| have >= need)
-                    {
-                        selected.push(take(&mut candidates, index));
-                        continue;
+    let mut adding_fee = false;
+    let mut available_for_fee = 0u64;
+    let mut needed_fee = 0u64;
+    let total = loop {
+        let total = sum(&selected)?;
+        let try_tx = !selected.is_empty()
+            && if adding_fee {
+                available_for_fee >= needed_fee
+            } else {
+                total >= amount
+            };
+        if try_tx {
+            needed_fee = estimate(
+                selected.len(),
+                wallet2_output_count(num_recipients, total, amount),
+            )?;
+            if total >= plus(amount, needed_fee)? {
+                if let [first] = selected.as_slice() {
+                    if let Some(index) = second_input(&candidates, first) {
+                        let with_second = total.checked_add(candidates[index].amount);
+                        let needed = amount.checked_add(estimate(2, outputs)?);
+                        if with_second
+                            .zip(needed)
+                            .is_some_and(|(have, need)| have >= need)
+                        {
+                            selected.push(take(&mut candidates, index));
+                            continue;
+                        }
                     }
                 }
+                break total;
             }
-            return Ok(CoinSelectionResult {
-                selected,
-                total,
-                estimated_fee: fee,
-            });
+            adding_fee = true;
         }
-        let pool = loop {
-            let Some(subaddress) = order.get(current) else {
-                return Err("Insufficient funds in the selected account".to_string());
-            };
-            let pool = in_subaddress(&candidates, *subaddress);
-            if !pool.is_empty() {
-                break pool;
-            }
-            current += 1;
+        let Some(input) = next_input(rng, &mut candidates, &selected, &order, &mut current) else {
+            return Err("Insufficient funds in the selected account".to_string());
         };
-        let ties = least_related(&candidates, &pool, &selected);
-        let index = random_of(rng, &ties);
-        selected.push(take(&mut candidates, index));
+        if adding_fee {
+            available_for_fee = plus(available_for_fee, input.amount)?;
+        }
+        selected.push(input);
+    };
+
+    let chosen = selected.len();
+    let estimated_fee = bound(chosen, outputs)?;
+    let mut covered = total;
+    while covered < plus(amount, bound(selected.len(), outputs)?)? {
+        let Some(input) = next_input(rng, &mut candidates, &selected, &order, &mut current) else {
+            break;
+        };
+        covered = plus(covered, input.amount)?;
+        selected.push(input);
     }
+    let further = selected.split_off(chosen);
+    Ok(CoinSelectionResult {
+        selected,
+        total,
+        estimated_fee,
+        further,
+    })
 }
 
 fn select_inputs_with_estimator(
@@ -465,6 +547,7 @@ fn select_inputs_with_estimator(
             selected: candidates,
             total,
             estimated_fee,
+            further: Vec::new(),
         });
     }
 
@@ -482,6 +565,7 @@ fn select_inputs_with_estimator(
             total: output.amount,
             estimated_fee: single_input_fee,
             selected: vec![output],
+            further: Vec::new(),
         });
     }
 
@@ -504,6 +588,7 @@ fn select_inputs_with_estimator(
                     selected: selection,
                     total,
                     estimated_fee,
+                    further: Vec::new(),
                 });
                 break; // Minimum input count found
             }
@@ -521,6 +606,7 @@ fn select_inputs_with_estimator(
                 selected: candidates,
                 total,
                 estimated_fee,
+                further: Vec::new(),
             })
         }
     }
@@ -684,6 +770,7 @@ mod tests {
             &outputs,
             1_000_000_000,
             1,
+            false,
             None,
             0,
             rct,
@@ -701,6 +788,7 @@ mod tests {
             &outputs,
             1_000_000_000,
             1,
+            false,
             None,
             0,
             rct,
@@ -729,6 +817,7 @@ mod tests {
             &[oldest, smallest, unrelated],
             1_000_000_000,
             1,
+            false,
             None,
             0,
             RctType::ClsagBulletproofPlus,
@@ -760,6 +849,7 @@ mod tests {
                 outputs,
                 XMR,
                 1,
+                false,
                 None,
                 0,
                 RctType::ClsagBulletproofPlus,
@@ -803,6 +893,7 @@ mod tests {
                 &outputs,
                 XMR / 10,
                 1,
+                false,
                 None,
                 0,
                 RctType::ClsagBulletproofPlus,
@@ -814,6 +905,34 @@ mod tests {
             assert_eq!(heights, [600, 3600]);
             assert_eq!(selected[0].output_index, 0);
         }
+    }
+
+    #[test]
+    fn a_random_input_leaves_the_list_in_wallet2s_order() {
+        let mut candidates = Vec::new();
+        for (tx, subaddress) in [("a0", 0), ("a1", 0), ("a2", 0), ("b0", 1), ("a3", 0)] {
+            let mut output = make_output(1_000_000, tx);
+            output.subaddress_index = Some((0, subaddress));
+            candidates.push(output);
+        }
+        let order = [Some((0, 0)), Some((0, 1))];
+        let (mut rng, index) = (0..64)
+            .map(|seed| {
+                let rng = rand::rngs::StdRng::seed_from_u64(seed);
+                let index = (rng.clone().next_u64() as usize) % 4;
+                (rng, index)
+            })
+            .find(|(_, index)| *index < 3)
+            .unwrap();
+        let mut current = 0;
+        let mut list = candidates.clone();
+        let input = next_input(&mut rng, &mut list, &[], &order, &mut current).unwrap();
+        assert_eq!(input.tx_hash, candidates[index].tx_hash);
+        let mut expected: Vec<&str> = vec!["a0", "a1", "a2", "b0", "a3"];
+        expected[index] = "a3";
+        expected.pop();
+        let left: Vec<&str> = list.iter().map(|o| o.tx_hash.as_str()).collect();
+        assert_eq!(left, expected);
     }
 
     #[test]
@@ -833,6 +952,7 @@ mod tests {
                 &outputs,
                 amount,
                 1,
+                false,
                 None,
                 0,
                 RctType::ClsagBulletproofPlus,
@@ -842,6 +962,112 @@ mod tests {
         assert_eq!(select(144 * XMR).unwrap().selected.len(), 145);
         let error = select(145 * XMR).unwrap_err();
         assert!(error.contains("wallet2 would split"), "{error}");
+    }
+
+    fn small_outputs(count: u64, amount: u64) -> Vec<WalletOutput> {
+        (0..count)
+            .map(|i| {
+                let mut output = make_output(amount, &format!("tx{i}"));
+                output.block_height = 100 + 20 * i;
+                output
+            })
+            .collect()
+    }
+
+    #[test]
+    fn many_inputs_stop_at_wallet2s_fee_estimate() {
+        const XMR: u64 = 1_000_000_000_000;
+        let outputs = small_outputs(240, XMR / 100);
+        let fee_rate = FeeRate::new(1_200_000, 10_000).unwrap();
+        let rct = RctType::ClsagBulletproofPlus;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(5);
+        let selection = select_inputs_with_fee_and_rng(
+            &mut rng, &outputs, XMR, 1, false, None, 0, rct, fee_rate,
+        )
+        .unwrap();
+        assert_eq!(selection.selected.len(), 109);
+        assert_eq!(selection.total, 109 * XMR / 100);
+        assert!(selection.total >= XMR + wallet2_fee_estimate(109, 2, 0, rct, fee_rate).unwrap());
+        assert!(
+            selection.total
+                < XMR + wallet2_fee_estimate(108, 2, 0, rct, fee_rate).unwrap() + XMR / 100
+        );
+        assert_eq!(selection.further.len(), 2);
+        let covered = selection.total + 2 * XMR / 100;
+        assert!(covered >= XMR + estimate_fee_with_rate(111, 2, rct, fee_rate).unwrap());
+        assert!(covered - XMR / 100 < XMR + estimate_fee_with_rate(110, 2, rct, fee_rate).unwrap());
+        let mut keys: Vec<_> = selection
+            .selected
+            .iter()
+            .chain(&selection.further)
+            .map(WalletOutput::output_key)
+            .collect();
+        keys.sort();
+        keys.dedup();
+        assert_eq!(keys.len(), 111, "further inputs are not already selected");
+    }
+
+    #[test]
+    fn an_integrated_destination_counts_its_payment_id() {
+        let outputs = small_outputs(100, 30_000_000);
+        let fee_rate = FeeRate::new(20_000, 10_000).unwrap();
+        let rct = RctType::ClsagBulletproofPlus;
+        let estimate =
+            |inputs, extra| wallet2_fee_estimate(inputs, 2, extra, rct, fee_rate).unwrap();
+        assert_eq!(wallet2_caller_extra(true), 11);
+        assert_eq!(estimate(5, 11) - estimate(5, 0), 11 * 20_000);
+        let select = |amount, integrated| {
+            let mut rng = rand::rngs::StdRng::seed_from_u64(5);
+            select_inputs_with_fee_and_rng(
+                &mut rng, &outputs, amount, 1, integrated, None, 0, rct, fee_rate,
+            )
+            .unwrap()
+        };
+        let mut decided_by_the_payment_id = 0;
+        for amount in (229_700_000..230_200_000)
+            .chain(246_200_000..246_600_000)
+            .step_by(20_000)
+        {
+            let without = select(amount, false);
+            let with = select(amount, true);
+            let len = |selection: &CoinSelectionResult| selection.selected.len();
+            assert!(without.total >= amount + estimate(len(&without), 0));
+            assert!(with.total >= amount + estimate(len(&with), 11));
+            if without.total < amount + estimate(len(&without), 11) {
+                decided_by_the_payment_id += 1;
+                assert!(len(&with) > len(&without), "amount {amount}");
+            }
+        }
+        assert_eq!(decided_by_the_payment_id, 22);
+    }
+
+    #[test]
+    fn inputs_added_for_the_fee_count_only_themselves() {
+        let outputs = small_outputs(100, 30_000_000);
+        let fee_rate = FeeRate::new(20_000, 10_000).unwrap();
+        let rct = RctType::ClsagBulletproofPlus;
+        let amount = 1_000_000_000;
+        let smallest = (1..=100u64)
+            .find(|n| {
+                n * 30_000_000
+                    >= amount + wallet2_fee_estimate(*n as usize, 2, 0, rct, fee_rate).unwrap()
+            })
+            .unwrap();
+        assert_eq!(smallest, 62);
+        let mut rng = rand::rngs::StdRng::seed_from_u64(6);
+        let selection = select_inputs_with_fee_and_rng(
+            &mut rng, &outputs, amount, 1, false, None, 0, rct, fee_rate,
+        )
+        .unwrap();
+        assert_eq!(selection.selected.len(), 63);
+    }
+
+    #[test]
+    fn wallet2_counts_outputs_like_get_num_outputs() {
+        assert_eq!(wallet2_output_count(1, 5, 5), 2);
+        assert_eq!(wallet2_output_count(1, 6, 5), 2);
+        assert_eq!(wallet2_output_count(3, 5, 5), 3);
+        assert_eq!(wallet2_output_count(3, 6, 5), 4);
     }
 
     #[test]
@@ -857,6 +1083,7 @@ mod tests {
             &[account_zero, account_three],
             1_000_000_000,
             1,
+            false,
             None,
             0,
             RctType::ClsagBulletproofPlus,
@@ -939,6 +1166,7 @@ mod tests {
                 &spendable,
                 amount,
                 1,
+                false,
                 manual,
                 0,
                 RctType::ClsagBulletproofPlus,

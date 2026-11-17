@@ -698,6 +698,7 @@ async fn selection_spends_only_outputs_unlocked_on_the_wallets_chain() {
             height,
             amount,
             1,
+            false,
             None,
             None,
             0,

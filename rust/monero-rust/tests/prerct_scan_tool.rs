@@ -303,6 +303,7 @@ async fn prerct_scan_tool() {
                     height,
                     total,
                     request.recipients.len(),
+                    false,
                     request.inputs.as_deref(),
                     None,
                     request.source_account,

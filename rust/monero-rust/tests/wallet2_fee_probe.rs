@@ -145,6 +145,7 @@ async fn probe_send() {
             daemon_height,
             amount,
             1,
+            false,
             None,
             None,
             0,

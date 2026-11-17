@@ -838,6 +838,7 @@ async fn regtest_samples() {
                         &spendable,
                         total,
                         cell.amounts.len(),
+                        false,
                         None,
                         cell.account,
                         rct_type,

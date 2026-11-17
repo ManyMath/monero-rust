@@ -668,6 +668,7 @@ async fn op_build(request: &Value) -> Value {
                 height,
                 total,
                 recipients.len(),
+                false,
                 inputs.as_deref(),
                 Some(&pending),
                 source_account,
@@ -704,6 +705,20 @@ async fn op_build(request: &Value) -> Value {
         build_state.set_ring_persister(Box::new(monero_rust::RingsNotPersisted));
         build_state.add_outputs(wallet_outputs.clone());
         let built = match kind {
+            "send" if inputs.is_none() => {
+                monero_rust::native::create_transaction_from_prepared_inputs(
+                    &rpc,
+                    &seed,
+                    &network_name,
+                    &prepared,
+                    &recipients,
+                    "",
+                    policy,
+                    &monero_rust::native::DecoyPolicy::default(),
+                    &mut build_state,
+                )
+                .await
+            }
             "send" => {
                 create_transaction_with_rpc_and_policy(
                     &rpc,
@@ -750,8 +765,19 @@ async fn op_build(request: &Value) -> Value {
                         })
                     })
                     .collect();
+                let spent: Vec<&WalletOutput> = result
+                    .input_rings
+                    .iter()
+                    .filter_map(|ring| {
+                        wallet_outputs
+                            .iter()
+                            .find(|output| output.key_image == ring.key_image)
+                    })
+                    .collect();
                 builds.push(json!({
                     "tx_id": result.tx_id,
+                    "inputs": spent.iter().map(|output| output.output_key()).collect::<Vec<_>>(),
+                    "input_total": spent.iter().map(|output| output.amount).sum::<u64>(),
                     "fee": result.fee,
                     "blob_bytes": result.tx_blob.len() / 2,
                     "tx_blob": if keep_blobs { Value::String(result.tx_blob.clone()) } else { Value::Null },
@@ -785,7 +811,17 @@ async fn op_build(request: &Value) -> Value {
                 .iter()
                 .map(|ring| ring.key_image.clone())
                 .collect(),
-            spent_output_keys: prepared.spent_output_keys.clone(),
+            spent_output_keys: result
+                .input_rings
+                .iter()
+                .filter_map(|ring| {
+                    state
+                        .outputs()
+                        .iter()
+                        .find(|output| output.key_image == ring.key_image)
+                        .map(|output| output.output_key())
+                })
+                .collect(),
             change_outputs: Vec::new(),
             fee: result.fee,
             created_at_secs: now_secs(),
@@ -804,6 +840,11 @@ async fn op_build(request: &Value) -> Value {
     json!({
         "wallet_height": height,
         "selected_inputs": prepared.spent_output_keys,
+        "further_inputs": prepared
+            .further_inputs
+            .iter()
+            .map(|input| format!("{}:{}", input.tx_hash, input.output_index))
+            .collect::<Vec<_>>(),
         "input_total": prepared.total_input,
         "estimated_fee": prepared.estimated_fee,
         "builds": builds,

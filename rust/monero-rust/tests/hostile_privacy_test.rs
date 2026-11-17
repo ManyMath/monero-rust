@@ -351,6 +351,7 @@ async fn automatic_priority_is_settled_once_per_transaction() {
         height,
         100_000_000_000,
         1,
+        false,
         None,
         None,
         0,
