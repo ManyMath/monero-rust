@@ -408,7 +408,6 @@ async fn candidate_ages_follow_wallet2s_picker() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "known defect: no ring is built while fewer than 76 outputs are older than the coinbase lock, where wallet2 requests every output"]
 async fn ring_is_built_on_a_chain_of_eighty_blocks() {
     let cumulative = cumulative_of(&[1u64; 80]);
     let node = Offline::new(&cumulative);
@@ -425,7 +424,6 @@ async fn ring_is_built_on_a_chain_of_eighty_blocks() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "known defect: candidate picking gives up after 1500 draws on a chain of about 90 blocks, where wallet2 keeps drawing"]
 async fn ring_is_built_when_most_draws_miss_the_chain() {
     let cumulative = cumulative_of(&[1u64; 90]);
     let node = Offline::new(&cumulative);

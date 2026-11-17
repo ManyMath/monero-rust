@@ -146,7 +146,7 @@ impl FakeNode {
         Self::with_blocks(vec![2; 2_000])
     }
 
-    fn with_blocks(per_block: Vec<u64>) -> Self {
+    pub fn with_blocks(per_block: Vec<u64>) -> Self {
         FakeNode(Arc::new(Mutex::new(NodeState {
             per_block,
             overrides: HashMap::new(),

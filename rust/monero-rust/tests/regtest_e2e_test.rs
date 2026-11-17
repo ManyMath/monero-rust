@@ -43,12 +43,6 @@ const NETWORK: monero_rust::Network = monero_rust::Network::Mainnet;
 /// Mine past coinbase's 60-confirmation maturity requirement.
 const BLOCKS_TO_MINE: usize = 80;
 
-/// Minimum chain height for the spending test.
-///
-/// Decoy selection samples ages from a gamma distribution and limits retries.
-/// A short coinbase-only chain has too few unlocked candidates. Earlier runs
-/// failed around 165 blocks and succeeded around 650; allow additional depth
-/// to reduce sensitivity to random sampling.
 const MIN_HEIGHT_TO_SPEND: usize = 750;
 
 const LOOKAHEAD: Lookahead = Lookahead {

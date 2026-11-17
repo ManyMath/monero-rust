@@ -210,6 +210,7 @@ mod tests {
                 block_number: 1_000,
                 rct_outputs_available: 20_000,
                 candidates: vec![candidates],
+                requests_everything: vec![false],
             },
             SpentOutput {
                 index_on_blockchain: real,
@@ -321,6 +322,120 @@ mod tests {
     }
 
     #[test]
+    fn a_short_chain_requests_every_output() {
+        use rand_core::SeedableRng;
+
+        let candidates = every_output(71, 75);
+        assert_eq!(candidates.len(), 75);
+        assert_eq!(&candidates[..71], (0..71).collect::<Vec<_>>().as_slice());
+        assert!(candidates[71..].iter().all(|index| *index == 70));
+        assert_eq!(every_output(75, 75), (0..75).collect::<Vec<_>>());
+
+        let point = |n: u64| Scalar::from(n) * ED25519_BASEPOINT_POINT;
+        let member = |index: u64| [point(index + 1), point(index + 50_000)];
+        let mut request = candidates.clone();
+        request.sort_unstable();
+        let mut fetched: Vec<_> = request.iter().map(|index| Some(member(*index))).collect();
+        fetched[3] = None;
+        let [key, commitment] = member(5);
+        let input = SpentOutput {
+            index_on_blockchain: 5,
+            key,
+            commitment,
+        };
+        let plan = CandidatePlan {
+            ring_len: 16,
+            block_number: 80,
+            rct_outputs_available: 80,
+            candidates: vec![candidates.clone()],
+            requests_everything: vec![true],
+        };
+        let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(1);
+        let rings = rings_from_reply(
+            &mut rng,
+            &plan,
+            std::slice::from_ref(&input),
+            &[None],
+            &fetched,
+            &HashSet::new(),
+        )
+        .unwrap();
+        let mut expected: Vec<u64> = (0..17).filter(|index| *index != 3).collect();
+        expected.truncate(16);
+        assert_eq!(absolute_indexes(&rings[0]).unwrap(), expected);
+
+        let mut scarce = fetched.clone();
+        for (position, entry) in scarce.iter_mut().enumerate().take(60) {
+            if position != 5 {
+                *entry = None;
+            }
+        }
+        let error = rings_from_reply(
+            &mut rng,
+            &plan,
+            std::slice::from_ref(&input),
+            &[None],
+            &scarce,
+            &HashSet::new(),
+        )
+        .unwrap_err();
+        assert!(error.contains("too few usable"), "{error}");
+
+        let mut two_faced = fetched;
+        two_faced[74] = Some(member(9));
+        let error = rings_from_reply(
+            &mut rng,
+            &plan,
+            std::slice::from_ref(&input),
+            &[None],
+            &two_faced,
+            &HashSet::new(),
+        )
+        .unwrap_err();
+        assert!(error.contains("two ways"), "{error}");
+    }
+
+    #[test]
+    fn a_persisted_candidate_set_never_repeats_an_output() {
+        let point = |n: u64| Scalar::from(n) * ED25519_BASEPOINT_POINT;
+        let input = SpentOutput {
+            index_on_blockchain: 5,
+            key: point(1),
+            commitment: point(2),
+        };
+        let refused = |candidates: &[u64]| {
+            let error = check_persisted_candidates(candidates, 75, &input, None).unwrap_err();
+            assert!(error.contains("repeats an output"), "{error}");
+        };
+        let every = every_output(71, 75);
+        refused(&every);
+        let mut other = every.clone();
+        other[74] = 6;
+        refused(&other);
+        let mut long: Vec<u64> = (0..74).collect();
+        long.push(73);
+        refused(&long);
+        check_persisted_candidates(&every_output(75, 75), 75, &input, None).unwrap();
+    }
+
+    #[test]
+    fn candidate_drawing_stops_on_a_distribution_without_room() {
+        use rand_core::SeedableRng;
+
+        let error = sample_candidates(
+            &mut rand_chacha::ChaCha20Rng::seed_from_u64(1),
+            &[100, 200],
+            100,
+            1e12,
+            &[5],
+            75,
+            &HashSet::new(),
+        )
+        .unwrap_err();
+        assert!(error.contains("draws"), "{error}");
+    }
+
+    #[test]
     fn wallet2_sanity_accepts_distinct_recent_outputs() {
         let first = ring_at(&(7000..7016).collect::<Vec<_>>());
         let second = ring_at(&(7100..7116).collect::<Vec<_>>());
@@ -331,6 +446,16 @@ mod tests {
 fn requested_outputs_count(ring_len: u8) -> usize {
     ((usize::from(ring_len) * 3) / 2 + 1)
         + (COINBASE_LOCK_WINDOW.saturating_sub(DEFAULT_LOCK_WINDOW))
+}
+
+const MAX_DRAWS_PER_INPUT: usize = 100_000;
+
+fn every_output(highest_output_exclusive_bound: u64, count: usize) -> Vec<u64> {
+    let newest = highest_output_exclusive_bound - 1;
+    (0..highest_output_exclusive_bound)
+        .chain(std::iter::repeat(newest))
+        .take(count)
+        .collect()
 }
 
 fn sample_candidates<R: RngCore + CryptoRng>(
@@ -352,19 +477,23 @@ fn sample_candidates<R: RngCore + CryptoRng>(
     if selected.len() > count {
         return Err("persisted ring is larger than the candidate request".to_string());
     }
-    let mut iters = 0usize;
+    let mut draws = 0usize;
     let mut allow_blackballed = false;
     while selected.len() < count {
-        iters += 1;
-        if (iters == 10 * count)
-            || (highest_output_exclusive_bound.saturating_sub(do_not_select.len() as u64)
-                < (count - selected.len()) as u64)
+        draws += 1;
+        if draws > MAX_DRAWS_PER_INPUT {
+            return Err(format!(
+                "no decoy candidates found in {MAX_DRAWS_PER_INPUT} draws: the node's output \
+                 distribution leaves almost no outputs old enough to spend"
+            ));
+        }
+        if highest_output_exclusive_bound.saturating_sub(do_not_select.len() as u64)
+            < (count - selected.len()) as u64
         {
             if allow_blackballed {
-                return Err("hit decoy selection round limit".to_string());
+                return Err("not enough decoy candidates".to_string());
             }
             allow_blackballed = true;
-            iters = 0;
             do_not_select.clear();
             do_not_select.extend(selected.iter().copied());
         }
@@ -485,7 +614,9 @@ fn ring_from_candidates(
                 }
                 continue;
             }
-            if blackballed.contains(index) != allow_blackballed {
+            if blackballed.contains(index) != allow_blackballed
+                || ring.iter().any(|(taken, _)| taken == index)
+            {
                 continue;
             }
             let Some([key, commitment]) = output else {
@@ -584,6 +715,7 @@ pub(crate) struct CandidatePlan {
     pub block_number: usize,
     rct_outputs_available: u64,
     pub candidates: Vec<Vec<u64>>,
+    pub requests_everything: Vec<bool>,
 }
 
 /// Decide every input's candidates, keeping recorded sets. Only chain-wide
@@ -625,12 +757,7 @@ pub(crate) async fn plan_candidates<R: RngCore + CryptoRng, C: RpcConnection>(
         return Err("not enough blocks to select decoys".to_string());
     }
     let highest_output_exclusive_bound = distribution[distribution.len() - DEFAULT_LOCK_WINDOW];
-    // This assumes that each miner TX had one output (as sane) and checks we
-    // have sufficient outputs even when excluding them (due to their own
-    // timelock requirements)
-    if highest_output_exclusive_bound.saturating_sub(COINBASE_LOCK_WINDOW as u64)
-        < u64::from(ring_len)
-    {
+    if highest_output_exclusive_bound < u64::from(ring_len) {
         return Err("not enough decoy candidates".to_string());
     }
     // wallet2 checks against the total. The unlocked bound also keeps outputs
@@ -659,10 +786,17 @@ pub(crate) async fn plan_candidates<R: RngCore + CryptoRng, C: RpcConnection>(
         .ok_or_else(|| "RPC returned an empty output distribution".to_string())?;
 
     let mut candidates = Vec::with_capacity(inputs.len());
+    let mut requests_everything = Vec::with_capacity(inputs.len());
     for ((input, ring), persisted) in inputs.iter().zip(existing_rings).zip(existing_candidates) {
+        let everything = persisted.is_none() && highest_output_exclusive_bound <= count as u64;
+        requests_everything.push(everything);
         if let Some(persisted) = persisted {
             check_persisted_candidates(persisted, count, input, ring.as_ref())?;
             candidates.push(persisted.clone());
+            continue;
+        }
+        if everything {
+            candidates.push(every_output(highest_output_exclusive_bound, count));
             continue;
         }
         let initial = match ring {
@@ -684,6 +818,7 @@ pub(crate) async fn plan_candidates<R: RngCore + CryptoRng, C: RpcConnection>(
         block_number,
         rct_outputs_available,
         candidates,
+        requests_everything,
     })
 }
 
@@ -756,6 +891,14 @@ fn rings_from_reply<R: RngCore + CryptoRng>(
     }
     if fetched.len() != start {
         return Err("node returned too few ring candidates".to_string());
+    }
+    for (position, requested) in request_orders.iter().enumerate() {
+        let reply = &fetched[starts[position]..starts[position] + requested.len()];
+        for pair in 1..requested.len() {
+            if requested[pair] == requested[pair - 1] && reply[pair] != reply[pair - 1] {
+                return Err("node described one requested output in two ways".to_string());
+            }
+        }
     }
 
     let mut secret_orders = plan.candidates.clone();

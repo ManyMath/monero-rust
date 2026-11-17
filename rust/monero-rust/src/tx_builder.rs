@@ -190,6 +190,16 @@ pub mod native {
         if key_images.len() != outputs.len() {
             return Err("selected ring count does not match stored input count".to_string());
         }
+        if let Some(output) = wallet_state
+            .outputs()
+            .iter()
+            .find(|output| output.pre_ringct && key_images.contains(&output.key_image))
+        {
+            return Err(format!(
+                "Output {}:{} is a pre-RingCT output; no decoys are drawn for it",
+                output.tx_hash, output.output_index
+            ));
+        }
         let existing_rings = recorded_rings(wallet_state, key_images)?;
         let existing_candidates: Vec<Option<Vec<u64>>> = key_images
             .iter()
@@ -215,7 +225,16 @@ pub mod native {
         )
         .await
         .map_err(|e| format!("Decoy selection failed: {}", e))?;
-        wallet_state.record_ring_candidates(key_images, &plan.candidates)?;
+        // Not recorded: reused on a longer chain, a request for every output
+        // would make the ring the oldest outputs.
+        let (fixed_key_images, fixed_candidates): (Vec<String>, Vec<Vec<u64>>) = key_images
+            .iter()
+            .zip(&plan.candidates)
+            .zip(&plan.requests_everything)
+            .filter(|(_, everything)| !**everything)
+            .map(|((key_image, candidates), _)| (key_image.clone(), candidates.clone()))
+            .unzip();
+        wallet_state.record_ring_candidates(&fixed_key_images, &fixed_candidates)?;
         wallet_state.persist_rings().await?;
         let decoys = crate::decoy_select::choose_rings(
             rng,
