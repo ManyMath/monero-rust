@@ -29,6 +29,7 @@ pub mod wallet_state;
 pub mod epee_compat;
 pub mod fee_estimate;
 pub mod key_image_signing;
+pub mod signed_tx_checks;
 pub mod tx_builder;
 pub mod tx_prepare;
 pub mod tx_utils;

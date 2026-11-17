@@ -788,7 +788,7 @@ pub mod native {
         }
     }
 
-    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     pub struct ChangeOutputInfo {
         pub tx_hash: String,
         pub output_index: u8,
@@ -1006,6 +1006,24 @@ pub mod native {
         lookahead: Lookahead,
         change_subaddress: Option<SubaddressIndex>,
     ) -> Result<Vec<ChangeOutputInfo>, String> {
+        own_transaction_outputs(tx, tx_id, view_pair, lookahead, change_subaddress)?
+            .into_iter()
+            .map(|(mut output, key_offset)| {
+                let one_time_key_scalar = Zeroizing::new(*spend_key + *key_offset);
+                let key_image_point = generate_key_image(&one_time_key_scalar);
+                output.key_image = hex::encode(key_image_point.compress().to_bytes());
+                Ok(output)
+            })
+            .collect()
+    }
+
+    pub(crate) fn own_transaction_outputs(
+        tx: &Transaction,
+        tx_id: &str,
+        view_pair: ViewPair,
+        lookahead: Lookahead,
+        change_subaddress: Option<SubaddressIndex>,
+    ) -> Result<Vec<(ChangeOutputInfo, Zeroizing<Scalar>)>, String> {
         let mut scanner = monero_wallet::Scanner::new(view_pair);
         crate::scanner::register_subaddresses(&mut scanner, lookahead);
         // Change may go to a subaddress outside the lookahead.
@@ -1034,22 +1052,22 @@ pub mod native {
                     .map(|idx| (idx.account(), idx.address()));
                 let received_output_bytes = hex::encode(output.serialize());
 
-                let one_time_key_scalar = Zeroizing::new(*spend_key + key_offset_scalar);
-                let key_image_point = generate_key_image(&one_time_key_scalar);
-                let key_image = hex::encode(key_image_point.compress().to_bytes());
-
-                Ok(ChangeOutputInfo {
-                    tx_hash: tx_id.to_string(),
-                    output_index: u8::try_from(output.index_in_transaction())
-                        .map_err(|_| "Signed transaction output index exceeds u8".to_string())?,
-                    amount,
-                    key,
-                    key_offset,
-                    commitment_mask,
-                    subaddress_index,
-                    received_output_bytes,
-                    key_image,
-                })
+                Ok((
+                    ChangeOutputInfo {
+                        tx_hash: tx_id.to_string(),
+                        output_index: u8::try_from(output.index_in_transaction()).map_err(
+                            |_| "Signed transaction output index exceeds u8".to_string(),
+                        )?,
+                        amount,
+                        key,
+                        key_offset,
+                        commitment_mask,
+                        subaddress_index,
+                        received_output_bytes,
+                        key_image: String::new(),
+                    },
+                    Zeroizing::new(key_offset_scalar),
+                ))
             })
             .collect()
     }
@@ -1931,7 +1949,8 @@ pub mod native {
     }
 
     /// Relay signed transaction bytes, after checking and recording their rings
-    /// in the wallet's ring database.
+    /// in the wallet's ring database. For the offline signer's answer, see
+    /// `broadcast_offline_signed_transaction`.
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn broadcast_raw_transaction(
         node_url: &str,
@@ -1967,6 +1986,65 @@ pub mod native {
             .await
             .map_err(|e| format!("Failed to broadcast: {:?}", e))?;
         check_send_raw_transaction_response(&response.to_string())
+    }
+
+    /// Check the offline signer's answer against `request`, then relay it as
+    /// `broadcast_raw_transaction` does.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(clippy::too_many_arguments)]
+    pub async fn broadcast_offline_signed_transaction(
+        node_url: &str,
+        request: &UnsignedTransactionResult,
+        signed: &OfflineSignResult,
+        view_key_hex: &str,
+        pub_spend_key_hex: &str,
+        wallet_state: &mut crate::wallet_state::WalletState,
+        do_not_relay: bool,
+    ) -> Result<(), String> {
+        let rpc = HttpRpc::new(node_url.to_string())
+            .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
+        broadcast_offline_signed_transaction_with_rpc(
+            &rpc,
+            request,
+            signed,
+            view_key_hex,
+            pub_spend_key_hex,
+            wallet_state,
+            do_not_relay,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn broadcast_offline_signed_transaction_with_rpc<R: RpcConnection>(
+        rpc: &Rpc<R>,
+        request: &UnsignedTransactionResult,
+        signed: &OfflineSignResult,
+        view_key_hex: &str,
+        pub_spend_key_hex: &str,
+        wallet_state: &mut crate::wallet_state::WalletState,
+        do_not_relay: bool,
+    ) -> Result<(), String> {
+        let key = |hex_key: &str, what: &str| -> Result<Zeroizing<[u8; 32]>, String> {
+            let bytes =
+                Zeroizing::new(hex::decode(hex_key).map_err(|_| format!("{what} is not hex"))?);
+            let mut key = Zeroizing::new([0u8; 32]);
+            if bytes.len() != 32 {
+                return Err(format!("{what} must be 32 bytes"));
+            }
+            key.copy_from_slice(&bytes);
+            Ok(key)
+        };
+        let view_secret_key = key(view_key_hex, "view key")?;
+        let public_spend_key = key(pub_spend_key_hex, "public spend key")?;
+        crate::signed_tx_checks::check_offline_signed_transaction(
+            &request.unsigned_tx_hex,
+            signed,
+            &view_secret_key,
+            &public_spend_key,
+        )
+        .map_err(|e| format!("Refusing to relay: {e}"))?;
+        broadcast_raw_transaction_with_rpc(rpc, &signed.tx_blob, wallet_state, do_not_relay).await
     }
 
     /// An output `get_received_outputs_from_scan` found.
@@ -2049,6 +2127,8 @@ pub mod native {
         received_outputs_from_scan_inner(rpc, block_height, seed_phrase, passphrase).await
     }
 
+    /// An unsigned transaction in the crate's format, for the offline signer.
+    /// Relay the answer with `broadcast_offline_signed_transaction`.
     #[must_use]
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct UnsignedTransactionResult {
