@@ -98,7 +98,7 @@ async fn honest_send_hides_each_input_in_one_batched_get_outs_request() {
             "get_height",
             "get_output_distribution.bin",
             "get_outs.bin",
-            "send_raw_transaction",
+            "sendrawtransaction",
         ]
     );
     assert_no_revealing_requests(&node);

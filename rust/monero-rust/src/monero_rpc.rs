@@ -781,6 +781,7 @@ fn response_limit(route: &str, method: Option<&str>) -> usize {
         ("get_output_distribution.bin", _) | ("json_rpc", Some("get_txpool_backlog")) => 64 * MIB,
         ("get_height", _)
         | ("send_raw_transaction", _)
+        | ("sendrawtransaction", _)
         | ("get_o_indexes.bin", _)
         | (
             "json_rpc",
@@ -1745,9 +1746,11 @@ impl<R: RpcConnection> Rpc<R> {
             reason: String,
         }
 
+        // As wallet2 relays: /sendrawtransaction with the transaction and
+        // `client` only.
         let res: SendRawResponse = self
             .rpc_call(
-                "send_raw_transaction",
+                "sendrawtransaction",
                 Some(json!({ "tx_as_hex": hex::encode(tx.serialize()) })),
             )
             .await?;

@@ -320,7 +320,7 @@ impl RpcConnection for FakeNode {
                 })
                 .unwrap())
             }
-            "send_raw_transaction" => {
+            "send_raw_transaction" | "sendrawtransaction" => {
                 let request: serde_json::Value =
                     serde_json::from_slice(&body).map_err(|_| RpcError::InvalidNode)?;
                 let mut state = self.0.lock().unwrap();

@@ -432,7 +432,7 @@ impl RpcConnection for SnapshotNode {
             "get_output_distribution.bin" => self.get_distribution(),
             "getblocks.bin" => self.get_blocks(&body),
             "get_transaction_pool" => json_bytes(self.snapshot.transaction_pool.clone()),
-            "send_raw_transaction" => {
+            "send_raw_transaction" | "sendrawtransaction" => {
                 let request: Value =
                     serde_json::from_slice(&body).map_err(|_| RpcError::InvalidNode)?;
                 self.relayed.lock().unwrap().push(

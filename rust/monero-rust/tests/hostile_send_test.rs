@@ -333,7 +333,7 @@ async fn unusable_decoys_are_never_put_in_a_ring() {
             "{name}: built a transaction from unusable decoys"
         );
         assert_eq!(node.count("get_outs.bin"), 1, "{name}: no retry");
-        assert_eq!(node.count("send_raw_transaction"), 0);
+        assert_eq!(node.count("sendrawtransaction"), 0);
     }
 }
 

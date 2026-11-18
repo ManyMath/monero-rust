@@ -454,7 +454,7 @@ class LoggingProxy:
                 entry["params"] = req.get("params")
             else:
                 entry["params"] = req
-            if path == "send_raw_transaction" or entry.get("method") in ("get_fee_estimate",):
+            if path in ("send_raw_transaction", "sendrawtransaction") or entry.get("method") in ("get_fee_estimate",):
                 try:
                     entry["resp"] = json.loads(resp)
                 except Exception:  # noqa: BLE001

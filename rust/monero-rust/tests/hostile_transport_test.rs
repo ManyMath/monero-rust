@@ -374,8 +374,8 @@ async fn dropped_connections_are_retried_for_read_only_calls_only() {
     let (url, accepted) = node(1).await;
     let relay: Result<serde_json::Value, _> = client(url)
         .rpc_call(
-            "send_raw_transaction",
-            Some(serde_json::json!({ "tx_as_hex": "00", "do_not_relay": false })),
+            "sendrawtransaction",
+            Some(serde_json::json!({ "tx_as_hex": "00" })),
         )
         .await;
     assert!(relay.is_err());

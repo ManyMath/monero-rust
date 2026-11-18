@@ -1707,14 +1707,14 @@ pub mod native {
             .map_err(|e| format!("Invalid transaction: {:?}", e))?;
         wallet_state.record_transaction_rings(&tx.serialize())?;
         wallet_state.persist_rings().await?;
+        // Like wallet2's request (wallet2.cpp:7710-7722), carry `do_not_relay`
+        // only when true.
+        let mut params = serde_json::json!({ "tx_as_hex": hex::encode(tx.serialize()) });
+        if do_not_relay {
+            params["do_not_relay"] = Value::Bool(true);
+        }
         let response: Value = rpc
-            .rpc_call(
-                "send_raw_transaction",
-                Some(serde_json::json!({
-                    "tx_as_hex": hex::encode(tx.serialize()),
-                    "do_not_relay": do_not_relay,
-                })),
-            )
+            .rpc_call("sendrawtransaction", Some(params))
             .await
             .map_err(|e| format!("Failed to broadcast: {:?}", e))?;
         check_send_raw_transaction_response(&response.to_string())
