@@ -1,0 +1,15 @@
+{
+  "id": "0",
+  "jsonrpc": "2.0",
+  "result": {
+    "block_size_limit": 600000,
+    "block_weight_limit": 600000,
+    "block_weight_median": 300000,
+    "height": 5500,
+    "nettype": "fakechain",
+    "status": "OK",
+    "target_height": 0,
+    "tx_pool_size": 7,
+    "version": "0.18.5.3-release"
+  }
+}
