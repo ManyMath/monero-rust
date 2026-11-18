@@ -227,6 +227,19 @@ impl BlockHashChain {
     pub fn is_empty(&self) -> bool {
         self.hashes.is_empty()
     }
+
+    pub(crate) fn base_height(&self) -> Option<u64> {
+        match self.hashes.range(1..).next() {
+            Some((&1, _)) => Some(0),
+            Some((&lowest, _)) => Some(lowest),
+            None => self.hashes.contains_key(&0).then_some(0),
+        }
+    }
+
+    /// Forget ids below `height` but genesis, as wallet2's `hashchain::trim`.
+    pub(crate) fn trim_below(&mut self, height: u64) {
+        self.hashes.retain(|&h, _| h == 0 || h >= height);
+    }
 }
 
 /// A conflict detected when a key image is spent at two different heights.

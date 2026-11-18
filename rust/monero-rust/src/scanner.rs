@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 
 use crate::wallet_output::WalletOutput;
+use crate::wallet_state::WalletState;
 use std::collections::{HashMap, HashSet};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
@@ -1414,10 +1415,7 @@ fn parse_block_transaction_blobs(
 
 /// Scan a batch of blocks fetched via `/getblocks.bin` for outputs belonging to the wallet.
 ///
-/// This is dramatically faster than scanning one block at a time because it fetches
-/// up to ~1000 blocks in a single RPC call instead of 4 calls per block.
-///
-/// The scanner is set up once and reused across all blocks in the batch.
+/// A node can tell this request from wallet2's; `Refresh` sends wallet2's.
 pub async fn scan_blocks_batch<R: RpcConnection>(
     rpc: &Rpc<R>,
     start_height: u64,
@@ -1465,6 +1463,32 @@ pub async fn scan_blocks_batch<R: RpcConnection>(
 pub async fn process_batch_response(
     response: GetBlocksFastResponse,
     requested_start_height: u64,
+    mnemonic: &str,
+    network: Network,
+    lookahead: Lookahead,
+    cached: Option<CachedScanner>,
+    passphrase: &str,
+) -> Result<(Vec<BlockScanResult>, CachedScanner), String> {
+    scan_batch_response(
+        response,
+        requested_start_height,
+        0,
+        mnemonic,
+        network,
+        lookahead,
+        cached,
+        passphrase,
+    )
+    .await
+}
+
+/// `process_batch_response` that reports blocks below `scan_from` without
+/// scanning them, as wallet2 skips them (`should_skip_block`).
+#[allow(clippy::too_many_arguments)]
+async fn scan_batch_response(
+    response: GetBlocksFastResponse,
+    requested_start_height: u64,
+    scan_from: u64,
     mnemonic: &str,
     _network: Network,
     lookahead: Lookahead,
@@ -1590,6 +1614,21 @@ pub async fn process_batch_response(
                 &parsed_txs,
                 response.output_indices.get(block_idx),
             )?;
+            if block_height < scan_from {
+                results.push(BlockScanResult {
+                    previous_block_hash: hex::encode(block.header.previous),
+                    block_height,
+                    block_hash,
+                    block_timestamp,
+                    tx_count,
+                    outputs: Vec::new(),
+                    daemon_height,
+                    spent_key_images: Vec::new(),
+                    spent_key_image_tx_hashes: Vec::new(),
+                    spent_key_image_rings: Vec::new(),
+                });
+                continue;
+            }
             let scanned = scan_parsed_block_expanding(
                 &mut scanner.scanner,
                 &mut scanner.watermark,
@@ -1932,6 +1971,7 @@ pub async fn scan_blocks_batch_multi_wallet_with_url(
 /// use `GetBlocksFastResponse` directly.
 pub struct FetchedBlocks {
     response: GetBlocksFastResponse,
+    scan_from: u64,
     /// Requested start height, retained for validation against the daemon's response.
     requested_start_height: u64,
     /// Wallet-supplied anchors for the zero-height history negotiation sentinel.
@@ -1946,6 +1986,17 @@ impl FetchedBlocks {
         if self.requested_start_height != 0 || self.requested_history.is_empty() {
             check_batch_start_height(self.response.start_height, self.requested_start_height)?;
             return Ok(self.requested_start_height);
+        }
+        // monerod answers a list that starts with its top block with no blocks
+        // (core_rpc_server.cpp:704-709).
+        if self.response.blocks.is_empty() {
+            let (tip, _) = self.requested_history[0];
+            if self.response.start_height == 0 && self.response.current_height == tip + 1 {
+                return Ok(tip + 1);
+            }
+            return Err(
+                "History-negotiated batch is missing its common starting block".to_string(),
+            );
         }
         let entry = self.response.blocks.first().ok_or_else(|| {
             "History-negotiated batch is missing its common starting block".to_string()
@@ -1972,12 +2023,333 @@ impl FetchedBlocks {
     pub fn is_empty(&self) -> bool {
         self.response.blocks.is_empty()
     }
+
+    /// Height of the first block in the batch, checked against the request.
+    pub fn start_height(&self) -> Result<u64, String> {
+        self.validated_start_height()
+    }
+
+    /// The chain length the node claimed. Unverified.
+    pub fn daemon_height(&self) -> u64 {
+        self.response.current_height
+    }
+
+    fn last_block_ids(&self, count: usize) -> Result<Vec<(u64, [u8; 32])>, String> {
+        let start = self.validated_start_height()?;
+        let blocks = &self.response.blocks;
+        let first = blocks.len().saturating_sub(count);
+        blocks[first..]
+            .iter()
+            .enumerate()
+            .map(|(offset, entry)| {
+                let block = OxideBlock::read(&mut entry.block.as_slice())
+                    .map_err(|e| format!("Failed to parse block: {e}"))?;
+                Ok((start + (first + offset) as u64, block.hash()))
+            })
+            .collect()
+    }
+}
+
+/// The id of a network's genesis block; a regtest daemon runs mainnet's.
+pub fn genesis_block_hash(network: Network) -> [u8; 32] {
+    let hex = match network {
+        Network::Mainnet => "418015bb9ae982a1975da7d79277c2705727a56894ba0fb246adaabb1f4632e3",
+        Network::Testnet => "48ca7cd3c8de5b6a4d53d2861fbdaedca141553559f9be9520068053cda8430b",
+        Network::Stagenet => "76ee3cc98646292206cd3e86f74d88b4dcc1d937088645e9b0cbca84b7ce74eb",
+    };
+    let mut hash = [0u8; 32];
+    hex::decode_to_slice(hex, &mut hash).expect("constant genesis id");
+    hash
+}
+
+/// wallet2's `drop_from_short_history` (wallet2.cpp:784-795): remove the `n`
+/// entries before the last one, which is genesis.
+fn drop_from_short_history<T>(history: &mut Vec<T>, n: usize) {
+    if history.len() > n {
+        let last = history.len() - 1;
+        history.drain(last - n..last);
+    }
+}
+
+/// wallet2's block id list for `chain`, and the entries of it the wallet holds.
+fn short_history(
+    chain: &crate::wallet_state::BlockHashChain,
+    network: Network,
+    granularity: u64,
+) -> Result<(Vec<(u64, [u8; 32])>, Vec<(u64, [u8; 32])>), String> {
+    let genesis = genesis_block_hash(network);
+    let mut genesis_only;
+    let chain = if chain.is_empty() {
+        genesis_only = crate::wallet_state::BlockHashChain::new();
+        genesis_only.record_block(0, hex::encode(genesis));
+        &genesis_only
+    } else {
+        chain
+    };
+    let mut known = Vec::new();
+    for (height, hash) in chain.get_short_chain_history_with_granularity(granularity) {
+        let hash = hex_to_hash(&hash)?;
+        if height == 0 && hash != genesis {
+            continue;
+        }
+        known.push((height, hash));
+    }
+    let mut history = known.clone();
+    if history.last() != Some(&(0, genesis)) {
+        history.push((0, genesis));
+    }
+    Ok((history, known))
+}
+
+fn block_ids_missing(
+    chain: &crate::wallet_state::BlockHashChain,
+    network: Network,
+    restore_height: u64,
+) -> bool {
+    let size = chain.tip_height().map_or(1, |tip| tip + 1);
+    restore_height > size || unanchored_base(chain, network).is_some()
+}
+
+fn unanchored_base(chain: &crate::wallet_state::BlockHashChain, network: Network) -> Option<u64> {
+    let base = chain.base_height().filter(|base| *base > 0)?;
+    let checkpoint = crate::checkpoints::at(network, base).map(hex::encode);
+    match (checkpoint, chain.get_hash(base)) {
+        (Some(checkpoint), Some(held)) if checkpoint == held => None,
+        _ => Some(base),
+    }
+}
+
+/// wallet2's `fast_refresh`: record `chain`'s missing block ids below `stop_height`.
+async fn pull_block_ids<R: RpcConnection>(
+    rpc: &Rpc<R>,
+    chain: &mut crate::wallet_state::BlockHashChain,
+    network: Network,
+    stop_height: u64,
+    granularity: u64,
+) -> Result<(), String> {
+    let (checkpoint, checkpoint_id) = crate::checkpoints::fetch_base(network, stop_height);
+    let tip = chain.tip_height().unwrap_or(0);
+    let mut trimmed = match checkpoint_id {
+        Some(id) if stop_height > checkpoint && tip < checkpoint => {
+            chain.trim_below(checkpoint);
+            chain.record_block(checkpoint, hex::encode(id));
+            true
+        }
+        _ => false,
+    };
+    let mut history = short_history(chain, network, if trimmed { 1 } else { granularity })?.0;
+    let mut current = chain.tip_height().map_or(1, |tip| tip + 1);
+    let mut reached = 0u64;
+    while current < stop_height {
+        let ids: Vec<[u8; 32]> = history.iter().map(|(_, id)| *id).collect();
+        let reply = rpc
+            .get_hashes(&ids, 0)
+            .await
+            .map_err(|e| format!("Failed to fetch block ids: {:?}", e))?;
+        if reply.ids.len() <= 3 {
+            return Ok(());
+        }
+        let start = reply.start_height;
+        if start < chain.base_height().unwrap_or(0) {
+            if !trimmed {
+                return Err(format!(
+                    "The node's block ids start at height {start}, below the first block \
+                     the wallet holds"
+                ));
+            }
+            chain.rollback_to(checkpoint);
+            trimmed = false;
+            history = short_history(chain, network, 1)?.0;
+            current = chain.tip_height().map_or(1, |tip| tip + 1);
+            reached = 0;
+            continue;
+        }
+        if !history.contains(&(start, reply.ids[0])) {
+            return Err(format!(
+                "The node's block ids start at height {start}, which is not a block the \
+                 request named"
+            ));
+        }
+        let end = start + reply.ids.len() as u64;
+        if end <= reached {
+            return Err("The node's block ids do not move forward".to_string());
+        }
+        reached = end;
+        current = start;
+        if end < stop_height {
+            drop_from_short_history(&mut history, 3);
+            for (offset, id) in reply.ids.iter().enumerate().skip(reply.ids.len() - 3).rev() {
+                history.insert(0, (start + offset as u64, *id));
+            }
+        }
+        for id in &reply.ids {
+            let id_hex = hex::encode(id);
+            match chain.get_hash(current) {
+                Some(held) if held != id_hex => return Ok(()),
+                Some(_) => {}
+                None => chain.record_block(current, id_hex),
+            }
+            current += 1;
+            if current >= stop_height {
+                return Ok(());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The block requests of one refresh, made as wallet2's refresh makes them. Call
+/// `fetch_block_ids`, then `next_batch` until `None`, processing each batch before
+/// the next; start a new `Refresh` after a reorganisation or an error.
+#[derive(Debug, Clone)]
+pub struct Refresh {
+    history: Vec<(u64, [u8; 32])>,
+    network: Network,
+    restore_height: u64,
+    granularity: u64,
+    block_ids_missing: bool,
+    known: Vec<(u64, [u8; 32])>,
+    start_height: u64,
+    client_key: crate::monero_rpc::RpcClientKey,
+    tail: Vec<(u64, [u8; 32])>,
+    previous_start: Option<u64>,
+    done: bool,
+}
+
+impl Refresh {
+    /// A refresh of `state` on `network`, as wallet2 makes it against a
+    /// trusted daemon or after its first refresh.
+    pub fn new(state: &WalletState, network: Network, restore_height: u64) -> Result<Self, String> {
+        Self::with_granularity(state, network, restore_height, 1)
+    }
+
+    /// A refresh whose first list is rounded down to `granularity`; wallet2 uses
+    /// 1024 on its first refresh against an untrusted daemon (wallet2.cpp:4147).
+    pub fn with_granularity(
+        state: &WalletState,
+        network: Network,
+        restore_height: u64,
+        granularity: u64,
+    ) -> Result<Self, String> {
+        let (history, known) = short_history(&state.block_hashes, network, granularity)?;
+        Ok(Refresh {
+            history,
+            network,
+            restore_height,
+            granularity,
+            block_ids_missing: block_ids_missing(&state.block_hashes, network, restore_height),
+            known,
+            start_height: 0,
+            client_key: state.rpc_client_key().clone(),
+            tail: Vec::new(),
+            previous_start: None,
+            done: false,
+        })
+    }
+
+    /// Whether the refresh has reached the node's tip.
+    pub fn is_done(&self) -> bool {
+        self.done
+    }
+
+    /// Fetch the block ids `state` is missing below the restore height, as
+    /// wallet2's `fast_refresh` does. `next_batch` refuses to run until this is done.
+    pub async fn fetch_block_ids<R: RpcConnection>(
+        &mut self,
+        rpc: &Rpc<R>,
+        state: &mut WalletState,
+    ) -> Result<(), String> {
+        if !self.block_ids_missing {
+            return Ok(());
+        }
+        let network = self.network;
+        if let Some(base) = unanchored_base(&state.block_hashes, network) {
+            let mut below = crate::wallet_state::BlockHashChain::new();
+            pull_block_ids(rpc, &mut below, network, base, 1).await?;
+            for height in below.earliest_height().unwrap_or(base)..base {
+                if let Some(hash) = below.get_hash(height) {
+                    state.block_hashes.record_block(height, hash.to_string());
+                }
+            }
+        }
+        let size = state.block_hashes.tip_height().map_or(1, |tip| tip + 1);
+        if self.restore_height > size {
+            pull_block_ids(
+                rpc,
+                &mut state.block_hashes,
+                network,
+                self.restore_height,
+                self.granularity,
+            )
+            .await?;
+        }
+        if let Some(tip) = state.block_hashes.tip_height() {
+            state.current_height = state.current_height.max(tip);
+        }
+        let (history, known) = short_history(&state.block_hashes, network, self.granularity)?;
+        self.history = history;
+        self.known = known;
+        self.block_ids_missing = false;
+        Ok(())
+    }
+
+    /// Ask for the next batch; `None` once the refresh is done. Requests are
+    /// signed with the refreshed wallet's key, whatever key `rpc` has.
+    pub async fn next_batch<R: RpcConnection>(
+        &mut self,
+        rpc: &Rpc<R>,
+    ) -> Result<Option<FetchedBlocks>, String> {
+        let rpc = &rpc.with_client_key(&self.client_key);
+        if self.done {
+            return Ok(None);
+        }
+        if self.block_ids_missing {
+            return Err(
+                "The wallet holds no block ids below its restore height; call \
+                 Refresh::fetch_block_ids before asking for blocks"
+                    .to_string(),
+            );
+        }
+        drop_from_short_history(&mut self.history, 3);
+        for id in self.tail.drain(..) {
+            self.history.insert(0, id);
+            self.known.insert(0, id);
+        }
+        let block_ids: Vec<[u8; 32]> = self.history.iter().map(|(_, hash)| *hash).collect();
+        let response = rpc
+            .get_blocks_fast(&block_ids, self.start_height, true)
+            .await
+            .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
+        let fetched = FetchedBlocks {
+            response,
+            scan_from: self.restore_height,
+            requested_start_height: self.start_height,
+            requested_history: if self.start_height == 0 {
+                self.known.clone()
+            } else {
+                Vec::new()
+            },
+        };
+        let start = fetched.validated_start_height()?;
+        self.start_height = 0;
+        if fetched.is_empty() || self.previous_start == Some(start) {
+            self.done = true;
+        } else {
+            let tail = fetched.last_block_ids(3)?;
+            let (last, _) = tail[tail.len() - 1];
+            if last + 1 >= fetched.daemon_height() {
+                self.done = true;
+            }
+            self.tail = tail;
+        }
+        self.previous_start = Some(start);
+        Ok(Some(fetched))
+    }
 }
 
 /// Fetch a batch of blocks without scanning them.
 ///
-/// This is the fetch-only half of `scan_blocks_batch_with_url`, designed for
-/// double-buffered pipelining: fetch the next batch while processing the current one.
+/// A node can tell this request from wallet2's; `Refresh` sends wallet2's.
 pub async fn fetch_blocks_batch<R: RpcConnection>(
     rpc: &Rpc<R>,
     start_height: u64,
@@ -1994,6 +2366,7 @@ pub async fn fetch_blocks_batch<R: RpcConnection>(
         .map_err(|e| format!("Failed to fetch blocks batch: {:?}", e))?;
     Ok(FetchedBlocks {
         response,
+        scan_from: 0,
         requested_start_height: start_height,
         requested_history: Vec::new(),
     })
@@ -2019,9 +2392,10 @@ pub async fn process_fetched_batch(
     passphrase: &str,
 ) -> Result<Vec<BlockScanResult>, String> {
     let validated_start_height = fetched.validated_start_height()?;
-    let (results, _cached) = process_batch_response(
+    let (results, _cached) = scan_batch_response(
         fetched.response,
         validated_start_height,
+        fetched.scan_from,
         mnemonic,
         network,
         lookahead,
@@ -2042,9 +2416,10 @@ pub async fn process_fetched_batch_cached(
     passphrase: &str,
 ) -> Result<(Vec<BlockScanResult>, CachedScanner), String> {
     let validated_start_height = fetched.validated_start_height()?;
-    process_batch_response(
+    scan_batch_response(
         fetched.response,
         validated_start_height,
+        fetched.scan_from,
         mnemonic,
         network,
         lookahead,
@@ -2112,6 +2487,8 @@ pub async fn scan_blocks_batch_with_history_url(
 
 /// Fetch a batch of blocks using known hash history, without scanning; see
 /// `scan_blocks_batch_with_history`.
+///
+/// The request matches wallet2's only when made as `Refresh` makes it.
 pub async fn fetch_blocks_batch_with_history<R: RpcConnection>(
     rpc: &Rpc<R>,
     start_height: u64,
@@ -2152,6 +2529,7 @@ pub async fn fetch_blocks_batch_with_history<R: RpcConnection>(
     let actual_start = response.start_height;
     let fetched = FetchedBlocks {
         response,
+        scan_from: 0,
         requested_start_height: start_height,
         requested_history,
     };
@@ -2431,6 +2809,262 @@ mod tests {
             extract_key_images_from_raw_tx(&blob),
             vec!["aa".repeat(32), "bb".repeat(32)]
         );
+    }
+
+    #[test]
+    fn genesis_ids_are_the_networks_genesis_blocks() {
+        let mainnet_tx = "013c01ff0001ffffffffffff03029b2e4c0281c0b02e7c53291a94d1d0cbff8883f80\
+                          24f5142ee494ffbbd08807121017767aafcde9be00dcfd098715ebcf7f410daebc582\
+                          fda69d24a28e9d0bc890d1";
+        let stagenet_tx = "013c01ff0001ffffffffffff0302df5d56da0c7d643ddd1ce61901c7bdc5fb1738bfe3\
+                           9fbe69c28a3a7032729c0f2101168d0c4ca86fb55a4cf6a36d31431be1c53a3bd7411b\
+                           b24e8832410289fa6f3b";
+        for (network, tx, nonce) in [
+            (Network::Mainnet, mainnet_tx, 10000u32),
+            (Network::Testnet, mainnet_tx, 10001),
+            (Network::Stagenet, stagenet_tx, 10002),
+        ] {
+            let mut blob = vec![1, 0, 0];
+            blob.extend_from_slice(&[0u8; 32]);
+            blob.extend_from_slice(&nonce.to_le_bytes());
+            blob.extend_from_slice(&hex::decode(tx).unwrap());
+            blob.push(0);
+            let block = OxideBlock::read(&mut blob.as_slice()).unwrap();
+            assert_eq!(block.hash(), genesis_block_hash(network), "{network:?}");
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    struct HashNode {
+        ids: Vec<[u8; 32]>,
+        requests: std::sync::Arc<std::sync::Mutex<Vec<Vec<Option<u64>>>>>,
+    }
+
+    impl HashNode {
+        fn new(length: u64, checkpoints: bool) -> Self {
+            let ids = (0..length)
+                .map(
+                    |height| match crate::checkpoints::at(Network::Mainnet, height) {
+                        _ if height == 0 => genesis_block_hash(Network::Mainnet),
+                        Some(id) if checkpoints => id,
+                        _ => {
+                            let mut id: [u8; 32] = Keccak256::digest(height.to_le_bytes()).into();
+                            id[0] ^= 0x5a;
+                            id
+                        }
+                    },
+                )
+                .collect();
+            HashNode {
+                ids,
+                requests: Default::default(),
+            }
+        }
+
+        fn requests(&self) -> Vec<Vec<Option<u64>>> {
+            self.requests.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl RpcConnection for HashNode {
+        async fn post(
+            &self,
+            route: &str,
+            body: Vec<u8>,
+        ) -> Result<Vec<u8>, crate::monero_rpc::RpcError> {
+            #[derive(Deserialize)]
+            struct Request {
+                #[serde(with = "serde_bytes")]
+                block_ids: Vec<u8>,
+                start_height: u64,
+            }
+            #[derive(Serialize)]
+            struct Reply {
+                current_height: u64,
+                #[serde(with = "serde_bytes")]
+                m_block_ids: Vec<u8>,
+                start_height: u64,
+                status: String,
+            }
+            assert_eq!(route, "gethashes.bin", "only block ids are asked for");
+            let request: Request = crate::safe_epee::from_bytes(&body).unwrap();
+            assert_eq!(request.start_height, 0);
+            let asked: Vec<[u8; 32]> = request
+                .block_ids
+                .chunks(32)
+                .map(|id| id.try_into().unwrap())
+                .collect();
+            let height_of = |id: &[u8; 32]| self.ids.iter().position(|own| own == id);
+            self.requests.lock().unwrap().push(
+                asked
+                    .iter()
+                    .map(|id| height_of(id).map(|h| h as u64))
+                    .collect(),
+            );
+            assert_eq!(asked.last().and_then(height_of), Some(0));
+            let start = asked.iter().find_map(height_of).unwrap();
+            let end = (start + crate::monero_rpc::MAX_BLOCK_IDS).min(self.ids.len());
+            Ok(monero_epee_bin_serde::to_bytes(&Reply {
+                current_height: self.ids.len() as u64,
+                m_block_ids: self.ids[start..end].iter().flatten().copied().collect(),
+                start_height: start as u64,
+                status: "OK".to_string(),
+            })
+            .unwrap())
+        }
+    }
+
+    fn chain_heights(state: &WalletState) -> (Option<u64>, Option<u64>, usize) {
+        (
+            state.block_hashes.earliest_height(),
+            state.block_hashes.tip_height(),
+            state.block_hashes.len(),
+        )
+    }
+
+    #[tokio::test]
+    async fn block_ids_are_fetched_from_the_checkpoint_below_the_restore_height_like_wallet2() {
+        let node = HashNode::new(50_100, true);
+        let rpc = Rpc::new_with_connection(node.clone());
+        let mut state = WalletState::new();
+        let mut refresh = Refresh::new(&state, Network::Mainnet, 50_000).unwrap();
+        refresh.fetch_block_ids(&rpc, &mut state).await.unwrap();
+
+        assert_eq!(
+            node.requests(),
+            vec![
+                vec![Some(29_556), Some(0)],
+                vec![
+                    Some(39_553),
+                    Some(39_554),
+                    Some(39_555),
+                    Some(29_556),
+                    Some(0)
+                ],
+                vec![
+                    Some(49_550),
+                    Some(49_551),
+                    Some(49_552),
+                    Some(39_553),
+                    Some(0)
+                ],
+            ]
+        );
+        assert_eq!(chain_heights(&state), (Some(29_556), Some(49_999), 20_444));
+        assert_eq!(state.current_height, 49_999);
+        assert_eq!(refresh.history[0].0, 49_999);
+        assert_eq!(
+            refresh.history[refresh.history.len() - 2..]
+                .iter()
+                .map(|(height, _)| *height)
+                .collect::<Vec<_>>(),
+            vec![29_556, 0]
+        );
+        refresh.fetch_block_ids(&rpc, &mut state).await.unwrap();
+        assert!(
+            !Refresh::new(&state, Network::Mainnet, 50_000)
+                .unwrap()
+                .block_ids_missing
+        );
+        assert_eq!(node.requests().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_node_without_the_checkpoint_is_asked_for_block_ids_from_genesis() {
+        let node = HashNode::new(1_200, false);
+        let rpc = Rpc::new_with_connection(node.clone());
+        let mut state = WalletState::new();
+        let mut refresh = Refresh::new(&state, Network::Mainnet, 1_100).unwrap();
+        refresh.fetch_block_ids(&rpc, &mut state).await.unwrap();
+        assert_eq!(node.requests(), vec![vec![None, Some(0)], vec![Some(0)]]);
+        assert_eq!(chain_heights(&state), (Some(0), Some(1_099), 1_100));
+    }
+
+    #[tokio::test]
+    async fn a_restore_height_past_the_chain_is_reached_by_block_ids_alone() {
+        let node = HashNode::new(31, false);
+        let rpc = Rpc::new_with_connection(node.clone());
+        let mut state = WalletState::new();
+        let mut refresh = Refresh::new(&state, Network::Mainnet, 36).unwrap();
+        refresh.fetch_block_ids(&rpc, &mut state).await.unwrap();
+        assert_eq!(
+            node.requests(),
+            vec![vec![Some(0)], vec![Some(28), Some(29), Some(30), Some(0)]]
+        );
+        assert_eq!(chain_heights(&state), (Some(0), Some(30), 31));
+        assert_eq!(state.current_height, 30);
+        let mut refresh = Refresh::new(&state, Network::Mainnet, 36).unwrap();
+        refresh.fetch_block_ids(&rpc, &mut state).await.unwrap();
+        assert_eq!(node.requests()[2][0], Some(30));
+    }
+
+    #[tokio::test]
+    async fn a_chain_recorded_from_its_restore_height_gets_the_ids_below_it() {
+        let node = HashNode::new(1_200, false);
+        let rpc = Rpc::new_with_connection(node.clone());
+        let mut state = WalletState::new();
+        for height in 600..=650 {
+            state
+                .block_hashes
+                .record_block(height, hex::encode(node.ids[height as usize]));
+        }
+        state.current_height = 650;
+        let mut refresh = Refresh::new(&state, Network::Mainnet, 600).unwrap();
+        refresh.fetch_block_ids(&rpc, &mut state).await.unwrap();
+        assert_eq!(node.requests(), vec![vec![Some(0)]]);
+        assert_eq!(chain_heights(&state), (Some(0), Some(650), 651));
+        assert_eq!(state.current_height, 650);
+    }
+
+    #[tokio::test]
+    async fn blocks_are_not_asked_for_before_the_block_ids_below_the_restore_height() {
+        let node = HashNode::new(100, false);
+        let rpc = Rpc::new_with_connection(node.clone());
+        let state = WalletState::new();
+        let mut refresh = Refresh::new(&state, Network::Mainnet, 50).unwrap();
+        let Err(refused) = refresh.next_batch(&rpc).await else {
+            panic!("blocks asked for before the block ids");
+        };
+        assert!(refused.contains("fetch_block_ids"), "{refused}");
+        assert!(node.requests().is_empty());
+    }
+
+    #[tokio::test]
+    async fn block_ids_from_a_block_the_request_did_not_name_are_refused() {
+        #[derive(Clone, Debug)]
+        struct Shifted(HashNode);
+        #[async_trait::async_trait]
+        impl RpcConnection for Shifted {
+            async fn post(
+                &self,
+                route: &str,
+                body: Vec<u8>,
+            ) -> Result<Vec<u8>, crate::monero_rpc::RpcError> {
+                let mut reply = self.0.post(route, body).await?;
+                let at = reply
+                    .windows(12)
+                    .position(|window| window == b"start_height")
+                    .unwrap();
+                reply[at + 13] -= 1;
+                Ok(reply)
+            }
+        }
+        let node = HashNode::new(100, false);
+        let rpc = Rpc::new_with_connection(Shifted(node.clone()));
+        let mut state = WalletState::new();
+        for height in 0..=50 {
+            state
+                .block_hashes
+                .record_block(height, hex::encode(node.ids[height as usize]));
+        }
+        let mut refresh = Refresh::new(&state, Network::Mainnet, 80).unwrap();
+        let refused = refresh.fetch_block_ids(&rpc, &mut state).await.unwrap_err();
+        assert!(
+            refused.contains("not a block the request named"),
+            "{refused}"
+        );
+        assert_eq!(state.block_hashes.tip_height(), Some(50));
     }
 
     const TEST_VECTOR_1_SEED: &str = "hemlock jubilee eden hacksaw boil superior inroads epoxy exhale orders cavernous second brunt saved richly lower upgrade hitched launching deepest mostly playful layout lower eden";

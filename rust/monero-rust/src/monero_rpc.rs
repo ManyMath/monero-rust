@@ -563,6 +563,7 @@ fn is_read_only(route: &str, body: &[u8]) -> bool {
     match route {
         "get_height"
         | "getblocks.bin"
+        | "gethashes.bin"
         | "get_outs.bin"
         | "get_output_distribution.bin"
         | "get_o_indexes.bin"
@@ -783,6 +784,7 @@ fn response_limit(route: &str, method: Option<&str>) -> usize {
         | ("send_raw_transaction", _)
         | ("sendrawtransaction", _)
         | ("get_o_indexes.bin", _)
+        | ("gethashes.bin", _)
         | (
             "json_rpc",
             Some(
@@ -1212,6 +1214,61 @@ impl<R: RpcConnection> Rpc<R> {
         let hash = self.get_block_hash(0).await?;
         self.1.state().genesis = Some(hash);
         Ok(hash)
+    }
+
+    /// The node's block ids from the newest id of `block_ids` it has, asked for
+    /// as wallet2's `pull_hashes` asks.
+    pub async fn get_hashes(
+        &self,
+        block_ids: &[[u8; 32]],
+        start_height: u64,
+    ) -> Result<BlockIds, RpcError> {
+        #[derive(Serialize, Debug)]
+        struct Request {
+            block_ids: Vec<u8>,
+            client: String,
+            start_height: u64,
+        }
+        #[derive(Deserialize, Debug)]
+        struct Response {
+            status: String,
+            #[serde(default, with = "epee_byte_blob")]
+            m_block_ids: Vec<u8>,
+            start_height: u64,
+            current_height: u64,
+        }
+        let request = Request {
+            block_ids: block_ids.iter().flatten().copied().collect(),
+            client: self.client(),
+            start_height,
+        };
+        let body = monero_epee_bin_serde::to_bytes(&request).map_err(|_| {
+            RpcError::InternalError("epee serialization failed for gethashes.bin request")
+        })?;
+        let reply: Response = self.bin_call("gethashes.bin", body).await?;
+        if reply.status != "OK" {
+            return Err(RpcError::NodeStatus(reply.status));
+        }
+        if reply.m_block_ids.len() % 32 != 0 || reply.m_block_ids.len() / 32 > MAX_BLOCK_IDS {
+            return Err(RpcError::InvalidNode);
+        }
+        let ids: Vec<[u8; 32]> = reply
+            .m_block_ids
+            .chunks(32)
+            .map(|id| <[u8; 32]>::try_from(id).unwrap())
+            .collect();
+        if reply
+            .start_height
+            .checked_add(ids.len() as u64)
+            .map_or(true, |end| end > reply.current_height)
+        {
+            return Err(RpcError::InvalidNode);
+        }
+        Ok(BlockIds {
+            start_height: reply.start_height,
+            current_height: reply.current_height,
+            ids,
+        })
     }
 
     /// Get the hash of a block from the node by the block's number.
@@ -2110,6 +2167,17 @@ pub struct BlockCompleteEntry {
     /// Block weight.
     #[serde(default)]
     pub block_weight: u64,
+}
+
+/// The most block ids monerod sends in one `/gethashes.bin` reply.
+pub const MAX_BLOCK_IDS: usize = 10_000;
+
+/// A `/gethashes.bin` answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockIds {
+    pub start_height: u64,
+    pub current_height: u64,
+    pub ids: Vec<[u8; 32]>,
 }
 
 /// Output indices for a single transaction.

@@ -366,6 +366,41 @@ impl SnapshotNode {
         Ok(epee::encode(&reply))
     }
 
+    fn get_hashes(&self, body: &[u8]) -> Result<Vec<u8>, RpcError> {
+        let request = epee::decode(body).map_err(|_| RpcError::InvalidNode)?;
+        let ids = epee::get(&request, "block_ids").map_or(&[][..], Val::bytes);
+        let height = self.height();
+        let known: HashMap<Vec<u8>, u64> = (0..height)
+            .map(|h| (hex32(&self.block(h).hash), h))
+            .collect();
+        let chunks: Vec<&[u8]> = ids.chunks(32).collect();
+        let start = match chunks.last() {
+            Some(last) if known.get(*last) == Some(&0) => {
+                chunks.iter().find_map(|id| known.get(*id)).copied()
+            }
+            _ => None,
+        };
+        let Some(start) = start else {
+            return Ok(epee::encode(&vec![
+                ("status".into(), epee::str_val("Failed")),
+                ("untrusted".into(), Val::Bool(false)),
+            ]));
+        };
+        let end = (start + 10_000).min(height);
+        let blob: Vec<u8> = (start..end)
+            .flat_map(|h| hex32(&self.block(h).hash))
+            .collect();
+        Ok(epee::encode(&vec![
+            ("credits".into(), Val::U64(0)),
+            ("current_height".into(), Val::U64(height)),
+            ("m_block_ids".into(), Val::Str(blob)),
+            ("start_height".into(), Val::U64(start)),
+            ("status".into(), epee::str_val("OK")),
+            ("top_hash".into(), epee::str_val("")),
+            ("untrusted".into(), Val::Bool(false)),
+        ]))
+    }
+
     fn json_rpc(&self, body: &[u8]) -> Result<Vec<u8>, RpcError> {
         let request: Value = serde_json::from_slice(body).map_err(|_| RpcError::InvalidNode)?;
         let method = request["method"].as_str().unwrap_or_default();
@@ -430,6 +465,7 @@ impl RpcConnection for SnapshotNode {
             "json_rpc" => self.json_rpc(&body),
             "get_outs.bin" => self.get_outs(&body),
             "get_output_distribution.bin" => self.get_distribution(),
+            "gethashes.bin" => self.get_hashes(&body),
             "getblocks.bin" => self.get_blocks(&body),
             "get_transaction_pool" => json_bytes(self.snapshot.transaction_pool.clone()),
             "send_raw_transaction" | "sendrawtransaction" => {

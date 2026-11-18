@@ -6,6 +6,7 @@
 // Compatibility wrappers call deprecated fixed-fee entry points internally.
 #![allow(deprecated)]
 
+mod checkpoints;
 mod rpc_client_id;
 mod safe_epee;
 
@@ -98,6 +99,7 @@ pub use scanner::{
     fetch_blocks_batch,
     fetch_blocks_batch_with_history,
     generate_seed,
+    genesis_block_hash,
     // Single-block scanning
     key_image_spent_status,
     // View-only wallet
@@ -126,6 +128,7 @@ pub use scanner::{
     Lookahead,
     MempoolScanResult,
     MultiWalletScanResult,
+    Refresh,
     SeedFormat,
     WalletScanConfig,
     WalletScanData,
