@@ -393,7 +393,6 @@ async fn deep_reorg_with_full_hash_history_converges() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: a fork is reported at the first height with a stored hash, not at the last block known to match"]
 async fn deep_reorg_after_compaction_leaves_no_orphaned_outputs_or_spends() {
     let honest = SnapshotNode::new();
     let node = Node::honest(honest.clone());

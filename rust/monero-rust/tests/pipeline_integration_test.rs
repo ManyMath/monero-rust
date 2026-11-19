@@ -634,10 +634,11 @@ fn reorg_unspends_outputs_spent_in_fork_zone() {
 
     // In a later batch, the output is spent at height 100
     let batch2 = vec![
+        make_block_result(99, vec![], vec![]),
         make_block_result(100, vec![], vec!["ki_tx_early".into()]),
         make_block_result(101, vec![], vec![]),
     ];
-    apply_normal_batch(&mut state, &batch2, None, 5000, 100);
+    apply_normal_batch(&mut state, &batch2, None, 5000, 99);
 
     assert!(state.outputs()[0].spent);
     assert_eq!(state.outputs()[0].spent_height, Some(100));
@@ -649,10 +650,10 @@ fn reorg_unspends_outputs_spent_in_fork_zone() {
     // Reorg at height 100: the spend is undone
     let mut reorg_block = make_block_result(100, vec![], vec![]);
     reorg_block.block_hash = "forked_100".to_string();
-    let reorg_batch = vec![reorg_block];
+    let reorg_batch = vec![make_block_result(99, vec![], vec![]), reorg_block];
 
     let outcome =
-        process_batch_with_reorg_detection(&reorg_batch, &mut state, None, 5000, 100).unwrap();
+        process_batch_with_reorg_detection(&reorg_batch, &mut state, None, 5000, 99).unwrap();
 
     match outcome {
         ScanBatchOutcome::Reorg(info) => {

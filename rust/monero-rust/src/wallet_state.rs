@@ -93,6 +93,11 @@ impl BlockHashChain {
         self.hashes.keys().next_back().copied()
     }
 
+    /// The lowest height a hash is stored for.
+    pub fn earliest_height(&self) -> Option<u64> {
+        self.hashes.keys().next().copied()
+    }
+
     /// Remove all hashes at heights >= split_height.
     pub fn rollback_to(&mut self, split_height: u64) {
         // BTreeMap::split_off returns everything >= key
@@ -134,36 +139,46 @@ impl BlockHashChain {
             }
         }
 
-        // Always keep genesis
+        // Genesis, and the lowest height above it for a node to answer from after a deep reorg.
         keep.insert(0);
+        if let Some((&base, _)) = self.hashes.range(1..).next() {
+            keep.insert(base);
+        }
 
         self.hashes.retain(|h, _| keep.contains(h));
     }
 
-    /// Build block_ids list for `/getblocks.bin`, matching wallet2's algorithm.
-    ///
-    /// Returns (height, hash_hex) pairs ordered from highest to lowest.
+    /// Block ids for `/getblocks.bin`, newest first.
     pub fn get_short_chain_history(&self) -> Vec<(u64, String)> {
+        let genesis = self.hashes.get(&0).or(self.genesis_hash.as_ref());
         let tip = match self.tip_height() {
             Some(t) => t,
             None => {
                 // Only genesis available
-                if let Some(g) = &self.genesis_hash {
+                if let Some(g) = genesis {
                     return vec![(0, g.clone())];
                 }
                 return vec![];
             }
         };
 
-        let mut result = Vec::new();
+        let mut result: Vec<(u64, String)> = Vec::new();
+        let push = |result: &mut Vec<(u64, String)>, target: u64| {
+            if target == 0 {
+                return;
+            }
+            if let Some((&height, hash)) = self.hashes.range(1..=target).next_back() {
+                if result.last().map_or(true, |(last, _)| height < *last) {
+                    result.push((height, hash.clone()));
+                }
+            }
+        };
         let mut current = tip;
         let mut step = 1u64;
         let mut count = 0u64;
 
         loop {
-            if let Some(hash) = self.hashes.get(&current) {
-                result.push((current, hash.clone()));
-            }
+            push(&mut result, current);
 
             if current == 0 {
                 break;
@@ -176,15 +191,15 @@ impl BlockHashChain {
             }
 
             if current < step {
-                // Jump to genesis
-                if current != 0 {
-                    if let Some(hash) = self.hashes.get(&0).or(self.genesis_hash.as_ref()) {
-                        result.push((0, hash.clone()));
-                    }
-                }
                 break;
             }
             current -= step;
+        }
+        if let Some((&base, _)) = self.hashes.range(1..).next() {
+            push(&mut result, base);
+        }
+        if let Some(hash) = genesis {
+            result.push((0, hash.clone()));
         }
 
         result
@@ -1964,6 +1979,24 @@ mod tests {
         for i in 0..10 {
             assert_eq!(history[i].0, 200 - i as u64);
         }
+    }
+
+    #[test]
+    fn short_chain_history_after_compaction_still_reaches_down_to_the_base() {
+        let mut chain = BlockHashChain::new();
+        chain.record_block(0, "genesis".into());
+        for h in 2_990_000..=3_000_000u64 {
+            chain.record_block(h, format!("hash_{}", h));
+        }
+        chain.compact();
+        let history = chain.get_short_chain_history();
+        let heights: Vec<u64> = history.iter().map(|(height, _)| *height).collect();
+        assert!(heights.windows(2).all(|pair| pair[0] > pair[1]));
+        assert!(history
+            .iter()
+            .all(|(height, hash)| chain.get_hash(*height) == Some(hash.as_str())));
+        assert!(heights.iter().filter(|h| **h < 3_000_000 - 99).count() > 5);
+        assert_eq!(heights[heights.len() - 2..], [2_990_000, 0]);
     }
 
     #[test]

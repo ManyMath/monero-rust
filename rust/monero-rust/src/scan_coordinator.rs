@@ -289,29 +289,54 @@ pub fn process_batch_with_reorg_detection(
     }
 
     // Check for reorg: compare batch block hashes against known hashes
+    let mut last_match: Option<u64> = None;
     for result in batch_results {
-        if let Some(known_hash) = wallet_state.block_hashes.get_hash(result.block_height) {
-            if known_hash != result.block_hash {
-                let split_height = result.block_height;
-                let current = wallet_state.current_height;
-                if current >= split_height && current - split_height > MAX_REORG_DEPTH {
-                    return Err(format!(
-                        "Reorg depth {} exceeds maximum {}",
-                        current - split_height,
-                        MAX_REORG_DEPTH
-                    ));
-                }
-                let rollback = wallet_state.rollback_to_height(split_height);
-                return Ok(ScanBatchOutcome::Reorg(ReorgInfo {
-                    split_height,
-                    blocks_detached: current.saturating_sub(split_height) + 1,
-                    outputs_removed: rollback.removed_outputs.len(),
-                    outputs_unspent: rollback.outputs_unspent,
-                    removed_key_images: rollback.removed_key_images,
-                    unspent_key_images: rollback.unspent_key_images,
-                }));
-            }
+        let Some(known_hash) = wallet_state.block_hashes.get_hash(result.block_height) else {
+            continue;
+        };
+        if known_hash == result.block_hash {
+            last_match = Some(result.block_height);
+            continue;
         }
+
+        let split_height = match last_match {
+            Some(matched) => matched + 1,
+            None if result.block_height > 0
+                && !result.previous_block_hash.is_empty()
+                && wallet_state.block_hashes.get_hash(result.block_height - 1)
+                    == Some(result.previous_block_hash.as_str()) =>
+            {
+                result.block_height
+            }
+            None if wallet_state.block_hashes.earliest_height() == Some(result.block_height) => {
+                result.block_height
+            }
+            None => {
+                return Err(format!(
+                    "Block {} differs from the wallet's and no earlier block of the batch \
+                     matches one the wallet knows; the fork point cannot be located, request \
+                     from an earlier block",
+                    result.block_height
+                ));
+            }
+        };
+        let current = wallet_state.current_height;
+        if current >= split_height && current - split_height > MAX_REORG_DEPTH {
+            return Err(format!(
+                "Reorg depth {} exceeds maximum {}",
+                current - split_height,
+                MAX_REORG_DEPTH
+            ));
+        }
+        let rollback = wallet_state.rollback_to_height(split_height);
+        return Ok(ScanBatchOutcome::Reorg(ReorgInfo {
+            split_height,
+            blocks_detached: current.saturating_sub(split_height) + 1,
+            outputs_removed: rollback.removed_outputs.len(),
+            outputs_unspent: rollback.outputs_unspent,
+            removed_key_images: rollback.removed_key_images,
+            unspent_key_images: rollback.unspent_key_images,
+        }));
     }
 
     let batch = process_single_wallet_batch(
@@ -326,6 +351,62 @@ pub fn process_batch_with_reorg_detection(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deep_reorg_after_compaction_is_found_through_the_history() {
+        let tip = 3000u64;
+        let fork = 2920u64;
+        let hash_a = |h: u64| format!("{h:064}");
+        let hash_b = |h: u64| {
+            if h < fork {
+                hash_a(h)
+            } else {
+                format!("b{h:063}")
+            }
+        };
+        for restore in [0u64, 2500] {
+            let mut state = WalletState::new();
+            if restore > 0 {
+                state.record_block_hash(0, hash_a(0));
+            }
+            for h in restore..=tip {
+                state.record_block_hash(h, hash_a(h));
+            }
+            let mut orphaned = make_output(1_000_000, 2950, "orphaned", 0);
+            orphaned.block_height = 2950;
+            state.add_outputs(vec![orphaned]);
+            state.current_height = tip;
+            state.block_hashes.compact();
+
+            let history = state.get_short_chain_history();
+            let start = history
+                .iter()
+                .find(|(h, hash)| *hash == hash_b(*h))
+                .map(|(h, _)| *h)
+                .unwrap();
+            assert!(
+                start > 0 && start < fork,
+                "restored at {restore}: node answers from {start}"
+            );
+            let batch: Vec<BlockScanResult> = (start..(start + 1000).min(tip + 11))
+                .map(|h| BlockScanResult {
+                    previous_block_hash: if h == 0 { String::new() } else { hash_b(h - 1) },
+                    block_hash: hash_b(h),
+                    ..make_block_result(h, vec![], vec![])
+                })
+                .collect();
+            let outcome =
+                process_batch_with_reorg_detection(&batch, &mut state, None, tip + 10, start)
+                    .unwrap();
+            match outcome {
+                ScanBatchOutcome::Reorg(info) => {
+                    assert!(info.split_height <= fork && info.split_height > start)
+                }
+                ScanBatchOutcome::Normal(_) => panic!("restored at {restore}: reorg not found"),
+            }
+            assert!(state.outputs().iter().all(|o| o.block_height != 2950));
+        }
+    }
 
     fn make_output(amount: u64, height: u64, tx_hash: &str, account: u32) -> WalletOutput {
         WalletOutput {
@@ -769,6 +850,72 @@ mod tests {
         }
         assert_eq!(state.block_hashes.get_hash(100), Some("hash_100"));
         assert_eq!(state.block_hashes.get_hash(101), Some("hash_101"));
+    }
+
+    #[test]
+    fn reorg_split_is_placed_above_the_last_block_known_to_match() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![
+            make_output(1000, 99, "tx_keep", 0),
+            make_output(2000, 102, "tx_orphaned", 0),
+        ]);
+        state.mark_spent_by_key_images_at_height(&["ki_tx_keep".to_string()], 103);
+        state.current_height = 106;
+        state.record_block_hash(100, "hash_100".to_string());
+        state.record_block_hash(105, "old_hash_105".to_string());
+
+        let results: Vec<_> = (100..=105)
+            .map(|height| make_block_result(height, vec![], vec![]))
+            .collect();
+        let outcome =
+            process_batch_with_reorg_detection(&results, &mut state, None, 1000, 100).unwrap();
+        let info = match outcome {
+            ScanBatchOutcome::Reorg(info) => info,
+            other => panic!("Expected ScanBatchOutcome::Reorg, got {:?}", other),
+        };
+        assert_eq!(info.split_height, 101);
+        assert_eq!(info.outputs_removed, 1);
+        assert_eq!(info.outputs_unspent, 1);
+        assert_eq!(state.current_height, 100);
+        assert_eq!(state.outputs().len(), 1);
+        assert!(!state.outputs()[0].spent);
+    }
+
+    #[test]
+    fn reorg_starting_at_a_block_that_builds_on_the_wallets_chain_splits_there() {
+        let mut state = WalletState::new();
+        state.current_height = 100;
+        state.record_block_hash(80, "hash_80".to_string());
+        state.record_block_hash(99, "hash_99".to_string());
+        state.record_block_hash(100, "old_hash_100".to_string());
+
+        let mut forked = make_block_result(100, vec![], vec![]);
+        forked.previous_block_hash = "hash_99".to_string();
+        let outcome =
+            process_batch_with_reorg_detection(&[forked], &mut state, None, 1000, 100).unwrap();
+        let info = match outcome {
+            ScanBatchOutcome::Reorg(info) => info,
+            other => panic!("Expected ScanBatchOutcome::Reorg, got {:?}", other),
+        };
+        assert_eq!(info.split_height, 100);
+        assert_eq!(state.current_height, 99);
+    }
+
+    #[test]
+    fn reorg_starting_at_the_first_block_is_refused_when_earlier_blocks_are_known() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1000, 90, "tx_90", 0)]);
+        state.current_height = 100;
+        state.record_block_hash(80, "hash_80".to_string());
+        state.record_block_hash(100, "old_hash_100".to_string());
+
+        let results = vec![make_block_result(100, vec![], vec![])];
+        let error =
+            process_batch_with_reorg_detection(&results, &mut state, None, 1000, 100).unwrap_err();
+        assert!(error.contains("fork point cannot be located"), "{error}");
+        assert_eq!(state.current_height, 100);
+        assert_eq!(state.outputs().len(), 1);
+        assert_eq!(state.block_hashes.get_hash(100), Some("old_hash_100"));
     }
 
     #[test]
