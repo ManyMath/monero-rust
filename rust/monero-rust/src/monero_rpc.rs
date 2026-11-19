@@ -831,6 +831,7 @@ fn response_limit(route: &str, method: Option<&str>) -> usize {
             Some(
                 "get_last_block_header"
                 | "get_block_header_by_height"
+                | "hard_fork_info"
                 | "get_fee_estimate"
                 | "get_info"
                 | "getblockheadersrange",
@@ -859,8 +860,29 @@ struct NodeCacheState {
     fee_estimate: Option<(Option<u64>, Option<u64>, FeeEstimate)>,
     wallet_height: Option<(u64, u64)>,
     info: Option<(u64, NodeInfo)>,
-    fork_version: Option<(u64, usize)>,
+    fork: Option<ForkInfo>,
     genesis: Option<[u8; 32]>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ForkInfo {
+    version: usize,
+    plus_from: u64,
+    at: Option<u64>,
+}
+
+impl ForkInfo {
+    fn version_at(&self, wallet_height: Option<u64>) -> usize {
+        if self.version < 15 && wallet_height.is_some_and(|height| height >= self.plus_from) {
+            15
+        } else {
+            self.version
+        }
+    }
+
+    fn decides(&self, wallet_height: Option<u64>, now: Option<u64>) -> bool {
+        self.version_at(wallet_height) >= 15 || self.at.is_some_and(|at| is_recent(at, now))
+    }
 }
 
 fn is_recent(at: u64, now: Option<u64>) -> bool {
@@ -889,12 +911,6 @@ impl NodeCacheState {
         self.info
             .filter(|(at, _)| is_recent(*at, now))
             .map(|(_, info)| info)
-    }
-
-    fn fork_version(&self, now: Option<u64>) -> Option<usize> {
-        self.fork_version
-            .filter(|(at, _)| is_recent(*at, now))
-            .map(|(_, version)| version)
     }
 }
 
@@ -1078,32 +1094,47 @@ impl<R: RpcConnection> Rpc<R> {
 
     /// The RingCT type of a transaction built under the node's current hard fork.
     pub async fn get_rct_type(&self) -> Result<RctType, RpcError> {
+        self.get_rct_type_at_height(None).await
+    }
+
+    /// The RingCT type of a transaction built now by a wallet whose chain is
+    /// `wallet_height` blocks long, as wallet2 decides it.
+    pub async fn get_rct_type_at_height(
+        &self,
+        wallet_height: Option<u64>,
+    ) -> Result<RctType, RpcError> {
         #[derive(Deserialize, Debug)]
-        struct ProtocolResponse {
-            major_version: usize,
+        struct HardForkInfo {
+            version: usize,
+            #[serde(default)]
+            earliest_height: Option<u64>,
+            #[serde(default)]
+            status: String,
         }
 
-        #[derive(Deserialize, Debug)]
-        struct LastHeaderResponse {
-            block_header: ProtocolResponse,
-        }
-
-        let recent = self.1.state().fork_version(current_time_secs());
-        let version = match recent {
-            Some(version) => version,
+        let now = current_time_secs();
+        let known = self
+            .1
+            .state()
+            .fork
+            .filter(|fork| fork.decides(wallet_height, now));
+        let fork = match known {
+            Some(fork) => fork,
             None => {
-                let version = self
-                    .json_rpc_call::<LastHeaderResponse>("get_last_block_header", None)
-                    .await?
-                    .block_header
-                    .major_version;
-                if let Some(now) = current_time_secs() {
-                    self.1.state().fork_version = Some((now, version));
-                }
-                version
+                let info: HardForkInfo = self
+                    .json_rpc_call("hard_fork_info", Some(json!({ "version": 15 })))
+                    .await?;
+                require_ok_status(&info.status)?;
+                let fork = ForkInfo {
+                    version: info.version,
+                    plus_from: info.earliest_height.unwrap_or(u64::MAX),
+                    at: now,
+                };
+                self.1.state().fork = Some(fork);
+                fork
             }
         };
-        Ok(match version {
+        Ok(match fork.version_at(wallet_height) {
             13 | 14 => RctType::ClsagBulletproof,
             15 | 16 => RctType::ClsagBulletproofPlus,
             protocol => Err(RpcError::UnsupportedProtocol(protocol))?,
@@ -2584,6 +2615,81 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Debug, Default)]
+    struct ForkingNode {
+        version: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+    #[async_trait]
+    impl RpcConnection for ForkingNode {
+        async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
+            use std::sync::atomic::Ordering;
+            assert_eq!(route, "json_rpc");
+            let request: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(request["method"], "hard_fork_info");
+            assert_eq!(request["params"]["version"], 15);
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let version = self.version.load(Ordering::SeqCst);
+            Ok(serde_json::to_vec(&json!({
+                "id": "0", "jsonrpc": "2.0",
+                "result": {"version": version, "earliest_height": 100,
+                           "enabled": version >= 15, "status": "OK"}
+            }))
+            .unwrap())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_long_lived_connection_follows_a_fork() {
+        use std::sync::atomic::Ordering;
+        let node = ForkingNode::default();
+        node.version.store(14, Ordering::SeqCst);
+        let rpc = Rpc::new_with_connection(node.clone());
+        let calls = || node.calls.load(Ordering::SeqCst);
+
+        assert_eq!(
+            rpc.get_rct_type_at_height(Some(99)).await.unwrap(),
+            RctType::ClsagBulletproof
+        );
+        node.version.store(15, Ordering::SeqCst);
+        assert_eq!(
+            rpc.get_rct_type_at_height(Some(100)).await.unwrap(),
+            RctType::ClsagBulletproofPlus
+        );
+        assert_eq!(calls(), 1);
+
+        assert_eq!(rpc.get_rct_type().await.unwrap(), RctType::ClsagBulletproof);
+        assert_eq!(calls(), 1);
+        let asked = rpc.1.state().fork.unwrap().at.unwrap();
+        rpc.1.state().fork.as_mut().unwrap().at = Some(asked - NODE_CACHE_SECONDS);
+        assert_eq!(
+            rpc.get_rct_type().await.unwrap(),
+            RctType::ClsagBulletproofPlus
+        );
+        assert_eq!(calls(), 2);
+        rpc.1.state().fork.as_mut().unwrap().at = Some(0);
+        for height in [None, Some(1), Some(1_000)] {
+            assert_eq!(
+                rpc.get_rct_type_at_height(height).await.unwrap(),
+                RctType::ClsagBulletproofPlus
+            );
+        }
+        assert_eq!(calls(), 2);
+    }
+
+    #[test]
+    fn a_node_that_knows_no_fork_block_is_judged_by_its_version() {
+        let fork = ForkInfo {
+            version: 14,
+            plus_from: u64::MAX,
+            at: Some(1_000),
+        };
+        assert_eq!(fork.version_at(Some(u64::MAX - 1)), 14);
+        assert!(fork.decides(Some(5), Some(1_029)));
+        assert!(!fork.decides(Some(5), Some(1_030)));
+        assert!(!fork.decides(None, None));
+    }
+
     fn signer_of(body: &[u8]) -> String {
         let request: Value = serde_json::from_slice(body).unwrap();
         let client = request["params"]["client"].as_str().unwrap();
@@ -3432,11 +3538,6 @@ mod tests {
         assert_eq!(state.info(Some(1_029)), Some(info));
         assert_eq!(state.info(Some(1_030)), None);
         assert_eq!(state.info(None), None);
-
-        state.fork_version = Some((1_000, 16));
-        assert_eq!(state.fork_version(Some(1_029)), Some(16));
-        assert_eq!(state.fork_version(Some(1_030)), None);
-        assert_eq!(state.fork_version(None), None);
 
         assert!(state.wallet_height_is_current(500, Some(1_000)));
         assert!(state.wallet_height_is_current(500, Some(1_029)));

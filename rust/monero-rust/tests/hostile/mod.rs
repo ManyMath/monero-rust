@@ -407,6 +407,12 @@ impl SnapshotNode {
         let params = &request["params"];
         let height = self.height();
         match method {
+            "hard_fork_info" => json_rpc_result(json!({
+                "version": self.header(height - 1)["major_version"],
+                "enabled": true,
+                "status": "OK",
+                "untrusted": false,
+            })),
             "get_last_block_header" => json_rpc_result(json!({
                 "block_header": self.header(height - 1),
                 "status": "OK",

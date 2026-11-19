@@ -217,10 +217,7 @@ impl FakeNode {
             serde_json::from_slice(body).map_err(|_| RpcError::InvalidNode)?;
         let height = self.0.lock().unwrap().per_block.len() as u64;
         let result = match request["method"].as_str().unwrap_or_default() {
-            "get_last_block_header" => serde_json::json!({
-                "block_header": { "major_version": 16 },
-                "status": "OK"
-            }),
+            "hard_fork_info" => serde_json::json!({ "version": 16, "status": "OK" }),
             "get_fee_estimate" => serde_json::json!({
                 "fee": 20_000,
                 "fees": [20_000, 80_000, 320_000, 4_000_000],

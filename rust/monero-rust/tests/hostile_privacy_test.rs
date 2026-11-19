@@ -89,7 +89,7 @@ async fn honest_send_hides_each_input_in_one_batched_get_outs_request() {
     assert_eq!(
         node.names(),
         vec![
-            "json_rpc:get_last_block_header",
+            "json_rpc:hard_fork_info",
             "json_rpc:get_fee_estimate",
             "json_rpc:get_txpool_backlog",
             "json_rpc:get_info",

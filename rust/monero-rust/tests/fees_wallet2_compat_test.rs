@@ -136,9 +136,7 @@ impl RpcConnection for Node {
                 return Ok(monerod_backlog_response(&self.backlog, self.backlog_status))
             }
             "get_info" => self.info.clone(),
-            "get_last_block_header" => json!({
-                "block_header": { "major_version": 16 }, "status": "OK"
-            }),
+            "hard_fork_info" => json!({ "version": 16, "status": "OK" }),
             "getblockheadersrange" => match &self.block_weights {
                 Some(weights) => json!({
                     "headers": weights.iter()
@@ -684,7 +682,7 @@ async fn a_settled_policy_asks_about_congestion_once() {
             "get_fee_estimate",
             "get_txpool_backlog",
             "get_info",
-            "get_last_block_header"
+            "hard_fork_info"
         ],
         "the fork version is asked for once as well"
     );

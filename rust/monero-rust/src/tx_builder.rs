@@ -957,7 +957,7 @@ pub mod native {
         }
 
         let rct_type = rpc
-            .get_rct_type()
+            .get_rct_type_at_height(Some(wallet_state.chain_height()))
             .await
             .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
 
@@ -1040,7 +1040,7 @@ pub mod native {
             return Err("Maximum 16 outputs allowed (bulletproofs limit)".to_string());
         }
         let rct_type = rpc
-            .get_rct_type()
+            .get_rct_type_at_height(policy.wallet_height)
             .await
             .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
 
@@ -1294,7 +1294,7 @@ pub mod native {
         let view_pair = signer_view_pair(&spend_key, &view_key)?;
 
         let rct_type = rpc
-            .get_rct_type()
+            .get_rct_type_at_height(Some(wallet_state.chain_height()))
             .await
             .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
 
@@ -1557,7 +1557,7 @@ pub mod native {
         let view_pair = signer_view_pair(&spend_key, &view_key)?;
 
         let rct_type = rpc
-            .get_rct_type()
+            .get_rct_type_at_height(Some(wallet_state.chain_height()))
             .await
             .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
 
@@ -2510,7 +2510,7 @@ pub mod native {
         .map_err(|e| format!("Invalid view keys: {}", e))?;
 
         let rct_type = rpc
-            .get_rct_type()
+            .get_rct_type_at_height(Some(wallet_state.chain_height()))
             .await
             .map_err(|e| format!("Failed to get protocol: {:?}", e))?;
         let (_, fee_rate) = fee_for_policy(rpc, policy).await?;
@@ -3468,8 +3468,8 @@ pub mod native {
                     assert_eq!(route, "json_rpc");
                     let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
                     let result = match request["method"].as_str().unwrap() {
-                        "get_last_block_header" => serde_json::json!({
-                            "block_header": { "major_version": 16 }
+                        "hard_fork_info" => serde_json::json!({
+                            "version": 16, "status": "OK"
                         }),
                         "get_fee_estimate" => serde_json::json!({
                             "fee": 32_000,
@@ -3521,8 +3521,8 @@ pub mod native {
                     };
                     self.0.lock().unwrap().push(method.clone());
                     let result = match method.as_str() {
-                        "get_last_block_header" => serde_json::json!({
-                            "block_header": { "major_version": 16 }
+                        "hard_fork_info" => serde_json::json!({
+                            "version": 16, "status": "OK"
                         }),
                         "get_fee_estimate" => serde_json::json!({
                             "fee": 32_000,
@@ -3622,7 +3622,7 @@ pub mod native {
 
             let (error, log) = send(INPUT - estimated_fee + 1).await;
             assert!(error.starts_with("Insufficient funds"), "{error}");
-            assert_eq!(log, ["get_last_block_header", "get_fee_estimate"]);
+            assert_eq!(log, ["hard_fork_info", "get_fee_estimate"]);
 
             let (error, log) = send(INPUT - estimated_fee).await;
             assert!(

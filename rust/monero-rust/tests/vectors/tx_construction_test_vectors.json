@@ -295,6 +295,12 @@
   },
   {
     "route": "json_rpc",
+    "body": "{\"method\":\"hard_fork_info\"}",
+    "response": "{\n\"id\": 0,\n\"jsonrpc\": \"2.0\",\n\"result\": {\n\"credits\": 0,\n\"earliest_height\": 1151000,\n\"enabled\": true,\n\"state\": 0,\n\"status\": \"OK\",\n\"threshold\": 0,\n\"top_hash\": \"\",\n\"untrusted\": false,\n\"version\": 16,\n\"votes\": 0,\n\"voting\": 16,\n\"window\": 0\n}\n}",
+    "is_binary": false
+  },
+  {
+    "route": "json_rpc",
     "body": "{\"method\":\"get_last_block_header\"}",
     "response": "{\n\"id\": 0,\n\"jsonrpc\": \"2.0\",\n\"result\": {\n\"block_header\": {\n\"block_size\": 85,\n\"block_weight\": 85,\n\"cumulative_difficulty\": 588085893836,\n\"cumulative_difficulty_top64\": 0,\n\"depth\": 0,\n\"difficulty\": 807462,\n\"difficulty_top64\": 0,\n\"hash\": \"e356162f9141d5ba26084db89f2c9f658de68240822287dafa587dfc6b0c7fed\",\n\"height\": 2053969,\n\"long_term_weight\": 176470,\n\"major_version\": 16,\n\"miner_tx_hash\": \"4b2e56365f3a795670aafad4159e0b6d7718e939f9d6516119d34143bbd20bfd\",\n\"minor_version\": 16,\n\"nonce\": 936227283,\n\"num_txes\": 0,\n\"orphan_status\": false,\n\"pow_hash\": \"\",\n\"prev_hash\": \"899bdf3baed1e671721c0d657f1f711dae61340349bbc8c678e616cf2453fd7e\",\n\"reward\": 722117067020,\n\"timestamp\": 1770842596,\n\"wide_cumulative_difficulty\": \"0x88eca69acc\",\n\"wide_difficulty\": \"0xc5226\"\n},\n\"credits\": 0,\n\"status\": \"OK\",\n\"top_hash\": \"\",\n\"untrusted\": false\n}\n}",
     "is_binary": false
