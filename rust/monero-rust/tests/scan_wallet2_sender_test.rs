@@ -694,3 +694,84 @@ async fn default_balance_unlocks_at_the_same_block_as_wallet2() {
         "the output in block 100 has ten blocks on the chain (100..=109)"
     );
 }
+
+fn chain_with_a_receipt_and_its_spend() -> FakeChain {
+    let recipient = Recipient::of(SEED, 0, 1);
+    let out = send_output(&recipient, Scalar::from(9101u64), 1, 4 * XMR);
+    let other = send_output(
+        &Recipient::of(OTHER_SEED, 0, 0),
+        Scalar::from(9102u64),
+        0,
+        XMR,
+    );
+    let reward = send_output(
+        &Recipient::of(SEED, 0, 0),
+        Scalar::from(9103u64),
+        0,
+        6 * XMR,
+    );
+    let mut chain = FakeChain::new(100, 5000);
+    chain.push(
+        miner_tx(
+            100,
+            &[(&reward).into()],
+            extra_with_pubkeys(&[reward.tx_pubkey]),
+        ),
+        vec![ringct_tx(
+            &[other.clone(), out.clone()],
+            extra_with_pubkeys(&[out.tx_pubkey]),
+            Timelock::Block(150),
+            1,
+        )],
+    );
+    chain.push_empty(2);
+    chain
+}
+
+#[tokio::test]
+async fn pruned_blocks_report_the_same_outputs_and_spends_as_full_blocks() {
+    let chain = chain_with_a_receipt_and_its_spend();
+    let full = scan(&chain, SEED).await;
+    assert_eq!(all_outputs(&full).len(), 2);
+    let timelocks = |results: &[BlockScanResult]| -> Vec<_> {
+        all_outputs(results)
+            .iter()
+            .map(|o| o.additional_timelock())
+            .collect()
+    };
+    for with_prunable_hash in [false, true] {
+        let (pruned, _) = process_batch_response(
+            chain.pruned_response_from(100, with_prunable_hash),
+            100,
+            SEED,
+            Network::Mainnet,
+            LOOKAHEAD,
+            None,
+            "",
+        )
+        .await
+        .expect("pruned scan");
+        assert_eq!(
+            fingerprint(&all_outputs(&pruned)),
+            fingerprint(&all_outputs(&full))
+        );
+        for (a, b) in pruned.iter().zip(&full) {
+            assert_eq!(a.block_hash, b.block_hash);
+            assert_eq!(a.spent_key_images, b.spent_key_images);
+            assert_eq!(a.spent_key_image_tx_hashes, b.spent_key_image_tx_hashes);
+        }
+        assert_eq!(timelocks(&pruned), timelocks(&full));
+    }
+}
+
+#[tokio::test]
+async fn pruned_transaction_with_the_wrong_prunable_hash_is_refused() {
+    let chain = chain_with_a_receipt_and_its_spend();
+    let mut response = chain.pruned_response_from(100, true);
+    let blob = &mut response.blocks[0].txs[0];
+    let last = blob.len() - 1;
+    blob[last] ^= 1;
+    let result =
+        process_batch_response(response, 100, SEED, Network::Mainnet, LOOKAHEAD, None, "").await;
+    assert!(result.is_err());
+}

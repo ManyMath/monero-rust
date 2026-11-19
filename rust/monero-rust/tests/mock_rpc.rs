@@ -110,6 +110,8 @@ struct BinaryGetBlocksRequest {
     block_ids: Vec<u8>,
     start_height: u64,
     prune: bool,
+    #[serde(default)]
+    #[allow(dead_code)]
     no_miner_tx: bool,
 }
 

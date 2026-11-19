@@ -130,7 +130,6 @@ async fn dump_state() {
 
 /// Needs SCAN_WALLET2_PRUNE_FROM, a height whose batch pays the wallet.
 #[tokio::test]
-#[ignore = "known defect: pruned getblocks.bin replies cannot be read"]
 async fn pruned_scan_finds_the_same_outputs() {
     let (Some(url), Ok(from)) = (
         common::regtest_node(),

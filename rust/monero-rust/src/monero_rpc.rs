@@ -1391,19 +1391,19 @@ impl<R: RpcConnection> Rpc<R> {
         // (KV_SERIALIZE_CONTAINER_POD_AS_BLOB)
         let block_ids_blob: Vec<u8> = block_ids.iter().flat_map(|h| h.iter().copied()).collect();
 
+        // Fields in name order, optional ones left out unless set, as wallet2
+        // writes them.
         #[derive(Serialize, Debug)]
         struct Request {
             block_ids: Vec<u8>,
-            start_height: u64,
             prune: bool,
-            no_miner_tx: bool,
+            start_height: u64,
         }
 
         let req = Request {
             block_ids: block_ids_blob,
-            start_height,
             prune,
-            no_miner_tx: false,
+            start_height,
         };
 
         let res: GetBlocksFastResponse = self
@@ -1544,6 +1544,33 @@ mod vec_of_bytes {
                 fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
                     Ok(v.as_bytes().to_vec())
                 }
+
+                fn visit_map<A: serde::de::MapAccess<'de>>(
+                    self,
+                    mut map: A,
+                ) -> Result<Self::Value, A::Error> {
+                    use serde::de::Error;
+
+                    let mut blob = None;
+                    let mut prunable_hash = None;
+                    while let Some(key) = map.next_key::<String>()? {
+                        match key.as_str() {
+                            "blob" => blob = Some(map.next_value_seed(ByteBlob)?),
+                            "prunable_hash" => prunable_hash = Some(map.next_value_seed(ByteBlob)?),
+                            _ => {
+                                map.next_value::<serde::de::IgnoredAny>()?;
+                            }
+                        }
+                    }
+                    let mut blob = blob.ok_or_else(|| A::Error::missing_field("blob"))?;
+                    let prunable_hash =
+                        prunable_hash.ok_or_else(|| A::Error::missing_field("prunable_hash"))?;
+                    if prunable_hash.len() != 32 {
+                        return Err(A::Error::custom("prunable_hash is not 32 bytes"));
+                    }
+                    blob.extend_from_slice(&prunable_hash);
+                    Ok(blob)
+                }
             }
 
             deserializer.deserialize_byte_buf(ByteBlobVisitor)
@@ -1599,7 +1626,8 @@ pub struct BlockCompleteEntry {
     /// Raw block blob (header + miner tx + tx hashes).
     #[serde(with = "epee_byte_blob")]
     pub block: Vec<u8>,
-    /// Raw transaction blobs (full transactions when prune=false).
+    /// Raw transaction blobs: whole when `pruned` is false, otherwise each the
+    /// pruned transaction followed by the 32-byte hash of its pruned part.
     #[serde(default, with = "vec_of_bytes")]
     pub txs: Vec<Vec<u8>>,
     /// Whether the transaction data is pruned.

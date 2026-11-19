@@ -819,6 +819,38 @@ pub(crate) fn parse_full_tx_blob(bytes: &[u8]) -> Option<([u8; 32], OxideTransac
     Some((tx.hash(), OxideTransaction::<Pruned>::from(tx)))
 }
 
+/// Parse a pruned `/getblocks.bin` transaction (blob, then prunable hash). The
+/// hash is `None` when it cannot be computed (zero prunable hash, or version 1).
+pub(crate) fn parse_pruned_tx_blob(
+    bytes: &[u8],
+) -> Option<(Option<[u8; 32]>, OxideTransaction<Pruned>)> {
+    use monero_oxide::io::VarInt;
+
+    let (blob, prunable_hash) = bytes.split_at(bytes.len().checked_sub(32)?);
+    let mut rest = blob;
+    let tx = OxideTransaction::<Pruned>::read(&mut rest).ok()?;
+    if !rest.is_empty() {
+        return None;
+    }
+    if !matches!(tx, OxideTransaction::V2 { .. }) {
+        return Some((None, tx));
+    }
+
+    let mut after_prefix = blob;
+    let version = <u64 as VarInt>::read(&mut after_prefix).ok()?;
+    OxideTransactionPrefix::read(&mut after_prefix, version).ok()?;
+    let prefix_len = blob.len() - after_prefix.len();
+
+    if prunable_hash == [0u8; 32] {
+        return Some((None, tx));
+    }
+    let mut hashes = Vec::with_capacity(96);
+    hashes.extend_from_slice(&Keccak256::digest(&blob[..prefix_len]));
+    hashes.extend_from_slice(&Keccak256::digest(&blob[prefix_len..]));
+    hashes.extend_from_slice(prunable_hash);
+    Some((Some(Keccak256::digest(&hashes).into()), tx))
+}
+
 /// The global index of a block's first RingCT output, from its `/getblocks.bin`
 /// output indices; `None` when they give none.
 fn first_ringct_index_from_rpc(
@@ -1162,13 +1194,19 @@ fn check_block_transaction_count(
 fn parse_block_transaction_blobs(
     block: &OxideBlock,
     blobs: &[Vec<u8>],
+    pruned: bool,
     block_height: u64,
 ) -> Result<(Vec<([u8; 32], OxideTransaction<Pruned>)>, Vec<String>), String> {
     let mut parsed = Vec::with_capacity(blobs.len());
     let mut skipped_key_images = Vec::new();
 
     for (index, blob) in blobs.iter().enumerate() {
-        match parse_full_tx_blob(blob) {
+        let parsed_blob = if pruned {
+            parse_pruned_tx_blob(blob)
+        } else {
+            parse_full_tx_blob(blob).map(|(hash, tx)| (Some(hash), tx))
+        };
+        match parsed_blob {
             Some((hash, tx)) => {
                 let listed = block.transactions.get(index).ok_or_else(|| {
                     format!(
@@ -1176,6 +1214,7 @@ fn parse_block_transaction_blobs(
                         block_height
                     )
                 })?;
+                let hash = hash.unwrap_or(*listed);
                 if hash != *listed {
                     return Err(format!(
                         "Block at height {} lists transaction {} at position {}, but the blob \
@@ -1357,48 +1396,13 @@ pub async fn process_batch_response(
         let miner_tx = OxideTransaction::<Pruned>::from(block.miner_transaction().clone());
         let tx_count = 1 + block_entry.txs.len();
 
-        // When a block is pruned, the RingCT signature data is stripped from
-        // transaction blobs. This means Transaction::read() will fail for
-        // non-coinbase transactions. However, the transaction prefix (version,
-        // timelock, inputs, outputs, extra) is preserved, so we CAN still
-        // extract key images (spent output detection). We CANNOT detect
-        // received outputs because the ECDH info and commitment data needed
-        // for output scanning are in the pruned RingCT portion.
-        if block_entry.pruned {
-            let mut spent_key_images = Vec::new();
-            let mut spent_key_image_tx_hashes = Vec::new();
-
-            for input in &miner_tx.prefix().inputs {
-                if let OxideInput::ToKey { key_image, .. } = input {
-                    spent_key_images.push(hex::encode(key_image.to_bytes()));
-                    spent_key_image_tx_hashes.push(hex::encode(miner_tx_hash));
-                }
-            }
-
-            for tx_blob in &block_entry.txs {
-                let key_images = extract_key_images_from_raw_tx(tx_blob);
-                let ki_count = key_images.len();
-                spent_key_images.extend(key_images);
-                // We don't have the tx hash for pruned blobs (can't compute
-                // hash without full data), so use empty strings as placeholders
-                spent_key_image_tx_hashes
-                    .extend(std::iter::repeat_with(String::new).take(ki_count));
-            }
-
-            results.push(BlockScanResult {
-                previous_block_hash: hex::encode(block.header.previous),
+        {
+            let (parsed_txs, skipped_key_images) = parse_block_transaction_blobs(
+                &block,
+                &block_entry.txs,
+                block_entry.pruned,
                 block_height,
-                block_hash,
-                block_timestamp,
-                tx_count,
-                outputs: vec![],
-                daemon_height,
-                spent_key_images,
-                spent_key_image_tx_hashes,
-            });
-        } else {
-            let (parsed_txs, skipped_key_images) =
-                parse_block_transaction_blobs(&block, &block_entry.txs, block_height)?;
+            )?;
 
             let skipped_count = skipped_key_images.len();
             let mut spent_key_images = skipped_key_images;
@@ -1704,49 +1708,13 @@ pub async fn process_batch_multi_wallet_response(
         let miner_tx = OxideTransaction::<Pruned>::from(block.miner_transaction().clone());
         let tx_count = 1 + block_entry.txs.len();
 
-        if block_entry.pruned {
-            let mut spent_key_images = Vec::new();
-            let mut spent_key_image_tx_hashes = Vec::new();
-
-            for input in &miner_tx.prefix().inputs {
-                if let OxideInput::ToKey { key_image, .. } = input {
-                    spent_key_images.push(hex::encode(key_image.to_bytes()));
-                    spent_key_image_tx_hashes.push(hex::encode(miner_tx_hash));
-                }
-            }
-
-            for tx_blob in &block_entry.txs {
-                let key_images = extract_key_images_from_raw_tx(tx_blob);
-                let ki_count = key_images.len();
-                spent_key_images.extend(key_images);
-                spent_key_image_tx_hashes
-                    .extend(std::iter::repeat_with(String::new).take(ki_count));
-            }
-
-            let mut wallet_results = HashMap::new();
-            for entry in &cached_scanners.entries {
-                wallet_results.insert(
-                    entry.address.clone(),
-                    WalletScanData {
-                        address: entry.address.clone(),
-                        outputs: vec![],
-                    },
-                );
-            }
-
-            results.push(MultiWalletScanResult {
+        {
+            let (parsed_txs, skipped_key_images) = parse_block_transaction_blobs(
+                &block,
+                &block_entry.txs,
+                block_entry.pruned,
                 block_height,
-                block_hash,
-                block_timestamp,
-                tx_count,
-                daemon_height,
-                spent_key_images,
-                spent_key_image_tx_hashes,
-                wallet_results,
-            });
-        } else {
-            let (parsed_txs, skipped_key_images) =
-                parse_block_transaction_blobs(&block, &block_entry.txs, block_height)?;
+            )?;
 
             let skipped_count = skipped_key_images.len();
             let mut spent_key_images = skipped_key_images;

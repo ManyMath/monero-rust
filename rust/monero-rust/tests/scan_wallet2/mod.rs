@@ -351,6 +351,30 @@ impl FakeChain {
         self.response_range(from, self.next_height())
     }
 
+    /// Pruned blocks, with a real prunable hash or the zero one monerod sends.
+    pub fn pruned_response_from(
+        &self,
+        from: u64,
+        with_prunable_hash: bool,
+    ) -> GetBlocksFastResponse {
+        let mut response = self.response_from(from);
+        for entry in &mut response.blocks {
+            entry.pruned = true;
+            for blob in &mut entry.txs {
+                let tx = Transaction::<NotPruned>::read(&mut blob.as_slice()).unwrap();
+                let prunable_hash = if with_prunable_hash {
+                    tx.prunable_hash().unwrap()
+                } else {
+                    [0u8; 32]
+                };
+                let (pruned, _) = tx.pruned_with_prunable();
+                *blob = pruned.serialize();
+                blob.extend_from_slice(&prunable_hash);
+            }
+        }
+        response
+    }
+
     pub fn response_range(&self, from: u64, to: u64) -> GetBlocksFastResponse {
         let a = (from - self.start_height) as usize;
         let b = (to - self.start_height) as usize;
