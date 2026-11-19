@@ -117,7 +117,10 @@ fn fold(
                     &result.spent_key_images,
                     result.block_height,
                 );
-                state.record_block_hash(result.block_height, result.block_hash.clone());
+                state.record_block_hash(
+                    result.block_height,
+                    monero_rust::block_id_from_hex(&result.block_hash).unwrap(),
+                );
                 response.blocks.push(BlockSeen {
                     height: result.block_height,
                     hash: result.block_hash.clone(),
@@ -166,7 +169,7 @@ async fn scan_wallet(
     response.daemon_height = daemon_height;
     if request.seed_genesis {
         match rpc.get_block_hash(0).await {
-            Ok(hash) => state.record_block_hash(0, hex::encode(hash)),
+            Ok(hash) => state.record_block_hash(0, hash),
             Err(error) => {
                 response.scan_error = Some(format!("genesis hash: {error:?}"));
                 return state;
@@ -256,7 +259,11 @@ async fn scan_wallet(
     }
 
     response.scanned_to = next;
-    response.short_chain_history = state.get_short_chain_history();
+    response.short_chain_history = state
+        .get_short_chain_history()
+        .into_iter()
+        .map(|(height, id)| (height, hex::encode(id)))
+        .collect();
     response.outputs = state.outputs().to_vec();
     let balance = state.balance_at_height(daemon_height);
     response.balance_confirmed = balance.confirmed;

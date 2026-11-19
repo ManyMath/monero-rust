@@ -20,10 +20,10 @@ use monero_rust::scanner::{
 };
 use monero_rust::wallet_state::is_spendable;
 use monero_rust::{
-    derive_address, derive_subaddress, generate_seed, prepare_send_inputs_with_rpc,
-    prepare_sweep_inputs_with_rpc, process_batch_with_reorg_detection, scan_mempool,
-    BlockHashChain, Network, PendingSpend, ScanBatchOutcome, TrackedTransaction, TxStatus,
-    WalletOutput, WalletState,
+    block_id_from_hex, derive_address, derive_subaddress, generate_seed,
+    prepare_send_inputs_with_rpc, prepare_sweep_inputs_with_rpc,
+    process_batch_with_reorg_detection, scan_mempool, BlockHashChain, Network, PendingSpend,
+    ScanBatchOutcome, TrackedTransaction, TxStatus, WalletOutput, WalletState,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -308,10 +308,10 @@ async fn scan_one<R: RpcConnection + 'static>(rpc: Rpc<R>, request: Value) -> Va
     let save_every = request["save_every_blocks"].as_u64().unwrap_or(200_000);
 
     let mut state = wallet_state_from(&file);
-    let genesis = hex::encode(rpc.get_block_hash(0).await.expect("genesis hash"));
+    let genesis = rpc.get_block_hash(0).await.expect("genesis hash");
     let genesis_first = request["genesis_first"].as_bool().unwrap_or(false);
     if file.next_height > 0 || genesis_first {
-        state.record_block_hash(0, genesis.clone());
+        state.record_block_hash(0, genesis);
     }
     let mut own: HashSet<String> = state
         .outputs()
@@ -453,9 +453,12 @@ async fn scan_one<R: RpcConnection + 'static>(rpc: Rpc<R>, request: Value) -> Va
                                 );
                             }
                         }
-                        state.record_block_hash(result.block_height, result.block_hash.clone());
+                        state.record_block_hash(
+                            result.block_height,
+                            block_id_from_hex(&result.block_hash).expect("block id"),
+                        );
                     }
-                    state.record_block_hash(0, genesis.clone());
+                    state.record_block_hash(0, genesis);
                     state.block_hashes.compact();
                     let end = batch.batch_end_height;
                     blocks += end.saturating_sub(next);

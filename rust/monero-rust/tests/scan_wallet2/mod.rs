@@ -275,13 +275,13 @@ impl FakeChain {
 
     /// Where monerod starts for a history and `start_height == 0`: the highest
     /// history block on this chain.
-    pub fn common_start(&self, history: &[(u64, String)]) -> u64 {
+    pub fn common_start(&self, history: &[(u64, [u8; 32])]) -> u64 {
         history
             .iter()
             .filter(|(height, hash)| {
                 *height >= self.start_height
                     && *height < self.next_height()
-                    && self.hash_hex(*height) == *hash
+                    && self.hash_hex(*height) == hex::encode(hash)
             })
             .map(|(height, _)| *height)
             .max()
@@ -401,7 +401,10 @@ pub fn apply_results(state: &mut WalletState, results: &[BlockScanResult]) {
             &result.spent_key_image_tx_hashes,
             result.block_height,
         );
-        state.record_block_hash(result.block_height, result.block_hash.clone());
+        state.record_block_hash(
+            result.block_height,
+            monero_rust::block_id_from_hex(&result.block_hash).unwrap(),
+        );
         state.current_height = result.block_height + 1;
         state.daemon_height = result.daemon_height;
     }

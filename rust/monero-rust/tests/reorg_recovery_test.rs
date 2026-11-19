@@ -1,7 +1,17 @@
 use monero_rust::{
-    process_batch_with_reorg_detection, BlockScanResult, ScanBatchOutcome, WalletOutput,
+    process_batch_with_reorg_detection, BlockId, BlockScanResult, ScanBatchOutcome, WalletOutput,
     WalletState,
 };
+
+fn id(label: &str) -> BlockId {
+    let mut id = [0u8; 32];
+    id[..label.len()].copy_from_slice(label.as_bytes());
+    id
+}
+
+fn id_hex(label: &str) -> String {
+    hex::encode(id(label))
+}
 
 /// Helper: create a WalletOutput with deterministic fields.
 fn make_output(amount: u64, height: u64, tx_hash: &str, account: u32) -> WalletOutput {
@@ -38,7 +48,7 @@ fn make_block_result(
     BlockScanResult {
         previous_block_hash: String::new(),
         block_height: height,
-        block_hash: format!("hash_{}", height),
+        block_hash: id_hex(&format!("hash_{}", height)),
         block_timestamp: height * 120,
         tx_count: outputs.len() + spent_key_images.len(),
         outputs,
@@ -93,7 +103,7 @@ fn test_reorg_recovery_full_cycle() {
     // ki_tx_100 was spent in block 103 (known from our test scenario).
     state.mark_spent_by_key_images_at_height(&["ki_tx_100".to_string()], 103);
     for (h, hash) in &batch.block_hashes {
-        state.record_block_hash(*h, hash.clone());
+        state.record_block_hash(*h, *hash);
     }
     state.current_height = 104;
 
@@ -116,7 +126,7 @@ fn test_reorg_recovery_full_cycle() {
         {
             // Inject a mismatched hash at height 102 to trigger reorg
             let mut block = make_block_result(102, vec![], vec![]);
-            block.block_hash = "new_chain_hash_102".to_string();
+            block.block_hash = id_hex("new_chain_hash_102");
             block
         },
     ];
@@ -159,7 +169,7 @@ fn test_reorg_recovery_full_cycle() {
         BlockScanResult {
             previous_block_hash: String::new(),
             block_height: 102,
-            block_hash: "new_chain_hash_102".to_string(),
+            block_hash: id_hex("new_chain_hash_102"),
             block_timestamp: 102 * 120,
             tx_count: 1,
             outputs: vec![make_output(4_000_000_000_000, 102, "tx_new_102", 0)],
@@ -171,7 +181,7 @@ fn test_reorg_recovery_full_cycle() {
         BlockScanResult {
             previous_block_hash: String::new(),
             block_height: 103,
-            block_hash: "new_chain_hash_103".to_string(),
+            block_hash: id_hex("new_chain_hash_103"),
             block_timestamp: 103 * 120,
             tx_count: 0,
             outputs: vec![],
@@ -194,7 +204,7 @@ fn test_reorg_recovery_full_cycle() {
     // Apply new chain results
     state.add_outputs(batch.outputs_to_store);
     for (h, hash) in &batch.block_hashes {
-        state.record_block_hash(*h, hash.clone());
+        state.record_block_hash(*h, *hash);
     }
     state.current_height = 103;
 
@@ -225,12 +235,12 @@ fn test_reorg_at_first_block_recovers() {
     let mut state = WalletState::new();
     state.add_outputs(vec![make_output(1_000_000_000_000, 100, "tx_100", 0)]);
     state.current_height = 100;
-    state.record_block_hash(100, "old_hash_100".to_string());
+    state.record_block_hash(100, id("old_hash_100"));
 
     let results = vec![BlockScanResult {
         previous_block_hash: String::new(),
         block_height: 100,
-        block_hash: "new_hash_100".to_string(), // different!
+        block_hash: id_hex("new_hash_100"), // different!
         block_timestamp: 12000,
         tx_count: 0,
         outputs: vec![],

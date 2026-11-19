@@ -738,7 +738,9 @@ pub async fn relay_raw(
         .await
 }
 
-pub fn scanned_block(height: u64, hash: &str, tx_blobs: &[&str]) -> BlockScanResult {
+pub fn scanned_block(height: u64, label: &str, tx_blobs: &[&str]) -> BlockScanResult {
+    let mut id = [0u8; 32];
+    id[..label.len()].copy_from_slice(label.as_bytes());
     let mut spent_key_images = Vec::new();
     let mut spent_key_image_tx_hashes = Vec::new();
     let mut spent_key_image_rings = Vec::new();
@@ -753,7 +755,7 @@ pub fn scanned_block(height: u64, hash: &str, tx_blobs: &[&str]) -> BlockScanRes
     }
     BlockScanResult {
         block_height: height,
-        block_hash: hash.to_string(),
+        block_hash: hex::encode(id),
         previous_block_hash: String::new(),
         block_timestamp: height * 120,
         tx_count: tx_blobs.len(),

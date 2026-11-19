@@ -602,8 +602,8 @@ async fn history_zero_negotiates_a_known_common_block_on_all_processing_routes()
     let rpc = history_node(make_response(100, 3, 103));
     // Daemon chooses an older common ancestor, not necessarily the first history entry.
     let history = vec![
-        (120, hex::encode([9; 32])),
-        (100, hex::encode(make_coinbase_block(100, [0; 32]).hash())),
+        (120, [9; 32]),
+        (100, make_coinbase_block(100, [0; 32]).hash()),
     ];
     let (direct, start) = scan_blocks_batch_with_history(
         &rpc,
@@ -673,11 +673,8 @@ async fn history_zero_negotiates_a_known_common_block_on_all_processing_routes()
 #[tokio::test]
 async fn history_zero_rejects_unanchored_and_mislabelled_starts() {
     use monero_rust::scanner::fetch_blocks_batch_with_history;
-    let good_hash = hex::encode(make_coinbase_block(100, [0; 32]).hash());
-    for history in [
-        vec![(100, hex::encode([9; 32]))],
-        vec![(101, good_hash.clone())],
-    ] {
+    let good_hash = make_coinbase_block(100, [0; 32]).hash();
+    for history in [vec![(100, [9; 32])], vec![(101, good_hash)]] {
         let rpc = history_node(make_response(100, 3, 103));
         let error = fetch_blocks_batch_with_history(&rpc, 0, &history, false)
             .await
@@ -691,7 +688,7 @@ async fn history_zero_rejects_unanchored_and_mislabelled_starts() {
     let mut response = make_response(100, 3, 103);
     response.start_height = 101;
     let rpc = history_node(response);
-    let error = fetch_blocks_batch_with_history(&rpc, 0, &[(101, good_hash.clone())], false)
+    let error = fetch_blocks_batch_with_history(&rpc, 0, &[(101, good_hash)], false)
         .await
         .err()
         .unwrap();
@@ -733,7 +730,7 @@ async fn history_anchor_does_not_bypass_parent_linkage() {
     let mut response = make_response(100, 3, 103);
     response.blocks[1].block = make_coinbase_block(101, [9; 32]).serialize();
     let rpc = history_node(response);
-    let history = [(100, hex::encode(make_coinbase_block(100, [0; 32]).hash()))];
+    let history = [(100, make_coinbase_block(100, [0; 32]).hash())];
     let error = scan_blocks_batch_with_history(
         &rpc,
         0,

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -72,11 +72,15 @@ pub struct TrackedTransaction {
     pub created_at_secs: u64,
 }
 
+/// A block id: the 32-byte hash of a block.
+pub type BlockId = [u8; 32];
+
 /// The wallet's block ids, for fork detection and the `/getblocks.bin` history.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BlockHashChain {
-    hashes: BTreeMap<u64, String>,
-    genesis_hash: Option<String>,
+    /// Runs of consecutive ids by first height; no two overlap or touch.
+    runs: BTreeMap<u64, Vec<BlockId>>,
+    genesis_hash: Option<BlockId>,
 }
 
 impl BlockHashChain {
@@ -84,35 +88,39 @@ impl BlockHashChain {
         Self::default()
     }
 
-    pub fn record_block(&mut self, height: u64, hash: String) {
+    pub fn record_block(&mut self, height: u64, hash: BlockId) {
         if height == 0 {
-            self.genesis_hash = Some(hash.clone());
+            self.genesis_hash = Some(hash);
         }
-        self.hashes.insert(height, hash);
+        self.insert(height, hash);
     }
 
-    pub fn get_hash(&self, height: u64) -> Option<&str> {
-        self.hashes.get(&height).map(|s| s.as_str())
+    pub fn get_hash(&self, height: u64) -> Option<&BlockId> {
+        let (&start, run) = self.runs.range(..=height).next_back()?;
+        run.get(usize::try_from(height - start).ok()?)
     }
 
     pub fn tip_height(&self) -> Option<u64> {
-        self.hashes.keys().next_back().copied()
+        self.runs
+            .iter()
+            .next_back()
+            .map(|(&start, run)| start + run.len() as u64 - 1)
     }
 
     /// The lowest height a hash is stored for.
     pub fn earliest_height(&self) -> Option<u64> {
-        self.hashes.keys().next().copied()
+        self.runs.keys().next().copied()
     }
 
     /// Remove all hashes at heights >= split_height.
     pub fn rollback_to(&mut self, split_height: u64) {
-        // BTreeMap::split_off returns everything >= key
-        let removed = self.hashes.split_off(&split_height);
-        // If genesis was in the removed range, keep it
-        if let Some(genesis) = &self.genesis_hash {
-            if removed.get(&0).map(|h| h == genesis).unwrap_or(false) {
-                self.hashes.insert(0, genesis.clone());
-            }
+        // A rollback to zero keeps the genesis id.
+        let genesis = self
+            .genesis_hash
+            .filter(|genesis| split_height == 0 && self.get_hash(0) == Some(genesis));
+        self.truncate(split_height);
+        if let Some(genesis) = genesis {
+            self.insert(0, genesis);
         }
     }
 
@@ -125,7 +133,7 @@ impl BlockHashChain {
         };
 
         let dense_start = tip.saturating_sub(DENSE_HASH_WINDOW - 1);
-        let mut keep = HashSet::new();
+        let mut keep = BTreeSet::new();
 
         // Keep dense window
         for h in dense_start..=tip {
@@ -148,31 +156,41 @@ impl BlockHashChain {
 
         // Genesis, and the lowest height above it for a node to answer from after a deep reorg.
         keep.insert(0);
-        if let Some((&base, _)) = self.hashes.range(1..).next() {
+        if let Some(base) = self.lowest_at_or_above(1) {
             keep.insert(base);
         }
 
-        self.hashes.retain(|h, _| keep.contains(h));
+        let mut kept = Self {
+            runs: BTreeMap::new(),
+            genesis_hash: self.genesis_hash,
+        };
+        for height in keep {
+            if let Some(hash) = self.get_hash(height) {
+                kept.insert(height, *hash);
+            }
+        }
+        *self = kept;
     }
 
     /// wallet2's short chain history, newest first. wallet2 drops the three
     /// oldest entries before genesis before sending it.
-    pub fn get_short_chain_history(&self) -> Vec<(u64, String)> {
+    pub fn get_short_chain_history(&self) -> Vec<(u64, BlockId)> {
         self.get_short_chain_history_with_granularity(1)
     }
 
     /// From the tip rounded down to `granularity`, as wallet2's first untrusted
     /// refresh hides the height (FIRST_REFRESH_GRANULARITY).
-    pub fn get_short_chain_history_with_granularity(&self, granularity: u64) -> Vec<(u64, String)> {
-        let genesis = self.hashes.get(&0).or(self.genesis_hash.as_ref());
+    pub fn get_short_chain_history_with_granularity(
+        &self,
+        granularity: u64,
+    ) -> Vec<(u64, BlockId)> {
+        let genesis = self.get_hash(0).or(self.genesis_hash.as_ref());
         let Some(tip) = self.tip_height() else {
-            return genesis
-                .map(|hash| vec![(0, hash.clone())])
-                .unwrap_or_default();
+            return genesis.map(|hash| vec![(0, *hash)]).unwrap_or_default();
         };
-        let offset = match self.hashes.range(1..).next() {
-            Some((&1, _)) if self.hashes.contains_key(&0) => 0,
-            Some((&lowest, _)) => lowest,
+        let offset = match self.lowest_at_or_above(1) {
+            Some(1) if self.get_hash(0).is_some() => 0,
+            Some(lowest) => lowest,
             None => 0,
         };
         let size = tip + 1;
@@ -180,17 +198,17 @@ impl BlockHashChain {
         let rounded = (size / granularity * granularity).max(offset);
         let sz = rounded - offset;
 
-        let mut ids: Vec<(u64, String)> = Vec::new();
+        let mut ids: Vec<(u64, BlockId)> = Vec::new();
         let mut push = |target: u64| {
             if target == 0 {
                 if let Some(hash) = genesis {
-                    ids.push((0, hash.clone()));
+                    ids.push((0, *hash));
                 }
                 return;
             }
-            if let Some((&height, hash)) = self.hashes.range(1..=target).next_back() {
+            if let Some((height, hash)) = self.highest_at_or_below(target).filter(|(h, _)| *h > 0) {
                 if ids.last().map_or(true, |(last, _)| height < *last) {
-                    ids.push((height, hash.clone()));
+                    ids.push((height, *hash));
                 }
             }
         };
@@ -222,24 +240,213 @@ impl BlockHashChain {
     }
 
     pub fn len(&self) -> usize {
-        self.hashes.len()
+        self.runs.values().map(Vec::len).sum()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.hashes.is_empty()
+        self.runs.is_empty()
     }
 
     pub(crate) fn base_height(&self) -> Option<u64> {
-        match self.hashes.range(1..).next() {
-            Some((&1, _)) => Some(0),
-            Some((&lowest, _)) => Some(lowest),
-            None => self.hashes.contains_key(&0).then_some(0),
+        match self.lowest_at_or_above(1) {
+            Some(1) => Some(0),
+            Some(lowest) => Some(lowest),
+            None => self.get_hash(0).is_some().then_some(0),
         }
     }
 
     /// Forget ids below `height` but genesis, as wallet2's `hashchain::trim`.
     pub(crate) fn trim_below(&mut self, height: u64) {
-        self.hashes.retain(|&h, _| h == 0 || h >= height);
+        if height <= 1 {
+            return;
+        }
+        let genesis = self.get_hash(0).copied();
+        let mut kept = self.runs.split_off(&height);
+        if let Some((&start, run)) = self.runs.iter_mut().next_back() {
+            if start + run.len() as u64 > height {
+                run.drain(..(height - start) as usize);
+                kept.insert(height, std::mem::take(run));
+            }
+        }
+        self.runs = kept;
+        if let Some(genesis) = genesis {
+            self.insert(0, genesis);
+        }
+    }
+
+    fn insert(&mut self, height: u64, hash: BlockId) {
+        let next = height.checked_add(1);
+        if let Some((&start, run)) = self.runs.range_mut(..=height).next_back() {
+            let end = start + run.len() as u64;
+            if height < end {
+                run[(height - start) as usize] = hash;
+                return;
+            }
+            if height == end {
+                run.push(hash);
+                if let Some(following) = next.and_then(|next| self.runs.remove(&next)) {
+                    if let Some(run) = self.runs.get_mut(&start) {
+                        run.extend(following);
+                    }
+                }
+                return;
+            }
+        }
+        let mut run = vec![hash];
+        if let Some(following) = next.and_then(|next| self.runs.remove(&next)) {
+            run.extend(following);
+        }
+        self.runs.insert(height, run);
+    }
+
+    /// Remove every id at `height` and above.
+    fn truncate(&mut self, height: u64) {
+        self.runs.split_off(&height);
+        if let Some((&start, run)) = self.runs.iter_mut().next_back() {
+            run.truncate((height - start).try_into().unwrap_or(usize::MAX));
+        }
+    }
+
+    fn highest_at_or_below(&self, height: u64) -> Option<(u64, &BlockId)> {
+        let (&start, run) = self.runs.range(..=height).next_back()?;
+        let found = height.min(start + run.len() as u64 - 1);
+        Some((found, &run[(found - start) as usize]))
+    }
+
+    fn lowest_at_or_above(&self, height: u64) -> Option<u64> {
+        if self.get_hash(height).is_some() {
+            return Some(height);
+        }
+        self.runs.range(height..).next().map(|(&start, _)| start)
+    }
+}
+
+#[derive(Serialize)]
+struct StoredChain<'a> {
+    genesis_hash: Option<String>,
+    runs: Vec<StoredRun<'a>>,
+}
+
+#[derive(Serialize)]
+struct StoredRun<'a> {
+    start: u64,
+    #[serde(serialize_with = "ids_to_base64")]
+    ids: &'a [BlockId],
+}
+
+fn ids_to_base64<S: serde::Serializer>(ids: &&[BlockId], serializer: S) -> Result<S::Ok, S::Error> {
+    use base64::Engine as _;
+    serializer.serialize_str(&base64::engine::general_purpose::STANDARD.encode(ids.concat()))
+}
+
+/// What a stored chain may hold: `runs`, or `hashes` (height to hex id) as
+/// written before ids were kept as bytes.
+#[derive(Deserialize)]
+struct LoadedChain {
+    #[serde(default)]
+    genesis_hash: Option<String>,
+    #[serde(default)]
+    runs: Option<Vec<LoadedRun>>,
+    #[serde(default)]
+    hashes: Option<BTreeMap<u64, String>>,
+}
+
+#[derive(Deserialize)]
+struct LoadedRun {
+    start: u64,
+    ids: String,
+}
+
+/// Parse a hex block id, as `BlockScanResult::block_hash` holds it.
+pub fn block_id_from_hex(hex_id: &str) -> Result<BlockId, String> {
+    let mut id = [0u8; 32];
+    hex::decode_to_slice(hex_id, &mut id)
+        .map_err(|e| format!("block id {hex_id:?} is not 32 bytes of hex: {e}"))?;
+    Ok(id)
+}
+
+impl TryFrom<LoadedChain> for BlockHashChain {
+    type Error = String;
+
+    fn try_from(loaded: LoadedChain) -> Result<Self, String> {
+        use base64::Engine as _;
+        let mut chain = BlockHashChain {
+            runs: BTreeMap::new(),
+            genesis_hash: loaded
+                .genesis_hash
+                .as_deref()
+                .map(block_id_from_hex)
+                .transpose()?,
+        };
+        match (loaded.runs, loaded.hashes) {
+            (Some(runs), None) => {
+                let mut end = 0u64;
+                for (i, run) in runs.into_iter().enumerate() {
+                    let bytes = base64::engine::general_purpose::STANDARD
+                        .decode(&run.ids)
+                        .map_err(|e| format!("run at height {}: {e}", run.start))?;
+                    if bytes.is_empty() || bytes.len() % 32 != 0 {
+                        return Err(format!(
+                            "run at height {} holds {} bytes, not a whole number of block ids",
+                            run.start,
+                            bytes.len()
+                        ));
+                    }
+                    if i > 0 && run.start < end {
+                        return Err(format!(
+                            "run at height {} overlaps the run before it or is out of order",
+                            run.start
+                        ));
+                    }
+                    let ids: Vec<BlockId> = bytes
+                        .chunks_exact(32)
+                        .map(|id| id.try_into().expect("32-byte chunk"))
+                        .collect();
+                    end = run
+                        .start
+                        .checked_add(ids.len() as u64)
+                        .ok_or_else(|| format!("run at height {} is too long", run.start))?;
+                    match chain.runs.iter_mut().next_back() {
+                        Some((&start, last)) if start + last.len() as u64 == run.start => {
+                            last.extend(ids)
+                        }
+                        _ => {
+                            chain.runs.insert(run.start, ids);
+                        }
+                    }
+                }
+            }
+            (None, Some(hashes)) => {
+                for (height, hex_id) in hashes {
+                    chain.insert(height, block_id_from_hex(&hex_id)?);
+                }
+            }
+            (Some(_), Some(_)) => return Err("both `runs` and `hashes` are present".into()),
+            (None, None) => return Err("missing field `runs`".into()),
+        }
+        Ok(chain)
+    }
+}
+
+impl Serialize for BlockHashChain {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        StoredChain {
+            genesis_hash: self.genesis_hash.map(hex::encode),
+            runs: self
+                .runs
+                .iter()
+                .map(|(&start, ids)| StoredRun { start, ids })
+                .collect(),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for BlockHashChain {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        LoadedChain::deserialize(deserializer)?
+            .try_into()
+            .map_err(serde::de::Error::custom)
     }
 }
 
@@ -1425,11 +1632,11 @@ impl WalletState {
         }
     }
 
-    pub fn record_block_hash(&mut self, height: u64, hash: String) {
+    pub fn record_block_hash(&mut self, height: u64, hash: BlockId) {
         self.block_hashes.record_block(height, hash);
     }
 
-    pub fn get_short_chain_history(&self) -> Vec<(u64, String)> {
+    pub fn get_short_chain_history(&self) -> Vec<(u64, BlockId)> {
         self.block_hashes.get_short_chain_history()
     }
 
@@ -3221,20 +3428,368 @@ mod tests {
 
     // ---- BlockHashChain tests ----
 
+    fn id(label: &str) -> BlockId {
+        let mut id = [0u8; 32];
+        id[..label.len()].copy_from_slice(label.as_bytes());
+        id
+    }
+
+    #[derive(Serialize, Default, Clone)]
+    struct HexMapChain {
+        hashes: BTreeMap<u64, String>,
+        genesis_hash: Option<String>,
+    }
+
+    impl HexMapChain {
+        fn record_block(&mut self, height: u64, hash: String) {
+            if height == 0 {
+                self.genesis_hash = Some(hash.clone());
+            }
+            self.hashes.insert(height, hash);
+        }
+
+        fn rollback_to(&mut self, split_height: u64) {
+            let removed = self.hashes.split_off(&split_height);
+            if let Some(genesis) = &self.genesis_hash {
+                if removed.get(&0).map(|h| h == genesis).unwrap_or(false) {
+                    self.hashes.insert(0, genesis.clone());
+                }
+            }
+        }
+
+        fn compact(&mut self) {
+            let Some(&tip) = self.hashes.keys().next_back() else {
+                return;
+            };
+            let dense_start = tip.saturating_sub(DENSE_HASH_WINDOW - 1);
+            let mut keep: HashSet<u64> = (dense_start..=tip).collect();
+            if dense_start > 0 {
+                let mut step = 1u64;
+                let mut h = dense_start - 1;
+                loop {
+                    keep.insert(h);
+                    step *= 2;
+                    if h < step {
+                        break;
+                    }
+                    h -= step;
+                }
+            }
+            keep.insert(0);
+            if let Some((&base, _)) = self.hashes.range(1..).next() {
+                keep.insert(base);
+            }
+            self.hashes.retain(|h, _| keep.contains(h));
+        }
+
+        fn history(&self, granularity: u64) -> Vec<(u64, String)> {
+            let genesis = self.hashes.get(&0).or(self.genesis_hash.as_ref());
+            let Some(&tip) = self.hashes.keys().next_back() else {
+                return genesis
+                    .map(|hash| vec![(0, hash.clone())])
+                    .unwrap_or_default();
+            };
+            let offset = match self.hashes.range(1..).next() {
+                Some((&1, _)) if self.hashes.contains_key(&0) => 0,
+                Some((&lowest, _)) => lowest,
+                None => 0,
+            };
+            let size = tip + 1;
+            let granularity = granularity.max(1);
+            let rounded = (size / granularity * granularity).max(offset);
+            let sz = rounded - offset;
+            let mut ids: Vec<(u64, String)> = Vec::new();
+            let mut push = |target: u64| {
+                if target == 0 {
+                    if let Some(hash) = genesis {
+                        ids.push((0, hash.clone()));
+                    }
+                    return;
+                }
+                if let Some((&height, hash)) = self.hashes.range(1..=target).next_back() {
+                    if ids.last().map_or(true, |(last, _)| height < *last) {
+                        ids.push((height, hash.clone()));
+                    }
+                }
+            };
+            if sz == 0 {
+                if size > offset {
+                    push(offset);
+                }
+                push(0);
+                return ids;
+            }
+            let (mut back, mut multiplier, mut i) = (1u64, 1u64, 0);
+            while back < sz {
+                push(offset + sz - back);
+                if i < 10 {
+                    back += 1;
+                } else {
+                    multiplier *= 2;
+                    back += multiplier;
+                }
+                i += 1;
+            }
+            push(offset);
+            if offset != 0 {
+                push(0);
+            }
+            ids
+        }
+
+        fn base_height(&self) -> Option<u64> {
+            match self.hashes.range(1..).next() {
+                Some((&1, _)) => Some(0),
+                Some((&lowest, _)) => Some(lowest),
+                None => self.hashes.contains_key(&0).then_some(0),
+            }
+        }
+
+        fn trim_below(&mut self, height: u64) {
+            self.hashes.retain(|&h, _| h == 0 || h >= height);
+        }
+    }
+
+    fn assert_same_chain(chain: &BlockHashChain, reference: &HexMapChain, step: usize, full: bool) {
+        let hex_history = |history: Vec<(u64, BlockId)>| -> Vec<(u64, String)> {
+            history
+                .into_iter()
+                .map(|(height, id)| (height, hex::encode(id)))
+                .collect()
+        };
+        if full {
+            let stored: BTreeMap<u64, String> = chain
+                .runs
+                .iter()
+                .flat_map(|(&start, run)| {
+                    run.iter()
+                        .enumerate()
+                        .map(move |(i, id)| (start + i as u64, hex::encode(id)))
+                })
+                .collect();
+            assert_eq!(stored, reference.hashes, "step {step}");
+            let tip = reference.hashes.keys().next_back().map_or(0, |tip| tip + 1);
+            for height in 0..=tip {
+                assert_eq!(
+                    chain.get_hash(height).map(hex::encode).as_ref(),
+                    reference.hashes.get(&height),
+                    "step {step}, height {height}"
+                );
+            }
+        }
+        assert_eq!(
+            chain.genesis_hash.map(hex::encode),
+            reference.genesis_hash,
+            "step {step}"
+        );
+        assert_eq!(
+            chain.tip_height(),
+            reference.hashes.keys().next_back().copied(),
+            "step {step}"
+        );
+        assert_eq!(
+            chain.earliest_height(),
+            reference.hashes.keys().next().copied(),
+            "step {step}"
+        );
+        assert_eq!(chain.len(), reference.hashes.len(), "step {step}");
+        assert_eq!(chain.is_empty(), reference.hashes.is_empty(), "step {step}");
+        assert_eq!(chain.base_height(), reference.base_height(), "step {step}");
+        for granularity in [1, 7, 1024] {
+            assert_eq!(
+                hex_history(chain.get_short_chain_history_with_granularity(granularity)),
+                reference.history(granularity),
+                "step {step}, granularity {granularity}"
+            );
+        }
+        let mut end = None;
+        for (&start, run) in &chain.runs {
+            assert!(!run.is_empty(), "step {step}");
+            assert!(end.map_or(true, |end| start > end), "step {step}");
+            end = Some(start + run.len() as u64);
+        }
+    }
+
+    #[test]
+    fn block_hash_chain_matches_the_hex_map_it_replaces() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move |bound: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % bound
+        };
+        for round in 0..40 {
+            let mut chain = BlockHashChain::new();
+            let mut reference = HexMapChain::default();
+            for step in 0..400 {
+                let tip = chain.tip_height().map_or(0, |tip| tip + 1);
+                let label = format!("{round}/{step}");
+                match next(100) {
+                    0..=59 => {
+                        let height = tip;
+                        chain.record_block(height, id(&label));
+                        reference.record_block(height, hex::encode(id(&label)));
+                    }
+                    60..=64 => {
+                        let from = if next(2) == 0 { tip } else { next(tip + 50) };
+                        for height in from..from + next(400) {
+                            let label = format!("{round}/{step}/{height}");
+                            chain.record_block(height, id(&label));
+                            reference.record_block(height, hex::encode(id(&label)));
+                        }
+                    }
+                    65..=79 => {
+                        let height = next(tip + 200);
+                        chain.record_block(height, id(&label));
+                        reference.record_block(height, hex::encode(id(&label)));
+                    }
+                    80..=89 => {
+                        let split = next(tip + 2);
+                        chain.rollback_to(split);
+                        reference.rollback_to(split);
+                    }
+                    90..=94 => {
+                        chain.compact();
+                        reference.compact();
+                    }
+                    _ => {
+                        let height = next(tip + 2);
+                        chain.trim_below(height);
+                        reference.trim_below(height);
+                    }
+                }
+                assert_same_chain(&chain, &reference, step, step % 20 == 0);
+                if step % 50 == 0 {
+                    let json = serde_json::to_string(&chain).unwrap();
+                    assert_eq!(
+                        serde_json::from_str::<BlockHashChain>(&json).unwrap(),
+                        chain
+                    );
+                    let old_json = serde_json::to_string(&reference).unwrap();
+                    assert_eq!(
+                        serde_json::from_str::<BlockHashChain>(&old_json).unwrap(),
+                        chain
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn block_hash_chain_loads_the_hex_map_format_and_round_trips_its_own() {
+        let hex = |label: &str| hex::encode(id(label));
+        let mut from_genesis = HexMapChain::default();
+        for height in 0..=300 {
+            from_genesis.record_block(height, hex(&format!("hash_{height}")));
+        }
+        let mut from_checkpoint = HexMapChain::default();
+        from_checkpoint.record_block(0, hex("genesis"));
+        for height in 550_000..=550_400 {
+            from_checkpoint.record_block(height, hex(&format!("hash_{height}")));
+        }
+        let mut compacted = from_checkpoint.clone();
+        compacted.compact();
+        let mut without_genesis = HexMapChain::default();
+        for height in 1000..=1010 {
+            without_genesis.record_block(height, hex(&format!("hash_{height}")));
+        }
+        for reference in [
+            &from_genesis,
+            &from_checkpoint,
+            &compacted,
+            &without_genesis,
+        ] {
+            let old_json = serde_json::to_string(reference).unwrap();
+            let chain: BlockHashChain = serde_json::from_str(&old_json).unwrap();
+            assert_same_chain(&chain, reference, 0, true);
+
+            let json = serde_json::to_string(&chain).unwrap();
+            assert!(!json.contains("\"hashes\""), "{json}");
+            let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+            assert_eq!(
+                value["runs"].as_array().unwrap().len(),
+                chain.runs.len(),
+                "{json}"
+            );
+            let again: BlockHashChain = serde_json::from_str(&json).unwrap();
+            assert_eq!(again, chain);
+            assert_same_chain(&again, reference, 0, true);
+        }
+
+        let literal = format!(
+            r#"{{"next_height":3,"block_hashes":{{"hashes":{{"0":"{g}","1":"{a}","2":"{b}"}},"genesis_hash":"{g}"}}}}"#,
+            g = hex("genesis"),
+            a = hex("hash_1"),
+            b = hex("hash_2"),
+        );
+        #[derive(Deserialize)]
+        struct StateFile {
+            block_hashes: BlockHashChain,
+        }
+        let loaded: StateFile = serde_json::from_str(&literal).unwrap();
+        assert_eq!(loaded.block_hashes.runs.len(), 1);
+        assert_eq!(loaded.block_hashes.get_hash(2), Some(&id("hash_2")));
+        assert_eq!(loaded.block_hashes.genesis_hash, Some(id("genesis")));
+        assert_eq!(
+            serde_json::to_value(&loaded.block_hashes).unwrap(),
+            serde_json::json!({
+                "genesis_hash": hex("genesis"),
+                "runs": [{
+                    "start": 0,
+                    "ids": "Z2VuZXNpcwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABoYXNoXzEAAAAAAAAAAAAAAAAAAA\
+                            AAAAAAAAAAAAAAAGhhc2hfMgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                }],
+            })
+        );
+    }
+
+    #[test]
+    fn block_hash_chain_refuses_a_state_it_cannot_hold() {
+        let refused = |json: &str| serde_json::from_str::<BlockHashChain>(json).unwrap_err();
+        let short = "ab".repeat(31);
+        assert!(refused(&format!(r#"{{"hashes":{{"5":"{short}"}}}}"#))
+            .to_string()
+            .contains("not 32 bytes of hex"));
+        assert!(refused(r#"{"hashes":{"5":"hash_5"}}"#)
+            .to_string()
+            .contains("not 32 bytes of hex"));
+        assert!(refused(
+            r#"{"runs":[{"start":5,"ids":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]}"#
+        )
+        .to_string()
+        .contains("not a whole number of block ids"));
+        let one = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        assert!(refused(&format!(
+            r#"{{"runs":[{{"start":5,"ids":"{one}"}},{{"start":5,"ids":"{one}"}}]}}"#
+        ))
+        .to_string()
+        .contains("overlaps"));
+        assert!(refused(r#"{"genesis_hash":null}"#)
+            .to_string()
+            .contains("missing field `runs`"));
+        let chain: BlockHashChain = serde_json::from_str(&format!(
+            r#"{{"genesis_hash":null,"runs":[{{"start":5,"ids":"{one}"}},{{"start":6,"ids":"{one}"}}]}}"#
+        ))
+        .unwrap();
+        assert_eq!(chain.runs.len(), 1);
+        assert_eq!(chain.len(), 2);
+    }
+
     #[test]
     fn test_block_hash_chain_basics() {
         let mut chain = BlockHashChain::new();
         assert!(chain.is_empty());
         assert_eq!(chain.tip_height(), None);
 
-        chain.record_block(100, "hash100".into());
-        chain.record_block(101, "hash101".into());
-        chain.record_block(102, "hash102".into());
+        chain.record_block(100, id("hash100"));
+        chain.record_block(101, id("hash101"));
+        chain.record_block(102, id("hash102"));
 
         assert_eq!(chain.len(), 3);
         assert_eq!(chain.tip_height(), Some(102));
-        assert_eq!(chain.get_hash(100), Some("hash100"));
-        assert_eq!(chain.get_hash(101), Some("hash101"));
+        assert_eq!(chain.get_hash(100), Some(&id("hash100")));
+        assert_eq!(chain.get_hash(101), Some(&id("hash101")));
         assert_eq!(chain.get_hash(99), None);
     }
 
@@ -3242,7 +3797,7 @@ mod tests {
     fn test_block_hash_chain_rollback() {
         let mut chain = BlockHashChain::new();
         for h in 90..=100 {
-            chain.record_block(h, format!("hash_{}", h));
+            chain.record_block(h, id(&format!("hash_{}", h)));
         }
         assert_eq!(chain.tip_height(), Some(100));
 
@@ -3251,18 +3806,18 @@ mod tests {
         assert!(chain.get_hash(98).is_none());
         assert!(chain.get_hash(99).is_none());
         assert!(chain.get_hash(100).is_none());
-        assert_eq!(chain.get_hash(97), Some("hash_97"));
+        assert_eq!(chain.get_hash(97), Some(&id("hash_97")));
     }
 
     #[test]
     fn test_block_hash_chain_rollback_preserves_genesis() {
         let mut chain = BlockHashChain::new();
-        chain.record_block(0, "genesis".into());
-        chain.record_block(1, "hash1".into());
-        chain.record_block(2, "hash2".into());
+        chain.record_block(0, id("genesis"));
+        chain.record_block(1, id("hash1"));
+        chain.record_block(2, id("hash2"));
 
         chain.rollback_to(1);
-        assert_eq!(chain.get_hash(0), Some("genesis"));
+        assert_eq!(chain.get_hash(0), Some(&id("genesis")));
         assert!(chain.get_hash(1).is_none());
     }
 
@@ -3270,7 +3825,7 @@ mod tests {
     fn test_short_chain_history_dense() {
         let mut chain = BlockHashChain::new();
         for h in 0..=5 {
-            chain.record_block(h, format!("hash_{}", h));
+            chain.record_block(h, id(&format!("hash_{}", h)));
         }
 
         let history = chain.get_short_chain_history();
@@ -3283,7 +3838,7 @@ mod tests {
     fn test_short_chain_history_exponential_spacing() {
         let mut chain = BlockHashChain::new();
         for h in 0..=200 {
-            chain.record_block(h, format!("hash_{}", h));
+            chain.record_block(h, id(&format!("hash_{}", h)));
         }
 
         let history = chain.get_short_chain_history();
@@ -3298,12 +3853,12 @@ mod tests {
     fn chain(heights: impl IntoIterator<Item = u64>) -> BlockHashChain {
         let mut chain = BlockHashChain::new();
         for h in heights {
-            chain.record_block(h, format!("hash_{}", h));
+            chain.record_block(h, id(&format!("hash_{}", h)));
         }
         chain
     }
 
-    fn heights(history: &[(u64, String)]) -> Vec<u64> {
+    fn heights(history: &[(u64, BlockId)]) -> Vec<u64> {
         history.iter().map(|(height, _)| *height).collect()
     }
 
@@ -3328,7 +3883,7 @@ mod tests {
     #[test]
     fn short_chain_history_from_an_offset_ends_in_the_offset_then_genesis() {
         let mut offset = chain(1000..=1100);
-        offset.record_block(0, "genesis".into());
+        offset.record_block(0, id("genesis"));
         assert_eq!(
             heights(&offset.get_short_chain_history()),
             [
@@ -3356,9 +3911,9 @@ mod tests {
     #[test]
     fn short_chain_history_after_compaction_still_reaches_down_to_the_base() {
         let mut chain = BlockHashChain::new();
-        chain.record_block(0, "genesis".into());
+        chain.record_block(0, id("genesis"));
         for h in 2_990_000..=3_000_000u64 {
-            chain.record_block(h, format!("hash_{}", h));
+            chain.record_block(h, id(&format!("hash_{}", h)));
         }
         chain.compact();
         let history = chain.get_short_chain_history();
@@ -3366,7 +3921,7 @@ mod tests {
         assert!(heights.windows(2).all(|pair| pair[0] > pair[1]));
         assert!(history
             .iter()
-            .all(|(height, hash)| chain.get_hash(*height) == Some(hash.as_str())));
+            .all(|(height, hash)| chain.get_hash(*height) == Some(hash)));
         assert!(heights.iter().filter(|h| **h < 3_000_000 - 99).count() > 5);
         assert_eq!(heights[heights.len() - 2..], [2_990_000, 0]);
     }
@@ -3381,10 +3936,10 @@ mod tests {
     #[test]
     fn test_short_chain_history_genesis_only() {
         let mut chain = BlockHashChain::new();
-        chain.record_block(0, "genesis".into());
+        chain.record_block(0, id("genesis"));
         let history = chain.get_short_chain_history();
         assert_eq!(history.len(), 1);
-        assert_eq!(history[0], (0, "genesis".into()));
+        assert_eq!(history[0], (0, id("genesis")));
     }
 
     // ---- mark_spent_by_key_images_at_height tests ----
@@ -3484,12 +4039,12 @@ mod tests {
     fn test_rollback_rolls_back_block_hashes() {
         let mut state = WalletState::new();
         for h in 90..=100 {
-            state.record_block_hash(h, format!("hash_{}", h));
+            state.record_block_hash(h, id(&format!("hash_{}", h)));
         }
 
         state.rollback_to_height(95);
         assert!(state.block_hashes.get_hash(95).is_none());
-        assert_eq!(state.block_hashes.get_hash(94), Some("hash_94"));
+        assert_eq!(state.block_hashes.get_hash(94), Some(&id("hash_94")));
     }
 
     #[test]
@@ -3510,15 +4065,15 @@ mod tests {
     fn test_compact_keeps_dense_and_sparse() {
         let mut chain = BlockHashChain::new();
         for h in 0..=500 {
-            chain.record_block(h, format!("hash_{}", h));
+            chain.record_block(h, id(&format!("hash_{}", h)));
         }
         assert_eq!(chain.len(), 501);
 
         chain.compact();
         assert!(chain.len() < 150);
-        assert_eq!(chain.get_hash(500), Some("hash_500"));
-        assert_eq!(chain.get_hash(0), Some("hash_0"));
-        assert_eq!(chain.get_hash(401), Some("hash_401"));
+        assert_eq!(chain.get_hash(500), Some(&id("hash_500")));
+        assert_eq!(chain.get_hash(0), Some(&id("hash_0")));
+        assert_eq!(chain.get_hash(401), Some(&id("hash_401")));
     }
 
     // ---- Complex rollback scenarios ----
@@ -3593,7 +4148,7 @@ mod tests {
             make_output(4_000_000_000_000, 120, "ki4"),
         ]);
         for h in 50..=120 {
-            state.record_block_hash(h, format!("hash_{}", h));
+            state.record_block_hash(h, id(&format!("hash_{}", h)));
         }
 
         // First rollback: remove ki4
@@ -3646,7 +4201,7 @@ mod tests {
     fn test_compact_then_rollback() {
         let mut chain = BlockHashChain::new();
         for h in 0..=500 {
-            chain.record_block(h, format!("hash_{}", h));
+            chain.record_block(h, id(&format!("hash_{}", h)));
         }
         chain.compact();
 
@@ -3656,7 +4211,7 @@ mod tests {
         assert!(chain.get_hash(450).is_none());
         assert!(chain.get_hash(500).is_none());
         // Genesis preserved
-        assert_eq!(chain.get_hash(0), Some("hash_0"));
+        assert_eq!(chain.get_hash(0), Some(&id("hash_0")));
     }
 
     #[test]
@@ -3666,7 +4221,7 @@ mod tests {
             make_output(1_000_000_000_000, 0, "ki_genesis"),
             make_output(2_000_000_000_000, 50, "ki1"),
         ]);
-        state.record_block_hash(0, "genesis".into());
+        state.record_block_hash(0, id("genesis"));
 
         let result = state.rollback_to_height(0);
         assert_eq!(result.removed_outputs.len(), 2);

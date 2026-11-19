@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::scanner::{BlockScanResult, Lookahead, DEFAULT_LOOKAHEAD};
 use crate::wallet_output::WalletOutput;
-use crate::wallet_state::{SpentConflict, WalletState};
+use crate::wallet_state::{block_id_from_hex, BlockId, SpentConflict, WalletState};
 
 /// Sync progress information.
 #[derive(Debug, Clone)]
@@ -49,7 +49,8 @@ pub struct ProcessedBatch {
     pub should_continue: bool,
     pub blocks_with_outputs: Vec<BlockOutputSummary>,
     pub daemon_height: u64,
-    pub block_hashes: Vec<(u64, String)>,
+    /// The id of each block of the batch whose `block_hash` is 32 bytes of hex.
+    pub block_hashes: Vec<(u64, BlockId)>,
 }
 
 /// Compute the lookahead needed for a scan.
@@ -139,7 +140,9 @@ pub fn process_single_wallet_batch(
 
     for result in batch_results {
         last_daemon_height = result.daemon_height;
-        all_block_hashes.push((result.block_height, result.block_hash.clone()));
+        if let Ok(id) = block_id_from_hex(&result.block_hash) {
+            all_block_hashes.push((result.block_height, id));
+        }
 
         all_spent_key_images.extend(result.spent_key_images.iter().cloned());
         all_spent_key_image_tx_hashes.extend(result.spent_key_image_tx_hashes.iter().cloned());
@@ -276,7 +279,7 @@ pub fn apply_processed_batch(
     }
     if !batch.block_hashes.is_empty() {
         for (height, hash) in &batch.block_hashes {
-            wallet_state.record_block_hash(*height, hash.clone());
+            wallet_state.record_block_hash(*height, *hash);
             wallet_state.current_height = wallet_state.current_height.max(*height);
         }
         wallet_state.daemon_height = batch.daemon_height;
@@ -313,6 +316,15 @@ pub fn process_batch_with_reorg_detection(
     target_height: u64,
     batch_start_height: u64,
 ) -> Result<ScanBatchOutcome, String> {
+    if let Some(result) = batch_results
+        .iter()
+        .find(|result| block_id_from_hex(&result.block_hash).is_err())
+    {
+        return Err(format!(
+            "Block {} has id {:?}, which is not 32 bytes of hex",
+            result.block_height, result.block_hash
+        ));
+    }
     for (i, result) in batch_results.iter().enumerate() {
         let parent_in_batch = i > 0 && batch_results[i - 1].block_height + 1 == result.block_height;
         if parent_in_batch || result.block_height == 0 || result.previous_block_hash.is_empty() {
@@ -320,6 +332,7 @@ pub fn process_batch_with_reorg_detection(
         }
         let parent_height = result.block_height - 1;
         if let Some(known_parent) = wallet_state.block_hashes.get_hash(parent_height) {
+            let known_parent = hex::encode(known_parent);
             if known_parent != result.previous_block_hash {
                 return Err(format!(
                     "Block {} builds on {} but the wallet holds {} at height {}: the chain was \
@@ -337,7 +350,7 @@ pub fn process_batch_with_reorg_detection(
         let Some(known_hash) = wallet_state.block_hashes.get_hash(result.block_height) else {
             continue;
         };
-        if known_hash == result.block_hash {
+        if hex::encode(known_hash) == result.block_hash {
             last_match = Some(result.block_height);
             continue;
         }
@@ -346,8 +359,10 @@ pub fn process_batch_with_reorg_detection(
             Some(matched) => matched + 1,
             None if result.block_height > 0
                 && !result.previous_block_hash.is_empty()
-                && wallet_state.block_hashes.get_hash(result.block_height - 1)
-                    == Some(result.previous_block_hash.as_str()) =>
+                && wallet_state
+                    .block_hashes
+                    .get_hash(result.block_height - 1)
+                    .is_some_and(|held| hex::encode(held) == result.previous_block_hash) =>
             {
                 result.block_height
             }
@@ -433,6 +448,7 @@ pub fn check_multi_wallet_batch_extends_chain(
         }
         let parent_height = result.block_height - 1;
         if let Some(known_parent) = wallet_state.block_hashes.get_hash(parent_height) {
+            let known_parent = hex::encode(known_parent);
             if known_parent != result.previous_block_hash {
                 return Err(format!(
                     "Block {} builds on {} but the wallet holds {} at height {}: the chain was \
@@ -451,14 +467,28 @@ mod tests {
     use super::*;
     use crate::wallet_state::MAX_REORG_DEPTH;
 
+    fn id(label: &str) -> BlockId {
+        let mut id = [0u8; 32];
+        id[..label.len()].copy_from_slice(label.as_bytes());
+        id
+    }
+
+    fn id_hex(label: &str) -> String {
+        hex::encode(id(label))
+    }
+
+    fn id_from_hex(hex_id: &str) -> BlockId {
+        block_id_from_hex(hex_id).unwrap()
+    }
+
     #[test]
     fn multi_wallet_batch_must_build_on_the_wallets_chain() {
         let mut state = WalletState::new();
-        state.record_block_hash(99, "hash_99".to_string());
+        state.record_block_hash(99, id("hash_99"));
         let result = |parent: &str| -> crate::scanner::MultiWalletScanResult {
             serde_json::from_value(serde_json::json!({
                 "block_height": 100,
-                "block_hash": "hash_100",
+                "block_hash": id_hex("hash_100"),
                 "previous_block_hash": parent,
                 "block_timestamp": 0,
                 "tx_count": 1,
@@ -469,8 +499,12 @@ mod tests {
             }))
             .unwrap()
         };
-        assert!(check_multi_wallet_batch_extends_chain(&[result("hash_99")], &state).is_ok());
-        assert!(check_multi_wallet_batch_extends_chain(&[result("other_99")], &state).is_err());
+        assert!(
+            check_multi_wallet_batch_extends_chain(&[result(&id_hex("hash_99"))], &state).is_ok()
+        );
+        assert!(
+            check_multi_wallet_batch_extends_chain(&[result(&id_hex("other_99"))], &state).is_err()
+        );
         assert!(check_multi_wallet_batch_extends_chain(&[result("")], &state).is_err());
     }
 
@@ -489,10 +523,10 @@ mod tests {
         for restore in [0u64, 2500] {
             let mut state = WalletState::new();
             if restore > 0 {
-                state.record_block_hash(0, hash_a(0));
+                state.record_block_hash(0, id_from_hex(&hash_a(0)));
             }
             for h in restore..=tip {
-                state.record_block_hash(h, hash_a(h));
+                state.record_block_hash(h, id_from_hex(&hash_a(h)));
             }
             let mut orphaned = make_output(1_000_000, 2950, "orphaned", 0);
             orphaned.block_height = 2950;
@@ -503,7 +537,7 @@ mod tests {
             let history = state.get_short_chain_history();
             let start = history
                 .iter()
-                .find(|(h, hash)| *hash == hash_b(*h))
+                .find(|(h, hash)| hex::encode(hash) == hash_b(*h))
                 .map(|(h, _)| *h)
                 .unwrap();
             assert!(
@@ -563,7 +597,7 @@ mod tests {
         BlockScanResult {
             previous_block_hash: String::new(),
             block_height: height,
-            block_hash: format!("hash_{}", height),
+            block_hash: id_hex(&format!("hash_{}", height)),
             block_timestamp: height * 120,
             tx_count: outputs.len() + spent_key_images.len(),
             outputs,
@@ -869,9 +903,9 @@ mod tests {
         ];
         let batch = process_single_wallet_batch(&results, None, 1000, 100);
         assert_eq!(batch.block_hashes.len(), 3);
-        assert_eq!(batch.block_hashes[0], (100, "hash_100".to_string()));
-        assert_eq!(batch.block_hashes[1], (101, "hash_101".to_string()));
-        assert_eq!(batch.block_hashes[2], (102, "hash_102".to_string()));
+        assert_eq!(batch.block_hashes[0], (100, id("hash_100")));
+        assert_eq!(batch.block_hashes[1], (101, id("hash_101")));
+        assert_eq!(batch.block_hashes[2], (102, id("hash_102")));
     }
 
     // ---- process_batch_with_reorg_detection ----
@@ -932,8 +966,8 @@ mod tests {
     fn reorg_detection_normal_matching_hashes() {
         let mut state = WalletState::new();
         state.current_height = 101;
-        state.record_block_hash(100, "hash_100".to_string());
-        state.record_block_hash(101, "hash_101".to_string());
+        state.record_block_hash(100, id("hash_100"));
+        state.record_block_hash(101, id("hash_101"));
         let results = vec![
             make_block_result(100, vec![], vec![]),
             make_block_result(101, vec![], vec![]),
@@ -948,9 +982,9 @@ mod tests {
     fn reorg_detection_detects_different_hash() {
         let mut state = WalletState::new();
         state.current_height = 102;
-        state.record_block_hash(100, "hash_100".to_string());
-        state.record_block_hash(101, "old_hash_101".to_string()); // differs from "hash_101"
-        state.record_block_hash(102, "hash_102".to_string());
+        state.record_block_hash(100, id("hash_100"));
+        state.record_block_hash(101, id("old_hash_101")); // differs from "hash_101"
+        state.record_block_hash(102, id("hash_102"));
         let results = vec![
             make_block_result(100, vec![], vec![]),
             make_block_result(101, vec![], vec![]),
@@ -969,11 +1003,25 @@ mod tests {
     fn reorg_detection_too_deep() {
         let mut state = WalletState::new();
         state.current_height = 2000;
-        state.record_block_hash(100, "old_hash".to_string());
+        state.record_block_hash(100, id("old_hash"));
         let results = vec![make_block_result(100, vec![], vec![])];
         let result = process_batch_with_reorg_detection(&results, &mut state, None, 3000, 100);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("exceeds maximum"));
+    }
+
+    #[test]
+    fn reorg_detection_refuses_a_block_id_that_is_not_32_bytes_of_hex() {
+        let mut state = WalletState::new();
+        state.record_block_hash(100, id("hash_100"));
+        for bad in ["hash_101".to_string(), "ab".repeat(31), String::new()] {
+            let mut block = make_block_result(101, vec![], vec![]);
+            block.block_hash = bad;
+            let error = process_batch_with_reorg_detection(&[block], &mut state, None, 1000, 101)
+                .unwrap_err();
+            assert!(error.contains("not 32 bytes of hex"), "{error}");
+        }
+        assert_eq!(state.block_hashes.len(), 1);
     }
 
     #[test]
@@ -1000,8 +1048,8 @@ mod tests {
         ]);
         state.mark_spent_by_key_images_at_height(&["ki_tx_keep".to_string()], 105);
         state.current_height = 105;
-        state.record_block_hash(100, "hash_100".to_string());
-        state.record_block_hash(101, "old_hash_101".to_string());
+        state.record_block_hash(100, id("hash_100"));
+        state.record_block_hash(101, id("old_hash_101"));
 
         let results = vec![
             make_block_result(100, vec![], vec![]),
@@ -1057,12 +1105,12 @@ mod tests {
         let results = vec![make_block_result(100, vec![], vec![])];
 
         state.current_height = 100 + MAX_REORG_DEPTH;
-        state.record_block_hash(100, "old_hash".to_string());
+        state.record_block_hash(100, id("old_hash"));
         let result = process_batch_with_reorg_detection(&results, &mut state, None, 3000, 100);
         assert!(result.is_err());
 
         state.current_height = 100 + MAX_REORG_DEPTH - 1;
-        state.record_block_hash(100, "old_hash".to_string());
+        state.record_block_hash(100, id("old_hash"));
         let result = process_batch_with_reorg_detection(&results, &mut state, None, 3000, 100);
         assert!(result.is_ok());
         assert!(matches!(result.unwrap(), ScanBatchOutcome::Reorg(_)));
@@ -1073,7 +1121,7 @@ mod tests {
         let results = vec![make_block_result(100, vec![], vec![])];
         let mut state = WalletState::new();
         state.current_height = 209;
-        state.record_block_hash(100, "old_hash".to_string());
+        state.record_block_hash(100, id("old_hash"));
         let refused =
             process_batch_with_reorg_detection(&results, &mut state, None, 3000, 100).unwrap_err();
         assert!(
@@ -1093,7 +1141,7 @@ mod tests {
         assert_eq!((info.split_height, info.blocks_detached), (100, 110));
 
         state.current_height = 209;
-        state.record_block_hash(100, "old_hash".to_string());
+        state.record_block_hash(100, id("old_hash"));
         state.set_max_reorg_depth(109);
         assert!(process_batch_with_reorg_detection(&results, &mut state, None, 3000, 100).is_err());
     }
@@ -1115,10 +1163,10 @@ mod tests {
         assert_eq!(batch.block_hashes.len(), 2);
         // Caller can record these into state
         for (h, hash) in &batch.block_hashes {
-            state.record_block_hash(*h, hash.clone());
+            state.record_block_hash(*h, *hash);
         }
-        assert_eq!(state.block_hashes.get_hash(100), Some("hash_100"));
-        assert_eq!(state.block_hashes.get_hash(101), Some("hash_101"));
+        assert_eq!(state.block_hashes.get_hash(100), Some(&id("hash_100")));
+        assert_eq!(state.block_hashes.get_hash(101), Some(&id("hash_101")));
     }
 
     #[test]
@@ -1130,8 +1178,8 @@ mod tests {
         ]);
         state.mark_spent_by_key_images_at_height(&["ki_tx_keep".to_string()], 103);
         state.current_height = 106;
-        state.record_block_hash(100, "hash_100".to_string());
-        state.record_block_hash(105, "old_hash_105".to_string());
+        state.record_block_hash(100, id("hash_100"));
+        state.record_block_hash(105, id("old_hash_105"));
 
         let results: Vec<_> = (100..=105)
             .map(|height| make_block_result(height, vec![], vec![]))
@@ -1154,12 +1202,12 @@ mod tests {
     fn reorg_starting_at_a_block_that_builds_on_the_wallets_chain_splits_there() {
         let mut state = WalletState::new();
         state.current_height = 100;
-        state.record_block_hash(80, "hash_80".to_string());
-        state.record_block_hash(99, "hash_99".to_string());
-        state.record_block_hash(100, "old_hash_100".to_string());
+        state.record_block_hash(80, id("hash_80"));
+        state.record_block_hash(99, id("hash_99"));
+        state.record_block_hash(100, id("old_hash_100"));
 
         let mut forked = make_block_result(100, vec![], vec![]);
-        forked.previous_block_hash = "hash_99".to_string();
+        forked.previous_block_hash = id_hex("hash_99");
         let outcome =
             process_batch_with_reorg_detection(&[forked], &mut state, None, 1000, 100).unwrap();
         let info = match outcome {
@@ -1175,8 +1223,8 @@ mod tests {
         let mut state = WalletState::new();
         state.add_outputs(vec![make_output(1000, 90, "tx_90", 0)]);
         state.current_height = 100;
-        state.record_block_hash(80, "hash_80".to_string());
-        state.record_block_hash(100, "old_hash_100".to_string());
+        state.record_block_hash(80, id("hash_80"));
+        state.record_block_hash(100, id("old_hash_100"));
 
         let results = vec![make_block_result(100, vec![], vec![])];
         let error =
@@ -1184,7 +1232,7 @@ mod tests {
         assert!(error.contains("fork point cannot be located"), "{error}");
         assert_eq!(state.current_height, 100);
         assert_eq!(state.outputs().len(), 1);
-        assert_eq!(state.block_hashes.get_hash(100), Some("old_hash_100"));
+        assert_eq!(state.block_hashes.get_hash(100), Some(&id("old_hash_100")));
     }
 
     #[test]
@@ -1192,7 +1240,7 @@ mod tests {
         // Reorg at the very first block of the batch
         let mut state = WalletState::new();
         state.current_height = 100;
-        state.record_block_hash(100, "old_hash_100".to_string());
+        state.record_block_hash(100, id("old_hash_100"));
 
         let results = vec![
             make_block_result(100, vec![], vec![]),

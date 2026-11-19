@@ -112,13 +112,14 @@ async fn live_history_negotiation_matches_the_snapshot_node() {
     let url = std::env::var("MONERO_REGTEST_RPC").expect("MONERO_REGTEST_RPC");
     let live = HostileNode::honest(hostile::LiveNode::new(&url));
     let snapshot = hostile::snapshot();
-    let genesis = snapshot.chain[0].hash.clone();
-    let known = |h: usize| (h as u64, snapshot.chain[h].hash.clone());
+    let id = |h: usize| monero_rust::block_id_from_hex(&snapshot.chain[h].hash).unwrap();
+    let genesis = id(0);
+    let known = |h: usize| (h as u64, id(h));
 
     let wrong_last_id = scan_blocks_batch_with_history(
         &live.rpc(),
         0,
-        &[known(800), (0, "11".repeat(32))],
+        &[known(800), (0, [0x11; 32])],
         SEED_W,
         NETWORK,
         hostile::LOOKAHEAD,

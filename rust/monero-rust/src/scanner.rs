@@ -2100,19 +2100,18 @@ fn short_history(
     chain: &crate::wallet_state::BlockHashChain,
     network: Network,
     granularity: u64,
-) -> Result<(Vec<(u64, [u8; 32])>, Vec<(u64, [u8; 32])>), String> {
+) -> (Vec<(u64, [u8; 32])>, Vec<(u64, [u8; 32])>) {
     let genesis = genesis_block_hash(network);
     let mut genesis_only;
     let chain = if chain.is_empty() {
         genesis_only = crate::wallet_state::BlockHashChain::new();
-        genesis_only.record_block(0, hex::encode(genesis));
+        genesis_only.record_block(0, genesis);
         &genesis_only
     } else {
         chain
     };
     let mut known = Vec::new();
     for (height, hash) in chain.get_short_chain_history_with_granularity(granularity) {
-        let hash = hex_to_hash(&hash)?;
         if height == 0 && hash != genesis {
             continue;
         }
@@ -2122,7 +2121,7 @@ fn short_history(
     if history.last() != Some(&(0, genesis)) {
         history.push((0, genesis));
     }
-    Ok((history, known))
+    (history, known)
 }
 
 fn block_ids_missing(
@@ -2136,9 +2135,9 @@ fn block_ids_missing(
 
 fn unanchored_base(chain: &crate::wallet_state::BlockHashChain, network: Network) -> Option<u64> {
     let base = chain.base_height().filter(|base| *base > 0)?;
-    let checkpoint = crate::checkpoints::at(network, base).map(hex::encode);
+    let checkpoint = crate::checkpoints::at(network, base);
     match (checkpoint, chain.get_hash(base)) {
-        (Some(checkpoint), Some(held)) if checkpoint == held => None,
+        (Some(checkpoint), Some(held)) if checkpoint == *held => None,
         _ => Some(base),
     }
 }
@@ -2156,12 +2155,12 @@ async fn pull_block_ids<R: RpcConnection>(
     let mut trimmed = match checkpoint_id {
         Some(id) if stop_height > checkpoint && tip < checkpoint => {
             chain.trim_below(checkpoint);
-            chain.record_block(checkpoint, hex::encode(id));
+            chain.record_block(checkpoint, id);
             true
         }
         _ => false,
     };
-    let mut history = short_history(chain, network, if trimmed { 1 } else { granularity })?.0;
+    let mut history = short_history(chain, network, if trimmed { 1 } else { granularity }).0;
     let mut current = chain.tip_height().map_or(1, |tip| tip + 1);
     let mut reached = 0u64;
     while current < stop_height {
@@ -2183,7 +2182,7 @@ async fn pull_block_ids<R: RpcConnection>(
             }
             chain.rollback_to(checkpoint);
             trimmed = false;
-            history = short_history(chain, network, 1)?.0;
+            history = short_history(chain, network, 1).0;
             current = chain.tip_height().map_or(1, |tip| tip + 1);
             reached = 0;
             continue;
@@ -2207,11 +2206,10 @@ async fn pull_block_ids<R: RpcConnection>(
             }
         }
         for id in &reply.ids {
-            let id_hex = hex::encode(id);
             match chain.get_hash(current) {
-                Some(held) if held != id_hex => return Ok(()),
+                Some(held) if held != id => return Ok(()),
                 Some(_) => {}
-                None => chain.record_block(current, id_hex),
+                None => chain.record_block(current, *id),
             }
             current += 1;
             if current >= stop_height {
@@ -2256,7 +2254,7 @@ impl Refresh {
         restore_height: u64,
         granularity: u64,
     ) -> Result<Self, String> {
-        let (history, known) = short_history(&state.block_hashes, network, granularity)?;
+        let (history, known) = short_history(&state.block_hashes, network, granularity);
         Ok(Refresh {
             history,
             network,
@@ -2301,7 +2299,7 @@ impl Refresh {
             pull_block_ids(rpc, &mut below, network, base, 1).await?;
             for height in below.earliest_height().unwrap_or(base)..base {
                 if let Some(hash) = below.get_hash(height) {
-                    state.block_hashes.record_block(height, hash.to_string());
+                    state.block_hashes.record_block(height, *hash);
                 }
             }
         }
@@ -2319,7 +2317,7 @@ impl Refresh {
         if let Some(tip) = state.block_hashes.tip_height() {
             state.current_height = state.current_height.max(tip);
         }
-        let (history, known) = short_history(&state.block_hashes, network, self.granularity)?;
+        let (history, known) = short_history(&state.block_hashes, network, self.granularity);
         self.history = history;
         self.known = known;
         self.block_ids_missing = false;
@@ -2495,7 +2493,7 @@ fn hex_to_hash(hex_str: &str) -> Result<[u8; 32], String> {
 pub async fn scan_blocks_batch_with_history<R: RpcConnection>(
     rpc: &Rpc<R>,
     start_height: u64,
-    known_hashes: &[(u64, String)],
+    known_hashes: &[(u64, [u8; 32])],
     mnemonic: &str,
     network: Network,
     lookahead: Lookahead,
@@ -2513,7 +2511,7 @@ pub async fn scan_blocks_batch_with_history<R: RpcConnection>(
 pub async fn scan_blocks_batch_with_history_url(
     node_url: &str,
     start_height: u64,
-    known_hashes: &[(u64, String)],
+    known_hashes: &[(u64, [u8; 32])],
     mnemonic: &str,
     network: Network,
     lookahead: Lookahead,
@@ -2542,13 +2540,10 @@ pub async fn scan_blocks_batch_with_history_url(
 pub async fn fetch_blocks_batch_with_history<R: RpcConnection>(
     rpc: &Rpc<R>,
     start_height: u64,
-    known_hashes: &[(u64, String)],
+    known_hashes: &[(u64, [u8; 32])],
     prune: bool,
 ) -> Result<(FetchedBlocks, u64), String> {
-    let mut requested_history = known_hashes
-        .iter()
-        .map(|(height, hash)| Ok((*height, hex_to_hash(hash)?)))
-        .collect::<Result<Vec<_>, String>>()?;
+    let mut requested_history = known_hashes.to_vec();
     let mut block_ids: Vec<[u8; 32]> = if requested_history.is_empty() {
         let anchor_height = start_height.saturating_sub(1);
         let hash = rpc
@@ -2592,7 +2587,7 @@ pub async fn fetch_blocks_batch_with_history<R: RpcConnection>(
 pub async fn fetch_blocks_batch_with_history_url(
     node_url: &str,
     start_height: u64,
-    known_hashes: &[(u64, String)],
+    known_hashes: &[(u64, [u8; 32])],
     prune: bool,
 ) -> Result<(FetchedBlocks, u64), String> {
     use crate::monero_rpc::url_rpc;
@@ -3327,7 +3322,7 @@ mod tests {
         for height in 600..=650 {
             state
                 .block_hashes
-                .record_block(height, hex::encode(node.ids[height as usize]));
+                .record_block(height, node.ids[height as usize]);
         }
         state.current_height = 650;
         let mut refresh = Refresh::new(&state, Network::Mainnet, 600).unwrap();
@@ -3376,7 +3371,7 @@ mod tests {
         for height in 0..=50 {
             state
                 .block_hashes
-                .record_block(height, hex::encode(node.ids[height as usize]));
+                .record_block(height, node.ids[height as usize]);
         }
         let mut refresh = Refresh::new(&state, Network::Mainnet, 80).unwrap();
         let refused = refresh.fetch_block_ids(&rpc, &mut state).await.unwrap_err();

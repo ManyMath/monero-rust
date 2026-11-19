@@ -565,7 +565,7 @@ async fn stale_height_zero_hash_is_never_sent_to_the_daemon() {
     let honest = SnapshotNode::new();
     let node = Node::honest(honest.clone());
     let mut wallet = hostile::synced_wallet().await;
-    wallet.state.record_block_hash(0, "9c".repeat(32));
+    wallet.state.record_block_hash(0, [0x9c; 32]);
     honest.switch_chain(Chain::Shallow);
     wallet.refresh(&node.rpc(), 10).await.unwrap();
     assert_eq!(wallet.state.current_height, 854);

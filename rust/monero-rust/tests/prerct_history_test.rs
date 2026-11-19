@@ -166,7 +166,10 @@ fn apply(state: &mut WalletState, results: &[BlockScanResult], target: u64) -> R
                     &result.spent_key_images,
                     result.block_height,
                 );
-                state.record_block_hash(result.block_height, result.block_hash.clone());
+                state.record_block_hash(
+                    result.block_height,
+                    monero_rust::block_id_from_hex(&result.block_hash)?,
+                );
             }
             state.current_height = batch.batch_end_height.saturating_sub(1);
             state.daemon_height = batch.daemon_height;
@@ -600,7 +603,7 @@ async fn history_resume_with_known_genesis_is_not_a_reorg() {
     let stop = fx.fork(2);
     let rpc = HttpRpc::new(fx.url.clone()).unwrap();
     let mut first = scan(&fx.url, &seed, 1, stop).await.unwrap();
-    let genesis = hex::encode(rpc.get_block_hash(0).await.unwrap());
+    let genesis = rpc.get_block_hash(0).await.unwrap();
     first.state.record_block_hash(0, genesis);
     let history = first.state.get_short_chain_history();
     let (results, _start) = scan_blocks_batch_with_history(

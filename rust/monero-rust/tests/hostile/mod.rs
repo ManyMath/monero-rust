@@ -844,9 +844,12 @@ impl Wallet {
                 Err(e) if !history.is_empty() && e.contains(AT_TIP) => return Ok(batches),
                 Err(e) => return Err(e),
             };
-            let fresh = results
-                .iter()
-                .any(|r| self.state.block_hashes.get_hash(r.block_height) != Some(&r.block_hash));
+            let fresh = results.iter().any(|r| {
+                self.state
+                    .block_hashes
+                    .get_hash(r.block_height)
+                    .map_or(true, |held| hex::encode(held) != r.block_hash)
+            });
             if results.is_empty() || !fresh {
                 return Ok(batches);
             }
@@ -880,7 +883,7 @@ pub async fn synced_wallet() -> Wallet {
     let node = SnapshotNode::new();
     let mut wallet = Wallet::new(SEED_W);
     if let Some(cached) = OUTPUTS.get() {
-        let (outputs, hashes, height): (Vec<WalletOutput>, Vec<(u64, String)>, u64) =
+        let (outputs, hashes, height): (Vec<WalletOutput>, Vec<(u64, [u8; 32])>, u64) =
             serde_json::from_str(cached).unwrap();
         wallet.state.add_outputs(outputs);
         for (h, hash) in hashes {
@@ -893,14 +896,8 @@ pub async fn synced_wallet() -> Wallet {
     }
     let rpc = Rpc::new_with_connection(node.clone());
     wallet.refresh(&rpc, 64).await.expect("honest refresh");
-    let hashes: Vec<(u64, String)> = (0..node.height())
-        .filter_map(|h| {
-            wallet
-                .state
-                .block_hashes
-                .get_hash(h)
-                .map(|hash| (h, hash.to_string()))
-        })
+    let hashes: Vec<(u64, [u8; 32])> = (0..node.height())
+        .filter_map(|h| wallet.state.block_hashes.get_hash(h).map(|hash| (h, *hash)))
         .collect();
     let cached = serde_json::to_string(&(
         wallet.state.outputs().to_vec(),

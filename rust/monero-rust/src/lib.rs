@@ -53,9 +53,9 @@ pub use tx_utils::{
 // -- Wallet state & output types --
 pub use wallet_output::WalletOutput;
 pub use wallet_state::{
-    is_spendable, is_spendable_at, Balance, BlockHashChain, ChangeOutputRef, PendingSpend,
-    RollbackResult, SpentConflict, TrackedTransaction, TxStatus, WalletState, MAX_REORG_DEPTH,
-    PENDING_SPEND_TTL_SECS,
+    block_id_from_hex, is_spendable, is_spendable_at, Balance, BlockHashChain, BlockId,
+    ChangeOutputRef, PendingSpend, RollbackResult, SpentConflict, TrackedTransaction, TxStatus,
+    WalletState, MAX_REORG_DEPTH, PENDING_SPEND_TTL_SECS,
 };
 
 pub use ring_db::{RingDatabase, RingPersister, RingsNotPersisted};

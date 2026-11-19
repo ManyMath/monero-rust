@@ -128,10 +128,7 @@ fn wallet2_list(tip: u64) -> Vec<Option<u64>> {
 
 fn id_heights(state: &WalletState) -> HashMap<[u8; 32], u64> {
     let mut heights: HashMap<[u8; 32], u64> = (0..=state.current_height)
-        .filter_map(|h| {
-            let hash = state.block_hashes.get_hash(h)?;
-            Some((hex::decode(hash).unwrap().try_into().unwrap(), h))
-        })
+        .filter_map(|h| Some((*state.block_hashes.get_hash(h)?, h)))
         .collect();
     heights.insert(genesis_block_hash(NETWORK), 0);
     heights

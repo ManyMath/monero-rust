@@ -1,4 +1,10 @@
-use monero_rust::{BlockHashChain, WalletOutput, WalletState};
+use monero_rust::{BlockHashChain, BlockId, WalletOutput, WalletState};
+
+fn id(label: &str) -> BlockId {
+    let mut id = [0u8; 32];
+    id[..label.len()].copy_from_slice(label.as_bytes());
+    id
+}
 
 /// Helper: create a WalletOutput with deterministic fields.
 fn make_test_output(amount: u64, height: u64, tx_hash: &str, account: u32) -> WalletOutput {
@@ -39,9 +45,9 @@ fn test_wallet_state_reload_roundtrip() {
     ]);
     state.current_height = 1002;
     state.daemon_height = 1100;
-    state.record_block_hash(1000, "hash_1000".to_string());
-    state.record_block_hash(1001, "hash_1001".to_string());
-    state.record_block_hash(1002, "hash_1002".to_string());
+    state.record_block_hash(1000, id("hash_1000"));
+    state.record_block_hash(1001, id("hash_1001"));
+    state.record_block_hash(1002, id("hash_1002"));
 
     // Record pre-reload balance
     let pre_balance = state.balance();
@@ -79,8 +85,8 @@ fn test_wallet_state_reload_roundtrip() {
     assert_eq!(restored.outputs()[0].amount, 1_000_000_000_000);
     assert_eq!(restored.outputs()[1].amount, 2_500_000_000_000);
     assert_eq!(restored.outputs()[2].amount, 500_000_000_000);
-    assert_eq!(restored.block_hashes.get_hash(1000), Some("hash_1000"));
-    assert_eq!(restored.block_hashes.get_hash(1002), Some("hash_1002"));
+    assert_eq!(restored.block_hashes.get_hash(1000), Some(&id("hash_1000")));
+    assert_eq!(restored.block_hashes.get_hash(1002), Some(&id("hash_1002")));
 }
 
 /// Verify that spent status persists through serialization roundtrip.
