@@ -37,6 +37,31 @@ pub struct Fee {
     pub mask: u64,
 }
 
+/// wallet2's four daemon fee tiers (2021 fee scaling) and its automatic default.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum FeePriority {
+    /// wallet2's automatic priority: tier one unless the pool or recent blocks
+    /// are congested, then tier two.
+    #[default]
+    Automatic,
+    Low,
+    Normal,
+    Elevated,
+    Priority,
+}
+
+impl FeePriority {
+    fn tier(self) -> Option<usize> {
+        match self {
+            Self::Automatic => None,
+            Self::Low => Some(0),
+            Self::Normal => Some(1),
+            Self::Elevated => Some(2),
+            Self::Priority => Some(3),
+        }
+    }
+}
+
 impl Fee {
     /// The estimate as a `FeeRate`; `None` if either number is zero.
     pub fn rate(&self) -> Option<FeeRate> {
@@ -141,12 +166,18 @@ pub enum RpcError {
     ZeroFee,
     #[error("zero fee mask returned by node")]
     ZeroMask,
+    #[error("node answered with status {0:?}")]
+    NodeStatus(String),
+    #[error("invalid fee estimate ({0})")]
+    InvalidFeeEstimate(&'static str),
 }
 
-/// A generous upper bound for fee per byte in atomic units.
-/// Monero's typical max is ~20000, but we use 100000 to avoid false positives
-/// on congested networks or unusual fee conditions.
-pub const DEFAULT_MAX_FEE_PER_BYTE: u64 = 100_000;
+/// The highest fee per byte a correct daemon can report for each tier; a rate
+/// above it is refused under any limit.
+pub const MAX_DAEMON_FEE_PER_BYTE: [u64; 4] = [1_200_000, 4_700_000, 19_000_000, 240_000_000];
+
+/// The default fee-per-byte limit: the highest tier bound.
+pub const DEFAULT_MAX_FEE_PER_BYTE: u64 = MAX_DAEMON_FEE_PER_BYTE[3];
 
 /// Require a nondecreasing cumulative RingCT output distribution.
 ///
@@ -162,6 +193,130 @@ fn check_distribution_is_monotonic(distribution: &[u64]) -> Result<(), RpcError>
         previous = *entry;
     }
     Ok(())
+}
+
+fn require_ok_status(status: &str) -> Result<(), RpcError> {
+    if status == "OK" {
+        Ok(())
+    } else {
+        Err(RpcError::NodeStatus(status.to_string()))
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct BacklogEntry {
+    weight: u64,
+    fee: u64,
+}
+
+fn epee_string(body: &[u8], quote: usize) -> Result<(Vec<u8>, usize), RpcError> {
+    let mut bytes = Vec::new();
+    let mut at = quote + 1;
+    loop {
+        match *body.get(at).ok_or(RpcError::InvalidNode)? {
+            b'"' => return Ok((bytes, at)),
+            b'\\' => {
+                at += 1;
+                match *body.get(at).ok_or(RpcError::InvalidNode)? {
+                    b'b' => bytes.push(0x08),
+                    b'f' => bytes.push(0x0c),
+                    b'n' => bytes.push(b'\n'),
+                    b'r' => bytes.push(b'\r'),
+                    b't' => bytes.push(b'\t'),
+                    b'v' => bytes.push(0x0b),
+                    literal @ (b'"' | b'\\' | b'/' | b'\'') => bytes.push(literal),
+                    b'u' => {
+                        let mut code = 0u32;
+                        for digit in body.get(at + 1..at + 5).ok_or(RpcError::InvalidNode)? {
+                            let digit = char::from(*digit)
+                                .to_digit(16)
+                                .ok_or(RpcError::InvalidNode)?;
+                            code = (code << 4) | digit;
+                        }
+                        let low = |shift: u32| 0x80 | ((code >> shift) & 0x3f) as u8;
+                        match code {
+                            0..=0x7f => bytes.push(code as u8),
+                            0x80..=0x7ff => bytes.extend([0xc0 | (code >> 6) as u8, low(0)]),
+                            _ => bytes.extend([0xe0 | (code >> 12) as u8, low(6), low(0)]),
+                        }
+                        at += 4;
+                    }
+                    _ => return Err(RpcError::InvalidNode),
+                }
+            }
+            byte => bytes.push(byte),
+        }
+        at += 1;
+    }
+}
+
+/// Decode monerod's `get_txpool_backlog` reply as epee's reader reads it:
+/// `backlog` is one string of raw 24-byte records that may hold any byte.
+fn parse_txpool_backlog(body: &[u8]) -> Result<Vec<BacklogEntry>, RpcError> {
+    const RECORD: usize = 24;
+
+    let mut blob = Vec::new();
+    let mut json = Vec::with_capacity(body.len());
+    let mut backlog_value_next = false;
+    let mut backlog_seen = false;
+    let mut at = 0;
+    while let Some(&byte) = body.get(at) {
+        if byte != b'"' {
+            // wallet2 reads a `backlog` that is not a string as empty.
+            if !byte.is_ascii_whitespace() && byte != b':' {
+                backlog_value_next = false;
+            }
+            json.push(byte);
+            at += 1;
+            continue;
+        }
+        let (bytes, end) = epee_string(body, at)?;
+        at = end + 1;
+        let mut after = at;
+        while body.get(after).is_some_and(u8::is_ascii_whitespace) {
+            after += 1;
+        }
+        let name = body.get(after) == Some(&b':');
+        if name && !backlog_seen && bytes == b"backlog" {
+            backlog_seen = true;
+            backlog_value_next = true;
+        } else if !name && backlog_value_next {
+            backlog_value_next = false;
+            blob = bytes;
+            json.extend(b"\"\"");
+            continue;
+        }
+        json.extend(
+            serde_json::to_vec(&String::from_utf8_lossy(&bytes))
+                .map_err(|_| RpcError::InternalError("Failed to serialize JSON string"))?,
+        );
+    }
+
+    #[derive(Deserialize, Debug)]
+    struct Status {
+        #[serde(default)]
+        status: String,
+    }
+    let reply: JsonRpcResponse<Status> = serde_json::from_slice(&json)
+        .map_err(|_| RpcError::InternalError("Failed to parse JSON response"))?;
+    require_ok_status(&reply.result.status)?;
+
+    // wallet2 reads a partial record as an empty backlog.
+    if blob.len() % RECORD != 0 {
+        return Ok(vec![]);
+    }
+    Ok(blob
+        .chunks_exact(RECORD)
+        .map(|record| {
+            let word = |at: usize| {
+                u64::from_le_bytes(record[at..at + 8].try_into().expect("an eight-byte slice"))
+            };
+            BacklogEntry {
+                weight: word(0),
+                fee: word(8),
+            }
+        })
+        .collect())
 }
 
 fn rpc_hex(value: &str) -> Result<Vec<u8>, RpcError> {
@@ -750,22 +905,161 @@ impl<R: RpcConnection> Rpc<R> {
         Ok(result)
     }
 
-    /// Get the currently estimated fee from the node. This may be manipulated
-    /// to unsafe levels and MUST be sanity checked. Prefer `get_fee_checked`
-    /// for production use.
-    pub async fn get_fee(&self) -> Result<Fee, RpcError> {
+    async fn wallet2_automatic_uses_normal(
+        &self,
+        low_fee: u64,
+        wallet_height: Option<u64>,
+    ) -> Result<bool, RpcError> {
+        #[derive(Deserialize, Debug)]
+        struct InfoResponse {
+            height: u64,
+            #[serde(default)]
+            block_weight_limit: u64,
+            #[serde(default)]
+            block_size_limit: u64,
+            #[serde(default)]
+            status: String,
+        }
+        #[derive(Deserialize, Debug)]
+        struct Header {
+            #[serde(default)]
+            block_weight: u64,
+        }
+        #[derive(Deserialize, Debug)]
+        struct HeadersResponse {
+            headers: Vec<Header>,
+            #[serde(default)]
+            status: String,
+        }
+
+        if low_fee == 0 {
+            return Err(RpcError::ZeroFee);
+        }
+
+        let request = serde_json::to_vec(&json!({ "method": "get_txpool_backlog", "params": {} }))
+            .map_err(|_| RpcError::InternalError("Failed to serialize JSON request"))?;
+        let backlog = parse_txpool_backlog(&self.0.post("json_rpc", request).await?)?;
+        let info: InfoResponse = self.json_rpc_call("get_info", Some(json!({}))).await?;
+        require_ok_status(&info.status)?;
+        let block_weight_limit = if info.block_weight_limit == 0 {
+            info.block_size_limit
+        } else {
+            info.block_weight_limit
+        };
+        let full_reward_zone = block_weight_limit / 2;
+        if full_reward_zone == 0 {
+            return Err(RpcError::InvalidNode);
+        }
+
+        // wallet2's arithmetic: rates compared as doubles, weights summed in a
+        // wrapping u64.
+        let backlog_weight = backlog
+            .iter()
+            .filter(|entry| {
+                entry.weight != 0 && entry.fee as f64 / entry.weight as f64 >= low_fee as f64
+            })
+            .fold(0u64, |sum, entry| sum.wrapping_add(entry.weight));
+        if backlog_weight / full_reward_zone > 0 {
+            return Ok(true);
+        }
+
+        const BLOCK_COUNT: u64 = 10;
+        // wallet2 asks for the blocks below its own height, and the callers take
+        // a refusal as "not congested".
+        let header_height = wallet_height.unwrap_or(info.height);
+        if header_height < BLOCK_COUNT {
+            return Err(RpcError::InvalidNode);
+        }
+        let headers: HeadersResponse = self
+            .json_rpc_call(
+                "getblockheadersrange",
+                Some(json!({
+                    "start_height": header_height - BLOCK_COUNT,
+                    "end_height": header_height - 1,
+                })),
+            )
+            .await?;
+        require_ok_status(&headers.status)?;
+        if headers.headers.len() != usize::try_from(BLOCK_COUNT).unwrap() {
+            return Err(RpcError::InvalidNode);
+        }
+        let weight = headers
+            .headers
+            .iter()
+            .fold(0u64, |sum, header| sum.wrapping_add(header.block_weight));
+        let capacity = BLOCK_COUNT.wrapping_mul(full_reward_zone);
+        let percent_full = 100u64
+            .wrapping_mul(weight)
+            .checked_div(capacity)
+            .ok_or(RpcError::InvalidNode)?;
+        Ok(percent_full > 80)
+    }
+
+    /// A wallet2 fee tier, unchecked; prefer `get_fee_checked_for_priority`.
+    pub async fn get_fee_for_priority(&self, priority: FeePriority) -> Result<Fee, RpcError> {
+        self.get_fee_for_priority_at_height(priority, None).await
+    }
+
+    /// A wallet2 fee tier, with `Automatic` judging the ten blocks below
+    /// `wallet_height`, as wallet2 does; `None` uses the node's height.
+    pub async fn get_fee_for_priority_at_height(
+        &self,
+        priority: FeePriority,
+        wallet_height: Option<u64>,
+    ) -> Result<Fee, RpcError> {
+        Ok(self
+            .fee_tier_for_priority_at_height(priority, wallet_height)
+            .await?
+            .1)
+    }
+
+    async fn fee_tier_for_priority_at_height(
+        &self,
+        priority: FeePriority,
+        wallet_height: Option<u64>,
+    ) -> Result<(usize, Fee), RpcError> {
         #[allow(dead_code)]
         #[derive(Deserialize, Debug)]
         struct FeeResponse {
-            fee: u64,
-            quantization_mask: u64,
+            #[serde(default)]
+            fee: Option<u64>,
+            #[serde(default)]
+            fees: Vec<u64>,
+            #[serde(default)]
+            quantization_mask: Option<u64>,
+            #[serde(default)]
+            status: String,
         }
 
-        let res: FeeResponse = self.json_rpc_call("get_fee_estimate", None).await?;
-        Ok(Fee {
-            per_weight: res.fee,
-            mask: res.quantization_mask,
-        })
+        let res: FeeResponse = self
+            .json_rpc_call("get_fee_estimate", Some(json!({ "grace_blocks": 10 })))
+            .await?;
+        require_ok_status(&res.status)?;
+        let mask = res
+            .quantization_mask
+            .ok_or(RpcError::InvalidFeeEstimate("no quantization mask"))?;
+        let tiers = if res.fees.is_empty() {
+            vec![res.fee.ok_or(RpcError::InvalidFeeEstimate("no fee rate"))?]
+        } else {
+            res.fees
+        };
+        let tier = match priority.tier() {
+            Some(tier) => tier,
+            None => usize::from(
+                self.wallet2_automatic_uses_normal(tiers[0], wallet_height)
+                    .await
+                    .unwrap_or(false),
+            ),
+        };
+        let per_weight = *tiers.get(tier).ok_or(RpcError::InvalidFeeEstimate(
+            "no rate for the requested priority",
+        ))?;
+        Ok((tier, Fee { per_weight, mask }))
+    }
+
+    /// Get wallet2's congestion-sensitive automatic fee tier.
+    pub async fn get_fee(&self) -> Result<Fee, RpcError> {
+        self.get_fee_for_priority(FeePriority::Automatic).await
     }
 
     /// Get the currently estimated fee from the node with a sanity check.
@@ -774,7 +1068,31 @@ impl<R: RpcConnection> Rpc<R> {
     /// exceeds `max_fee_per_byte` (indicating a malicious or malfunctioning
     /// node). Use `DEFAULT_MAX_FEE_PER_BYTE` for a reasonable default limit.
     pub async fn get_fee_checked(&self, max_fee_per_byte: u64) -> Result<Fee, RpcError> {
-        let fee = self.get_fee().await?;
+        self.get_fee_checked_for_priority(FeePriority::Automatic, max_fee_per_byte)
+            .await
+    }
+
+    /// Get a selected wallet2 fee tier with a sanity check.
+    pub async fn get_fee_checked_for_priority(
+        &self,
+        priority: FeePriority,
+        max_fee_per_byte: u64,
+    ) -> Result<Fee, RpcError> {
+        self.get_fee_checked_for_priority_at_height(priority, None, max_fee_per_byte)
+            .await
+    }
+
+    /// `get_fee_checked_for_priority` at a wallet height (see
+    /// `get_fee_for_priority_at_height`).
+    pub async fn get_fee_checked_for_priority_at_height(
+        &self,
+        priority: FeePriority,
+        wallet_height: Option<u64>,
+        max_fee_per_byte: u64,
+    ) -> Result<Fee, RpcError> {
+        let (tier, fee) = self
+            .fee_tier_for_priority_at_height(priority, wallet_height)
+            .await?;
 
         if fee.per_weight == 0 {
             return Err(RpcError::ZeroFee);
@@ -782,6 +1100,14 @@ impl<R: RpcConnection> Rpc<R> {
 
         if fee.mask == 0 {
             return Err(RpcError::ZeroMask);
+        }
+
+        let tier_limit = MAX_DAEMON_FEE_PER_BYTE[tier];
+        if fee.per_weight > tier_limit {
+            return Err(RpcError::FeeExceedsLimit {
+                per_weight: fee.per_weight,
+                limit: tier_limit,
+            });
         }
 
         if fee.per_weight > max_fee_per_byte {
@@ -1398,5 +1724,294 @@ mod tests {
         let mut data = vec![2];
         monero_oxide::io::VarInt::write(&500_000_000u64, &mut data).unwrap();
         assert_eq!(prefix_timelock(&data).unwrap(), Timelock::Time(500_000_000));
+    }
+
+    #[tokio::test]
+    async fn fee_priority_selects_the_daemons_wallet2_tier() {
+        #[derive(Clone, Debug)]
+        struct Connection;
+        #[async_trait]
+        impl RpcConnection for Connection {
+            async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
+                assert_eq!(route, "json_rpc");
+                assert_eq!(
+                    serde_json::from_slice::<Value>(&body).unwrap()["method"],
+                    "get_fee_estimate"
+                );
+                Ok(serde_json::to_vec(&json!({
+                    "result": {
+                        "fee": 32_000,
+                        "fees": [32_000, 130_000, 510_000, 6_400_000],
+                        "quantization_mask": 10_000,
+                        "status": "OK"
+                    }
+                }))
+                .unwrap())
+            }
+        }
+
+        let rpc = Rpc::new_with_connection(Connection);
+        assert_eq!(
+            rpc.get_fee_for_priority(FeePriority::Normal).await.unwrap(),
+            Fee {
+                per_weight: 130_000,
+                mask: 10_000
+            }
+        );
+    }
+
+    fn monerod_backlog_reply(entries: &[(u64, u64)]) -> Vec<u8> {
+        let mut reply = b"{\"id\": \"0\", \"jsonrpc\": \"2.0\", \"result\": {".to_vec();
+        let pool: Vec<_> = entries.iter().filter(|(weight, _)| *weight != 0).collect();
+        if !pool.is_empty() {
+            reply.extend(b"\"backlog\": \"");
+            for (weight, fee) in pool {
+                for byte in [*weight, *fee, 0].into_iter().flat_map(u64::to_le_bytes) {
+                    match byte {
+                        0x08 => reply.extend(b"\\b"),
+                        0x0c => reply.extend(b"\\f"),
+                        b'\n' => reply.extend(b"\\n"),
+                        b'\r' => reply.extend(b"\\r"),
+                        b'\t' => reply.extend(b"\\t"),
+                        0x0b => reply.extend(b"\\v"),
+                        b'"' | b'\\' | b'/' => reply.extend([b'\\', byte]),
+                        other => reply.push(other),
+                    }
+                }
+            }
+            reply.extend(b"\", ");
+        }
+        reply.extend(b"\"credits\": 0, \"status\": \"OK\", \"untrusted\": false}}");
+        reply
+    }
+
+    #[test]
+    fn txpool_backlog_is_read_from_monerods_blob() {
+        let entry = |weight, fee| BacklogEntry { weight, fee };
+        let entries = [
+            (0x0c0b_0a09_0822_2f5c, 0xfffe_8000_0d00_5c5c),
+            (150_000, 3_000_000_000),
+        ];
+        assert_eq!(
+            parse_txpool_backlog(&monerod_backlog_reply(&entries)),
+            Ok(vec![
+                entry(entries[0].0, entries[0].1),
+                entry(150_000, 3_000_000_000)
+            ])
+        );
+
+        assert_eq!(
+            parse_txpool_backlog(&monerod_backlog_reply(&[])),
+            Ok(vec![])
+        );
+        assert_eq!(
+            parse_txpool_backlog(br#"{"result":{"credits":0,"status":"OK"}}"#),
+            Ok(vec![])
+        );
+
+        assert_eq!(
+            parse_txpool_backlog(br#"{"result":{"backlog":"0123456789","status":"OK"}}"#),
+            Ok(vec![])
+        );
+        assert_eq!(
+            parse_txpool_backlog(
+                br#"{"result":{"backlog":[{"weight":300000,"fee":1}],"status":"OK"}}"#
+            ),
+            Ok(vec![])
+        );
+
+        let mut escaped = br#"{"result":{"backlog":"\u00e9"#.to_vec();
+        escaped.extend([b'x'; 22]);
+        escaped.extend(br#"","status":"OK"}}"#);
+        let parsed = parse_txpool_backlog(&escaped).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].weight.to_le_bytes()[..2], [0xc3, 0xa9]);
+
+        assert!(parse_txpool_backlog(br#"{"result":{"backlog":"unterminated"#).is_err());
+        assert!(parse_txpool_backlog(br#"{"error":{"code":-32601}}"#).is_err());
+        assert!(parse_txpool_backlog(b"").is_err());
+    }
+
+    #[test]
+    fn txpool_backlog_escapes_are_read_as_epee_reads_them() {
+        let read = |escape: &str, decoded: usize| {
+            let mut body = br#"{"result":{"backlog":""#.to_vec();
+            body.extend(escape.as_bytes());
+            body.extend(vec![b'x'; 24 - decoded]);
+            body.extend(br#"","status":"OK"}}"#);
+            parse_txpool_backlog(&body).map(|entries| {
+                assert_eq!(entries.len(), 1, "{escape}");
+                entries[0].weight.to_le_bytes()[..decoded].to_vec()
+            })
+        };
+        for (escape, bytes) in [
+            (r"\u0000", &[0x00][..]),
+            (r"\u0041", &[0x41]),
+            (r"\u00e9", &[0xc3, 0xa9]),
+            (r"\u07FF", &[0xdf, 0xbf]),
+            (r"\u0800", &[0xe0, 0xa0, 0x80]),
+            (r"\ud800", &[0xed, 0xa0, 0x80]),
+            (r"\uDFFF", &[0xed, 0xbf, 0xbf]),
+            (r"\uffff", &[0xef, 0xbf, 0xbf]),
+            (r"\ud83d\ude00", &[0xed, 0xa0, 0xbd, 0xed, 0xb8, 0x80]),
+            (r"\v\'\/", &[0x0b, b'\'', b'/']),
+        ] {
+            assert_eq!(read(escape, bytes.len()), Ok(bytes.to_vec()), "{escape}");
+        }
+
+        let mut raw = br#"{"result":{"backlog":""#.to_vec();
+        raw.extend([0xed, 0xa0, 0x80]);
+        raw.extend([b'x'; 21]);
+        raw.extend(br#"","status":"OK"}}"#);
+        let mut escaped = br#"{"result":{"backlog":"\ud800"#.to_vec();
+        escaped.extend([b'x'; 21]);
+        escaped.extend(br#"","status":"OK"}}"#);
+        assert_eq!(parse_txpool_backlog(&raw), parse_txpool_backlog(&escaped));
+        assert_eq!(parse_txpool_backlog(&raw).unwrap().len(), 1);
+
+        for escape in [r"\u+0e9", r"\u00g0", r"\u12", r"\x", r"\U0041"] {
+            assert!(read(escape, 0).is_err(), "{escape}");
+        }
+        assert!(parse_txpool_backlog(br#"{"result":{"backlog":"\u00"#).is_err());
+
+        let mut body = br#"{"result":{"back\u006cog":""#.to_vec();
+        body.extend([b'x'; 24]);
+        body.extend(br#"","st\u0061tus":"\u004fK","top_hash":"\ud800\v"#);
+        body.extend([0x01, 0xff]);
+        body.extend(br#"","untrusted":false}}"#);
+        assert_eq!(parse_txpool_backlog(&body).unwrap().len(), 1);
+        let mut body = br#"{"id":"backlog","result":{"backlog":""#.to_vec();
+        body.extend([b'x'; 24]);
+        body.extend(br#"","status":"OK"}}"#);
+        assert_eq!(parse_txpool_backlog(&body).unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn automatic_fee_matches_wallet2_backlog_and_block_fullness_rules() {
+        #[derive(Clone, Debug)]
+        struct Connection {
+            backlog_weight: u64,
+            block_weight: u64,
+        }
+        #[async_trait]
+        impl RpcConnection for Connection {
+            async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
+                assert_eq!(route, "json_rpc");
+                let request: Value = serde_json::from_slice(&body).unwrap();
+                let result = match request["method"].as_str().unwrap() {
+                    "get_fee_estimate" => json!({
+                        "fee": 32_000,
+                        "fees": [32_000, 130_000, 510_000, 6_400_000],
+                        "quantization_mask": 10_000,
+                        "status": "OK"
+                    }),
+                    "get_txpool_backlog" => {
+                        return Ok(monerod_backlog_reply(&[(
+                            self.backlog_weight,
+                            self.backlog_weight * 32_000,
+                        )]))
+                    }
+                    "get_info" => json!({
+                        "height": 100,
+                        "block_weight_limit": 600_000,
+                        "status": "OK"
+                    }),
+                    "getblockheadersrange" => json!({
+                        "headers": (0..10)
+                            .map(|_| json!({ "block_weight": self.block_weight }))
+                            .collect::<Vec<_>>(),
+                        "status": "OK"
+                    }),
+                    method => panic!("unexpected method {method}"),
+                };
+                Ok(serde_json::to_vec(&json!({ "result": result })).unwrap())
+            }
+        }
+
+        let fee = |backlog_weight, block_weight| async move {
+            Rpc::new_with_connection(Connection {
+                backlog_weight,
+                block_weight,
+            })
+            .get_fee()
+            .await
+            .unwrap()
+            .per_weight
+        };
+
+        assert_eq!(fee(0, 240_000).await, 32_000);
+        assert_eq!(fee(0, 243_000).await, 130_000);
+        assert_eq!(fee(300_000, 0).await, 130_000);
+    }
+
+    #[test]
+    fn tier_bounds_are_the_daemons_formula_at_its_maximum() {
+        fn round_up(amount: u128) -> u64 {
+            let mut unit = 1;
+            while amount / unit >= 100 {
+                unit *= 10;
+            }
+            u64::try_from(amount.div_ceil(unit) * unit).unwrap()
+        }
+        let reward = u128::from(u64::MAX >> 19);
+        let zone = 300_000u128;
+        let reference = 3_000u128;
+        let low = reward * reference / (zone * zone);
+        let normal = 4 * reward * reference / (zone * zone);
+        let elevated = 16 * reward * reference / (zone * zone);
+        let priority = (4 * elevated).max(4 * elevated * zone / (32 * reference * zone / zone));
+        assert_eq!(
+            [low, normal, elevated, priority].map(round_up),
+            MAX_DAEMON_FEE_PER_BYTE
+        );
+        assert_eq!(DEFAULT_MAX_FEE_PER_BYTE, 240_000_000);
+    }
+
+    #[tokio::test]
+    async fn automatic_fee_checks_blocks_at_the_wallet_height() {
+        #[derive(Clone, Debug)]
+        struct Connection;
+        #[async_trait]
+        impl RpcConnection for Connection {
+            async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
+                assert_eq!(route, "json_rpc");
+                let request: Value = serde_json::from_slice(&body).unwrap();
+                let result = match request["method"].as_str().unwrap() {
+                    "get_fee_estimate" => json!({
+                        "fee": 32_000,
+                        "fees": [32_000, 130_000, 510_000, 6_400_000],
+                        "quantization_mask": 10_000,
+                        "status": "OK"
+                    }),
+                    "get_txpool_backlog" => return Ok(monerod_backlog_reply(&[])),
+                    "get_info" => json!({
+                        "height": 1_000,
+                        "block_weight_limit": 600_000,
+                        "status": "OK"
+                    }),
+                    "getblockheadersrange" => {
+                        assert_eq!(request["params"]["start_height"], 490);
+                        assert_eq!(request["params"]["end_height"], 499);
+                        json!({
+                            "headers": (0..10)
+                                .map(|_| json!({ "block_weight": 0 }))
+                                .collect::<Vec<_>>(),
+                            "status": "OK"
+                        })
+                    }
+                    method => panic!("unexpected method {method}"),
+                };
+                Ok(serde_json::to_vec(&json!({ "result": result })).unwrap())
+            }
+        }
+
+        assert_eq!(
+            Rpc::new_with_connection(Connection)
+                .get_fee_for_priority_at_height(FeePriority::Automatic, Some(500))
+                .await
+                .unwrap()
+                .per_weight,
+            32_000
+        );
     }
 }

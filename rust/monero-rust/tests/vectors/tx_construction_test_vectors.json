@@ -301,7 +301,7 @@
   },
   {
     "route": "json_rpc",
-    "body": "{\"method\":\"get_fee_estimate\"}",
+    "body": "{\"method\":\"get_fee_estimate\",\"params\":{\"grace_blocks\":10}}",
     "response": "{\n\"id\": 0,\n\"jsonrpc\": \"2.0\",\n\"result\": {\n\"credits\": 0,\n\"fee\": 25000,\n\"fees\": [25000,97000,390000,4900000],\n\"quantization_mask\": 10000,\n\"status\": \"OK\",\n\"top_hash\": \"\",\n\"untrusted\": false\n}\n}",
     "is_binary": false
   },
