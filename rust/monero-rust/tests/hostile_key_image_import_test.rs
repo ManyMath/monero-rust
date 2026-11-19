@@ -108,7 +108,6 @@ fn verified_import_refuses_a_valid_image_of_another_output() {
 }
 
 #[test]
-#[ignore = "known defect: an unsigned, unauthenticated key image list is accepted for a known account"]
 fn unauthenticated_legacy_key_images_are_not_accepted_for_a_known_account() {
     let (key_a, _honest) = signed("a");
     let bogus = "ab".repeat(32);

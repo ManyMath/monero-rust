@@ -1,12 +1,5 @@
-//! Key image export/import with support for both legacy EPEE and Monero v3 formats.
-//!
-//! The old EPEE-based export format is deprecated but retained for backward
-//! compatibility. New exports should use `key_image_signing::export_key_images_v3`
-//! for full interoperability with Feather Wallet and monero-wallet-cli.
-//!
-//! The `import_key_images` function auto-detects the format: it tries EPEE first,
-//! and if that fails, falls back to the v3 encrypted binary format (requires
-//! the view secret key for decryption).
+//! wallet2's export file formats. The unauthenticated legacy key image list is
+//! returned as a bare list only without a view key or an expected account.
 
 use serde::{Deserialize, Serialize};
 use std::io::{Cursor, Read};
@@ -1643,13 +1636,8 @@ pub fn export_key_images(key_images: &[ExportedKeyImage]) -> Result<Vec<u8>, Str
     Ok(wrap_with_magic(KEY_IMAGES_MAGIC, &epee_data))
 }
 
-/// Import key images from either old EPEE format or new v3 encrypted format.
-///
-/// - If `view_secret_key` is `None`, only old EPEE format is supported.
-/// - With `view_secret_key`, try v3 before the legacy Epee format.
-///
-/// This function does not check the account. Use `import_key_images_for_account`
-/// when the destination wallet is known.
+/// Import key images: the legacy list without `view_secret_key`, only the
+/// authenticated v3 format with it. The account is not checked.
 pub fn import_key_images(
     data: &[u8],
     view_secret_key: Option<&[u8; 32]>,
@@ -1657,22 +1645,20 @@ pub fn import_key_images(
     import_key_images_for_account(data, view_secret_key, None)
 }
 
-/// Import key images and check the v3 header against `expected_keys`, supplied as
-/// `(public_spend_key, public_view_key)`.
-///
-/// Key images are assigned to outputs by position. Rejecting another account
-/// prevents its key images from being assigned to this wallet, as in
-/// `wallet2::import_key_images`. Legacy Epee exports contain no account keys
-/// and cannot be checked this way.
-///
-/// Partial exports are rejected because this hex list cannot preserve their offset.
-/// Use `import_signed_key_images_for_account` to retain the offset and signatures.
+/// Import key images, checking the v3 header against `expected_keys`
+/// (`(public_spend_key, public_view_key)`). Refuses partial exports, and the
+/// unauthenticated legacy list when a view key or `expected_keys` is given.
 pub fn import_key_images_for_account(
     data: &[u8],
     view_secret_key: Option<&[u8; 32]>,
     expected_keys: Option<(&[u8; 32], &[u8; 32])>,
 ) -> Result<Vec<String>, String> {
-    let (offset, entries) = parse_key_image_export(data, view_secret_key, expected_keys)?;
+    let legacy = if view_secret_key.is_some() || expected_keys.is_some() {
+        LegacyKeyImages::Refuse
+    } else {
+        LegacyKeyImages::Accept
+    };
+    let (offset, entries) = parse_key_image_export(data, view_secret_key, expected_keys, legacy)?;
     if offset != 0 {
         return Err(format!(
             "this export starts at output {offset}, and a bare key-image list has nowhere to \
@@ -1696,7 +1682,14 @@ pub fn import_signed_key_images_for_account(
     view_secret_key: Option<&[u8; 32]>,
     expected_keys: Option<(&[u8; 32], &[u8; 32])>,
 ) -> Result<crate::key_image_import::SignedKeyImageImport, String> {
-    let (offset, entries) = parse_key_image_export(data, view_secret_key, expected_keys)?;
+    // Every entry must carry a signature, and the caller checks each one
+    // against its output, so the legacy format needs no authentication here.
+    let (offset, entries) = parse_key_image_export(
+        data,
+        view_secret_key,
+        expected_keys,
+        LegacyKeyImages::Accept,
+    )?;
     let key_images = entries
         .into_iter()
         .enumerate()
@@ -1716,6 +1709,13 @@ pub fn import_signed_key_images_for_account(
     Ok(crate::key_image_import::SignedKeyImageImport { offset, key_images })
 }
 
+/// Whether the unauthenticated legacy key image list may be read.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LegacyKeyImages {
+    Accept,
+    Refuse,
+}
+
 /// Parse either supported key-image export format.
 ///
 /// Return the offset and key images, including signatures when present. Legacy
@@ -1724,6 +1724,7 @@ fn parse_key_image_export(
     data: &[u8],
     view_secret_key: Option<&[u8; 32]>,
     expected_keys: Option<(&[u8; 32], &[u8; 32])>,
+    legacy: LegacyKeyImages,
 ) -> Result<(u32, Vec<([u8; 32], Option<[u8; 64]>)>), String> {
     let payload = strip_magic(KEY_IMAGES_MAGIC, data)?;
 
@@ -1769,6 +1770,14 @@ fn parse_key_image_export(
     }
 
     if let Ok(export) = crate::safe_epee::from_bytes::<KeyImageExport, _>(payload) {
+        if legacy == LegacyKeyImages::Refuse {
+            return Err(
+                "this is a legacy key image list: it has no signatures and nothing ties it to \
+                 this wallet, so it is not accepted in place of an authenticated export. \
+                 Re-export the key images from the signing wallet."
+                    .to_string(),
+            );
+        }
         let mut entries = Vec::with_capacity(export.key_images.len());
         for (i, entry) in export.key_images.into_iter().enumerate() {
             let key_image: [u8; 32] = entry

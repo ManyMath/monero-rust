@@ -418,11 +418,8 @@ pub fn export_key_images_from_outputs(
     )
 }
 
-/// Derives the view key from `seed_phrase`/`passphrase` and imports key images (EPEE or v3).
-///
-/// This discards ring signatures and rejects partial exports, whose offset cannot
-/// be represented by a bare list. Use `import_signed_key_images_from_seed` to
-/// retain the data needed to verify and assign entries.
+/// Key images, without signatures, from an export authenticated by the view key
+/// of `seed_phrase`/`passphrase`. Partial exports are refused.
 pub fn import_key_images_from_seed(
     seed_phrase: &str,
     passphrase: &str,

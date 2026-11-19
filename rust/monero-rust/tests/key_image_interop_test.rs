@@ -288,10 +288,9 @@ fn test_old_epee_import_without_view_key() {
     );
 }
 
-// Test 6: old EPEE import with view key
 #[test]
 fn test_old_epee_import_with_view_key() {
-    let (_, _, _, view_secret) = test_keys();
+    let (_, pub_spend, pub_view, view_secret) = test_keys();
 
     let key_images = vec![epee_compat::ExportedKeyImage {
         key_image: "0197168670bb9a4f183be4eb8f0f0d57354dfe7094f0c55e5552b7b3a105a77a".to_string(),
@@ -302,14 +301,20 @@ fn test_old_epee_import_with_view_key() {
     #[allow(deprecated)]
     let exported = epee_compat::export_key_images(&key_images).expect("Old export should succeed");
 
-    // Import with view key should still succeed (tries EPEE first)
-    let imported = epee_compat::import_key_images(&exported, Some(&view_secret))
-        .expect("Old EPEE import with view key should succeed");
+    let err = epee_compat::import_key_images(&exported, Some(&view_secret))
+        .expect_err("an unauthenticated list must be refused when a view key is held");
+    assert!(err.contains("legacy key image list"), "{err}");
 
-    assert_eq!(imported.len(), 1);
+    let err =
+        epee_compat::import_key_images_for_account(&exported, None, Some((&pub_spend, &pub_view)))
+            .expect_err("an account check that cannot be made must not be skipped");
+    assert!(err.contains("legacy key image list"), "{err}");
+
+    let imported = epee_compat::import_key_images(&exported, None)
+        .expect("a caller with no keys can still read the legacy list");
     assert_eq!(
-        imported[0],
-        "0197168670bb9a4f183be4eb8f0f0d57354dfe7094f0c55e5552b7b3a105a77a"
+        imported,
+        vec!["0197168670bb9a4f183be4eb8f0f0d57354dfe7094f0c55e5552b7b3a105a77a".to_string()]
     );
 }
 
