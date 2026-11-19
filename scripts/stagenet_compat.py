@@ -103,6 +103,41 @@ def cmd_w2_restore(args):
             w.stop()
 
 
+def cmd_w2_viewonly(args):
+    w = open_wallet(args.label)
+    try:
+        address = w.call("get_address", {"account_index": 0})["address"]
+        view_key = w.call("query_key", {"key_type": "view_key"})["key"]
+    finally:
+        w.stop(store=False)
+    spend_public, _ = lib.address_keys(address)
+    seed_path = lib.viewonly_seed_file(args.label)
+    if not os.path.exists(seed_path):
+        fd = os.open(seed_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write("viewonly:%s:%s\n" % (view_key, spend_public))
+    name = args.label + "-vo"
+    wdir = os.path.join(RUN, "w2", name)
+    if os.path.exists(os.path.join(wdir, "w.keys")):
+        print(name, "exists")
+        return
+    w = lib.WalletRpc(wdir, RINGDB)
+    try:
+        r = w.call("generate_from_keys", {"filename": "w", "address": address, "viewkey": view_key,
+                                          "restore_height": args.restore_height, "password": "",
+                                          "autosave_current": False})
+        w.call("auto_refresh", {"enable": False})
+        started = time.time()
+        refreshed = w.call("refresh", timeout=7200)
+        info = {"name": name, "address": address, "restore_height": args.restore_height, "created": r,
+                "refresh": refreshed, "refresh_seconds": time.time() - started,
+                "height": w.call("get_height")["height"]}
+        evidence("wallet-" + name, info)
+        print(json.dumps(info), flush=True)
+    finally:
+        w.stop()
+
+
 def scan_response_path(label, tag=""):
     return os.path.join(RUN, "mr", (tag + "-" if tag else "") + label + "-scan.json")
 
@@ -385,7 +420,7 @@ def cmd_proxy(args):
     import signal
     lib.ensure_dirs()
     upstream = lib.rpc_url()
-    proxy = lib.LoggingProxy(upstream, lib.proxy_log(args.label), args.label)
+    proxy = lib.LoggingProxy(upstream, lib.proxy_log(args.label), args.label, light=args.light)
     with open(os.path.join(RUN, "proxy-%s.port" % args.label), "w") as f:
         f.write(str(proxy.port))
     print("proxy", args.label, proxy.url, "->", upstream, flush=True)
@@ -408,6 +443,10 @@ def main():
     s.add_argument("labels", nargs="+")
     s.add_argument("--restore-height", type=int, default=0)
     s.set_defaults(fn=cmd_w2_restore)
+    s = sub.add_parser("w2-viewonly", help="wallet2 view-only wallet LABEL-vo, and the crate's view-only keys")
+    s.add_argument("label")
+    s.add_argument("--restore-height", type=int, default=0)
+    s.set_defaults(fn=cmd_w2_viewonly)
     s = sub.add_parser("scan", help="scan one or more wallets with the crate")
     s.add_argument("labels", nargs="+")
     s.add_argument("--state-tag", default="", help="use a separate state file mr/TAG-LABEL-state.json")
@@ -440,9 +479,14 @@ def main():
     s.set_defaults(fn=cmd_new_wallet)
     s = sub.add_parser("proxy", help="run one logging proxy in front of the node")
     s.add_argument("label")
+    s.add_argument("--light", action="store_true", help="log sizes only (metering), no reply decoding")
     s.set_defaults(fn=cmd_proxy)
     import stagenet_send
     stagenet_send.register(sub)
+    import stagenet_viewonly
+    stagenet_viewonly.register(sub)
+    import stagenet_live
+    stagenet_live.register(sub)
     args = p.parse_args()
     lib.ensure_dirs()
     args.fn(args)

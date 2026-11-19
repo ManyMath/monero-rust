@@ -11,7 +11,7 @@ EVID = os.path.join(RUN, "evidence")
 RINGDB = os.path.join(RUN, "ringdb")
 LOOKAHEAD = {"lookahead_account": 49, "lookahead_subaddress": 199}
 PRIORITIES = ["automatic", "low", "normal", "elevated", "priority"]
-MAX_RELAYS = 25
+MAX_RELAYS = int(os.environ.get("MONERO_STAGENET_MAX_RELAYS", "25"))
 MAX_SANE_FEE = 1_000_000_000  # 0.001 XMR
 
 
@@ -39,7 +39,8 @@ def open_wallet(label, daemon=None, ringdb=RINGDB, log_level=0):
 
 
 def mr_scan(label, name, rpc=None):
-    request = {"op": "scan", "seed_file": lib.seed_file(label), "state": lib.state_file(label)}
+    request = {"op": "scan", "seed_file": lib.seed_file(label), "state": lib.state_file(label),
+               "ring_db": lib.ring_db_file(label)}
     request.update(LOOKAHEAD)
     return lib.tool(request, name, rpc=rpc)
 
@@ -49,6 +50,7 @@ def mr_build(label, name, kind, recipients, account=0, inputs=None, priority="au
     assert not (record and state), "rings are only recorded in the wallet's own state file"
     request = {"op": "build", "seed_file": lib.seed_file(label), "state": state or lib.state_file(label),
                "kind": kind,
+               "ring_db": lib.ring_db_file(label) if state is None else None,
                "recipients": recipients, "source_account": account, "priority": priority, "record": record,
                "fresh_rings": fresh, "repeat": repeat, "ignore_pending": ignore_pending}
     if inputs is not None:
@@ -142,9 +144,26 @@ def check_built(shape, build, tx, state_before, state_after, tiers):
         elif i["indexes"][stored["real_index"]] != by_ki_after[i["key_image"]]["global_index"]:
             ring_ok = False
     checks["rings_saved_in_state_file_match_blob"] = ring_ok
+    ring_db = lib.ring_db_file(shape["wallet"])
+    if os.path.exists(ring_db):
+        with open(ring_db) as f:
+            rings = json.load(f).get("rings", {})
+        checks["rings_in_ring_database_file_match_blob"] = all(
+            rings.get(i["key_image"], {}).get("offsets") == i["offsets"] for i in tx["inputs"])
+    else:
+        checks["rings_in_ring_database_file_match_blob"] = False
+    subaddresses = {tuple(by_ki_before[k]["subaddress_index"] or [0, 0]) for k in kis if k in by_ki_before}
+    if len(kis) <= len(selected):
+        checks["inputs_from_one_subaddress"] = len(subaddresses) == 1
     ledger = load_evidence("relayed", [])
     used = {k for entry in ledger for k in entry.get("key_images", [])}
     checks["inputs_not_in_an_earlier_relay"] = not (set(kis) & used)
+    if shape.get("expect_zero_change"):
+        checks["zero_change_with_dummy_output"] = not build["change_outputs"] and len(tx["outputs"]) == 2
+        checks["fee_as_probed"] = tx["fee"] == shape.get("probe_fee")
+    if shape.get("expect_rebuild"):
+        checks["rebuilt_with_a_further_input"] = (selected == {shape["expect_rebuild"]} and len(kis) == 2
+                                                  and spent <= selected | further)
     total_in = sum(by_ki_before[k]["amount"] for k in kis if k in by_ki_before)
     paid = sum(v for _, v in shape["recipients"])
     change = sum(c["amount"] for c in build["change_outputs"])
@@ -246,15 +265,18 @@ def cmd_shape_relay(args):
     before = tx_status(record["tx_id"])
     assert not before["known"], "transaction is already known to the node: %s" % before
     label = record["shape"]["wallet"]
+    guarded = guard(kis)
     # Write the ledger entry first so an ambiguous result still blocks a second relay.
     entry = {"name": args.name, "tx_id": record["tx_id"], "key_images": kis, "by": "monero-rust",
-             "started": time.time(), "result": "pending"}
+             "guard": guarded, "started": time.time(), "result": "pending"}
     ledger.append(entry)
     evidence("relayed", ledger)
     try:
-        result = lib.tool({"op": "relay", "state": lib.state_file(label),
-                           "tx": os.path.join(EVID, "tx-%s.json" % args.name)}, "relay-" + args.name, rpc=args.rpc)
+        result = lib.tool({"op": "relay", "state": lib.state_file(label), "ring_db": lib.ring_db_file(label),
+                           "guard": True, "tx": os.path.join(EVID, "tx-%s.json" % args.name)},
+                          "relay-" + args.name, rpc=args.rpc)
         entry["result"] = result["relay"]
+        entry["guard_in_tool"] = result.get("guard")
     except Exception as exc:  # noqa: BLE001
         entry["result"] = "tool failure: %r" % exc
     time.sleep(1)
@@ -263,6 +285,17 @@ def cmd_shape_relay(args):
     entry["finished"] = time.time()
     evidence("relayed", ledger)
     print(json.dumps(entry, indent=1))
+
+
+def guard(key_images):
+    """Refuse unless every key image is unspent and not in the pool of the node
+    MONERO_STAGENET_GUARD_RPC names (else the run's node), which learns them."""
+    r = lib.tool({"op": "guard", "key_images": list(key_images)}, "guard-%d" % int(time.time() * 1000),
+                 rpc=os.environ.get("MONERO_STAGENET_GUARD_RPC"))
+    if r.get("error") or not r.get("clear"):
+        raise SystemExit("not relayed: an input is spent, in the pool, or the node could not say: %s"
+                         % json.dumps(r))
+    return r
 
 
 def cmd_shape_status(args):
@@ -785,8 +818,10 @@ def cmd_sweep_back(args):
             if not all(checks.values()):
                 entry["relay"] = "not relayed: a check failed"
                 continue
+            entry["guard"] = guard(entry["observer"]["key_images"])
             record = {"name": "%s-%d" % (args.name, position), "tx_id": txid, "by": "wallet2",
-                      "key_images": entry["observer"]["key_images"], "started": time.time(), "result": "pending"}
+                      "key_images": entry["observer"]["key_images"], "guard": entry["guard"],
+                      "started": time.time(), "result": "pending"}
             ledger.append(record)
             evidence("relayed", ledger)
             if use_proxy:

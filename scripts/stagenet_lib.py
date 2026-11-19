@@ -352,14 +352,16 @@ def summarize_json_request(body):
 
 
 class LoggingProxy:
-    def __init__(self, upstream, log_path, label):
+    def __init__(self, upstream, log_path, label, light=False):
         host, port = upstream.replace("http://", "").split(":")
         self.upstream = (host, int(port))
         self.log_path = log_path
         self.label = label
+        self.light = light
         self.lock = threading.Lock()
         self.seq = 0
         self.phase = "start"
+        self.refuse = set()
         proxy = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -379,6 +381,12 @@ class LoggingProxy:
                     self.wfile.write(b"ok")
                     return
                 started = time.time()
+                if self.path.lstrip("/") in proxy.refuse:
+                    self.send_response(503)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    proxy.record(self, body, 503, b"", time.time() - started)
+                    return
                 conn = getattr(self, "_up", None)
                 headers = {k: v for k, v in self.headers.items()
                            if k.lower() not in ("host", "connection", "proxy-connection", "accept-encoding")}
@@ -428,7 +436,11 @@ class LoggingProxy:
                  "ms": round(seconds * 1000, 1),
                  "user_agent": handler.headers.get("User-Agent"),
                  "headers": sorted(k.lower() for k in handler.headers.keys())}
-        if path.endswith(".bin"):
+        if self.light:
+            if path == "json_rpc":
+                req = summarize_json_request(body)
+                entry["method"] = req.get("method") if isinstance(req, dict) else None
+        elif path.endswith(".bin"):
             entry["params"] = summarize_bin_request(path, body)
             if path == "getblocks.bin":
                 try:
@@ -603,6 +615,10 @@ def state_file(label, tag=""):
     return os.path.join(RUN, "mr", (tag + "-" if tag else "") + label + "-state.json")
 
 
+def ring_db_file(label, tag=""):
+    return os.path.join(RUN, "mr", (tag + "-" if tag else "") + label + "-rings.json")
+
+
 def proxy_url(label):
     with open(os.path.join(RUN, "proxy-%s.port" % label)) as f:
         return "http://127.0.0.1:%s" % f.read().strip()
@@ -614,3 +630,23 @@ def set_phase(label, phase):
 
 def proxy_log(label):
     return os.path.join(RUN, "evidence", "proxy-%s.jsonl" % label)
+
+
+_B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+_B58_BLOCK = {0: 0, 2: 1, 3: 2, 5: 3, 6: 4, 7: 5, 9: 6, 10: 7, 11: 8}
+
+
+def address_keys(address):
+    data = b""
+    for start in range(0, len(address), 11):
+        block = address[start:start + 11]
+        value = 0
+        for ch in block:
+            value = value * 58 + _B58.index(ch)
+        data += value.to_bytes(_B58_BLOCK[len(block)], "big")
+    assert len(data) == 69, "not a 95-character address"
+    return data[1:33].hex(), data[33:65].hex()
+
+
+def viewonly_seed_file(label):
+    return seed_file(label + "-vo")
