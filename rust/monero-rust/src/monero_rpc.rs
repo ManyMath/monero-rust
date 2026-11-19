@@ -1152,6 +1152,44 @@ impl<R: RpcConnection> Rpc<R> {
             .height)
     }
 
+    async fn transaction_entries(
+        &self,
+        hashes: &[[u8; 32]],
+    ) -> Result<Vec<TransactionResponse>, RpcError> {
+        let mut entries = Vec::with_capacity(hashes.len());
+        let mut missing = Vec::new();
+        for slice in hashes.chunks(TRANSACTIONS_PER_REQUEST) {
+            let txs: TransactionsResponse = self
+                .rpc_call_limited(
+                    "get_transactions",
+                    Some(json!({
+                      "txs_hashes": slice.iter().map(hex::encode).collect::<Vec<_>>()
+                    })),
+                    transactions_limit(slice.len()),
+                )
+                .await?;
+
+            if !txs.missed_tx.is_empty() {
+                for hash in &txs.missed_tx {
+                    missing.push(hash_hex(hash)?);
+                }
+                continue;
+            }
+
+            // One entry per hash: callers pair entries with hashes by position.
+            if txs.txs.len() != slice.len() {
+                return Err(RpcError::InvalidNode);
+            }
+            entries.extend(txs.txs);
+        }
+        if !missing.is_empty() {
+            return Err(RpcError::TransactionsNotFound(missing));
+        }
+        Ok(entries)
+    }
+
+    /// Transactions by hash, in the order of `hashes`, each checked against its
+    /// hash and asked for in slices a restricted node answers.
     pub async fn get_transactions(
         &self,
         hashes: &[[u8; 32]],
@@ -1160,33 +1198,8 @@ impl<R: RpcConnection> Rpc<R> {
             return Ok(vec![]);
         }
 
-        let txs: TransactionsResponse = self
-            .rpc_call_limited(
-                "get_transactions",
-                Some(json!({
-                  "txs_hashes": hashes.iter().map(hex::encode).collect::<Vec<_>>()
-                })),
-                transactions_limit(hashes.len()),
-            )
-            .await?;
-
-        if !txs.missed_tx.is_empty() {
-            Err(RpcError::TransactionsNotFound(
-                txs.missed_tx
-                    .iter()
-                    .map(|hash| hash_hex(hash))
-                    .collect::<Result<_, _>>()?,
-            ))?;
-        }
-
-        // Require one response per requested hash. Per-entry hash checks alone would
-        // accept a truncated reply and let the scanner miss received outputs or spent
-        // key images. Extra entries would index past `hashes`.
-        if txs.txs.len() != hashes.len() {
-            return Err(RpcError::InvalidNode);
-        }
-
-        txs.txs
+        self.transaction_entries(hashes)
+            .await?
             .iter()
             .enumerate()
             .map(|(i, res)| {
@@ -1238,31 +1251,8 @@ impl<R: RpcConnection> Rpc<R> {
             return Ok(vec![]);
         }
 
-        let txs: TransactionsResponse = self
-            .rpc_call_limited(
-                "get_transactions",
-                Some(json!({
-                  "txs_hashes": hashes.iter().map(hex::encode).collect::<Vec<_>>()
-                })),
-                transactions_limit(hashes.len()),
-            )
-            .await?;
-
-        if !txs.missed_tx.is_empty() {
-            Err(RpcError::TransactionsNotFound(
-                txs.missed_tx
-                    .iter()
-                    .map(|hash| hash_hex(hash))
-                    .collect::<Result<_, _>>()?,
-            ))?;
-        }
-
-        // Callers match timelocks to transactions by position, so the counts must agree.
-        if txs.txs.len() != hashes.len() {
-            return Err(RpcError::InvalidNode);
-        }
-
-        txs.txs
+        self.transaction_entries(hashes)
+            .await?
             .iter()
             .map(|res| {
                 let hex_data = if !res.as_hex.is_empty() {
@@ -2207,6 +2197,10 @@ impl<R: RpcConnection> Rpc<R> {
         ))
     }
 }
+
+/// Transaction ids per /get_transactions request: the most a restricted node
+/// answers.
+const TRANSACTIONS_PER_REQUEST: usize = 100;
 
 fn transactions_limit(count: usize) -> usize {
     count
