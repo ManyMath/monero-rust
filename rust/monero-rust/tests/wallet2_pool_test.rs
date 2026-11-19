@@ -7,9 +7,9 @@ use std::sync::{Arc, Mutex};
 use hostile::epee::{self, Obj, Val};
 use hostile::{HostileNode, SnapshotNode, LOOKAHEAD, NETWORK, NETWORK_STR, SEED_W, SEED_W2};
 use monero_oxide::transaction::{NotPruned, Pruned, Transaction};
-use monero_rust::native::{create_transaction_with_rpc, StoredOutputData};
+use monero_rust::native::{create_transaction_with_rpc, FeePolicy, StoredOutputData};
 use monero_rust::scanner::{derive_address, scan_pool_update, MempoolView, Refresh};
-use monero_rust::WalletState;
+use monero_rust::{prepare_sweep_inputs_with_rpc, WalletState};
 use serde_json::{json, Value};
 
 type Node = HostileNode<SnapshotNode>;
@@ -609,6 +609,100 @@ async fn a_whole_pool_answer_drops_what_left_the_pool() {
         .outputs()
         .iter()
         .all(|o| o.tx_hash != hex::encode(id)));
+}
+
+fn in_the_pool_once(tx: PoolTx) -> Node {
+    let calls = Arc::new(Mutex::new(0));
+    pool_node(
+        move |r| {
+            let mut count = calls.lock().unwrap();
+            *count += 1;
+            full_pool(
+                if *count == 1 {
+                    vec![tx.clone()]
+                } else {
+                    vec![]
+                },
+                7,
+            )(r)
+        },
+        vec![],
+        honest_gettransactions,
+    )
+}
+
+async fn sweep_of(
+    node: &Node,
+    state: &WalletState,
+    output_key: &str,
+) -> Result<Vec<String>, String> {
+    let output = state
+        .outputs()
+        .iter()
+        .find(|o| o.output_key() == output_key)
+        .unwrap();
+    prepare_sweep_inputs_with_rpc(
+        &node.rpc(),
+        state.outputs(),
+        state.chain_height(),
+        Some(&[output_key.to_string()]),
+        Some(&state.pending_key_images()),
+        output.subaddress_index.unwrap_or_default().0,
+        FeePolicy::default(),
+    )
+    .await
+    .map(|prepared| prepared.spent_output_keys)
+}
+
+async fn spent_in_the_pool(node: &Node, view: &mut MempoolView) -> (WalletState, String) {
+    let mut state = synced_state().await;
+    let pool = refresh_pool(node, &state, view).await.unwrap();
+    state.add_outputs(pool.outputs.clone());
+    assert_eq!(state.add_pool_spends(&pool, 0), 1);
+    let spent = state
+        .pending_spends()
+        .values()
+        .next()
+        .unwrap()
+        .output_key
+        .clone();
+    assert!(sweep_of(node, &state, &spent).await.is_err());
+    (state, spent)
+}
+
+#[tokio::test]
+async fn an_output_spent_in_the_pool_is_released_when_the_transaction_leaves_it() {
+    let node = in_the_pool_once(pool_tx(&hostile::synced_wallet().await).await);
+    let mut view = MempoolView::new();
+    let (mut state, spent) = spent_in_the_pool(&node, &mut view).await;
+
+    refresh_pool(&node, &state, &mut view).await.unwrap();
+    state.retain_pool_outputs(|tx| view.contains(tx));
+    assert!(state.pending_key_images().is_empty());
+    assert_eq!(sweep_of(&node, &state, &spent).await.unwrap(), [spent]);
+}
+
+#[tokio::test]
+async fn an_output_spent_in_the_pool_stays_spent_when_the_transaction_is_mined() {
+    let tx = pool_tx(&hostile::synced_wallet().await).await;
+    let id = hex::encode(tx.id);
+    let node = in_the_pool_once(tx);
+    let mut view = MempoolView::new();
+    let (mut state, spent) = spent_in_the_pool(&node, &mut view).await;
+    let key_images: Vec<String> = state.pending_key_images().into_iter().collect();
+
+    let height = state.current_height + 1;
+    state.mark_spent_detecting_conflicts(&key_images, &[id], height);
+    refresh_pool(&node, &state, &mut view).await.unwrap();
+    state.retain_pool_outputs(|tx| view.contains(tx));
+    assert!(state.pending_key_images().is_empty());
+    let output = state
+        .outputs()
+        .iter()
+        .find(|o| o.output_key() == spent)
+        .unwrap();
+    assert!(output.spent && output.spent_height == Some(height));
+    assert!(sweep_of(&node, &state, &spent).await.is_err());
 }
 
 fn keys(result: &monero_rust::scanner::MempoolScanResult) -> Vec<(String, u64, u64)> {

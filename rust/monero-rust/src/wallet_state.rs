@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::monero_rpc::RpcClientKey;
 use crate::ring_db::{RingDatabase, RingPersister};
+use crate::scanner::MempoolScanResult;
 use crate::tx_builder::native::DecoySelection;
 use crate::wallet_output::WalletOutput;
 
@@ -281,6 +282,8 @@ pub struct WalletState {
     pub block_hashes: BlockHashChain,
     /// Outputs used in broadcast-but-unconfirmed transactions (key_image -> PendingSpend).
     pending_spends: HashMap<String, PendingSpend>,
+    /// Transactions of pending spends seen in the pool, released by `retain_pool_outputs`.
+    pool_txs: HashSet<String>,
     /// Transaction lifecycle tracking (tx_id -> TrackedTransaction).
     tracked_transactions: HashMap<String, TrackedTransaction>,
     /// Maps key_image -> tx_hash of the transaction that spent it, for conflict dedup.
@@ -314,6 +317,7 @@ impl WalletState {
             daemon_height: 0,
             block_hashes: BlockHashChain::new(),
             pending_spends: HashMap::new(),
+            pool_txs: HashSet::new(),
             tracked_transactions: HashMap::new(),
             spent_by_tx: HashMap::new(),
             rings_restored: false,
@@ -997,8 +1001,8 @@ impl WalletState {
         self.spent_by_tx.clear();
     }
 
-    /// Drop pool outputs whose transaction `in_pool` does not report, as wallet2
-    /// does; call after the refresh's blocks. Returns how many.
+    /// Drop pool outputs, and release pool spends, of transactions `in_pool` does not
+    /// report, as wallet2 does; call after the refresh's blocks. Returns how many outputs.
     pub fn retain_pool_outputs(&mut self, in_pool: impl Fn(&str) -> bool) -> usize {
         let before = self.outputs.len();
         self.outputs
@@ -1007,7 +1011,57 @@ impl WalletState {
         if dropped > 0 {
             self.rebuild_key_image_index();
         }
+        let left: HashSet<String> = self
+            .pool_txs
+            .iter()
+            .filter(|tx| !in_pool(tx))
+            .cloned()
+            .collect();
+        self.pool_txs.retain(|tx| !left.contains(tx));
+        self.pending_spends
+            .retain(|_, spend| !left.contains(&spend.tx_id));
         dropped
+    }
+
+    /// Mark outputs that pool transactions spend as pending until `retain_pool_outputs`
+    /// releases them, as wallet2 marks them spent (wallet2.cpp:2746). Returns how many are new.
+    pub fn add_pool_spends(&mut self, pool: &MempoolScanResult, now_secs: u64) -> usize {
+        let mut added = 0;
+        for (key_image, tx_id) in pool
+            .spent_key_images
+            .iter()
+            .zip(&pool.spent_key_image_tx_hashes)
+        {
+            let Some(&idx) = self
+                .key_image_index
+                .get(&crate::ring_db::canonical_key_image(key_image))
+            else {
+                continue;
+            };
+            let output = &self.outputs[idx];
+            if output.spent {
+                continue;
+            }
+            match self.pending_spends.get(&output.key_image) {
+                Some(spend) if &spend.tx_id != tx_id => continue,
+                Some(_) => {}
+                None => {
+                    self.pending_spends.insert(
+                        output.key_image.clone(),
+                        PendingSpend {
+                            tx_id: tx_id.clone(),
+                            key_image: output.key_image.clone(),
+                            output_key: output.output_key(),
+                            amount: output.amount,
+                            created_at_secs: now_secs,
+                        },
+                    );
+                    added += 1;
+                }
+            }
+            self.pool_txs.insert(tx_id.clone());
+        }
+        added
     }
 
     /// Mark outputs as spent by matching key images.
@@ -1440,7 +1494,10 @@ impl WalletState {
         let expired: Vec<String> = self
             .pending_spends
             .iter()
-            .filter(|(_, ps)| now_secs.saturating_sub(ps.created_at_secs) >= PENDING_SPEND_TTL_SECS)
+            .filter(|(_, ps)| {
+                now_secs.saturating_sub(ps.created_at_secs) >= PENDING_SPEND_TTL_SECS
+                    && !self.pool_txs.contains(&ps.tx_id)
+            })
             .map(|(ki, _)| ki.clone())
             .collect();
 
@@ -3066,6 +3123,48 @@ mod tests {
         assert_eq!(state.balance().unconfirmed, 2_000_000);
         assert_eq!(state.mark_spent_by_key_images(&["ki_gone".into()]), 0);
         assert_eq!(state.mark_spent_by_key_images(&["ki_mined".into()]), 1);
+    }
+
+    #[test]
+    fn pool_spends_hold_until_their_transaction_leaves_the_pool() {
+        let mut state = WalletState::new();
+        let mut outputs = Vec::new();
+        for (amount, ki) in [(1_000, "ki_a"), (2_000, "ki_b"), (3_000, "ki_c")] {
+            let mut output = make_output(amount, 50, ki);
+            output.key = format!("k_{ki}");
+            outputs.push(output);
+        }
+        state.add_outputs(outputs);
+        state.add_pending_spends(
+            "mine",
+            vec![make_pending_spend(
+                "mine",
+                "ki_b",
+                2_000,
+                PENDING_SPEND_TTL_SECS,
+            )],
+        );
+        state.add_pending_spends("sent", vec![make_pending_spend("sent", "ki_c", 3_000, 0)]);
+        let pool = MempoolScanResult {
+            tx_count: 2,
+            outputs: vec![],
+            spent_key_images: vec!["ki_a".into(), "ki_b".into(), "ki_c".into(), "ki_x".into()],
+            spent_key_image_tx_hashes: vec![
+                "other".into(),
+                "other".into(),
+                "sent".into(),
+                "other".into(),
+            ],
+        };
+        assert_eq!(state.add_pool_spends(&pool, 0), 1);
+        assert_eq!(state.pending_spends()["ki_a"].tx_id, "other");
+        assert_eq!(state.pending_spends()["ki_b"].tx_id, "mine");
+        assert!(state
+            .cleanup_expired_pending_spends(PENDING_SPEND_TTL_SECS)
+            .is_empty());
+
+        assert_eq!(state.retain_pool_outputs(|_| false), 0);
+        assert_eq!(state.pending_key_images(), ["ki_b".to_string()].into());
     }
 
     // ---- BlockHashChain tests ----
