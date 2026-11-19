@@ -87,9 +87,13 @@ struct TransactionResponse {
     tx_hash: String,
     as_hex: String,
     pruned_as_hex: String,
+    #[serde(default)]
+    prunable_hash: String,
 }
 #[derive(Deserialize, Debug)]
 struct TransactionsResponse {
+    #[serde(default)]
+    status: Option<String>,
     #[serde(default)]
     missed_tx: Vec<String>,
     txs: Vec<TransactionResponse>,
@@ -154,8 +158,10 @@ struct CompressedOutputDistribution {
 /// fee limit.
 pub const MAX_DAEMON_FEE_QUANTIZATION_MASK: u64 = 10_000;
 
+/// Why a call to the node failed.
 #[derive(Clone, PartialEq, Eq, Debug, Error)]
 pub enum RpcError {
+    /// A reply that could not be read, or a request that could not be written.
     #[error("internal error ({0})")]
     InternalError(&'static str),
     #[error("connection error")]
@@ -168,8 +174,13 @@ pub enum RpcError {
     TransactionsNotFound(Vec<[u8; 32]>),
     #[error("invalid point ({0})")]
     InvalidPoint(String),
-    #[error("pruned transaction")]
-    PrunedTransaction,
+    /// The node sent the transaction pruned.
+    #[error(
+        "transaction {} is pruned on this node; ask an unpruned node, or read it \
+         with a call that accepts pruned transactions",
+        hex::encode(.0)
+    )]
+    PrunedTransaction([u8; 32]),
     #[error("invalid transaction ({0:?})")]
     InvalidTransaction([u8; 32]),
     #[error("fee exceeds limit (per_weight: {per_weight}, limit: {limit})")]
@@ -180,12 +191,112 @@ pub enum RpcError {
     ZeroMask,
     #[error("fee mask exceeds limit (mask: {mask}, limit: {limit})")]
     MaskExceedsLimit { mask: u64, limit: u64 },
+    /// The reply's status was not "OK".
     #[error("node answered with status {0:?}")]
     NodeStatus(String),
     #[error("invalid fee estimate ({0})")]
     InvalidFeeEstimate(&'static str),
     #[error("reply exceeds the {limit} bytes allowed for this call")]
     ResponseTooLarge { limit: usize },
+    /// The node answered with an HTTP status other than 2xx.
+    #[error("node answered HTTP {status}{}", body_suffix(.body))]
+    HttpStatus { status: u16, body: String },
+    /// The node answered a JSON-RPC call with an error object.
+    #[error("node refused the call with JSON-RPC error {code} ({message:?})")]
+    JsonRpcError { code: i64, message: String },
+    /// Not sent: monerod drops a request over 1 MiB without a reply.
+    #[error("request of {size} bytes exceeds the {limit} bytes a node accepts")]
+    RequestTooLarge { size: usize, limit: usize },
+}
+
+/// The most characters of node-supplied text an error keeps.
+pub const MAX_ERROR_TEXT: usize = 128;
+
+/// The largest request body sent: monerod's 1 MiB limit less 4 KiB for headers.
+pub const MAX_REQUEST_BYTES: usize = 1_048_576 - 4096;
+
+const ERROR_BODY_BYTES: usize = 4 * MAX_ERROR_TEXT;
+
+fn body_suffix(body: &str) -> String {
+    if body.is_empty() {
+        String::new()
+    } else {
+        format!(" ({body:?})")
+    }
+}
+
+fn bounded_text(text: &[u8]) -> String {
+    let head = &text[..text.len().min(4 * MAX_ERROR_TEXT)];
+    let text: String = String::from_utf8_lossy(head)
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .take(MAX_ERROR_TEXT)
+        .collect();
+    text.trim().to_string()
+}
+
+impl RpcError {
+    /// An `HttpStatus` error with `body` cut to `MAX_ERROR_TEXT` characters.
+    pub fn http_status(status: u16, body: &[u8]) -> Self {
+        RpcError::HttpStatus {
+            status,
+            body: bounded_text(body),
+        }
+    }
+
+    /// A `NodeStatus` error with `status` cut to `MAX_ERROR_TEXT` characters.
+    pub fn node_status(status: &str) -> Self {
+        RpcError::NodeStatus(bounded_text(status.as_bytes()))
+    }
+}
+
+fn json_refusal(reply: &[u8]) -> Option<RpcError> {
+    #[derive(Deserialize)]
+    struct ErrorObject {
+        #[serde(default)]
+        code: i64,
+        #[serde(default)]
+        message: String,
+    }
+    #[derive(Deserialize)]
+    struct Status {
+        #[serde(default)]
+        status: Option<String>,
+    }
+    #[derive(Deserialize)]
+    struct Envelope {
+        #[serde(default)]
+        status: Option<String>,
+        #[serde(default)]
+        error: Option<ErrorObject>,
+        #[serde(default)]
+        result: Option<Status>,
+    }
+    let envelope: Envelope = serde_json::from_slice(reply).ok()?;
+    if let Some(error) = envelope.error {
+        return Some(RpcError::JsonRpcError {
+            code: error.code,
+            message: bounded_text(error.message.as_bytes()),
+        });
+    }
+    [
+        envelope.status,
+        envelope.result.and_then(|result| result.status),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|status| status != "OK")
+    .map(|status| RpcError::node_status(&status))
+}
+
+fn binary_refusal(reply: &[u8]) -> Option<RpcError> {
+    #[derive(Deserialize)]
+    struct Status {
+        #[serde(default)]
+        status: String,
+    }
+    let reply: Status = crate::safe_epee::from_bytes(reply).ok()?;
+    (!reply.status.is_empty() && reply.status != "OK").then(|| RpcError::node_status(&reply.status))
 }
 
 /// The highest fee per byte a correct daemon can report for each tier; a rate
@@ -215,7 +326,7 @@ fn require_ok_status(status: &str) -> Result<(), RpcError> {
     if status == "OK" {
         Ok(())
     } else {
-        Err(RpcError::NodeStatus(status.to_string()))
+        Err(RpcError::node_status(status))
     }
 }
 
@@ -313,8 +424,9 @@ fn parse_txpool_backlog(body: &[u8]) -> Result<Vec<BacklogEntry>, RpcError> {
         #[serde(default)]
         status: String,
     }
-    let reply: JsonRpcResponse<Status> = serde_json::from_slice(&json)
-        .map_err(|_| RpcError::InternalError("Failed to parse JSON response"))?;
+    let reply: JsonRpcResponse<Status> = serde_json::from_slice(&json).map_err(|_| {
+        json_refusal(&json).unwrap_or(RpcError::InternalError("Failed to parse JSON response"))
+    })?;
     require_ok_status(&reply.result.status)?;
 
     // wallet2 reads a partial record as an empty backlog.
@@ -645,6 +757,21 @@ impl HttpRpc {
         }
 
         let mut response = builder.send().await?;
+        let status = response.status();
+        if !status.is_success() {
+            let mut excerpt = Vec::new();
+            while excerpt.len() < ERROR_BODY_BYTES {
+                match response.chunk().await {
+                    Ok(Some(chunk)) => excerpt.extend_from_slice(&chunk),
+                    Ok(None) | Err(_) => break,
+                }
+            }
+            excerpt.truncate(ERROR_BODY_BYTES);
+            return Err(Failure::Final(RpcError::http_status(
+                status.as_u16(),
+                &excerpt,
+            )));
+        }
         let too_large = Failure::Final(RpcError::ResponseTooLarge { limit });
         if response
             .content_length()
@@ -988,6 +1115,16 @@ impl<R: RpcConnection> Rpc<R> {
         &self.2
     }
 
+    async fn send(&self, route: &str, body: Vec<u8>, limit: usize) -> Result<Vec<u8>, RpcError> {
+        if body.len() > MAX_REQUEST_BYTES {
+            return Err(RpcError::RequestTooLarge {
+                size: body.len(),
+                limit: MAX_REQUEST_BYTES,
+            });
+        }
+        self.0.post_limited(route, body, limit).await
+    }
+
     fn client(&self) -> String {
         self.2.signature()
     }
@@ -1035,13 +1172,8 @@ impl<R: RpcConnection> Rpc<R> {
                     .or_insert_with(|| Value::String(self.client()));
             }
         }
-        self.call_tail(
-            route,
-            self.0
-                .post_limited(route, epee_json(&params), limit)
-                .await?,
-        )
-        .await
+        self.call_tail(route, self.send(route, epee_json(&params), limit).await?)
+            .await
     }
 
     /// Perform a JSON-RPC call with the specified method with the provided parameters.
@@ -1074,7 +1206,7 @@ impl<R: RpcConnection> Rpc<R> {
         params: Vec<u8>,
         limit: usize,
     ) -> Result<Response, RpcError> {
-        self.call_tail(route, self.0.post_limited(route, params, limit).await?)
+        self.call_tail(route, self.send(route, params, limit).await?)
             .await
     }
 
@@ -1085,10 +1217,15 @@ impl<R: RpcConnection> Rpc<R> {
     ) -> Result<Response, RpcError> {
         Ok(if !is_binary_route(route) {
             serde_json::from_str(std::str::from_utf8(&res).map_err(|_| RpcError::InvalidNode)?)
-                .map_err(|_| RpcError::InternalError("Failed to parse JSON response"))?
+                .map_err(|_| {
+                    json_refusal(&res)
+                        .unwrap_or(RpcError::InternalError("Failed to parse JSON response"))
+                })?
         } else {
-            crate::safe_epee::from_bytes(&res)
-                .map_err(|_| RpcError::InternalError("Failed to parse binary response"))?
+            crate::safe_epee::from_bytes(&res).map_err(|_| {
+                binary_refusal(&res)
+                    .unwrap_or(RpcError::InternalError("Failed to parse binary response"))
+            })?
         })
     }
 
@@ -1168,6 +1305,9 @@ impl<R: RpcConnection> Rpc<R> {
                     transactions_limit(slice.len()),
                 )
                 .await?;
+            if let Some(status) = &txs.status {
+                require_ok_status(status)?;
+            }
 
             if !txs.missed_tx.is_empty() {
                 for hash in &txs.missed_tx {
@@ -1203,26 +1343,29 @@ impl<R: RpcConnection> Rpc<R> {
             .iter()
             .enumerate()
             .map(|(i, res)| {
-                let tx = Transaction::<NotPruned>::read::<&[u8]>(
-                    &mut rpc_hex(if !res.as_hex.is_empty() {
-                        &res.as_hex
-                    } else {
-                        &res.pruned_as_hex
-                    })?
-                    .as_ref(),
-                )
-                .map_err(|_| match hash_hex(&res.tx_hash) {
-                    Ok(hash) => RpcError::InvalidTransaction(hash),
-                    Err(err) => err,
+                let blob = rpc_hex(if !res.as_hex.is_empty() {
+                    &res.as_hex
+                } else {
+                    &res.pruned_as_hex
                 })?;
+                let tx = Transaction::<NotPruned>::read::<&[u8]>(&mut blob.as_ref());
 
-                // https://github.com/monero-project/monero/issues/8311
-                if res.as_hex.is_empty() {
-                    match tx.prefix().inputs.first() {
-                        Some(Input::Gen { .. }) => (),
-                        _ => Err(RpcError::PrunedTransaction)?,
+                // monerod sends a whole miner transaction in the pruned field
+                // (monero-project/monero#8311); anything else there is pruned.
+                let tx = match tx {
+                    Ok(tx) if !res.as_hex.is_empty() => tx,
+                    Ok(tx) if matches!(tx.prefix().inputs.first(), Some(Input::Gen { .. })) => tx,
+                    Ok(_) => return Err(RpcError::PrunedTransaction(hashes[i])),
+                    Err(_) if res.as_hex.is_empty() => {
+                        return Err(pruned_entry_error(&blob, &res.prunable_hash, hashes[i]))
                     }
-                }
+                    Err(_) => {
+                        return Err(match hash_hex(&res.tx_hash) {
+                            Ok(hash) => RpcError::InvalidTransaction(hash),
+                            Err(err) => err,
+                        })
+                    }
+                };
 
                 // This provides resilience against invalid/malicious nodes
                 if tx.hash() != hashes[i] {
@@ -1438,6 +1581,7 @@ impl<R: RpcConnection> Rpc<R> {
             )
             .await?;
 
+        require_ok_status(&indexes.status)?;
         Ok(indexes.o_indexes)
     }
 
@@ -1467,6 +1611,7 @@ impl<R: RpcConnection> Rpc<R> {
                 })?,
             )
             .await?;
+        require_ok_status(&response.status)?;
         let [distribution] = response.distributions.as_slice() else {
             return Err(RpcError::InvalidNode);
         };
@@ -1537,6 +1682,7 @@ impl<R: RpcConnection> Rpc<R> {
                 )
                 .await?;
 
+            require_ok_status(&outs.status)?;
             if outs.outs.len() != indexes.len() {
                 return Err(RpcError::InvalidNode);
             }
@@ -1590,8 +1736,7 @@ impl<R: RpcConnection> Rpc<R> {
             self.with_client("get_txpool_backlog", None),
         ));
         let limit = response_limit("json_rpc", Some("get_txpool_backlog"));
-        let backlog =
-            parse_txpool_backlog(&self.0.post_limited("json_rpc", request, limit).await?)?;
+        let backlog = parse_txpool_backlog(&self.send("json_rpc", request, limit).await?)?;
         let info = self.node_info().await?;
         let full_reward_zone = info.block_weight_limit / 2;
         if full_reward_zone == 0 {
@@ -1905,10 +2050,7 @@ impl<R: RpcConnection> Rpc<R> {
     pub async fn get_pool_hashes(&self) -> Result<Vec<[u8; 32]>, RpcError> {
         let route = "get_transaction_pool_hashes.bin";
         let body = epee_json(&json!({ "client": self.client() }));
-        let reply = self
-            .0
-            .post_limited(route, body, response_limit(route, None))
-            .await?;
+        let reply = self.send(route, body, response_limit(route, None)).await?;
         let status = epee_json_string(&reply, "status").ok_or(RpcError::InvalidNode)?;
         require_ok_status(std::str::from_utf8(&status).map_err(|_| RpcError::InvalidNode)?)?;
         let present = reply
@@ -2117,9 +2259,7 @@ impl<R: RpcConnection> Rpc<R> {
         let full: GetBlocksFastFullResponse =
             self.bin_call_limited("getblocks.bin", body, limit).await?;
 
-        if full.status != "OK" {
-            return Err(RpcError::InvalidNode);
-        }
+        require_ok_status(&full.status)?;
         // A pruned reply to an unpruned request would skip the check that each
         // transaction is the one its block lists.
         if !prune && full.blocks.iter().any(|block| block.pruned) {
@@ -2207,6 +2347,24 @@ fn transactions_limit(count: usize) -> usize {
         .saturating_add(1)
         .saturating_mul(MIB)
         .min(MAX_RESPONSE_BYTES)
+}
+
+fn pruned_entry_error(blob: &[u8], prunable_hash: &str, hash: [u8; 32]) -> RpcError {
+    let prunable_hash = if prunable_hash.is_empty() {
+        [0u8; 32]
+    } else {
+        match hash_hex(prunable_hash) {
+            Ok(prunable_hash) => prunable_hash,
+            Err(error) => return error,
+        }
+    };
+    let mut with_hash = blob.to_vec();
+    with_hash.extend_from_slice(&prunable_hash);
+    match crate::scanner::parse_pruned_tx_blob(&with_hash) {
+        Some((Some(id), _)) if id != hash => RpcError::InvalidNode,
+        Some(_) => RpcError::PrunedTransaction(hash),
+        None => RpcError::InvalidTransaction(hash),
+    }
 }
 
 /// Parse the additional timelock out of a transaction prefix: the version
