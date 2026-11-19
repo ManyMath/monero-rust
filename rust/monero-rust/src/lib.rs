@@ -82,6 +82,7 @@ pub use key_image_import::{
 // -- Scanning --
 pub use monero_wallet::address::{MoneroAddress, Network};
 pub use scanner::{
+    cached_scanner_for_wallet,
     daemon_height,
     // Key derivation
     derive_address,

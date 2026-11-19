@@ -577,6 +577,18 @@ impl WalletState {
             .collect()
     }
 
+    /// Every (account, index) paid to; feed it to `cached_scanner_for_wallet`.
+    pub fn used_subaddresses(&self) -> Vec<(u32, u32)> {
+        let used: HashSet<(u32, u32)> = self
+            .outputs
+            .iter()
+            .filter_map(|output| output.subaddress_index)
+            .collect();
+        let mut used: Vec<(u32, u32)> = used.into_iter().collect();
+        used.sort_unstable();
+        used
+    }
+
     /// Get all outputs (including spent).
     pub fn outputs(&self) -> &[WalletOutput] {
         &self.outputs

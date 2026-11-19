@@ -27,8 +27,8 @@ mod tests {
 
         assert_eq!(config.mnemonic, TEST_WALLET_1_SEED);
         assert_eq!(config.network, Network::Mainnet);
-        assert_eq!(config.lookahead.account, 0);
-        assert_eq!(config.lookahead.subaddress, 20);
+        assert_eq!(config.lookahead.account, 49);
+        assert_eq!(config.lookahead.subaddress, 199);
     }
 
     #[test]

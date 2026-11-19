@@ -267,7 +267,6 @@ async fn subaddress_outputs_inside_the_lookahead_are_labelled() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: the expanded subaddress window cannot be rebuilt for a new scanner"]
 async fn lookahead_expansion_carries_over_to_the_next_batch() {
     let first = send_output(&Recipient::of(SEED, 0, 4), Scalar::from(3001u64), 0, XMR);
     let second = send_output(
@@ -297,19 +296,25 @@ async fn lookahead_expansion_carries_over_to_the_next_batch() {
         )],
     );
 
+    let mut state = WalletState::new();
     let mut found = Vec::new();
     for height in [100u64, 101] {
+        let scanner =
+            monero_rust::cached_scanner_for_wallet(SEED, LOOKAHEAD, "", &state.used_subaddresses())
+                .await
+                .unwrap();
         let (results, _) = process_batch_response(
             chain.response_range(height, height + 1),
             height,
             SEED,
             Network::Mainnet,
             LOOKAHEAD,
-            None,
+            Some(scanner),
             "",
         )
         .await
         .unwrap();
+        apply_results(&mut state, &results);
         found.extend(all_outputs(&results));
     }
     let total: u64 = found.iter().map(|o| o.amount).sum();

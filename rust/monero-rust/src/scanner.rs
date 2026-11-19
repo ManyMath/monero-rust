@@ -194,9 +194,11 @@ pub struct Lookahead {
     pub subaddress: u32,
 }
 
+/// wallet2's default subaddress window (`SUBADDRESS_LOOKAHEAD_MAJOR` 50,
+/// `SUBADDRESS_LOOKAHEAD_MINOR` 200); the bounds here are inclusive.
 pub const DEFAULT_LOOKAHEAD: Lookahead = Lookahead {
-    account: 0,
-    subaddress: 20,
+    account: 49,
+    subaddress: 199,
 };
 
 pub const WALLET_CLI_SOFTWARE_LOOKAHEAD: Lookahead = Lookahead {
@@ -382,6 +384,43 @@ fn expand_subaddresses_if_needed(
     }
 
     expanded
+}
+
+/// Build the scanner for a wallet whose earlier receipts are known. Pass
+/// `WalletState::used_subaddresses` to get the window wallet2 would have.
+pub async fn cached_scanner_for_wallet(
+    mnemonic: &str,
+    lookahead: Lookahead,
+    passphrase: &str,
+    used_subaddresses: &[(u32, u32)],
+) -> Result<CachedScanner, String> {
+    let view_only = parse_view_only_keys(mnemonic);
+    let (spend_point, view_scalar, spend_scalar) = match view_only {
+        Some((view_scalar, spend_point)) => (spend_point, view_scalar, None),
+        None => {
+            let seed = resolve_seed(mnemonic)?;
+            (
+                spend_key_from_seed(&seed, passphrase),
+                view_key_from_seed(&seed, passphrase),
+                Some(spend_key_scalar_from_seed(&seed, passphrase)),
+            )
+        }
+    };
+    let mut scanner = oxide_scanner_from_keys(&spend_point, &view_scalar)?;
+    register_subaddresses_async(&mut scanner, lookahead).await;
+    let mut watermark = SubaddressWatermark::new(lookahead);
+    for &(account, address) in used_subaddresses {
+        if let Some(found) = SubaddressIndex::new(account, address) {
+            expand_subaddresses_if_needed(&mut scanner, &mut watermark, lookahead, found);
+        }
+    }
+    Ok(CachedScanner {
+        scanner,
+        lookahead,
+        fingerprint: spend_point.compress().to_bytes(),
+        watermark,
+        spend_scalar,
+    })
 }
 
 impl CachedScanner {
@@ -2544,10 +2583,12 @@ mod tests {
     #[test]
     fn test_default_lookahead_indices() {
         let indices = build_subaddress_indices(DEFAULT_LOOKAHEAD);
-        assert_eq!(indices.len(), 20);
+        assert_eq!(indices.len(), 50 * 200 - 1);
         assert!(indices.contains(&SubaddressIndex::new(0, 1).unwrap()));
-        assert!(indices.contains(&SubaddressIndex::new(0, 20).unwrap()));
-        assert!(!indices.contains(&SubaddressIndex::new(1, 0).unwrap()));
+        assert!(indices.contains(&SubaddressIndex::new(0, 199).unwrap()));
+        assert!(indices.contains(&SubaddressIndex::new(49, 0).unwrap()));
+        assert!(!indices.contains(&SubaddressIndex::new(0, 200).unwrap()));
+        assert!(!indices.contains(&SubaddressIndex::new(50, 0).unwrap()));
     }
 
     #[test]
@@ -2561,8 +2602,8 @@ mod tests {
     #[test]
     fn test_lookahead_constants() {
         // Verify DEFAULT_LOOKAHEAD structure
-        assert_eq!(DEFAULT_LOOKAHEAD.account, 0);
-        assert_eq!(DEFAULT_LOOKAHEAD.subaddress, 20);
+        assert_eq!(DEFAULT_LOOKAHEAD.account, 49);
+        assert_eq!(DEFAULT_LOOKAHEAD.subaddress, 199);
 
         // Verify WALLET_CLI_SOFTWARE_LOOKAHEAD
         assert_eq!(WALLET_CLI_SOFTWARE_LOOKAHEAD.account, 50);
