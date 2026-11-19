@@ -140,4 +140,18 @@ async fn live_history_negotiation_matches_the_snapshot_node() {
     .await
     .expect("history ending in the real genesis hash");
     assert_eq!(with_genesis.1, 800);
+
+    let without_genesis = scan_blocks_batch_with_history(
+        &live.rpc(),
+        0,
+        &[known(800)],
+        SEED_W,
+        NETWORK,
+        hostile::LOOKAHEAD,
+        false,
+        "",
+    )
+    .await
+    .expect("history without a genesis entry");
+    assert_eq!(without_genesis.1, 800);
 }

@@ -1871,17 +1871,8 @@ fn hex_to_hash(hex_str: &str) -> Result<[u8; 32], String> {
     Ok(arr)
 }
 
-/// Scan a batch of blocks using a history of known hashes for fork-point detection.
-///
-/// Unlike `scan_blocks_batch` which sends only one hash, this sends a sparse
-/// exponential history of hashes (matching wallet2's algorithm) so the daemon
-/// can detect forks further back in the chain.
-///
-/// Returns `(results, actual_start_height)`; the daemon may return blocks
-/// starting earlier than `start_height` if a fork was detected. With nonempty
-/// history, `start_height = 0` asks the daemon to select a common starting block;
-/// its hash and height must match an entry in `known_hashes`. Empty history keeps
-/// zero as a literal genesis request.
+/// Scan a batch of blocks, sending `known_hashes` as the block id history.
+/// Returns the results and the height the reply starts at.
 pub async fn scan_blocks_batch_with_history<R: RpcConnection>(
     rpc: &Rpc<R>,
     start_height: u64,
@@ -1926,20 +1917,19 @@ pub async fn scan_blocks_batch_with_history_url(
     .await
 }
 
-/// Fetch a batch of blocks using known hash history, without scanning.
-///
-/// This is the fetch-only half for double-buffered pipelining with reorg awareness.
+/// Fetch a batch of blocks using known hash history, without scanning; see
+/// `scan_blocks_batch_with_history`.
 pub async fn fetch_blocks_batch_with_history<R: RpcConnection>(
     rpc: &Rpc<R>,
     start_height: u64,
     known_hashes: &[(u64, String)],
     prune: bool,
 ) -> Result<(FetchedBlocks, u64), String> {
-    let requested_history = known_hashes
+    let mut requested_history = known_hashes
         .iter()
         .map(|(height, hash)| Ok((*height, hex_to_hash(hash)?)))
         .collect::<Result<Vec<_>, String>>()?;
-    let block_ids: Vec<[u8; 32]> = if requested_history.is_empty() {
+    let mut block_ids: Vec<[u8; 32]> = if requested_history.is_empty() {
         let anchor_height = start_height.saturating_sub(1);
         let hash = rpc
             .get_block_hash(anchor_height as usize)
@@ -1949,6 +1939,19 @@ pub async fn fetch_blocks_batch_with_history<R: RpcConnection>(
     } else {
         requested_history.iter().map(|(_, hash)| *hash).collect()
     };
+    // monerod refuses a list that does not end in its genesis id, and blocks a
+    // client that keeps sending one.
+    if start_height == 0 && !requested_history.is_empty() {
+        let genesis = rpc
+            .genesis_hash()
+            .await
+            .map_err(|e| format!("Failed to get the genesis block hash: {:?}", e))?;
+        requested_history.retain(|(height, hash)| *height != 0 || *hash == genesis);
+        block_ids = requested_history.iter().map(|(_, hash)| *hash).collect();
+        if block_ids.last() != Some(&genesis) {
+            block_ids.push(genesis);
+        }
+    }
     let response = rpc
         .get_blocks_fast(&block_ids, start_height, prune)
         .await

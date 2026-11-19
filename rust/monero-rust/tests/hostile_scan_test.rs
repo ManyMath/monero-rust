@@ -461,8 +461,10 @@ async fn fabricated_reorg_below_the_restore_height_is_refused() {
 
     let deep = SnapshotNode::new();
     deep.switch_chain(Chain::Deep);
-    let node = Node::with(honest, "reorg-below-restore-height", move |call, _| {
-        assert!(call.is("getblocks.bin"));
+    let node = Node::with(honest, "reorg-below-restore-height", move |call, reply| {
+        if !call.is("getblocks.bin") {
+            return reply;
+        }
         let request = epee::encode(&vec![
             ("block_ids".into(), Val::Str(vec![])),
             ("start_height".into(), Val::U64(650)),
@@ -503,6 +505,74 @@ async fn real_reorg_below_the_restore_height_leaves_a_consistent_wallet() {
                 .iter()
                 .all(|n| n == "getblocks.bin" || n == "json_rpc:get_block_header_by_height"));
         }
+    }
+}
+
+#[tokio::test]
+async fn history_of_a_restored_wallet_is_completed_with_the_genesis_id() {
+    let honest = SnapshotNode::new();
+    honest.set_height(820);
+    let node = Node::honest(honest.clone());
+    let mut wallet = Wallet::new(SEED_W);
+    wallet.restore_height = 800;
+    wallet.refresh(&node.rpc(), 8).await.unwrap();
+    assert_eq!(wallet.state.current_height, 819);
+    assert_eq!(wallet.state.block_hashes.get_hash(0), None);
+
+    honest.set_height(850);
+    node.clear_log();
+    wallet.refresh(&node.rpc(), 8).await.unwrap();
+    assert_eq!(wallet.state.current_height, 849);
+    let genesis_requests: Vec<_> = node
+        .requests("json_rpc:get_block_header_by_height")
+        .iter()
+        .map(|request| request.json()["params"]["height"].as_u64())
+        .collect();
+    assert_eq!(
+        genesis_requests,
+        vec![Some(0)],
+        "asked for once per connection"
+    );
+    assert!(node.count("getblocks.bin") >= 2);
+    assert_eq!(fingerprint(&wallet).len(), 50);
+    assert_history_requests_end_in_genesis(&node);
+}
+
+fn assert_history_requests_end_in_genesis(node: &Node) {
+    let genesis = hex::decode(&hostile::snapshot().chain[0].hash).unwrap();
+    for request in node.requests("getblocks.bin") {
+        let request = request.epee();
+        if epee::get(&request, "start_height").map_or(0, Val::u64) != 0 {
+            continue;
+        }
+        let ids = epee::get(&request, "block_ids").unwrap().bytes();
+        assert_eq!(&ids[ids.len() - 32..], &genesis[..]);
+    }
+}
+
+#[tokio::test]
+async fn stale_height_zero_hash_is_never_sent_to_the_daemon() {
+    let honest = SnapshotNode::new();
+    let node = Node::honest(honest.clone());
+    let mut wallet = hostile::synced_wallet().await;
+    wallet.state.record_block_hash(0, "9c".repeat(32));
+    honest.switch_chain(Chain::Shallow);
+    wallet.refresh(&node.rpc(), 10).await.unwrap();
+    assert_eq!(wallet.state.current_height, 854);
+    assert_history_requests_end_in_genesis(&node);
+    for request in node.requests("getblocks.bin") {
+        let reply = futures::executor::block_on(monero_rust::monero_rpc::RpcConnection::post(
+            &honest,
+            "getblocks.bin",
+            request.body.clone(),
+        ))
+        .unwrap();
+        assert_eq!(
+            epee::get(&epee::decode(&reply).unwrap(), "status")
+                .unwrap()
+                .bytes(),
+            b"OK"
+        );
     }
 }
 

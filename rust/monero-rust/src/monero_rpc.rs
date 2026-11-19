@@ -479,6 +479,7 @@ struct NodeCacheState {
     wallet_height: Option<(u64, u64)>,
     info: Option<(u64, NodeInfo)>,
     fork_version: Option<(u64, usize)>,
+    genesis: Option<[u8; 32]>,
 }
 
 fn is_recent(at: u64, now: Option<u64>) -> bool {
@@ -769,6 +770,18 @@ impl<R: RpcConnection> Rpc<R> {
                 prefix_timelock(&data)
             })
             .collect()
+    }
+
+    /// The id of the node's genesis block, asked for once per `Rpc`. monerod
+    /// refuses, and counts against the client, a block id list that does not
+    /// end in it.
+    pub async fn genesis_hash(&self) -> Result<[u8; 32], RpcError> {
+        if let Some(hash) = self.1.state().genesis {
+            return Ok(hash);
+        }
+        let hash = self.get_block_hash(0).await?;
+        self.1.state().genesis = Some(hash);
+        Ok(hash)
     }
 
     /// Get the hash of a block from the node by the block's number.

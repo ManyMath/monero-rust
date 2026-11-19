@@ -710,7 +710,6 @@ pub struct Wallet {
     pub state: WalletState,
     pub restore_height: u64,
     pub reorgs: Vec<monero_rust::ReorgInfo>,
-    genesis: String,
     started: bool,
 }
 
@@ -721,7 +720,6 @@ impl Wallet {
             state: WalletState::new(),
             restore_height: 0,
             reorgs: Vec::new(),
-            genesis: snapshot().chain[0].hash.clone(),
             started: false,
         }
     }
@@ -738,7 +736,6 @@ impl Wallet {
         for (height, hash) in &batch.block_hashes {
             self.state.record_block_hash(*height, hash.clone());
         }
-        self.state.record_block_hash(0, self.genesis.clone());
         self.state.current_height = batch.batch_end_height - 1;
         self.state.daemon_height = batch.daemon_height;
         self.started = true;
