@@ -160,7 +160,7 @@ async fn json_rpc_refusals_are_reported() {
 
 #[tokio::test]
 async fn an_unreadable_reply_without_a_refusal_is_a_parse_error() {
-    let rpc = json_node(json!({ "status": "OK" }));
+    let rpc = json_node(json!({ "status": "OK", "txs": "none" }));
     assert_eq!(
         rpc.get_transactions(&[[1; 32]]).await.unwrap_err(),
         RpcError::InternalError("Failed to parse JSON response")

@@ -96,6 +96,7 @@ struct TransactionsResponse {
     status: Option<String>,
     #[serde(default)]
     missed_tx: Vec<String>,
+    #[serde(default)]
     txs: Vec<TransactionResponse>,
 }
 

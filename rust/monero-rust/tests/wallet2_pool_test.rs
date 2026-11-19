@@ -784,7 +784,7 @@ async fn whole_pool_is_read_in_bounded_slices() {
         move |call, reply| match call.route.as_str() {
             "get_transaction_pool_hashes.bin" => Ok(hostile::pool_hashes_reply(&[id])),
             "get_transactions" => Ok(serde_json::to_vec(&json!({
-                "status": "OK", "txs": [], "missed_tx": [hex::encode(id)],
+                "status": "OK", "missed_tx": [hex::encode(id)],
             }))
             .unwrap()),
             _ => reply,

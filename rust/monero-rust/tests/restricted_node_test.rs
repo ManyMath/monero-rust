@@ -90,7 +90,11 @@ impl RestrictedNode {
                 None => missed.push(id.to_string()),
             }
         }
-        let mut reply = json!({ "status": "OK", "untrusted": false, "txs": txs });
+        // monerod leaves out an empty array.
+        let mut reply = json!({ "status": "OK", "untrusted": false });
+        if !txs.is_empty() {
+            reply["txs"] = json!(txs);
+        }
         if !missed.is_empty() {
             reply["missed_tx"] = json!(missed);
         }
@@ -217,6 +221,22 @@ async fn missing_transactions_are_reported_from_every_slice() {
         RpcError::TransactionsNotFound(vec![[0xaa; 32], [0xbb; 32]])
     );
     assert_eq!(transaction_requests(&node).len(), 3);
+}
+
+#[tokio::test]
+async fn a_slice_the_node_has_none_of_is_reported_as_not_found() {
+    let txs: Vec<Transaction> = (0..100).map(make_tx).collect();
+    let rpc = Rpc::new_with_connection(RestrictedNode::with_txs(&txs));
+    assert_eq!(
+        rpc.get_transactions(&[[0xaa; 32]]).await.unwrap_err(),
+        RpcError::TransactionsNotFound(vec![[0xaa; 32]])
+    );
+    let mut hashes: Vec<[u8; 32]> = txs.iter().map(Transaction::hash).collect();
+    hashes.push([0xbb; 32]);
+    assert_eq!(
+        rpc.get_transactions(&hashes).await.unwrap_err(),
+        RpcError::TransactionsNotFound(vec![[0xbb; 32]])
+    );
 }
 
 #[tokio::test]
