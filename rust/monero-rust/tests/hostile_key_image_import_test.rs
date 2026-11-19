@@ -248,7 +248,6 @@ fn larger_output_to_a_held_key_takes_the_earlier_export_position() {
 }
 
 #[test]
-#[ignore = "known defect: signed txsets carry bare hex key images where wallet2 writes <hex>"]
 fn signed_txset_key_images_text_matches_wallet2() {
     let hot = hot_keys();
     let unsigned = vector_unsigned_txset();

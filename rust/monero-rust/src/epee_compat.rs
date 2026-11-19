@@ -449,16 +449,7 @@ pub fn build_signed_monero_txset(request: BuildSignedTxSetRequest<'_>) -> Result
             remaining_spent_key_images.remove(position);
         }
 
-        let key_images_text = spent_key_images
-            .iter()
-            .map(hex::encode)
-            .collect::<Vec<_>>()
-            .join(" ");
-        let key_images_text = if key_images_text.is_empty() {
-            key_images_text
-        } else {
-            format!("{key_images_text} ")
-        };
+        let key_images_text = wallet2_key_images_text(&spent_key_images);
         pending.push(Pending {
             tx_blob,
             fee,
@@ -501,6 +492,15 @@ pub struct ExportedKeyImage {
     pub key_image: String,
     pub tx_hash: String,
     pub output_index: u8,
+}
+
+/// wallet2's `pending_tx::key_images` text, `<hex> ` per input. wallet2 compares
+/// it when it loads a signed txset, so the brackets and spaces matter.
+pub(crate) fn wallet2_key_images_text(key_images: &[[u8; 32]]) -> String {
+    key_images
+        .iter()
+        .map(|key_image| format!("<{}> ", hex::encode(key_image)))
+        .collect()
 }
 
 pub fn wrap_with_magic(magic: &[u8], data: &[u8]) -> Vec<u8> {
@@ -1826,6 +1826,15 @@ mod wasm_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn key_images_text_is_written_the_way_wallet2_prints_key_images() {
+        assert_eq!(wallet2_key_images_text(&[]), "");
+        assert_eq!(
+            wallet2_key_images_text(&[[0x11; 32], [0xab; 32]]),
+            format!("<{}> <{}> ", "11".repeat(32), "ab".repeat(32))
+        );
+    }
 
     #[test]
     fn test_magic_wrap_strip_roundtrip() {
