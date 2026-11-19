@@ -743,6 +743,12 @@ fn check_spent_status(requested: usize, statuses: Vec<u32>) -> Result<Vec<u32>, 
     Ok(statuses)
 }
 
+/// Key images per `is_key_image_spent` request, as wallet2's `rescan_spent`;
+/// monerod refuses a body over 1 MB.
+const KEY_IMAGES_PER_REQUEST: usize = 1000;
+
+/// The spent status of each key image, in order: 0 unspent, 1 spent in a
+/// block, 2 spent in the pool.
 pub async fn key_image_spent_status<R: RpcConnection>(
     rpc: &Rpc<R>,
     key_images: &[String],
@@ -756,17 +762,21 @@ pub async fn key_image_spent_status<R: RpcConnection>(
         spent_status: Vec<u32>,
     }
 
-    let params = Req {
-        key_images: key_images.to_vec(),
-    };
-
-    let resp: Resp = rpc
-        .rpc_call("is_key_image_spent", Some(params))
-        .await
-        .map_err(|e| format!("RPC error: {:?}", e))?;
-    check_spent_status(key_images.len(), resp.spent_status)
+    let mut statuses = Vec::with_capacity(key_images.len());
+    for slice in key_images.chunks(KEY_IMAGES_PER_REQUEST) {
+        let params = Req {
+            key_images: slice.to_vec(),
+        };
+        let resp: Resp = rpc
+            .rpc_call("is_key_image_spent", Some(params))
+            .await
+            .map_err(|e| format!("RPC error: {:?}", e))?;
+        statuses.extend(check_spent_status(slice.len(), resp.spent_status)?);
+    }
+    Ok(statuses)
 }
 
+/// `key_image_spent_status` through a new connection to `node_url`.
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn is_key_image_spent(node_url: &str, key_images: &[String]) -> Result<Vec<u32>, String> {
     crate::validation::validate_node_url(node_url).map_err(|e| e.to_string())?;

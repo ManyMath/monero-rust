@@ -189,3 +189,75 @@ async fn block_and_pool_requests_are_wallet2s() {
     assert_same_request(&requests[1], &incremental);
     assert_same_request(&requests[2], &wallet2("pool_hashes"));
 }
+
+#[derive(Clone, Debug, Default)]
+struct KeyImageNode(Arc<Mutex<Vec<usize>>>);
+
+#[async_trait]
+impl RpcConnection for KeyImageNode {
+    async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
+        assert_eq!(route, "is_key_image_spent");
+        if body.len() > 1_048_576 {
+            return Err(RpcError::ConnectionError);
+        }
+        let request: Value = serde_json::from_slice(&body).unwrap();
+        let images = request["key_images"].as_array().unwrap();
+        self.0.lock().unwrap().push(images.len());
+        let statuses: Vec<u64> = images
+            .iter()
+            .map(|image| u64::from_str_radix(&image.as_str().unwrap()[56..], 16).unwrap() % 3)
+            .collect();
+        Ok(
+            serde_json::to_vec(&serde_json::json!({ "spent_status": statuses, "status": "OK" }))
+                .unwrap(),
+        )
+    }
+}
+
+#[tokio::test]
+async fn key_images_of_a_large_wallet_are_checked_in_slices_that_fit() {
+    let images: Vec<String> = (0..36_189u64).map(|n| format!("{n:064x}")).collect();
+    let node = KeyImageNode::default();
+    let statuses = monero_rust::scanner::key_image_spent_status(
+        &Rpc::new_with_connection(node.clone()),
+        &images,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        statuses,
+        (0..36_189u64).map(|n| (n % 3) as u32).collect::<Vec<_>>()
+    );
+    let slices = node.0.lock().unwrap().clone();
+    assert_eq!(slices.len(), 37);
+    assert!(slices.iter().all(|&count| count <= 1000));
+}
+
+#[tokio::test]
+async fn a_failed_key_image_slice_fails_the_whole_check() {
+    #[derive(Clone, Debug, Default)]
+    struct Flaky(Arc<Mutex<usize>>);
+    #[async_trait]
+    impl RpcConnection for Flaky {
+        async fn post(&self, _: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
+            let mut calls = self.0.lock().unwrap();
+            *calls += 1;
+            if *calls == 2 {
+                return Err(RpcError::ConnectionError);
+            }
+            let request: Value = serde_json::from_slice(&body).unwrap();
+            let count = request["key_images"].as_array().unwrap().len();
+            Ok(serde_json::to_vec(
+                &serde_json::json!({ "spent_status": vec![0; count], "status": "OK" }),
+            )
+            .unwrap())
+        }
+    }
+    let images: Vec<String> = (0..2500u64).map(|n| format!("{n:064x}")).collect();
+    assert!(monero_rust::scanner::key_image_spent_status(
+        &Rpc::new_with_connection(Flaky::default()),
+        &images
+    )
+    .await
+    .is_err());
+}
