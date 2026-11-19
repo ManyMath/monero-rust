@@ -339,6 +339,20 @@ pub fn process_batch_with_reorg_detection(
         }));
     }
 
+    let received: std::collections::HashMap<&str, Option<u64>> = batch_results
+        .iter()
+        .flat_map(|result| &result.outputs)
+        .filter(|output| !output.key_image.is_empty())
+        .map(|output| (output.key_image.as_str(), output.global_index))
+        .collect();
+    for result in batch_results {
+        wallet_state.learn_spent_rings_of(
+            &received,
+            &result.spent_key_images,
+            &result.spent_key_image_rings,
+        );
+    }
+
     let batch = process_single_wallet_batch(
         batch_results,
         accounts_to_scan,
@@ -446,6 +460,7 @@ mod tests {
             daemon_height: 1000,
             spent_key_images,
             spent_key_image_tx_hashes: vec![String::new(); tx_hashes_len],
+            spent_key_image_rings: vec![],
         }
     }
 
@@ -673,6 +688,45 @@ mod tests {
     }
 
     // ---- process_batch_with_reorg_detection ----
+
+    #[test]
+    fn batch_teaches_wallet_state_the_rings_of_its_own_spends() {
+        let mut state = WalletState::new();
+        let mut held = make_output(1, 90, "held", 0);
+        held.global_index = Some(40);
+        state.add_outputs(vec![held]);
+
+        let mut fresh = make_output(1, 100, "fresh", 0);
+        fresh.global_index = Some(77);
+        let mut received = make_block_result(100, vec![fresh], vec![]);
+        received.spent_key_image_rings = vec![];
+        let mut first = make_block_result(101, vec![], vec!["ki_held".into(), "foreign".into()]);
+        first.spent_key_image_rings = vec![vec![10, 30, 5], vec![1, 2, 3]];
+        let mut second = make_block_result(102, vec![], vec!["ki_fresh".into()]);
+        second.spent_key_image_rings = vec![vec![70, 7, 3]];
+
+        let outcome = process_batch_with_reorg_detection(
+            &[received, first, second],
+            &mut state,
+            None,
+            1000,
+            100,
+        )
+        .unwrap();
+        assert!(matches!(outcome, ScanBatchOutcome::Normal(_)));
+
+        let rings = state.ring_database();
+        assert_eq!(rings.len(), 2);
+        let held = rings.ring("ki_held").unwrap();
+        assert_eq!(held.indexes().unwrap(), vec![10, 40, 45]);
+        assert_eq!(held.real_index, 1);
+        assert!(held.ring.is_empty());
+        let fresh = rings.ring("ki_fresh").unwrap();
+        assert_eq!(fresh.indexes().unwrap(), vec![70, 77, 80]);
+        assert_eq!(fresh.real_index, 1);
+        assert!(rings.ring("foreign").is_none());
+        assert_eq!(state.outputs()[0].ring.as_ref(), Some(held));
+    }
 
     #[test]
     fn reorg_detection_normal_all_beyond_tip() {

@@ -59,14 +59,16 @@ pub mod native {
         Ok((output, global_index))
     }
 
-    fn persisted_rings(stored_outputs: &[StoredOutputData]) -> Result<Vec<Option<Decoys>>, String> {
+    fn persisted_rings(
+        stored_outputs: &[StoredOutputData],
+    ) -> Result<Vec<Option<crate::decoy_select::RecordedRing>>, String> {
         stored_outputs
             .iter()
             .map(|stored| {
                 stored
                     .ring
                     .as_ref()
-                    .map(DecoySelection::to_decoys)
+                    .map(DecoySelection::to_recorded_ring)
                     .transpose()
             })
             .collect()
@@ -140,7 +142,7 @@ pub mod native {
         rct_type: RctType,
         height: usize,
         outputs: &[(WalletOutput, u64)],
-        existing_rings: &[Option<Decoys>],
+        existing_rings: &[Option<crate::decoy_select::RecordedRing>],
         blackballed: &HashSet<u64>,
     ) -> Result<Vec<Decoys>, String> {
         let ring_len = ring_len(rct_type).ok_or_else(|| "Unsupported RingCT type".to_string())?;
@@ -199,7 +201,7 @@ pub mod native {
         change: Option<UnsignedChange>,
         blackballed: &HashSet<u64>,
     ) -> Result<UnsignedTransaction, String> {
-        let existing_rings = vec![None; outputs.len()];
+        let existing_rings: Vec<_> = outputs.iter().map(|_| None).collect();
         let source_account = output_source_account(outputs)?;
         build_unsigned_transaction_with_rings(
             rng,
@@ -222,7 +224,7 @@ pub mod native {
         rct_type: RctType,
         fee_rate: FeeRate,
         outputs: &[(WalletOutput, u64)],
-        existing_rings: &[Option<Decoys>],
+        existing_rings: &[Option<crate::decoy_select::RecordedRing>],
         source_account: u32,
         payments: Vec<(MoneroAddress, u64)>,
         change: Option<UnsignedChange>,
@@ -572,8 +574,13 @@ pub mod native {
     /// Decoy selection result for a single input
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     pub struct DecoySelection {
+        /// Position of the real output in the ring.
         pub real_index: u8,
+        /// The members' global indexes, as relative offsets.
         pub offsets: Vec<u64>,
+        /// Each member's key and commitment; empty for a ring read from a
+        /// transaction.
+        #[serde(default)]
         pub ring: Vec<RingMember>,
     }
 
@@ -607,27 +614,57 @@ pub mod native {
             }
         }
 
-        fn to_decoys(&self) -> Result<Decoys, String> {
-            let ring = self
-                .ring
+        pub(crate) fn from_offsets(offsets: &[u64], real_index: u8) -> Self {
+            DecoySelection {
+                real_index,
+                offsets: offsets.to_vec(),
+                ring: Vec::new(),
+            }
+        }
+
+        /// The members' global indexes, ascending.
+        pub fn indexes(&self) -> Result<Vec<u64>, String> {
+            let mut index = 0u64;
+            self.offsets
                 .iter()
-                .map(|member| {
-                    let point = |encoded: &str| {
-                        let bytes: [u8; 32] = hex::decode(encoded)
-                            .map_err(|_| "persisted ring member is not hex".to_string())?
-                            .try_into()
-                            .map_err(|_| {
-                                "persisted ring member is not a 32-byte point".to_string()
-                            })?;
-                        monero_wallet::ed25519::CompressedPoint::from(bytes)
-                            .decompress()
-                            .ok_or_else(|| "persisted ring member is not a point".to_string())
-                    };
-                    Ok([point(&member.key)?, point(&member.commitment)?])
+                .map(|offset| {
+                    index = index
+                        .checked_add(*offset)
+                        .ok_or_else(|| "persisted ring offsets overflow".to_string())?;
+                    Ok(index)
                 })
-                .collect::<Result<Vec<_>, String>>()?;
-            Decoys::new(self.offsets.clone(), self.real_index, ring)
-                .ok_or_else(|| "persisted ring is syntactically invalid".to_string())
+                .collect()
+        }
+
+        pub(crate) fn is_same_ring(&self, other: &DecoySelection) -> bool {
+            self.offsets == other.offsets
+                && (self.ring.is_empty() || other.ring.is_empty() || self.ring == other.ring)
+        }
+
+        fn to_recorded_ring(&self) -> Result<crate::decoy_select::RecordedRing, String> {
+            let point = |encoded: &str| {
+                let bytes: [u8; 32] = hex::decode(encoded)
+                    .map_err(|_| "persisted ring member is not hex".to_string())?
+                    .try_into()
+                    .map_err(|_| "persisted ring member is not a 32-byte point".to_string())?;
+                CompressedEdwardsY(bytes)
+                    .decompress()
+                    .ok_or_else(|| "persisted ring member is not a point".to_string())
+            };
+            let members = if self.ring.is_empty() {
+                None
+            } else {
+                Some(
+                    self.ring
+                        .iter()
+                        .map(|member| Ok([point(&member.key)?, point(&member.commitment)?]))
+                        .collect::<Result<Vec<_>, String>>()?,
+                )
+            };
+            Ok(crate::decoy_select::RecordedRing {
+                indexes: self.indexes()?,
+                members,
+            })
         }
     }
 
@@ -3159,10 +3196,22 @@ pub mod native {
             assert_eq!(selection.offsets, vec![7, 5, 10]);
             assert_eq!(selection.ring.len(), 3);
             assert_eq!(selection.ring[0].key, hex::encode(g.compress().to_bytes()));
-            let restored = selection.to_decoys().unwrap();
-            assert_eq!(restored.offsets(), decoys.offsets());
-            assert_eq!(restored.signer_index(), decoys.signer_index());
-            assert_eq!(restored.ring(), decoys.ring());
+            let restored = selection.to_recorded_ring().unwrap();
+            assert_eq!(restored.indexes, vec![7, 12, 22]);
+            let members = restored.members.unwrap();
+            assert_eq!(members.len(), 3);
+            for (restored, original) in members.iter().zip(decoys.ring()) {
+                let key: EdwardsPoint = original[0].into();
+                let commitment: EdwardsPoint = original[1].into();
+                assert_eq!(restored, &[key, commitment]);
+            }
+
+            let learned = DecoySelection::from_offsets(&[7, 5, 10], 1);
+            let restored = learned.to_recorded_ring().unwrap();
+            assert_eq!(restored.indexes, vec![7, 12, 22]);
+            assert!(restored.members.is_none());
+            assert!(learned.is_same_ring(&selection));
+            assert!(!learned.is_same_ring(&DecoySelection::from_offsets(&[7, 5, 11], 1)));
         }
 
         fn stored_output_bytes(chunks: u64) -> Vec<u8> {

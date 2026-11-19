@@ -43,6 +43,7 @@ fn make_block_result(
         daemon_height: 3000,
         spent_key_images,
         spent_key_image_tx_hashes: vec![String::new(); tx_hashes_len],
+        spent_key_image_rings: vec![],
     }
 }
 
@@ -163,6 +164,7 @@ fn test_reorg_recovery_full_cycle() {
             daemon_height: 3000,
             spent_key_images: vec![],
             spent_key_image_tx_hashes: vec![],
+            spent_key_image_rings: vec![],
         },
         BlockScanResult {
             previous_block_hash: String::new(),
@@ -174,6 +176,7 @@ fn test_reorg_recovery_full_cycle() {
             daemon_height: 3000,
             spent_key_images: vec![],
             spent_key_image_tx_hashes: vec![],
+            spent_key_image_rings: vec![],
         },
     ];
 
@@ -232,6 +235,7 @@ fn test_reorg_at_first_block_recovers() {
         daemon_height: 3000,
         spent_key_images: vec![],
         spent_key_image_tx_hashes: vec![],
+        spent_key_image_rings: vec![],
     }];
 
     let outcome =

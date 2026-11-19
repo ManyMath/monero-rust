@@ -306,6 +306,48 @@ async fn regtest_respend_after_pool_drop_reuses_the_ring_and_the_daemon_accepts_
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn regtest_scan_learns_the_ring_of_a_spend_found_on_chain() {
+    let Some(node) = common::regtest_node() else {
+        return;
+    };
+    let _chain = CHAIN.lock().await;
+    let rpc = HttpRpc::new(node).unwrap();
+    let Funded {
+        mut state,
+        key_image,
+        received_at,
+        ..
+    } = fund_spender(&rpc).await;
+
+    let first = spend(&rpc, &mut state, &key_image, XMR).await;
+    relay(&rpc, &mut state, &first)
+        .await
+        .expect("the daemon accepts the spend");
+    mine_pool(&rpc).await;
+
+    let mut other_device = wallet_holding(vec![]);
+    refresh(&rpc, &mut other_device, received_at).await;
+    let output = other_device
+        .outputs()
+        .iter()
+        .find(|output| output.key_image == key_image)
+        .expect("the other device found the same output");
+    assert!(output.spent, "and saw it spent");
+    let learned = other_device
+        .ring_database()
+        .ring(&key_image)
+        .expect("the ring of the spend was learned from the chain");
+    assert_eq!(
+        learned.indexes().unwrap(),
+        ring_of(&first.tx_blob, &key_image)
+    );
+    assert_eq!(
+        output.global_index,
+        Some(learned.indexes().unwrap()[usize::from(learned.real_index)])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn regtest_reorg_of_the_receiving_block_keeps_the_ring() {
     let Some(node) = common::regtest_node() else {
         return;

@@ -85,6 +85,7 @@ fn make_sample_block_scan_result(num_outputs: usize, num_key_images: usize) -> B
         spent_key_image_tx_hashes: (0..num_key_images)
             .map(|i| format!("{:064x}", i + 10000))
             .collect(),
+        spent_key_image_rings: vec![],
     }
 }
 

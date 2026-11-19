@@ -12,6 +12,12 @@ use curve25519_dalek::traits::IsIdentity as _;
 use monero_oxide::{ringct::clsag::Decoys, BLOCK_TIME, COINBASE_LOCK_WINDOW, DEFAULT_LOCK_WINDOW};
 use monero_wallet::ed25519::CompressedPoint;
 
+pub(crate) struct RecordedRing {
+    /// The members' global indexes, ascending.
+    pub indexes: Vec<u64>,
+    pub members: Option<Vec<[curve25519_dalek::EdwardsPoint; 2]>>,
+}
+
 /// The facts about the output being spent that decoy selection needs.
 pub(crate) struct SpentOutput {
     /// The output's global RingCT index.
@@ -96,6 +102,61 @@ mod tests {
         )
         .unwrap();
         assert_eq!(absolute_indexes(&ring).unwrap(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn recorded_ring_without_member_keys_takes_them_from_the_reply() {
+        let (input, indexes, fetched) = blackball_fixture();
+        let recorded = |members| RecordedRing {
+            indexes: vec![1, 2, 4],
+            members,
+        };
+        let ring = ring_from_candidates(
+            &input,
+            3,
+            &indexes,
+            &indexes,
+            &fetched,
+            Some(&recorded(None)),
+            &HashSet::new(),
+        )
+        .unwrap();
+        assert_eq!(absolute_indexes(&ring).unwrap(), vec![1, 2, 4]);
+        assert_eq!(ring.signer_index(), 0);
+        let reply_key: curve25519_dalek::EdwardsPoint = ring.ring()[2][0].into();
+        assert_eq!(reply_key, fetched[3].unwrap()[0]);
+
+        let mut members: Vec<_> = [0, 1, 3].iter().map(|i| fetched[*i].unwrap()).collect();
+        members[1][0] = fetched[2].unwrap()[0];
+        let error = ring_from_candidates(
+            &input,
+            3,
+            &indexes,
+            &indexes,
+            &fetched,
+            Some(&recorded(Some(members))),
+            &HashSet::new(),
+        )
+        .unwrap_err();
+        assert!(error.contains("different persisted ring member"), "{error}");
+
+        let error = ring_from_candidates(
+            &input,
+            3,
+            &indexes,
+            &indexes,
+            &fetched,
+            Some(&RecordedRing {
+                indexes: vec![2, 3, 4],
+                members: None,
+            }),
+            &HashSet::new(),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("does not contain the real output"),
+            "{error}"
+        );
     }
 
     fn ring_at(indexes: &[u64]) -> Decoys {
@@ -215,17 +276,31 @@ fn ring_from_candidates(
     secret_order: &[u64],
     request_order: &[u64],
     fetched: &[Option<[curve25519_dalek::EdwardsPoint; 2]>],
-    existing: Option<&Decoys>,
+    existing: Option<&RecordedRing>,
     blackballed: &HashSet<u64>,
 ) -> Result<Decoys, String> {
     if let Some(existing) = existing {
-        let indexes = absolute_indexes(existing)?;
+        let indexes = &existing.indexes;
         if indexes.len() != usize::from(ring_len) {
             return Err("persisted ring has the wrong size for this protocol".to_string());
         }
-        if indexes.get(usize::from(existing.signer_index())) != Some(&input.index_on_blockchain) {
-            return Err("persisted ring does not contain the real output".to_string());
+        if !indexes.windows(2).all(|pair| pair[0] < pair[1])
+            || existing
+                .members
+                .as_ref()
+                .is_some_and(|members| members.len() != indexes.len())
+        {
+            return Err("persisted ring is syntactically invalid".to_string());
         }
+        let Ok(signer) = indexes.binary_search(&input.index_on_blockchain) else {
+            return Err("persisted ring does not contain the real output".to_string());
+        };
+        let convert = |point: &curve25519_dalek::EdwardsPoint| {
+            CompressedPoint::from(point.compress().to_bytes())
+                .decompress()
+                .ok_or_else(|| "persisted ring member failed to decompress".to_string())
+        };
+        let mut ring = Vec::with_capacity(indexes.len());
         for (member, index) in indexes.iter().enumerate() {
             let position = request_order
                 .binary_search(index)
@@ -233,23 +308,28 @@ fn ring_from_candidates(
             let Some([key, commitment]) = fetched.get(position).copied().flatten() else {
                 return Err("persisted ring member is no longer available".to_string());
             };
-            if member == usize::from(existing.signer_index()) {
+            if member == signer {
                 if key != input.key || commitment != input.commitment {
                     return Err(
                         "node presented different view of output we're trying to spend".into(),
                     );
                 }
-            } else {
-                let expected_key: curve25519_dalek::EdwardsPoint =
-                    existing.ring()[member][0].into();
-                let expected_commitment: curve25519_dalek::EdwardsPoint =
-                    existing.ring()[member][1].into();
-                if key != expected_key || commitment != expected_commitment {
+            } else if let Some(members) = &existing.members {
+                if [key, commitment] != members[member] {
                     return Err("node presented a different persisted ring member".to_string());
                 }
             }
+            ring.push([convert(&key)?, convert(&commitment)?]);
         }
-        return Ok(existing.clone());
+        let mut offsets = Vec::with_capacity(indexes.len());
+        offsets.push(indexes[0]);
+        for member in 1..indexes.len() {
+            offsets.push(indexes[member] - indexes[member - 1]);
+        }
+        let signer_index =
+            u8::try_from(signer).map_err(|_| "ring signer index exceeded u8::MAX".to_string())?;
+        return Decoys::new(offsets, signer_index, ring)
+            .ok_or_else(|| "persisted ring is syntactically invalid".to_string());
     }
 
     let mut ring = Vec::with_capacity(usize::from(ring_len));
@@ -372,7 +452,7 @@ pub(crate) async fn select_decoys_for_outputs<R: RngCore + CryptoRng, C: RpcConn
     ring_len: u8,
     block_number: usize,
     inputs: &[SpentOutput],
-    existing_rings: &[Option<Decoys>],
+    existing_rings: &[Option<RecordedRing>],
     blackballed: &HashSet<u64>,
 ) -> Result<Vec<Decoys>, String> {
     if ring_len == 0 {
@@ -440,7 +520,7 @@ pub(crate) async fn select_decoys_for_outputs<R: RngCore + CryptoRng, C: RpcConn
         let mut flattened = Vec::with_capacity(inputs.len() * count);
         for (input, existing) in inputs.iter().zip(existing_rings) {
             let initial = match existing {
-                Some(ring) => absolute_indexes(ring)?,
+                Some(ring) => ring.indexes.clone(),
                 None => vec![input.index_on_blockchain],
             };
             let secret = sample_candidates(

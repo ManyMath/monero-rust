@@ -262,6 +262,9 @@ pub struct WalletState {
     rings_restored: bool,
     /// Key images whose ring the stored ring database overrides once it is loaded.
     adopted_rings: HashSet<String>,
+    /// Of `adopted_rings`, those learned from the chain.
+    learned_before_restore: HashSet<String>,
+    ring_conflicts: Vec<crate::ring_db::ChainRingConflict>,
     /// Rings by key image. Independent of `outputs`, so a ring outlives the
     /// output record it was chosen for.
     rings: RingDatabase,
@@ -284,6 +287,8 @@ impl WalletState {
             spent_by_tx: HashMap::new(),
             rings_restored: false,
             adopted_rings: HashSet::new(),
+            learned_before_restore: HashSet::new(),
+            ring_conflicts: Vec::new(),
             rings: RingDatabase::default(),
         }
     }
@@ -314,7 +319,7 @@ impl WalletState {
                 ));
             }
             match self.rings.ring(&input_ring.key_image) {
-                Some(existing) if existing != &input_ring.ring => {
+                Some(existing) if !existing.is_same_ring(&input_ring.ring) => {
                     return Err(format!(
                         "Refusing to replace the persisted ring for key image {}",
                         input_ring.key_image
@@ -332,14 +337,106 @@ impl WalletState {
         }
 
         for input_ring in rings {
-            self.rings
-                .set_ring(&input_ring.key_image, input_ring.ring.clone());
+            self.keep_ring(&input_ring.key_image, &input_ring.ring);
         }
         self.attach_rings();
         for input_ring in rings {
             self.adopted_rings.remove(&input_ring.key_image);
         }
         Ok(())
+    }
+
+    /// Store `ring` for a key image holding no different ring.
+    fn keep_ring(&mut self, key_image: &str, ring: &DecoySelection) {
+        let known_with_members = self
+            .rings
+            .ring(key_image)
+            .is_some_and(|existing| !existing.ring.is_empty());
+        if !known_with_members {
+            self.rings.set_ring(key_image, ring.clone());
+        }
+    }
+
+    /// Learn the rings of this wallet's own spends seen on chain. Unlike wallet2,
+    /// a recorded ring is never replaced (a node can fake blocks); a different
+    /// one is listed in [`Self::ring_conflicts`].
+    pub fn learn_spent_rings(&mut self, key_images: &[String], rings: &[Vec<u64>]) -> usize {
+        self.learn_spent_rings_of(&HashMap::new(), key_images, rings)
+    }
+
+    /// `learn_spent_rings`, also counting the batch's own new outputs `received`.
+    pub(crate) fn learn_spent_rings_of(
+        &mut self,
+        received: &HashMap<&str, Option<u64>>,
+        key_images: &[String],
+        rings: &[Vec<u64>],
+    ) -> usize {
+        let mut learned = 0;
+        for (key_image, offsets) in key_images.iter().zip(rings) {
+            if offsets.is_empty() {
+                continue;
+            }
+            let key_image = crate::ring_db::canonical_key_image(key_image);
+            let global_index = match self.key_image_index.get(&key_image) {
+                Some(&index) => self.outputs[index].global_index,
+                None => match received.get(key_image.as_str()) {
+                    Some(global_index) => *global_index,
+                    None if self.rings.ring(&key_image).is_some() => None,
+                    None => continue,
+                },
+            };
+            let mut ring = DecoySelection::from_offsets(offsets, 0);
+            let Ok(indexes) = ring.indexes() else {
+                continue;
+            };
+            if let Some(global_index) = global_index {
+                let Some(position) = indexes.iter().position(|i| *i == global_index) else {
+                    continue;
+                };
+                ring.real_index = u8::try_from(position).unwrap_or(0);
+            }
+            match self.rings.ring(&key_image) {
+                Some(existing) if existing.is_same_ring(&ring) => {}
+                Some(existing) => {
+                    let recorded = existing.indexes().unwrap_or_default();
+                    self.note_ring_conflict(&key_image, recorded, indexes);
+                }
+                None => {
+                    if !self.rings_restored {
+                        self.adopted_rings.insert(key_image.clone());
+                        self.learned_before_restore.insert(key_image.clone());
+                    }
+                    self.rings.set_ring(&key_image, ring);
+                    learned += 1;
+                }
+            }
+        }
+        if learned > 0 {
+            self.attach_rings();
+        }
+        learned
+    }
+
+    /// Rings on chain that differ from the kept ones. `clear_ring` and a rescan
+    /// adopt the chain's ring.
+    pub fn ring_conflicts(&self) -> &[crate::ring_db::ChainRingConflict] {
+        &self.ring_conflicts
+    }
+
+    /// Return the listed ring conflicts and empty the list.
+    pub fn take_ring_conflicts(&mut self) -> Vec<crate::ring_db::ChainRingConflict> {
+        std::mem::take(&mut self.ring_conflicts)
+    }
+
+    fn note_ring_conflict(&mut self, key_image: &str, recorded: Vec<u64>, seen: Vec<u64>) {
+        let conflict = crate::ring_db::ChainRingConflict {
+            key_image: key_image.to_string(),
+            recorded,
+            seen,
+        };
+        if !self.ring_conflicts.contains(&conflict) {
+            self.ring_conflicts.push(conflict);
+        }
     }
 
     /// Every recorded ring by key image, to be stored durably. Rollbacks and
@@ -356,7 +453,7 @@ impl WalletState {
             let key_image = crate::ring_db::canonical_key_image(key_image);
             if spellings
                 .insert(key_image.clone(), ring)
-                .is_some_and(|other| other != ring)
+                .is_some_and(|other| !other.is_same_ring(ring))
             {
                 return Err(format!(
                     "Stored ring database holds two rings for key image {key_image}"
@@ -366,7 +463,7 @@ impl WalletState {
                 && self
                     .rings
                     .ring(&key_image)
-                    .is_some_and(|existing| existing != ring)
+                    .is_some_and(|existing| !existing.is_same_ring(ring))
             {
                 return Err(format!(
                     "Stored ring database holds a different ring for key image {key_image}"
@@ -375,8 +472,20 @@ impl WalletState {
         }
         for (key_image, ring) in stored.rings() {
             let key_image = crate::ring_db::canonical_key_image(key_image);
-            self.adopted_rings.remove(&key_image);
-            self.rings.set_ring(&key_image, ring.clone());
+            if self.adopted_rings.remove(&key_image) {
+                let learned = self
+                    .rings
+                    .ring(&key_image)
+                    .filter(|_| self.learned_before_restore.contains(&key_image))
+                    .filter(|learned| !learned.is_same_ring(ring))
+                    .map(|learned| learned.indexes().unwrap_or_default());
+                if let Some(seen) = learned {
+                    self.note_ring_conflict(&key_image, ring.indexes().unwrap_or_default(), seen);
+                }
+                self.rings.set_ring(&key_image, ring.clone());
+            } else {
+                self.keep_ring(&key_image, ring);
+            }
         }
         for key_image in stored.cleared_key_images() {
             if self
@@ -390,6 +499,7 @@ impl WalletState {
             }
         }
         self.adopted_rings.clear();
+        self.learned_before_restore.clear();
         self.rings_restored = true;
         self.attach_rings();
         Ok(())
@@ -1939,6 +2049,91 @@ mod tests {
             assert!(!restarted.ring_database().is_cleared("ki1"));
             assert_eq!(restarted.outputs()[0].ring, Some(test_ring(8)));
         }
+    }
+
+    #[test]
+    fn spent_rings_are_learned_for_own_key_images_only() {
+        let mut state = WalletState::new();
+        let mut owned = make_output(1, 100, "ki1");
+        owned.global_index = Some(12);
+        state.add_outputs(vec![owned, make_output(1, 100, "ki2")]);
+        state.record_input_rings(&[input_ring("ki2", 9)]).unwrap();
+
+        let key_images: Vec<String> = ["ki1", "other", "ki2", "ki1"]
+            .iter()
+            .map(|k| k.to_string())
+            .collect();
+        let rings = vec![vec![7, 5, 10], vec![1, 1, 1], vec![9; 16], vec![]];
+        assert_eq!(state.learn_spent_rings(&key_images, &rings), 1);
+
+        let learned = state.ring_database().ring("ki1").unwrap();
+        assert_eq!(learned.offsets, vec![7, 5, 10]);
+        assert_eq!(learned.real_index, 1);
+        assert!(learned.ring.is_empty());
+        assert!(state.ring_database().ring("other").is_none());
+        assert_eq!(state.ring_database().ring("ki2"), Some(&test_ring(9)));
+        assert_eq!(state.learn_spent_rings(&key_images, &rings), 0);
+
+        assert!(state.ring_conflicts().is_empty());
+        assert_eq!(
+            state.learn_spent_rings(&["ki2".to_string()], &[vec![8; 16]]),
+            0
+        );
+        assert_eq!(state.ring_database().ring("ki2"), Some(&test_ring(9)));
+        let seen = DecoySelection::from_offsets(&[8; 16], 0).indexes().unwrap();
+        assert_eq!(
+            state.take_ring_conflicts(),
+            vec![crate::ring_db::ChainRingConflict {
+                key_image: "ki2".into(),
+                recorded: test_ring(9).indexes().unwrap(),
+                seen,
+            }]
+        );
+        assert!(state.ring_conflicts().is_empty());
+
+        let mut known = make_output(1, 100, "ki3");
+        known.global_index = Some(40);
+        state.add_outputs(vec![known]);
+        assert_eq!(
+            state.learn_spent_rings(&["ki3".to_string()], &[vec![30, 5, 6]]),
+            0
+        );
+        assert!(state.ring_database().ring("ki3").is_none());
+        assert!(state.ring_conflicts().is_empty());
+
+        let mut with_keys = test_ring(1);
+        with_keys.offsets = vec![7, 5, 10];
+        with_keys.ring.truncate(3);
+        with_keys.real_index = 1;
+        state
+            .record_input_rings(&[crate::tx_builder::native::InputRing {
+                key_image: "ki1".into(),
+                ring: with_keys.clone(),
+            }])
+            .unwrap();
+        assert_eq!(state.ring_database().ring("ki1"), Some(&with_keys));
+        assert_eq!(state.outputs()[0].ring, Some(with_keys));
+    }
+
+    #[test]
+    fn a_ring_learned_before_the_stored_database_is_loaded_gives_way_to_it() {
+        let mut state = WalletState::new();
+        state.add_outputs(vec![make_output(1, 100, "ki1")]);
+        state.record_input_rings(&[input_ring("ki1", 7)]).unwrap();
+        let stored = state.ring_database().clone();
+
+        let mut restarted = WalletState::new();
+        restarted.add_outputs(vec![make_output(1, 100, "ki1")]);
+        assert_eq!(
+            restarted.learn_spent_rings(&["ki1".to_string()], &[vec![8; 16]]),
+            1
+        );
+        restarted.restore_ring_database(stored).unwrap();
+        assert_eq!(restarted.ring_database().ring("ki1"), Some(&test_ring(7)));
+        assert_eq!(restarted.outputs()[0].ring, Some(test_ring(7)));
+        let conflicts = restarted.ring_conflicts();
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].recorded, test_ring(7).indexes().unwrap());
     }
 
     #[test]

@@ -718,12 +718,14 @@ pub async fn relay_raw(
 pub fn scanned_block(height: u64, hash: &str, tx_blobs: &[&str]) -> BlockScanResult {
     let mut spent_key_images = Vec::new();
     let mut spent_key_image_tx_hashes = Vec::new();
+    let mut spent_key_image_rings = Vec::new();
     for blob in tx_blobs {
         let bytes = hex::decode(blob).unwrap();
         let tx = Transaction::<NotPruned>::read(&mut bytes.as_slice()).unwrap();
-        for key_image in monero_rust::scanner::extract_key_images_from_raw_tx(&bytes) {
+        for (key_image, ring) in monero_rust::scanner::extract_spent_rings_from_raw_tx(&bytes) {
             spent_key_images.push(key_image);
             spent_key_image_tx_hashes.push(hex::encode(tx.hash()));
+            spent_key_image_rings.push(ring);
         }
     }
     BlockScanResult {
@@ -736,6 +738,7 @@ pub fn scanned_block(height: u64, hash: &str, tx_blobs: &[&str]) -> BlockScanRes
         daemon_height: height + 1,
         spent_key_images,
         spent_key_image_tx_hashes,
+        spent_key_image_rings,
     }
 }
 

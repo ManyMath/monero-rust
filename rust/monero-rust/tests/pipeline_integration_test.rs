@@ -50,6 +50,7 @@ fn make_block_result(
         daemon_height: 5000,
         spent_key_images,
         spent_key_image_tx_hashes: Vec::new(),
+        spent_key_image_rings: vec![],
     }
 }
 

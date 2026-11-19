@@ -18,6 +18,17 @@ pub struct RingDatabase {
     cleared: BTreeSet<String>,
 }
 
+/// A ring seen on chain for one of the wallet's key images that differs from
+/// the recorded one, which is kept.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChainRingConflict {
+    pub key_image: String,
+    /// The global indexes of the recorded ring.
+    pub recorded: Vec<u64>,
+    /// The global indexes of the ring the chain showed.
+    pub seen: Vec<u64>,
+}
+
 pub(crate) fn canonical_key_image(key_image: &str) -> String {
     key_image.to_ascii_lowercase()
 }

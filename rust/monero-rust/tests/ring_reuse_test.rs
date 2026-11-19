@@ -1242,7 +1242,6 @@ async fn clearing_a_recorded_ring_is_the_only_way_to_draw_another() {
 }
 
 #[tokio::test]
-#[ignore = "known defect: the scanner reports the key images a block spends without their rings, so the ring of a spend made by another instance is never learned"]
 async fn ring_of_a_spend_made_by_another_instance_is_learned_from_the_chain() {
     let node = FakeNode::uniform();
     let (mut instance_one, owned, _disk) = funded(&node, 1);
@@ -1280,6 +1279,117 @@ async fn ring_of_a_spend_made_by_another_instance_is_learned_from_the_chain() {
         "a spend seen on chain and this instance's respend after its reorg",
         &first_ring,
         &signed_ring(&second.tx_blob, a),
+    );
+}
+
+fn block_spending(
+    height: u64,
+    hash: &str,
+    key_image: &str,
+    indexes: &[u64],
+) -> monero_rust::BlockScanResult {
+    let mut block = scanned_block(height, hash, &[]);
+    let mut previous = 0;
+    block.tx_count = 1;
+    block.spent_key_images = vec![key_image.to_string()];
+    block.spent_key_image_tx_hashes = vec!["ab".repeat(32)];
+    block.spent_key_image_rings = vec![indexes
+        .iter()
+        .map(|index| {
+            let offset = index - previous;
+            previous = *index;
+            offset
+        })
+        .collect()];
+    block
+}
+
+#[tokio::test]
+async fn a_ring_served_in_a_block_never_replaces_the_relayed_ring() {
+    let node = FakeNode::uniform();
+    let (mut state, owned, _disk) = funded(&node, 1);
+    let a = &owned[0];
+    let (first_ring, _) = relay_first_spend(&node, &mut state, a).await;
+
+    let mut planted: Vec<u64> = (199_000..199_015).collect();
+    planted.push(a.global_index());
+    planted.sort_unstable();
+    assert!(!refresh_with(
+        &mut state,
+        &[block_spending(99_990, "planted", a.key_image(), &planted)]
+    ));
+    assert!(refresh_with(
+        &mut state,
+        &[scanned_block(99_990, "honest", &[])]
+    ));
+    let kept = state.ring_database().ring(a.key_image()).unwrap();
+    assert_eq!(ring_indexes(kept), first_ring);
+    assert_eq!(
+        state.ring_conflicts(),
+        &[monero_rust::ring_db::ChainRingConflict {
+            key_image: a.key_image().to_string(),
+            recorded: first_ring.clone(),
+            seen: planted,
+        }]
+    );
+
+    let respend = hot_send(
+        &node,
+        &mut state,
+        &[a.key_image()],
+        &destination(1),
+        XMR,
+        NORMAL,
+    )
+    .await
+    .unwrap();
+    assert_same_ring(
+        "the relayed ring and the respend after a planted block",
+        &first_ring,
+        &signed_ring(&respend.tx_blob, a),
+    );
+}
+
+#[tokio::test]
+async fn a_ring_without_the_real_output_is_never_learned() {
+    let node = FakeNode::uniform();
+    let (mut state, owned, _disk) = funded(&node, 1);
+    let (mut fresh, _other_disk) = second_instance(&owned);
+    let a = &owned[0];
+    let (first_ring, _) = relay_first_spend(&node, &mut state, a).await;
+
+    let poisoned: Vec<u64> = (1_000..1_016).collect();
+    for wallet in [&mut state, &mut fresh] {
+        assert!(!refresh_with(
+            wallet,
+            &[block_spending(99_990, "poisoned", a.key_image(), &poisoned)]
+        ));
+        assert!(refresh_with(
+            wallet,
+            &[scanned_block(99_990, "honest", &[])]
+        ));
+        assert!(wallet.ring_conflicts().is_empty());
+    }
+    assert_eq!(
+        ring_indexes(state.ring_database().ring(a.key_image()).unwrap()),
+        first_ring
+    );
+    assert!(fresh.ring_database().ring(a.key_image()).is_none());
+
+    let respend = hot_send(
+        &node,
+        &mut state,
+        &[a.key_image()],
+        &destination(1),
+        XMR,
+        NORMAL,
+    )
+    .await
+    .unwrap();
+    assert_same_ring(
+        "the relayed ring and the respend after a poisoned block",
+        &first_ring,
+        &signed_ring(&respend.tx_blob, a),
     );
 }
 

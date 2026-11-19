@@ -52,6 +52,14 @@ pub fn compute_block_id(block: &OxideBlock) -> [u8; 32] {
 
 /// Fallback key image extraction from raw tx bytes when `Transaction::read()` fails.
 pub fn extract_key_images_from_raw_tx(tx_blob: &[u8]) -> Vec<String> {
+    extract_spent_rings_from_raw_tx(tx_blob)
+        .into_iter()
+        .map(|(key_image, _)| key_image)
+        .collect()
+}
+
+/// The key image and ring (relative offsets) of each key input of a raw transaction.
+pub fn extract_spent_rings_from_raw_tx(tx_blob: &[u8]) -> Vec<(String, Vec<u64>)> {
     use std::io::{Cursor, Read};
 
     fn read_varint(r: &mut Cursor<&[u8]>) -> Option<u64> {
@@ -106,16 +114,18 @@ pub fn extract_key_images_from_raw_tx(tx_blob: &[u8]) -> Vec<String> {
                 let Some(num_offsets) = read_varint(&mut cursor) else {
                     break;
                 };
+                let mut offsets = Vec::new();
                 for _ in 0..num_offsets {
-                    if read_varint(&mut cursor).is_none() {
-                        break;
+                    match read_varint(&mut cursor) {
+                        Some(offset) => offsets.push(offset),
+                        None => break,
                     }
                 }
                 let mut ki = [0u8; 32];
                 if cursor.read_exact(&mut ki).is_err() {
                     break;
                 }
-                key_images.push(hex::encode(ki));
+                key_images.push((hex::encode(ki), offsets));
             }
             _ => break,
         }
@@ -137,6 +147,10 @@ pub struct BlockScanResult {
     pub daemon_height: u64,
     pub spent_key_images: Vec<String>,
     pub spent_key_image_tx_hashes: Vec<String>,
+    /// The ring of each spent key image as relative offsets, parallel to
+    /// `spent_key_images`; empty or missing when unknown.
+    #[serde(default)]
+    pub spent_key_image_rings: Vec<Vec<u64>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,6 +171,9 @@ pub struct MultiWalletScanResult {
     pub daemon_height: u64,
     pub spent_key_images: Vec<String>,
     pub spent_key_image_tx_hashes: Vec<String>,
+    /// The ring of each spent key image; see `BlockScanResult::spent_key_image_rings`.
+    #[serde(default)]
+    pub spent_key_image_rings: Vec<Vec<u64>>,
     /// Map of wallet address to its scan result
     pub wallet_results: HashMap<String, WalletScanData>,
 }
@@ -1412,14 +1429,21 @@ pub async fn process_batch_response(
 
             let mut spent_key_images = Vec::new();
             let mut spent_key_image_tx_hashes: Vec<String> = Vec::new();
+            let mut spent_key_image_rings: Vec<Vec<u64>> = Vec::new();
             for (tx_hash, tx) in std::iter::once((miner_tx_hash, &miner_tx))
                 .chain(parsed_txs.iter().map(|(hash, tx)| (*hash, tx)))
             {
                 let tx_hash_hex = hex::encode(tx_hash);
                 for input in &tx.prefix().inputs {
-                    if let OxideInput::ToKey { key_image, .. } = input {
+                    if let OxideInput::ToKey {
+                        key_image,
+                        key_offsets,
+                        ..
+                    } = input
+                    {
                         spent_key_images.push(hex::encode(key_image.to_bytes()));
                         spent_key_image_tx_hashes.push(tx_hash_hex.clone());
+                        spent_key_image_rings.push(key_offsets.clone());
                     }
                 }
             }
@@ -1470,6 +1494,7 @@ pub async fn process_batch_response(
                 daemon_height,
                 spent_key_images,
                 spent_key_image_tx_hashes,
+                spent_key_image_rings,
             });
         }
 
@@ -1675,14 +1700,21 @@ pub async fn process_batch_multi_wallet_response(
 
             let mut spent_key_images = Vec::new();
             let mut spent_key_image_tx_hashes: Vec<String> = Vec::new();
+            let mut spent_key_image_rings: Vec<Vec<u64>> = Vec::new();
             for (tx_hash, tx) in std::iter::once((miner_tx_hash, &miner_tx))
                 .chain(parsed_txs.iter().map(|(hash, tx)| (*hash, tx)))
             {
                 let tx_hash_hex = hex::encode(tx_hash);
                 for input in &tx.prefix().inputs {
-                    if let OxideInput::ToKey { key_image, .. } = input {
+                    if let OxideInput::ToKey {
+                        key_image,
+                        key_offsets,
+                        ..
+                    } = input
+                    {
                         spent_key_images.push(hex::encode(key_image.to_bytes()));
                         spent_key_image_tx_hashes.push(tx_hash_hex.clone());
+                        spent_key_image_rings.push(key_offsets.clone());
                     }
                 }
             }
@@ -1741,6 +1773,7 @@ pub async fn process_batch_multi_wallet_response(
                 daemon_height,
                 spent_key_images,
                 spent_key_image_tx_hashes,
+                spent_key_image_rings,
                 wallet_results,
             });
         }
@@ -2262,6 +2295,28 @@ pub async fn scan_mempool<R: RpcConnection>(
 mod tests {
     use super::*;
 
+    #[test]
+    fn raw_transaction_inputs_are_read_with_their_rings() {
+        let mut blob = vec![2, 0, 2];
+        blob.extend_from_slice(&[0x02, 0, 3, 5, 0x80, 0x01, 7]);
+        blob.extend_from_slice(&[0xaa; 32]);
+        blob.extend_from_slice(&[0x02, 0, 1, 9]);
+        blob.extend_from_slice(&[0xbb; 32]);
+        blob.extend_from_slice(&[0, 0]);
+
+        assert_eq!(
+            extract_spent_rings_from_raw_tx(&blob),
+            vec![
+                ("aa".repeat(32), vec![5, 128, 7]),
+                ("bb".repeat(32), vec![9]),
+            ]
+        );
+        assert_eq!(
+            extract_key_images_from_raw_tx(&blob),
+            vec!["aa".repeat(32), "bb".repeat(32)]
+        );
+    }
+
     const TEST_VECTOR_1_SEED: &str = "hemlock jubilee eden hacksaw boil superior inroads epoxy exhale orders cavernous second brunt saved richly lower upgrade hitched launching deepest mostly playful layout lower eden";
     const TEST_VECTOR_1_SPEND_KEY: &str =
         "29adefc8f67515b4b4bf48031780ab9d071d24f8a674b879ce7f245c37523807";
@@ -2599,6 +2654,7 @@ mod tests {
             daemon_height: 12350,
             spent_key_images: vec!["key1".to_string(), "key2".to_string()],
             spent_key_image_tx_hashes: vec!["tx1".to_string(), "tx2".to_string()],
+            spent_key_image_rings: vec![],
         };
 
         let json = serde_json::to_string(&result).unwrap();
