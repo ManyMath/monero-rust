@@ -7,7 +7,7 @@ use crate::coin_selection::{
     select_inputs, select_inputs_with_fee, CoinSelectionResult,
 };
 use crate::fee_estimate::wallet2_transaction_is_full;
-use crate::monero_rpc::{Rpc, RpcConnection};
+use crate::monero_rpc::{Fee, Rpc, RpcConnection};
 use crate::tx_builder::native::FeePolicy;
 use crate::tx_builder::native::StoredOutputData;
 use crate::wallet_output::WalletOutput;
@@ -21,6 +21,12 @@ pub struct PreparedInputs {
     pub total_input: u64,
     /// Fee estimate for the selected transaction shape.
     pub estimated_fee: u64,
+    /// The node's fee estimate the `_with_rpc` preparers used; `None` from
+    /// the others.
+    pub fee_rate: Option<Fee>,
+    /// The fee policy the `_with_rpc` preparers used, an Automatic priority
+    /// settled; `None` from the others.
+    pub fee_policy: Option<FeePolicy>,
 }
 
 /// Prepare send inputs with a fixed tier-one fee estimate.
@@ -72,6 +78,8 @@ pub fn prepare_send_inputs_with_fee(
 
 /// Prepare send inputs at the node's RingCT type and the fee tier `policy`
 /// selects.
+/// An Automatic policy is settled here; build with
+/// `PreparedInputs::fee_policy`.
 /// `wallet_height` must be the wallet's own chain height
 /// (`WalletState::chain_height()`), never the node's.
 pub async fn prepare_send_inputs_with_rpc<R: RpcConnection>(
@@ -85,21 +93,8 @@ pub async fn prepare_send_inputs_with_rpc<R: RpcConnection>(
     source_account: u32,
     policy: FeePolicy,
 ) -> Result<PreparedInputs, String> {
-    let rct_type = rpc
-        .get_rct_type()
-        .await
-        .map_err(|e| format!("Failed to get protocol: {e:?}"))?;
-    let fee = rpc
-        .get_fee_checked_for_priority_at_height(
-            policy.priority,
-            policy.wallet_height,
-            policy.max_fee_per_weight,
-        )
-        .await
-        .map_err(|e| format!("Failed to get fee rate: {e:?}"))?;
-    let fee_rate = fee
-        .rate()
-        .ok_or_else(|| "Fee rate and quantization mask must be nonzero".to_string())?;
+    let (rct_type, fee_rate, policy, fee) =
+        construction_fee_rate(rpc, wallet_height, policy).await?;
     prepare_send_inputs_with_fee(
         wallet_outputs,
         wallet_height,
@@ -111,6 +106,7 @@ pub async fn prepare_send_inputs_with_rpc<R: RpcConnection>(
         rct_type,
         fee_rate,
     )
+    .map(|prepared| with_policy(prepared, policy, fee))
 }
 
 /// Clock-injected variant of `prepare_send_inputs_with_fee`.
@@ -159,6 +155,8 @@ pub fn prepare_send_inputs_at_with_fee(
         spent_output_keys,
         total_input: total,
         estimated_fee,
+        fee_rate: None,
+        fee_policy: None,
     })
 }
 
@@ -202,6 +200,8 @@ pub fn prepare_send_inputs_at(
         spent_output_keys,
         total_input: total,
         estimated_fee,
+        fee_rate: None,
+        fee_policy: None,
     })
 }
 
@@ -217,21 +217,8 @@ pub async fn prepare_sweep_inputs_with_rpc<R: RpcConnection>(
     source_account: u32,
     policy: FeePolicy,
 ) -> Result<PreparedInputs, String> {
-    let rct_type = rpc
-        .get_rct_type()
-        .await
-        .map_err(|e| format!("Failed to get protocol: {e:?}"))?;
-    let fee = rpc
-        .get_fee_checked_for_priority_at_height(
-            policy.priority,
-            policy.wallet_height,
-            policy.max_fee_per_weight,
-        )
-        .await
-        .map_err(|e| format!("Failed to get fee rate: {e:?}"))?;
-    let fee_rate = fee
-        .rate()
-        .ok_or_else(|| "Fee rate and quantization mask must be nonzero".to_string())?;
+    let (rct_type, fee_rate, policy, fee) =
+        construction_fee_rate(rpc, wallet_height, policy).await?;
     prepare_sweep_inputs_with_fee(
         wallet_outputs,
         wallet_height,
@@ -241,6 +228,7 @@ pub async fn prepare_sweep_inputs_with_rpc<R: RpcConnection>(
         rct_type,
         fee_rate,
     )
+    .map(|prepared| with_policy(prepared, policy, fee))
 }
 
 /// Prepare sweep inputs at an explicit daemon fee tier.
@@ -353,7 +341,8 @@ pub async fn prepare_sweep_inputs_from_subaddresses_with_rpc<R: RpcConnection>(
     source_account: u32,
     policy: FeePolicy,
 ) -> Result<PreparedInputs, String> {
-    let (rct_type, fee_rate) = construction_fee_rate(rpc, policy).await?;
+    let (rct_type, fee_rate, policy, fee) =
+        construction_fee_rate(rpc, wallet_height, policy).await?;
     prepare_sweep_inputs_from_subaddresses(
         &mut rand::rngs::OsRng,
         wallet_outputs,
@@ -365,6 +354,7 @@ pub async fn prepare_sweep_inputs_from_subaddresses_with_rpc<R: RpcConnection>(
         rct_type,
         fee_rate,
     )
+    .map(|prepared| with_policy(prepared, policy, fee))
 }
 
 /// Prepare a sweep as the series of transactions wallet2 would make of it.
@@ -423,7 +413,8 @@ pub async fn prepare_sweep_transactions_with_rpc<R: RpcConnection>(
     source_account: u32,
     policy: FeePolicy,
 ) -> Result<Vec<PreparedInputs>, String> {
-    let (rct_type, fee_rate) = construction_fee_rate(rpc, policy).await?;
+    let (rct_type, fee_rate, policy, fee) =
+        construction_fee_rate(rpc, wallet_height, policy).await?;
     prepare_sweep_transactions(
         &mut rand::rngs::OsRng,
         wallet_outputs,
@@ -435,22 +426,32 @@ pub async fn prepare_sweep_transactions_with_rpc<R: RpcConnection>(
         rct_type,
         fee_rate,
     )
+    .map(|transactions| {
+        transactions
+            .into_iter()
+            .map(|prepared| with_policy(prepared, policy, fee))
+            .collect()
+    })
 }
 
 async fn construction_fee_rate<R: RpcConnection>(
     rpc: &Rpc<R>,
+    wallet_height: u64,
     policy: FeePolicy,
 ) -> Result<
     (
         monero_wallet::ringct::RctType,
         monero_wallet::interface::FeeRate,
+        FeePolicy,
+        Fee,
     ),
     String,
 > {
     let rct_type = rpc
-        .get_rct_type()
+        .get_rct_type_at_height(Some(wallet_height))
         .await
         .map_err(|e| format!("Failed to get protocol: {e:?}"))?;
+    let policy = policy.resolve(rpc).await?;
     let fee = rpc
         .get_fee_checked_for_priority_at_height(
             policy.priority,
@@ -462,7 +463,7 @@ async fn construction_fee_rate<R: RpcConnection>(
     let fee_rate = fee
         .rate()
         .ok_or_else(|| "Fee rate and quantization mask must be nonzero".to_string())?;
-    Ok((rct_type, fee_rate))
+    Ok((rct_type, fee_rate, policy, fee))
 }
 
 fn refuse_pre_ringct_selection(
@@ -598,6 +599,8 @@ fn prepared_sweep(
         spent_output_keys,
         total_input,
         estimated_fee,
+        fee_rate: None,
+        fee_policy: None,
     })
 }
 
@@ -667,6 +670,8 @@ pub fn prepare_sweep_inputs_at(
         spent_output_keys,
         total_input,
         estimated_fee,
+        fee_rate: None,
+        fee_policy: None,
     })
 }
 
@@ -1137,4 +1142,10 @@ mod tests {
         assert_eq!(result.stored_outputs.len(), 2);
         assert_eq!(result.total_input, 6_000_000_000_000); // tx1 + tx3
     }
+}
+
+fn with_policy(mut prepared: PreparedInputs, policy: FeePolicy, fee: Fee) -> PreparedInputs {
+    prepared.fee_policy = Some(policy);
+    prepared.fee_rate = Some(fee);
+    prepared
 }

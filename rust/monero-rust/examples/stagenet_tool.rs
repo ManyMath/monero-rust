@@ -693,6 +693,7 @@ async fn op_build(request: &Value) -> Value {
         Ok(prepared) => prepared,
         Err(error) => return json!({ "prepare_error": error }),
     };
+    let policy = prepared.fee_policy.unwrap_or(policy);
 
     let mut builds = Vec::new();
     let mut errors = Vec::new();

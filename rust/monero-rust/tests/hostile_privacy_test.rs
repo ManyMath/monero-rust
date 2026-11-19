@@ -332,3 +332,68 @@ async fn failed_get_outs_keeps_the_candidates_so_a_user_retry_repeats_them() {
         "the retry asks for the same candidates"
     );
 }
+
+#[tokio::test]
+async fn automatic_priority_is_settled_once_per_transaction() {
+    use monero_rust::monero_rpc::{FeePriority, DEFAULT_MAX_FEE_PER_BYTE};
+    use monero_rust::native::{create_transaction_with_rpc_and_policy, FeePolicy};
+    let mut wallet = hostile::synced_wallet().await;
+    let node = Node::honest(SnapshotNode::new());
+    let rpc = node.rpc().for_wallet(&wallet.state);
+    let height = wallet.state.chain_height();
+    let policy = FeePolicy {
+        priority: FeePriority::Automatic,
+        wallet_height: Some(height),
+        max_fee_per_weight: DEFAULT_MAX_FEE_PER_BYTE,
+    };
+    let w2 = derive_address(SEED_W2, NETWORK, "").unwrap().to_string();
+    let prepared = monero_rust::prepare_send_inputs_with_rpc(
+        &rpc,
+        wallet.outputs(),
+        height,
+        100_000_000_000,
+        1,
+        None,
+        None,
+        0,
+        policy,
+    )
+    .await
+    .unwrap();
+    let settled = prepared.fee_policy.expect("the settled policy");
+    assert_ne!(settled.priority, FeePriority::Automatic);
+    let tier = rpc
+        .get_fee_checked_for_priority_at_height(
+            settled.priority,
+            settled.wallet_height,
+            settled.max_fee_per_weight,
+        )
+        .await
+        .unwrap();
+    assert_eq!(prepared.fee_rate, Some(tier));
+    let _built = create_transaction_with_rpc_and_policy(
+        &rpc,
+        SEED_W,
+        NETWORK_STR,
+        prepared.stored_outputs.clone(),
+        &[(w2, 100_000_000_000)],
+        "",
+        settled,
+        &mut wallet.state,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        node.count("json_rpc:get_txpool_backlog"),
+        1,
+        "{:?}",
+        node.names()
+    );
+    assert_eq!(
+        node.count("json_rpc:hard_fork_info"),
+        1,
+        "{:?}",
+        node.names()
+    );
+    assert_eq!(node.count("json_rpc:get_last_block_header"), 0);
+}
