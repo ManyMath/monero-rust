@@ -2,7 +2,7 @@
 
 Large-sample comparison of monero-rust with wallet2: decoy ages, ring
 construction and input selection. The quick checks are in
-`rust/monero-rust/tests/stat_parity_harness.rs`.
+`tests/stat_parity_harness.rs`.
 
 ## Environment
 
@@ -23,8 +23,8 @@ From the repository root, with the variables above exported:
 ```sh
 S=scripts/stat-parity
 R=$STAT_PARITY_DIR
-(cd rust && cargo test -p monero-rust --release --test stat_parity_harness --no-run)
-BIN=$(ls -t ${CARGO_TARGET_DIR:-rust/target}/release/deps/stat_parity_harness-* | grep -v '\.d$' | head -1)
+cargo test --release --test stat_parity_harness --no-run
+BIN=$(ls -t ${CARGO_TARGET_DIR:-target}/release/deps/stat_parity_harness-* | grep -v '\.d$' | head -1)
 $S/build_w2harness.sh
 python $S/build_chain.py                           # about an hour
 

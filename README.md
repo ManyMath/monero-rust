@@ -41,10 +41,9 @@ does not claim exact behavioral or network-fingerprint equivalence with
   encodes payloads as animated UR QR codes (`xmr-txunsigned`,
   `xmr-txsigned`, `xmr-keyimage`, `xmr-output`).
 
-The crate lives in `rust/monero-rust` and uses the published `monero-wallet`
-0.2.0 crate. CryptoNight hashing (Cuprate) and Epee serialization use pinned
-upstream Git revisions because their crates.io releases are placeholders or
-lack needed fixes.
+CryptoNight hashing (Cuprate) and Epee serialization use pinned upstream Git 
+revisions because their crates.io releases are placeholders or lack needed 
+fixes.
 
 ## Requirements
 
