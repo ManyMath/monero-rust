@@ -88,3 +88,6 @@ criterion = { version = "0.5", features = ["html_reports"] }
 [[bench]]
 name = "scanning"
 harness = false
+
+[profile.dev.package."*"]
+opt-level = 3
