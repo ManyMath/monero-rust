@@ -8,8 +8,8 @@
   and sweeps.
 - Added a durable ring database interface that records rings and decoy candidate
   sets across transaction rebuilds, restarts, imports, and reorgs.
-- Added wallet refresh and mempool state types, pre-RingCT output reporting,
-  pruned-block scanning, and explicit handling for deeper reorgs.
+- Added wallet refresh and mempool state types, pruned-block scanning, and
+  explicit handling for deeper reorgs.
 - Added checks for unsigned and signed wallet2 transaction sets and for
   transactions returned by an offline signer before relay.
 - Added support for wallet2 ASCII-armored exports and keys files with configured
@@ -21,8 +21,8 @@
 
 - Replaced the `wallet_compat` types with `monero-wallet` outputs, decoys, view
   pairs, and fee-rate types, and moved fee estimation into its own module.
-- Vendored `monero-wallet` 0.2.0 with recorded patches for address
-  classification, payment IDs, and scanning version 1 transactions.
+- Changed `monero-wallet` 0.2.0 from a patched vendored dependency to the
+  published crate.
 - Changed transaction preparation to expose fee and change bounds, use checked
   amount arithmetic, reject zero-value destinations, and split or stop adding
   inputs when a transaction reaches its configured weight policy.
@@ -47,6 +47,8 @@
   use fresh encryption IVs, and require canonical signature scalars.
 - Removed vendored Polyseed support. Sixteen-word seed imports now return an
   unsupported-Polyseed error.
+- Removed pre-RingCT output reporting, balance accounting, and spend-selection
+  handling.
 
 ### Fixed
 

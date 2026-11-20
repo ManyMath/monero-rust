@@ -23,9 +23,8 @@ does not claim exact behavioral or network-fingerprint equivalence with
   The built-in transport bounds response sizes and request time, and untrusted
   Epee input is structurally validated before deserialization.
 - Scanning: batched and pipelined block scanning for one or many wallets,
-  subaddress lookahead, pruned-block handling, pre-RingCT output reporting,
-  mempool tracking, spent detection by key image, and bounded reorg detection
-  with rollback. Pre-RingCT outputs are not spendable by this library.
+  subaddress lookahead, pruned-block handling, mempool tracking, spent detection
+  by key image, and bounded reorg detection with rollback.
 - Wallet state: outputs, balances with lock and unlock rules, freezing,
   pending spends, tracked transactions, spend conflict detection, and hooks
   for durably storing rings and their decoy candidate sets.
@@ -42,10 +41,10 @@ does not claim exact behavioral or network-fingerprint equivalence with
   encodes payloads as animated UR QR codes (`xmr-txunsigned`,
   `xmr-txsigned`, `xmr-keyimage`, `xmr-output`).
 
-The crate lives in `rust/monero-rust`. A patched `monero-wallet` 0.2.0 is
-vendored, with its source and changes recorded alongside it. CryptoNight
-hashing (Cuprate) and Epee serialization use pinned upstream Git revisions
-because their crates.io releases are placeholders or lack needed fixes.
+The crate lives in `rust/monero-rust` and uses the published `monero-wallet`
+0.2.0 crate. CryptoNight hashing (Cuprate) and Epee serialization use pinned
+upstream Git revisions because their crates.io releases are placeholders or
+lack needed fixes.
 
 ## Requirements
 
