@@ -253,23 +253,10 @@ fn test_resolve_seed_matches_explicit_bip39_conversion() {
 }
 
 #[test]
-fn test_resolve_seed_with_polyseed() {
-    let polyseed = generate_seed(SeedFormat::Polyseed).unwrap();
-    assert_eq!(polyseed.split_whitespace().count(), 16);
-    // Polyseed should pass through resolve_seed without BIP39 conversion
-    let _seed = resolve_seed(&polyseed).unwrap();
-    let keys = derive_keys(&polyseed, monero_rust::Network::Mainnet, "").unwrap();
-    assert!(!keys.address.to_string().is_empty());
-}
-
-#[test]
-fn test_validate_seed_accepts_all_types() {
+fn test_validate_seed_accepts_supported_types() {
     // 12-word BIP39
     validate_seed("meadow tip best belt boss eyebrow control affair eternal piece very shiver")
         .unwrap();
-    // 16-word polyseed
-    let polyseed = generate_seed(SeedFormat::Polyseed).unwrap();
-    validate_seed(&polyseed).unwrap();
     // 25-word classic
     validate_seed(
         "tasked eight afraid laboratory tail feline rift reinvest vane cafe bailed \
@@ -394,13 +381,4 @@ fn test_resolve_seed_bip39_passthrough_classic() {
             .unwrap()
             .to_string()
     );
-}
-
-#[test]
-fn test_resolve_seed_bip39_passthrough_polyseed() {
-    let polyseed = generate_seed(SeedFormat::Polyseed).unwrap();
-    // Polyseed (16 words) should pass through regardless of passphrase/account_index
-    let _seed = resolve_seed_bip39(&polyseed, "pass", 3).unwrap();
-    let keys = derive_keys(&polyseed, monero_rust::Network::Mainnet, "").unwrap();
-    assert!(!keys.address.to_string().is_empty());
 }

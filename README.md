@@ -1,27 +1,40 @@
 # monero-rust
 
-Monero wallet tooling in Rust.
+A Monero wallet library in Rust using [`monero-oxide`](https://github.com/monero-oxide/monero-oxide) 
+and its [`monero-wallet`](https://github.com/monero-oxide/monero-oxide/tree/main/monero-oxide/wallet) 
+that runs natively and in the browser (`wasm32-unknown-unknown`).  An RPC 
+client, block scanning, wallet state, transaction construction, and the file 
+and QR formats other Monero wallets (like `wallet2` and Feather) exchange.
 
-## Workspace
+## Synopsis
 
-- `rust/monero-rust`: wallet library
-- `rust/monero-utils/polyseed`: local Polyseed crate
+- Seeds and keys: generates and restores classic 25-word seeds (with seed
+  offset passphrases, in all wallet2 languages) and converts 12-word BIP39
+  mnemonics using the Cake Wallet "Exodus style" derivation. Derives
+  addresses and subaddresses, and restores view-only wallets from keys.
+  Polyseed (16-word) support was recently removed but will be re-added. 
+- Daemon RPC: a JSON-RPC and binary Epee client over a pluggable connection
+  trait, with an HTTP transport (including digest auth) on native targets.
+  Untrusted Epee input is structurally validated before deserialization.
+- Scanning: batched and pipelined block scanning for one or many wallets,
+  subaddress lookahead, mempool scanning, spent detection by key image, and
+  reorg detection with rollback.
+- Wallet state: outputs, balances with lock and unlock rules, freezing,
+  pending spends, tracked transactions, and spend conflict detection.
+- Sending: coin selection, fee estimation, decoy selection matching
+  `monero-wallet`, transfers, sweeps, and broadcast with classified errors.
+- Cold signing and interop: reads and writes wallet2 unsigned and signed
+  transaction sets, output exports, and key image exports (v3 format and
+  legacy Epee), so view-only and offline signing flows work with
+  monero-wallet-cli and Feather. Imported key images are verified before use.
+- Files and transport: reads and writes monero-wallet-cli `.keys` files,
+  encrypts arbitrary wallet data with Argon2 and ChaCha20-Poly1305, and
+  encodes payloads as animated UR QR codes (`xmr-txunsigned`,
+  `xmr-txsigned`, `xmr-keyimage`, `xmr-output`).
 
-The wallet library depends on the published `monero-oxide` and `monero-wallet` crates.
-CryptoNight hashing and Epee serialization use pinned upstream Git revisions.
-
-## Reduced feature branch
-
-This branch removes the vendored payment-proof implementation and the public
-`tx_proof` module. The published `monero-payment-proofs` 0.0.1 package is an
-empty placeholder, so OutProofV2 generation and verification are unavailable.
-The complete implementation remains on `staging`.
-
-## Related repositories
-
-- [`monero-ffi`](https://git.manymath.com/sneurlax/monero-ffi): Dart/Flutter bindings and browser transport
-- [`monero-cli`](https://git.manymath.com/sneurlax/monero-cli): command-line wallet
-- [`monero-extension`](https://git.manymath.com/sneurlax/monero-extension): Flutter browser extension built on `monero-ffi`
+The crate lives in `rust/monero-rust`. CryptoNight hashing (Cuprate) and Epee
+serialization use pinned upstream Git revisions because their crates.io
+releases are placeholders or lack needed fixes.
 
 ## Requirements
 
@@ -35,7 +48,9 @@ scripts/test-fast.sh   # check formatting, compile, and run selected unit tests
 scripts/test-all.sh    # run the full suite; use --no-regtest to skip regtest
 ```
 
-The full suite reports skips when `wasm-bindgen-test-runner` or `monerod` is unavailable.
+The full suite reports skips when `wasm-bindgen-test-runner` or `monerod` is
+unavailable. Tests check against vectors from upstream Monero, Feather, and
+Ledger, and against a regtest `monerod`.
 
 ## Acknowledgements
 

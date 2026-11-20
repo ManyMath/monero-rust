@@ -33,7 +33,6 @@ serde_bytes = "0.11"
 # Use the Cuprate revision previously vendored here; the crates.io package
 # is a placeholder.
 cuprate-cryptonight = { git = "https://github.com/Cuprate/cuprate", rev = "b6a0302c8189187c7b85059c81086858bd4e4352" }
-polyseed = { path = "../monero-utils/polyseed", default-features = false }
 crc = "3"
 lazy_static = "1" 
 # This revision includes the nested-struct and byte-blob deserialization fixes

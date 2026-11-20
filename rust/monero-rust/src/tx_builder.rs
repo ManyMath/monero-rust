@@ -1082,8 +1082,7 @@ pub mod native {
     }
 
     fn spend_key_from_seed(seed: &Seed, passphrase: &str) -> Zeroizing<Scalar> {
-        // Apply the seed offset passphrase and derive the spend key. For polyseed,
-        // this includes PBKDF2; the seed entropy alone is not the spend key.
+        // Apply the seed offset passphrase before deriving the spend key.
         let entropy = seed.key_bytes_with_passphrase(passphrase);
         let mut spend_bytes = [0u8; 32];
         spend_bytes.copy_from_slice(&entropy[..]);
@@ -1093,12 +1092,6 @@ pub mod native {
     fn view_key_from_spend_key(spend_key: &Zeroizing<Scalar>) -> Zeroizing<Scalar> {
         let view: [u8; 32] = Keccak256::digest(spend_key.to_bytes()).into();
         Zeroizing::new(Scalar::from_bytes_mod_order(view))
-    }
-
-    fn view_pair_from_seed(seed: &Seed, passphrase: &str) -> ViewPair {
-        let spend_key = spend_key_from_seed(seed, passphrase);
-        let view_key = view_key_from_spend_key(&spend_key);
-        signer_view_pair(&spend_key, &view_key).expect("valid wallet keys")
     }
 
     fn signer_view_pair(
@@ -3480,43 +3473,6 @@ pub mod native {
     #[cfg(test)]
     mod tests {
         use super::*;
-
-        /// Derive the same polyseed wallet as the scanner and key-image signer.
-        ///
-        /// Polyseed derives its spend key from entropy through PBKDF2. Using the
-        /// entropy directly would select a different wallet; classic seeds do not
-        /// expose that mistake because their entropy is the spend key.
-        #[test]
-        fn seed_derivation_matches_derive_keys_for_a_polyseed() {
-            use rand_core::SeedableRng;
-
-            let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(3);
-            let seed = Seed::new_polyseed(&mut rng);
-            assert_ne!(
-                seed.entropy(),
-                seed.key_bytes(),
-                "premise: a polyseed's key is not its entropy"
-            );
-
-            let words = seed.to_string();
-            let expected =
-                crate::scanner::derive_keys(&words, monero_wallet::address::Network::Stagenet, "")
-                    .expect("derive_keys must accept a polyseed");
-
-            let spend = spend_key_from_seed(&seed, "");
-            assert_eq!(
-                (&*spend * ED25519_BASEPOINT_TABLE).compress().to_bytes(),
-                expected.public_spend_key,
-                "signer's spend key must be the wallet's spend key"
-            );
-
-            let view_pair = view_pair_from_seed(&seed, "");
-            assert_eq!(
-                view_pair.legacy_address(Network::Stagenet).to_string(),
-                expected.address.to_string(),
-                "signer's view pair must be the wallet's view pair"
-            );
-        }
 
         /// Apply the seed offset passphrase in every seed-based offline signing API.
         ///

@@ -23,14 +23,6 @@ fn hub_seed_birthday_with_bip39() {
 }
 
 #[test]
-fn hub_seed_birthday_with_polyseed() {
-    let polyseed = generate_seed(SeedFormat::Polyseed).unwrap();
-    let birthday = seed_birthday(&polyseed);
-    assert!(birthday.is_some());
-    assert!(birthday.unwrap() > 0);
-}
-
-#[test]
 fn hub_seed_birthday_with_classic() {
     let classic = generate_seed(SeedFormat::Classic).unwrap();
     let birthday = seed_birthday(&classic);
@@ -43,14 +35,6 @@ fn hub_generate_bip39_then_birthday() {
     assert_eq!(seed.split_whitespace().count(), 12);
     let birthday = seed_birthday(&seed);
     assert_eq!(birthday, None);
-}
-
-#[test]
-fn hub_generate_polyseed_then_birthday() {
-    let seed = generate_seed(SeedFormat::Polyseed).unwrap();
-    assert_eq!(seed.split_whitespace().count(), 16);
-    let birthday = seed_birthday(&seed);
-    assert!(birthday.is_some());
 }
 
 #[test]
@@ -101,15 +85,12 @@ fn hub_bip39_to_legacy_conversion() {
 }
 
 #[test]
-fn hub_resolve_seed_all_types() {
+fn hub_resolve_seed_supported_types() {
     // BIP39
     resolve_seed(BIP39_SEED).unwrap();
     // Classic
     let classic = generate_seed(SeedFormat::Classic).unwrap();
     resolve_seed(&classic).unwrap();
-    // Polyseed
-    let polyseed = generate_seed(SeedFormat::Polyseed).unwrap();
-    resolve_seed(&polyseed).unwrap();
 }
 
 #[test]
@@ -138,11 +119,10 @@ fn hub_full_bip39_restore_pipeline() {
 }
 
 #[test]
-fn hub_all_seed_types_through_restore_pipeline() {
+fn hub_supported_seed_types_through_restore_pipeline() {
     let seeds = vec![
         ("bip39", generate_seed(SeedFormat::Bip39).unwrap()),
         ("classic", generate_seed(SeedFormat::Classic).unwrap()),
-        ("polyseed", generate_seed(SeedFormat::Polyseed).unwrap()),
     ];
 
     for (seed_type, seed) in &seeds {

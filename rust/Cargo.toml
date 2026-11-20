@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "monero-rust",
-    "monero-utils/polyseed",
 ]
 exclude = [
     "vendor",

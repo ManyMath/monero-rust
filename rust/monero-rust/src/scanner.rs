@@ -506,7 +506,7 @@ struct CachedScannerEntry {
 
 /// Resolve a mnemonic with explicit BIP39 passphrase and account index.
 /// If 12 words, convert from BIP39 first using the given passphrase and account index.
-/// Non-BIP39 seeds (16-word polyseed, 25-word classic) pass through unchanged.
+/// Classic seeds pass through unchanged; unsupported formats are rejected.
 pub fn resolve_seed_bip39(
     mnemonic: &str,
     passphrase: &str,
@@ -595,7 +595,6 @@ pub fn derive_address_from_view_only(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SeedFormat {
     Classic,
-    Polyseed,
     Bip39,
 }
 
@@ -605,7 +604,6 @@ pub fn generate_seed(format: SeedFormat) -> Result<String, String> {
 
     let seed = match format {
         SeedFormat::Classic => Seed::new(&mut rng, Language::English),
-        SeedFormat::Polyseed => Seed::new_polyseed(&mut rng),
         SeedFormat::Bip39 => return crate::bip39_conv::generate_bip39(),
     };
 
@@ -4198,40 +4196,6 @@ mod tests {
     fn test_hex_to_hash_wrong_length() {
         let result = hex_to_hash("0011");
         assert!(result.is_err());
-    }
-
-    /// Feather Wallet test vector: polyseed + passphrase "hunter2" through derive_keys.
-    #[test]
-    fn test_derive_keys_polyseed_passphrase_feather_vector() {
-        let seed = "shoot exhibit rebuild laptop drive come off yard infant session subject tree steak antique liar hybrid";
-
-        // Mainnet keys
-        let keys = derive_keys(seed, Network::Mainnet, "hunter2").unwrap();
-        assert_eq!(
-            hex::encode(keys.secret_spend_key.as_deref().unwrap()),
-            "08813258e8b396b2629ae9ecccd95ae33ec269ab0813754f43edfae937304909"
-        );
-        assert_eq!(
-            hex::encode(&*keys.secret_view_key),
-            "1be97a06de0e8e32952e41fa80023e5e0d96af4e61d6d1c2f521f94d12c3170b"
-        );
-        assert_eq!(
-            hex::encode(keys.public_spend_key),
-            "b4e3d0ed0ab2a22cb567d2edb7d33e402d0bf1a38b75fb1adb7cca6116f2b18e"
-        );
-        assert_eq!(
-            hex::encode(keys.public_view_key),
-            "c9efbf531801051471e29c7c2cc36458e10f5a4f2041842c818ed1654c938fde"
-        );
-        assert_eq!(keys.address.to_string(), "48UhC3g9s9T8UjKHj1GQsPBjb4To7AS585VYujqCfgEcQtEMx2CKgHA4RLmRYqjsG7FsErzHZbeUb8SmMihoYme6S4MBnaZ");
-
-        // Stagenet keys (the Feather wallet was on Stagenet)
-        let keys_stagenet = derive_keys(seed, Network::Stagenet, "hunter2").unwrap();
-        assert_eq!(keys_stagenet.address.to_string(), "58gjGtb7WkZ8UjKHj1GQsPBjb4To7AS585VYujqCfgEcQtEMx2CKgHA4RLmRYqjsG7FsErzHZbeUb8SmMihoYme6S9wf8gy");
-
-        // Without passphrase: different keys
-        let keys_no_pass = derive_keys(seed, Network::Mainnet, "").unwrap();
-        assert_ne!(keys_no_pass.address, keys.address);
     }
 
     /// Reject a short reply before `zip` can silently leave key images unchecked.
