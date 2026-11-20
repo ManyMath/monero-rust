@@ -583,7 +583,6 @@ mod tests {
             key_image: format!("ki_{}", tx_hash),
             is_coinbase: false,
             frozen: false,
-            pre_ringct: false,
             export_height: None,
         }
     }

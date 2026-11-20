@@ -885,7 +885,6 @@ async fn scan_one<R: RpcConnection + 'static>(rpc: Rpc<R>, request: Value) -> Va
             "confirmed": balance.confirmed,
             "unconfirmed": balance.unconfirmed,
             "pending_spend": balance.pending_spend,
-            "pre_ringct": balance.pre_ringct,
         },
         "conflicts": file.conflicts,
         "reorgs": file.reorgs,
@@ -926,7 +925,6 @@ fn outputs_json(state: &WalletState, file: &StateFile, height: u64) -> Vec<Value
                 "spent_by_tx": spent_by.map(|spent| spent.tx.clone()),
                 "key_image": output.key_image,
                 "is_coinbase": output.is_coinbase,
-                "pre_ringct": output.pre_ringct,
                 "payment_id": output.payment_id,
                 "has_ring": output.ring.is_some(),
                 "ring": output.ring.as_ref().and_then(|ring| ring.indexes().ok()),
@@ -1135,7 +1133,6 @@ async fn op_ki_import(request: &Value) -> Value {
             "confirmed": balance.confirmed,
             "unconfirmed": balance.unconfirmed,
             "pending_spend": balance.pending_spend,
-            "pre_ringct": balance.pre_ringct,
         },
         "outputs": outputs_json(&state, &file, height),
     })

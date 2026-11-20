@@ -1569,6 +1569,8 @@ dependencies = [
 [[package]]
 name = "monero-wallet"
 version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8d9a2431255db4deaf39671646e17f79bfb4ceadfffc9bb52e0f3fb0d29c75e"
 dependencies = [
  "curve25519-dalek",
  "hex",

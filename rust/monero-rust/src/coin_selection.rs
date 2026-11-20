@@ -164,10 +164,7 @@ pub fn select_inputs_with_fee_and_rng<R: RngCore + CryptoRng>(
     }
     let candidates = spendable
         .iter()
-        .filter(|output| {
-            !output.pre_ringct
-                && output.subaddress_index.map_or(0, |index| index.0) == source_account
-        })
+        .filter(|output| output.subaddress_index.map_or(0, |index| index.0) == source_account)
         .cloned()
         .collect::<Vec<_>>();
     let extra = wallet2_caller_extra(integrated);
@@ -518,12 +515,15 @@ fn select_inputs_with_estimator(
     manual_selection: Option<&[String]>,
     fee_for: impl Fn(usize, usize) -> Result<u64, String>,
 ) -> Result<CoinSelectionResult, String> {
-    let mut candidates: Vec<WalletOutput> = spendable
-        .iter()
-        .filter(|o| !o.pre_ringct)
-        .filter(|o| manual_selection.map_or(true, |keys| keys.contains(&o.output_key())))
-        .cloned()
-        .collect();
+    let mut candidates: Vec<WalletOutput> = if let Some(selected_keys) = manual_selection {
+        spendable
+            .iter()
+            .filter(|o| selected_keys.contains(&o.output_key()))
+            .cloned()
+            .collect()
+    } else {
+        spendable.to_vec()
+    };
 
     if candidates.is_empty() {
         return Err(if manual_selection.is_some() {
@@ -733,7 +733,6 @@ mod tests {
             key_image: format!("ki_{}", tx_hash),
             is_coinbase: false,
             frozen: false,
-            pre_ringct: false,
             export_height: None,
         }
     }
@@ -1145,37 +1144,6 @@ mod tests {
         let selected_keys = vec!["tx1:0".to_string(), "tx2:0".to_string()];
         let error = select_inputs(&outputs, 1, 1, Some(&selected_keys)).unwrap_err();
         assert!(error.contains("overflow"), "{error}");
-    }
-
-    #[test]
-    fn pre_ringct_outputs_are_never_candidates() {
-        const XMR: u64 = 1_000_000_000_000;
-        let mut old = make_output(50 * XMR, "old");
-        old.pre_ringct = true;
-        let spendable = vec![old, make_output(XMR, "new")];
-        let named = vec![spendable[0].output_key()];
-
-        let chosen = select_inputs(&spendable, 10 * XMR, 1, None).unwrap();
-        assert!(chosen.selected.iter().all(|o| !o.pre_ringct));
-        assert!(select_inputs(&spendable, 1, 1, Some(&named)).is_err());
-
-        let fee_rate = FeeRate::new(20_000, 10_000).unwrap();
-        let select = |amount, manual: Option<&[String]>| {
-            select_inputs_with_fee_and_rng(
-                &mut rand::rngs::StdRng::seed_from_u64(1),
-                &spendable,
-                amount,
-                1,
-                false,
-                manual,
-                0,
-                RctType::ClsagBulletproofPlus,
-                fee_rate,
-            )
-        };
-        assert!(select(10 * XMR, None).is_err());
-        assert!(select(1, Some(&named)).is_err());
-        assert_eq!(select(XMR / 2, None).unwrap().selected[0].tx_hash, "new");
     }
 
     #[test]

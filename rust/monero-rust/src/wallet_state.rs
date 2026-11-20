@@ -29,9 +29,6 @@ pub struct Balance {
     pub unconfirmed: u64,
     /// Total amount of outputs that are pending-spent (broadcast but not yet confirmed).
     pub pending_spend: u64,
-    /// Unspent pre-RingCT outputs, which this library cannot spend; wallet2's
-    /// balance includes them.
-    pub pre_ringct: u64,
 }
 
 /// Transaction lifecycle status.
@@ -1351,10 +1348,6 @@ impl WalletState {
             if output.spent || output.frozen {
                 continue;
             }
-            if output.pre_ringct {
-                bal.pre_ringct = bal.pre_ringct.saturating_add(output.amount);
-                continue;
-            }
             if self.pending_spends.contains_key(&output.key_image) {
                 bal.pending_spend = bal.pending_spend.saturating_add(output.amount);
                 continue;
@@ -1385,14 +1378,13 @@ impl WalletState {
         self.spendable_outputs_at(height, current_time_secs())
     }
 
-    /// Spendable outputs at `height` with an explicit clock; never pre-RingCT ones.
+    /// Get spendable outputs using an explicit height and Unix clock.
     pub fn spendable_outputs_at(&self, height: u64, now_secs: Option<u64>) -> Vec<&WalletOutput> {
         self.outputs
             .iter()
             .filter(|o| {
                 !o.spent
                     && !o.frozen
-                    && !o.pre_ringct
                     && !self.pending_spends.contains_key(&o.key_image)
                     && is_spendable_at(o, height, now_secs)
             })
@@ -2121,7 +2113,6 @@ mod tests {
             key_image: key_image.into(),
             is_coinbase: false,
             frozen: false,
-            pre_ringct: false,
             export_height: None,
         }
     }
@@ -2282,40 +2273,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn pre_ringct_outputs_are_counted_apart_and_never_offered() {
-        let mut state = WalletState::new();
-        let mut old = make_output(3_000, 50, "ki_old");
-        old.pre_ringct = true;
-        let mut old_locked = make_output(5_000, 195, "ki_old_locked");
-        old_locked.pre_ringct = true;
-        state.add_outputs(vec![
-            old,
-            old_locked,
-            make_output(1_000, 100, "ki_new"),
-            make_output(2_000, 195, "ki_new_locked"),
-        ]);
-
-        let balance = state.balance_at(200, None);
-        assert_eq!(balance.confirmed, 1_000);
-        assert_eq!(balance.unconfirmed, 2_000);
-        assert_eq!(balance.pre_ringct, 8_000);
-        let offered: Vec<&str> = state
-            .spendable_outputs_at(200, None)
-            .iter()
-            .map(|o| o.key_image.as_str())
-            .collect();
-        assert_eq!(offered, ["ki_new"]);
-        assert!(is_spendable_at(&state.outputs()[0], 200, None));
-
-        assert_eq!(
-            state.mark_spent_by_key_images_at_height(&["ki_old".to_string()], 210),
-            1
-        );
-        assert_eq!(state.outputs()[0].spent_height, Some(210));
-        assert_eq!(state.balance_at(220, None).pre_ringct, 5_000);
     }
 
     #[test]

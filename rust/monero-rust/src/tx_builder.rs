@@ -51,13 +51,6 @@ pub mod native {
     fn spendable_from_stored_data(
         stored: &StoredOutputData,
     ) -> Result<(WalletOutput, u64), String> {
-        if stored.pre_ringct {
-            return Err(format!(
-                "Output {}:{} is a pre-RingCT output, which this library cannot spend; \
-                 wallet2 can move it to a RingCT output (sweep_all, or sweep_unmixable)",
-                stored.tx_hash, stored.output_index
-            ));
-        }
         let output = parse_stored_output(&stored.received_output_bytes)?;
         let global_index = stored.global_index.ok_or_else(|| {
             "Output has no authoritative global index; refresh/rescan it before spending"
@@ -189,16 +182,6 @@ pub mod native {
         let ring_len = ring_len(rct_type).ok_or_else(|| "Unsupported RingCT type".to_string())?;
         if key_images.len() != outputs.len() {
             return Err("selected ring count does not match stored input count".to_string());
-        }
-        if let Some(output) = wallet_state
-            .outputs()
-            .iter()
-            .find(|output| output.pre_ringct && key_images.contains(&output.key_image))
-        {
-            return Err(format!(
-                "Output {}:{} is a pre-RingCT output; no decoys are drawn for it",
-                output.tx_hash, output.output_index
-            ));
         }
         let existing_rings = recorded_rings(wallet_state, key_images)?;
         let existing_candidates: Vec<Option<Vec<u64>>> = key_images
@@ -865,9 +848,6 @@ pub mod native {
         /// holds nothing for `key_image`.
         #[serde(default)]
         pub ring: Option<DecoySelection>,
-        /// An output of a version 1 transaction, which the builders refuse.
-        #[serde(default)]
-        pub pre_ringct: bool,
     }
 
     /// Ring member data (key + commitment as hex)
@@ -2040,21 +2020,12 @@ pub mod native {
         broadcast_raw_transaction_with_rpc(rpc, &signed.tx_blob, wallet_state, do_not_relay).await
     }
 
-    /// An output `get_received_outputs_from_scan` found.
-    #[derive(Debug, Clone)]
-    pub struct ReceivedOutput {
-        pub output: WalletOutput,
-        /// Version 1 output: `index_on_blockchain` is its position in the
-        /// transaction, and it cannot be spent here.
-        pub pre_ringct: bool,
-    }
-
     async fn received_outputs_from_scan_inner<R: RpcConnection>(
         rpc: &Rpc<R>,
         block_height: u64,
         seed_phrase: &str,
         passphrase: &str,
-    ) -> Result<Vec<ReceivedOutput>, String> {
+    ) -> Result<Vec<WalletOutput>, String> {
         let seed = resolve_seed(seed_phrase)?;
         let spend_key = spend_key_from_seed(&seed, passphrase);
         let view_pair = signer_view_pair(&spend_key, &view_key_from_spend_key(&spend_key))?;
@@ -2083,12 +2054,11 @@ pub mod native {
 
         let mut received_outputs = Vec::new();
         for (tx_hash, tx) in &txs_with_hashes {
-            let pre_ringct = tx.version() == 1;
-            received_outputs.extend(
-                crate::scanner::scan_single_transaction(&mut scanner, *tx_hash, tx)?
-                    .into_iter()
-                    .map(|output| ReceivedOutput { output, pre_ringct }),
-            );
+            received_outputs.extend(crate::scanner::scan_single_transaction(
+                &mut scanner,
+                *tx_hash,
+                tx,
+            )?);
         }
         Ok(received_outputs)
     }
@@ -2102,7 +2072,7 @@ pub mod native {
         seed_phrase: &str,
         _network_str: &str,
         passphrase: &str,
-    ) -> Result<Vec<ReceivedOutput>, String> {
+    ) -> Result<Vec<WalletOutput>, String> {
         let rpc = crate::monero_rpc::url_rpc(node_url)
             .map_err(|e| format!("Failed to create RPC client: {:?}", e))?;
         received_outputs_from_scan_inner(&rpc, block_height, seed_phrase, passphrase).await
@@ -2116,7 +2086,7 @@ pub mod native {
         seed_phrase: &str,
         _network_str: &str,
         passphrase: &str,
-    ) -> Result<Vec<ReceivedOutput>, String> {
+    ) -> Result<Vec<WalletOutput>, String> {
         received_outputs_from_scan_inner(rpc, block_height, seed_phrase, passphrase).await
     }
 
@@ -3587,7 +3557,6 @@ pub mod native {
                 global_index: None,
                 key_image: String::new(),
                 ring: None,
-                pre_ringct: false,
             };
 
             assert_eq!(source_account(&[output(None), output(Some((0, 7)))]), Ok(0));
@@ -3666,7 +3635,6 @@ pub mod native {
                 global_index: Some(424242),
                 key_image: String::new(),
                 ring: None,
-                pre_ringct: false,
             };
             let (output, global_index) = spendable_from_stored_data(&stored).unwrap();
             let spent = spent_output(&output, global_index);
@@ -3675,30 +3643,6 @@ pub mod native {
             assert_eq!(spent.key, key);
             let commitment: EdwardsPoint = output.commitment().commit().into();
             assert_eq!(spent.commitment, commitment);
-        }
-
-        #[test]
-        fn a_pre_ringct_output_is_refused_before_decoys_are_drawn() {
-            let output = parse_stored_output(&hex::encode(stored_output_bytes(0))).unwrap();
-            let stored = StoredOutputData {
-                tx_hash: hex::encode(output.transaction()),
-                output_index: 0,
-                amount: 1234,
-                key: String::new(),
-                key_offset: String::new(),
-                commitment_mask: String::new(),
-                subaddress: None,
-                payment_id: None,
-                received_output_bytes: hex::encode(stored_output_bytes(0)),
-                global_index: Some(7),
-                key_image: String::new(),
-                ring: None,
-                pre_ringct: true,
-            };
-            let error = spendable_from_stored_data(&stored)
-                .expect_err("a pre-RingCT output must not reach decoy selection");
-            assert!(error.contains("pre-RingCT"), "{error}");
-            assert!(error.contains("sweep_unmixable"), "{error}");
         }
 
         #[test]
@@ -3732,7 +3676,6 @@ pub mod native {
                 global_index: None,
                 key_image: String::new(),
                 ring: None,
-                pre_ringct: false,
             };
 
             // Test that it can be serialized and deserialized
@@ -3903,7 +3846,6 @@ pub mod native {
                 global_index: Some(424_242),
                 key_image: "22".repeat(32),
                 ring: None,
-                pre_ringct: false,
             };
             let output = crate::wallet_output::WalletOutput {
                 tx_hash: stored.tx_hash.clone(),
@@ -3923,7 +3865,6 @@ pub mod native {
                 key_image: stored.key_image.clone(),
                 is_coinbase: false,
                 frozen: false,
-                pre_ringct: false,
                 export_height: None,
             };
             let address = crate::scanner::derive_address(SEED, Network::Mainnet, "")
@@ -4001,7 +3942,6 @@ pub mod native {
                     global_index: Some(1_000 + index),
                     key_image: format!("{index:064x}"),
                     ring: None,
-                    pre_ringct: false,
                 }
             };
             let fee_rate = FeeRate::new(20_000, 10_000).unwrap();

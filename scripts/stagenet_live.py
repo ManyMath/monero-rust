@@ -55,8 +55,7 @@ def w2_funds(view):
             if t["spent"]:
                 continue
             key = "%d,%d" % (t["subaddr_index"]["major"], t["subaddr_index"]["minor"])
-            row = by_sub.setdefault(key, {"outputs": 0, "amount": 0, "unlocked_outputs": 0,
-                                          "pre_ringct_outputs": 0, "pre_ringct_amount": 0})
+            row = by_sub.setdefault(key, {"outputs": 0, "amount": 0, "unlocked_outputs": 0})
             row["outputs"] += 1
             row["amount"] += t["amount"]
             row["unlocked_outputs"] += 1 if t.get("unlocked") else 0
@@ -76,27 +75,23 @@ def mr_funds(scan):
             continue
         sub = o["subaddress_index"] or [0, 0]
         key = "%d,%d" % tuple(sub)
-        row = by_sub.setdefault(key, {"outputs": 0, "amount": 0, "unlocked_outputs": 0,
-                                      "pre_ringct_outputs": 0, "pre_ringct_amount": 0})
+        row = by_sub.setdefault(key, {"outputs": 0, "amount": 0, "unlocked_outputs": 0})
         unlocked = o["spendable"] and not o.get("pending_spend")
         row["outputs"] += 1
         row["amount"] += o["amount"]
         row["unlocked_outputs"] += 1 if unlocked else 0
-        if o.get("pre_ringct"):
-            row["pre_ringct_outputs"] += 1
-            row["pre_ringct_amount"] += o["amount"]
         acc = per_account.setdefault(str(sub[0]), [0, 0])
         acc[0] += o["amount"]
         acc[1] += o["amount"] if unlocked else 0
     bal = scan["balance"]
     return {"height": scan["height"], "balance_struct": bal,
-            "balance": bal["confirmed"] + bal["unconfirmed"] + bal.get("pre_ringct", 0),
+            "balance": bal["confirmed"] + bal["unconfirmed"],
             "unlocked_balance": sum(v[1] for v in per_account.values()),
-            "pre_ringct": bal.get("pre_ringct"), "per_account": per_account,
+            "per_account": per_account,
             "unspent_by_subaddress": dict(sorted(by_sub.items())),
             "unspent_outputs": [{k: o.get(k) for k in ("tx_hash", "output_index", "amount", "subaddress_index",
                                                        "block_height", "global_index", "spendable",
-                                                       "pending_spend", "pre_ringct")}
+                                                       "pending_spend")}
                                 for o in scan["outputs"] if not o["spent"]]}
 
 
@@ -113,15 +108,10 @@ def cmd_funds(args):
         json.dump(scan, f)
     diff = compat.scan_diff(view, scan)
     w2, mr = w2_funds(view), mr_funds(scan)
-    flagged = {(o["tx_hash"], o["key"]) for o in scan["outputs"] if o.get("pre_ringct") and not o["spent"]}
-    w2_unspent = {(t["tx_hash"], t["pubkey"]): t for v in view["incoming"].values() for t in v if not t["spent"]}
-    w2["pre_ringct"] = sum(w2_unspent[k]["amount"] for k in flagged if k in w2_unspent)
-    w2["pre_ringct_outputs_found"] = sum(1 for k in flagged if k in w2_unspent)
     subs = sorted(set(w2["unspent_by_subaddress"]) | set(mr["unspent_by_subaddress"]),
                   key=lambda k: tuple(int(x) for x in k.split(",")))
     agree = {
         "height": w2["height"] == mr["height"],
-        "pre_ringct": w2["pre_ringct"] == mr["pre_ringct"] and w2["pre_ringct_outputs_found"] == len(flagged),
         "balance": w2["balance"] == mr["balance"],
         "unlocked_balance": w2["unlocked_balance"] == mr["unlocked_balance"],
         "per_account": {k: v for k, v in w2["per_account"].items() if v != [0, 0]} ==
@@ -142,7 +132,7 @@ def cmd_funds(args):
     brief = {k: out[k] for k in ("agree", "all_agree")}
     brief["wallet2"] = {k: w2[k] for k in ("height", "balance", "unlocked_balance", "per_account",
                                            "unspent_by_subaddress")}
-    brief["monero_rust"] = {k: mr[k] for k in ("height", "balance", "unlocked_balance", "pre_ringct",
+    brief["monero_rust"] = {k: mr[k] for k in ("height", "balance", "unlocked_balance",
                                                "balance_struct", "per_account", "unspent_by_subaddress")}
     print(json.dumps(brief, indent=1))
     print("evidence:", path)
@@ -342,7 +332,7 @@ def cmd_rebuild(args):
                    "estimate-%s" % args.name)
     e12, e22 = est["shapes"][0]["wallet2_fee"], est["shapes"][1]["wallet2_fee"]
     cands = [o for o in outputs if not o["spent"] and o["spendable"] and not o["pending_spend"]
-             and not o.get("pre_ringct") and (o["subaddress_index"] or [0, 0])[0] == args.account]
+             and (o["subaddress_index"] or [0, 0])[0] == args.account]
     by_sub = {}
     for o in cands:
         by_sub.setdefault(tuple(o["subaddress_index"] or [0, 0]), []).append(o)

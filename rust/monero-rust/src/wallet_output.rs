@@ -37,10 +37,6 @@ pub struct WalletOutput {
     /// Whether this output is frozen (excluded from coin selection).
     #[serde(default)]
     pub frozen: bool,
-    /// Output of a version 1 transaction (per-amount global index). This library
-    /// cannot spend it; it counts in `Balance::pre_ringct` and is never selected.
-    #[serde(default)]
-    pub pre_ringct: bool,
     /// For a record that replaced a smaller output with the same one-time key: the
     /// height of the first output credited for the key, which keeps its position in
     /// key image exports as wallet2 overwrites in place (wallet2.cpp:2653).
@@ -63,7 +59,6 @@ impl From<&WalletOutput> for StoredOutputData {
             global_index: o.global_index,
             key_image: o.key_image.clone(),
             ring: o.ring.clone(),
-            pre_ringct: o.pre_ringct,
         }
     }
 }
@@ -83,7 +78,6 @@ impl From<WalletOutput> for StoredOutputData {
             global_index: o.global_index,
             key_image: o.key_image,
             ring: o.ring,
-            pre_ringct: o.pre_ringct,
         }
     }
 }
@@ -142,7 +136,6 @@ mod tests {
             key_image: "ki_abc".into(),
             is_coinbase: false,
             frozen: false,
-            pre_ringct: false,
             export_height: None,
         }
     }
@@ -206,30 +199,6 @@ mod tests {
         }"#;
         let deserialized: WalletOutput = serde_json::from_str(json).unwrap();
         assert!(!deserialized.frozen);
-    }
-
-    #[test]
-    fn pre_ringct_flag_defaults_to_false_and_reaches_the_builder() {
-        let json = r#"{
-            "tx_hash":"abc123","output_index":0,"amount":1000000000000,
-            "key":"key","key_offset":"offset",
-            "commitment_mask":"mask","subaddress_index":[0,1],"payment_id":null,
-            "received_output_bytes":"bytes","block_height":100,"spent":false,
-            "key_image":"ki_abc","is_coinbase":false
-        }"#;
-        let deserialized: WalletOutput = serde_json::from_str(json).unwrap();
-        assert!(!deserialized.pre_ringct);
-
-        let mut o = sample_output();
-        o.pre_ringct = true;
-        let json = serde_json::to_string(&o).unwrap();
-        assert!(
-            serde_json::from_str::<WalletOutput>(&json)
-                .unwrap()
-                .pre_ringct
-        );
-        assert!(StoredOutputData::from(&o).pre_ringct);
-        assert!(StoredOutputData::from(o).pre_ringct);
     }
 
     #[test]

@@ -58,7 +58,6 @@ fn state_output(tx: &str, key: &EdwardsPoint, height: u64) -> WalletOutput {
         key_image: String::new(),
         is_coinbase: false,
         frozen: false,
-        pre_ringct: false,
         export_height: None,
     }
 }

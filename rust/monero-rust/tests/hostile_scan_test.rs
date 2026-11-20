@@ -152,7 +152,7 @@ async fn unparseable_transaction_blob_is_never_dropped_silently() {
 }
 
 #[tokio::test]
-async fn pre_ringct_blocks_are_parsed_and_keep_their_real_hash() {
+async fn version_1_blocks_are_parsed_and_keep_their_real_hash() {
     let node = Node::honest(SnapshotNode::new());
     let scanned = scan_blocks_batch(&node.rpc(), 0, SEED_W, NETWORK, LOOKAHEAD, false, "")
         .await

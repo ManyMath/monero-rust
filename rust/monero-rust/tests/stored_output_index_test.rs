@@ -21,7 +21,6 @@ fn scanned_output(global_index: Option<u64>) -> WalletOutput {
         key_image: "66".repeat(32),
         is_coinbase: false,
         frozen: false,
-        pre_ringct: false,
         export_height: None,
     }
 }
