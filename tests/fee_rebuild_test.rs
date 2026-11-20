@@ -43,11 +43,16 @@ async fn prepare(node: &FakeNode, state: &WalletState) -> PreparedInputs {
     .unwrap()
 }
 
-fn candidate_sets(node: &FakeNode, owned: &Owned) -> Vec<Vec<u64>> {
+fn candidate_sets(node: &FakeNode, state: &WalletState, owned: &Owned) -> Vec<Vec<u64>> {
+    let Some(candidates) = state.ring_database().candidates(owned.key_image()) else {
+        return Vec::new();
+    };
+    let mut expected = candidates.to_vec();
+    expected.sort_unstable();
     node.get_outs_log()
         .iter()
         .flat_map(|call| call.chunks(75).map(<[u64]>::to_vec).collect::<Vec<_>>())
-        .filter(|set| set.contains(&owned.global_index()))
+        .filter(|set| *set == expected)
         .collect()
 }
 
@@ -103,6 +108,7 @@ async fn pair_falls_short(
 
 fn assert_rebuild_kept_what_was_recorded(
     node: &FakeNode,
+    state: &WalletState,
     owned: &[Owned; 3],
     before: &BTreeMap<String, Vec<u64>>,
     built: &BTreeMap<String, Vec<u64>>,
@@ -117,7 +123,7 @@ fn assert_rebuild_kept_what_was_recorded(
         assert_same_ring("an input built again", ring, &built[key_image]);
     }
     for o in &owned[..2] {
-        let sets = candidate_sets(node, o);
+        let sets = candidate_sets(node, state, o);
         assert_eq!(
             sets.len(),
             3,
@@ -129,7 +135,7 @@ fn assert_rebuild_kept_what_was_recorded(
         );
     }
     assert_eq!(
-        candidate_sets(node, &owned[2]).len(),
+        candidate_sets(node, state, &owned[2]).len(),
         1,
         "the added input is requested once"
     );
@@ -156,7 +162,7 @@ async fn hot_send_adds_an_input_when_the_real_fee_is_not_covered() {
     .await
     .unwrap();
     let built = rings_in_signed(&result.tx_blob);
-    assert_rebuild_kept_what_was_recorded(&node, &owned, &before, &built);
+    assert_rebuild_kept_what_was_recorded(&node, &state, &owned, &before, &built);
     assert_eq!(recorded_rings(&state, &owned), built);
     let spent: Vec<_> = result
         .input_rings
@@ -208,7 +214,7 @@ async fn unsigned_send_adds_an_input_when_the_real_fee_is_not_covered() {
             (o.key_image().to_string(), ring)
         })
         .collect();
-    assert_rebuild_kept_what_was_recorded(&node, &owned, &before, &built);
+    assert_rebuild_kept_what_was_recorded(&node, &state, &owned, &before, &built);
     assert_eq!(recorded_rings(&state, &owned), built);
     assert_eq!(result.input_rings.len(), 3);
 }
@@ -234,7 +240,7 @@ async fn prepared_send_without_a_reserve_fails_after_one_build() {
     .unwrap_err();
     assert!(error.contains("Insufficient funds"), "{error}");
     assert_eq!(node.get_outs_log().len(), 1);
-    assert!(candidate_sets(&node, &owned[2]).is_empty());
+    assert!(candidate_sets(&node, &state, &owned[2]).is_empty());
 }
 
 #[tokio::test]
