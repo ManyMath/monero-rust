@@ -3,7 +3,7 @@
 Environment: MONERO_REGTEST_RPC (eval "$(scripts/regtest-node.sh start)"),
 MONERO_WALLET_RPC, MONEROD (run_short.py only), WALLET2_FEES_DIR (work
 directory) and WALLET2_FEE_PROBE (default: the newest build of
-`cd rust && cargo test -p monero-rust --test wallet2_fee_probe --no-run`).
+`cargo test --test wallet2_fee_probe --no-run`).
 """
 
 import json
@@ -164,14 +164,14 @@ def probe_binary():
     explicit = os.environ.get("WALLET2_FEE_PROBE")
     if explicit:
         return explicit
-    target = os.environ.get("CARGO_TARGET_DIR") or f"{REPO}/rust/target"
+    target = os.environ.get("CARGO_TARGET_DIR") or f"{REPO}/target"
     deps = f"{target}/debug/deps"
     found = [
         f for f in os.listdir(deps)
         if f.startswith("wallet2_fee_probe-") and "." not in f
     ]
     if not found:
-        raise SystemExit("build the probe: cargo test -p monero-rust --test wallet2_fee_probe --no-run")
+        raise SystemExit("build the probe: cargo test --test wallet2_fee_probe --no-run")
     found.sort(key=lambda f: os.path.getmtime(f"{deps}/{f}"))
     return f"{deps}/{found[-1]}"
 

@@ -2,8 +2,8 @@
 //! private regtest daemon, in two phases:
 //!
 //!     eval "$(MONEROD=... scripts/regtest-node.sh start)"
-//!     HOSTILE_RPC_RECORD=main  cargo test -p monero-rust --test hostile_rpc_record -- --ignored --nocapture
-//!     HOSTILE_RPC_RECORD=forks cargo test -p monero-rust --test hostile_rpc_record -- --ignored --nocapture
+//!     HOSTILE_RPC_RECORD=main  cargo test --test hostile_rpc_record -- --ignored --nocapture
+//!     HOSTILE_RPC_RECORD=forks cargo test --test hostile_rpc_record -- --ignored --nocapture
 
 #![cfg(not(target_arch = "wasm32"))]
 

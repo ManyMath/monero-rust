@@ -163,7 +163,7 @@ class Ctx:
 
 
 REPO = Path(__file__).resolve().parents[1]
-CRATE = REPO / "rust" / "monero-rust"
+CRATE = REPO
 VECTORS = CRATE / "tests" / "vectors" / "cold_signing_regtest_v0_18_5_0"
 
 

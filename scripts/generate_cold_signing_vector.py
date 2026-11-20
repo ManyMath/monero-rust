@@ -186,7 +186,7 @@ def main() -> None:
     parser.add_argument(
         "--out-dir",
         type=Path,
-        default=Path("rust/monero-rust/tests/vectors/cold_signing_regtest_v0_18_5_0"),
+        default=Path("tests/vectors/cold_signing_regtest_v0_18_5_0"),
     )
     parser.add_argument(
         "--verify-rust-rebuilt-submit",
@@ -406,8 +406,6 @@ def main() -> None:
                 args.cargo_bin,
                 f"+{args.rust_toolchain}",
                 "run",
-                "-p",
-                "monero-rust",
                 "--example",
                 "rebuild_wallet2_signed_txset",
                 "--",
@@ -424,7 +422,7 @@ def main() -> None:
                 "--out",
                 str(rebuilt_path),
             ]
-            subprocess.run(cargo_cmd, cwd=repo_root / "rust", check=True)
+            subprocess.run(cargo_cmd, cwd=repo_root, check=True)
             signed_txset_for_submit = rebuilt_path.read_bytes().hex()
             rebuilt_signed_sha256 = sha256_file(rebuilt_path)
         cli_submit_stdout = None

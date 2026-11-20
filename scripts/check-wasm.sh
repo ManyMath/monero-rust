@@ -4,14 +4,14 @@
 # Dev-dependencies (reqwest, monero-serai http-rpc) pull in Send-bound futures
 # that are incompatible with WASM's single-threaded runtime, so we check the
 # library only (--lib). Full wasm-pack test would require a WASM-only test
-# workspace crate that excludes those dev-deps.
+# separate test crate that excludes those dev-deps.
 #
 # Usage: ./scripts/check-wasm.sh [--release]
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CRATE_DIR="$SCRIPT_DIR/../rust/monero-rust"
+CRATE_DIR="$SCRIPT_DIR/.."
 
 RELEASE_FLAG=""
 if [[ "${1:-}" == "--release" ]]; then

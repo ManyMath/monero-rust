@@ -47,15 +47,15 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-cd "$ROOT/rust"
+cd "$ROOT"
 
 step "unit and integration tests (live tiers skip)"
-if ! cargo test --workspace --no-fail-fast; then
+if ! cargo test --no-fail-fast; then
     record_failure "default suite"
 fi
 
 step "wasm32 build"
-if ! cargo check -p monero-rust --target wasm32-unknown-unknown; then
+if ! cargo check --target wasm32-unknown-unknown; then
     record_failure "monero-rust wasm32"
 fi
 
@@ -67,13 +67,13 @@ if ! command -v wasm-bindgen-test-runner >/dev/null 2>&1; then
     echo "wasm-bindgen-test-runner not on PATH - skipping the wasm32 tests." >&2
     echo "Install a CLI matching the wasm-bindgen crate version, e.g." >&2
     echo "  cargo install -f wasm-bindgen-cli --version 0.2.126" >&2
-elif ! cargo test -p monero-rust --lib --target wasm32-unknown-unknown; then
+elif ! cargo test --lib --target wasm32-unknown-unknown; then
     record_failure "wasm32 unit tests"
 fi
 
 step "send path against recorded RPC (--features mock-rpc)"
 # Enable recorded RPC responses for tests that otherwise require a live node.
-if ! cargo test -p monero-rust --features mock-rpc \
+if ! cargo test --features mock-rpc \
     --test tx_construction_test --test unsigned_tx_roundtrip_test --test sign_unsigned_unit_test; then
     record_failure "mock-rpc send path"
 fi
@@ -92,7 +92,7 @@ if [ "$WITH_REGTEST" = 1 ]; then
         fi
         export MONERO_REGTEST_RPC
 
-        if ! cargo test -p monero-rust --test regtest_e2e_test; then
+        if ! cargo test --test regtest_e2e_test; then
             record_failure "regtest end to end"
         fi
     fi

@@ -21,7 +21,7 @@ RUN = os.environ.get("MONERO_STAGENET_DIR") or os.path.join(os.environ.get("TMPD
                                                              "monero-rust-stagenet")
 WALLET_RPC = os.environ.get("MONERO_WALLET_RPC", "monero-wallet-rpc")
 TOOL = os.environ.get("MONERO_STAGENET_TOOL") or os.path.join(
-    os.environ.get("CARGO_TARGET_DIR") or os.path.join(REPO, "rust", "target"),
+    os.environ.get("CARGO_TARGET_DIR") or os.path.join(REPO, "target"),
     "release", "examples", "stagenet_tool")
 OFFLINE_OPS = ("addr", "seed")
 
@@ -596,7 +596,7 @@ def tool(request, name, rpc=None):
     os.makedirs(os.path.join(RUN, "logs"), exist_ok=True)
     if not os.path.exists(TOOL):
         raise SystemExit("stagenet_tool is not built at %s; run "
-                         "`cargo build --release -p monero-rust --example stagenet_tool` in rust/ "
+                         "`cargo build --release --example stagenet_tool` at the repository root "
                          "or set MONERO_STAGENET_TOOL" % TOOL)
     log = open(os.path.join(RUN, "logs", name + ".log"), "ab")
     code = subprocess.call([TOOL, req_path, out_path], stdout=log, stderr=log)

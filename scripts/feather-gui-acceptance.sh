@@ -4,7 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 feather_appimage="${FEATHER_APPIMAGE:-/home/user/Downloads/feather-2.8.1.AppImage}"
 timeout_s="${FEATHER_GUI_TIMEOUT:-45}"
-vector_dir="$repo_root/rust/monero-rust/tests/vectors/cold_signing_regtest_v0_18_5_0"
+vector_dir="$repo_root/tests/vectors/cold_signing_regtest_v0_18_5_0"
 wallet_keys="$vector_dir/cold_full.keys"
 unsigned_tx="$vector_dir/unsigned_monero_tx"
 

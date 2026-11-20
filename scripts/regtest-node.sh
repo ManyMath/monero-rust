@@ -6,7 +6,7 @@
 # to find this daemon.
 #
 #   eval "$(scripts/regtest-node.sh start)"   # start and export MONERO_REGTEST_RPC
-#   cargo test -p monero-rust --test regtest_e2e_test
+#   cargo test --test regtest_e2e_test
 #   scripts/regtest-node.sh stop
 #
 # `status` prints the URL if RPC is available, otherwise exits nonzero.

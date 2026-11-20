@@ -2,7 +2,7 @@
 """Compare monero-rust sends with a real wallet2 on a private regtest chain.
 
     eval "$(scripts/regtest-node.sh start)"
-    (cd rust && cargo test --release -p monero-rust --test wallet2_interop_tool --no-run)
+    cargo test --release --test wallet2_interop_tool --no-run
     scripts/wallet2_interop.py --run-dir DIR start
     scripts/wallet2_interop.py --run-dir DIR fund
     scripts/wallet2_interop.py --run-dir DIR shapes      # also: sample, priorities, spend-back
@@ -93,7 +93,7 @@ class Run:
     def tool(self):
         if self.tool_path:
             return self.tool_path
-        pattern = str(REPO / "rust/target/*/deps/wallet2_interop_tool-*")
+        pattern = str(REPO / "target/*/deps/wallet2_interop_tool-*")
         found = [p for p in glob.glob(pattern) if os.access(p, os.X_OK) and not p.endswith(".d")]
         if not found:
             raise SystemExit("build the tool first: cargo test --test wallet2_interop_tool --no-run")
@@ -999,7 +999,7 @@ def main():
     parser.add_argument("--run-dir", required=True, help="where wallets, logs and evidence are kept")
     parser.add_argument("--evidence", default="evidence", help="subdirectory of the run dir for this pass")
     parser.add_argument("--tool", default=os.environ.get("INTEROP_TOOL"),
-                        help="wallet2_interop_tool test binary (default: the newest one under rust/target)")
+                        help="wallet2_interop_tool test binary (default: the newest one under target/)")
     sub = parser.add_subparsers(dest="command", required=True)
     start = sub.add_parser("start")
     start.add_argument("--daemon", default=None, help="regtest daemon RPC URL (default: MONERO_REGTEST_RPC)")

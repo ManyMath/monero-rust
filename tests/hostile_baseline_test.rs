@@ -103,7 +103,7 @@ async fn honest_send_builds_and_relays() {
 
 /// Needs a regtest daemon serving the recorded main chain:
 ///
-///     MONERO_REGTEST_RPC=http://127.0.0.1:PORT cargo test -p monero-rust \
+///     MONERO_REGTEST_RPC=http://127.0.0.1:PORT cargo test \
 ///         --test hostile_baseline_test live_ -- --ignored --nocapture
 #[tokio::test]
 #[ignore = "needs MONERO_REGTEST_RPC serving the recorded chain"]

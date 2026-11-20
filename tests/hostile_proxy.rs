@@ -4,7 +4,7 @@
 //!     MONERO_REGTEST_RPC=http://127.0.0.1:PORT \
 //!     HOSTILE_PROXY_MUTATION=distribution-truncated \
 //!     HOSTILE_PROXY_DIR=/path/to/scratch \
-//!     cargo test -p monero-rust --test hostile_proxy -- --ignored --nocapture
+//!     cargo test --test hostile_proxy -- --ignored --nocapture
 //!
 //! It exits when a file named `stop` appears in that directory.
 

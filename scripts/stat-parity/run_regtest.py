@@ -76,7 +76,7 @@ def w2_start(url, tag, seed, commands, kind="seeded"):
 def rust_bin():
     bins = [p for p in glob.glob(TARGET + "/release/deps/stat_parity_harness-*") if not p.endswith(".d")]
     if not bins:
-        raise SystemExit("build the sampler first: cargo test -p monero-rust --release --test stat_parity_harness --no-run")
+        raise SystemExit("build the sampler first: cargo test --release --test stat_parity_harness --no-run")
     return max(bins, key=os.path.getmtime)
 
 

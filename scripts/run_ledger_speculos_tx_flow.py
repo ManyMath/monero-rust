@@ -69,7 +69,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="nanosp", help="pytest --device value. Default: nanosp.")
     parser.add_argument(
         "--output-dir",
-        default=str(repo_root() / "rust/monero-rust/tests/vectors/ledger_app_speculos/tx_flow_runs"),
+        default=str(repo_root() / "tests/vectors/ledger_app_speculos/tx_flow_runs"),
         help="Directory where run artifacts are written.",
     )
     parser.add_argument(

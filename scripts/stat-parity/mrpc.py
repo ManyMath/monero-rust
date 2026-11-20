@@ -14,7 +14,7 @@ RESULTS = os.environ.get("STAT_PARITY_RESULTS") or RUN + "/results"
 MONEROD = os.environ.get("MONEROD", "monerod")
 WALLET_RPC = os.environ.get("MONERO_WALLET_RPC", "monero-wallet-rpc")
 W2HARNESS = os.environ.get("W2HARNESS_DIR") or RUN + "/w2build"
-TARGET = os.environ.get("CARGO_TARGET_DIR") or os.path.join(REPO, "rust", "target")
+TARGET = os.environ.get("CARGO_TARGET_DIR") or os.path.join(REPO, "target")
 ATOMIC = 10**12
 
 

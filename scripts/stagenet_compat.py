@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare monero-rust with wallet2 on a real network (stagenet by default).
 
-    cd rust && cargo build --release -p monero-rust --example stagenet_tool
+    cargo build --release --example stagenet_tool
     export MONERO_STAGENET_RPC=<synced node> MONERO_STAGENET_DIR=<run dir> MONERO_WALLET_RPC=<path>
     scripts/stagenet_compat.py scan LABEL
 

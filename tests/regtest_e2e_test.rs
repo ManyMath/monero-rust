@@ -3,7 +3,7 @@
 //! Mine the required blocks locally so these tests need no synced stagenet node.
 //!
 //!     eval "$(scripts/regtest-node.sh start)"
-//!     cargo test -p monero-rust --test regtest_e2e_test
+//!     cargo test --test regtest_e2e_test
 //!     scripts/regtest-node.sh stop
 //!
 //! Set `MONERO_REGTEST_RPC` to enable these tests; see `common::regtest_node`.

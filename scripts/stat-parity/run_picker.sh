@@ -9,7 +9,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 R="${STAT_PARITY_DIR:-${TMPDIR:-/tmp}/monero-rust-stat-parity}"
 PICKS="${STAT_PARITY_PICKS:-$R/picks}"
 W2="${W2HARNESS_DIR:-$R/w2build}"
-TARGET="${CARGO_TARGET_DIR:-$HERE/../../rust/target}"
+TARGET="${CARGO_TARGET_DIR:-$HERE/../../target}"
 mkdir -p "$PICKS"
 if [ -z "${STAT_PARITY_SKIP_WALLET2:-}" ]; then
     "$W2/w2harness-seeded" pick "$R/dist/$NAME.u64" 40000000 1 "$PICKS/$NAME.w2.seed1.u64"
